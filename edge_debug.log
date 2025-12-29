@@ -1,0 +1,50 @@
+DEBUG: Starting Edge App. Port: 8000, IsInteger: true
+=CRASH REPORT==== 29-Dec-2025::22:33:51.139710 ===
+  crasher:
+    initial call: application_master:init/4
+    pid: <0.86.0>
+    registered_name: []
+    exception exit: {badarg,{iris_edge_app,start,[normal,[]]}}
+      in function  application_master:init/4 (application_master.erl, line 142)
+    ancestors: [<0.85.0>]
+    message_queue_len: 1
+    messages: [{'EXIT',<0.87.0>,normal}]
+    links: [<0.85.0>,<0.44.0>]
+    dictionary: []
+    trap_exit: true
+    status: running
+    heap_size: 233
+    stack_size: 28
+    reductions: 170
+  neighbours:
+
+=CRASH REPORT==== 29-Dec-2025::22:33:51.139626 ===
+  crasher:
+    initial call: iris_edge_listener:init/1
+    pid: <0.88.0>
+    registered_name: []
+    exception exit: badarg
+      in function  inet_tcp:listen/2 (inet_tcp.erl, line 179)
+      in call from iris_edge_listener:init/1 (src/iris_edge_listener.erl, line 15)
+      in call from gen_server:init_it/2 (gen_server.erl, line 851)
+      in call from gen_server:init_it/6 (gen_server.erl, line 814)
+    ancestors: [<0.87.0>]
+    message_queue_len: 0
+    messages: []
+    links: []
+    dictionary: []
+    trap_exit: false
+    status: running
+    heap_size: 376
+    stack_size: 28
+    reductions: 201
+  neighbours:
+
+=INFO REPORT==== 29-Dec-2025::22:33:51.158329 ===
+    application: iris_edge
+    exited: {badarg,{iris_edge_app,start,[normal,[]]}}
+    type: temporary
+
+=INFO REPORT==== 29-Dec-2025::22:36:44.748307 ===
+SIGTERM received - shutting down
+

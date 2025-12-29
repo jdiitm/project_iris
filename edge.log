@@ -1,0 +1,15 @@
+DEBUG: Starting Edge App. Port: 8085, IsInteger: true
+Edge Listener started on port 8085
+User logged in: <<"alice">>
+User logged in: <<"bob">>
+Sending msg to <<"bob">>
+Routing msg to <<"bob">> on iris_edge1@j
+Delivering message to client: <<"Hello Bob!">>
+Client disconnected
+Client disconnected
+User logged in: <<"alice">>
+Sending msg to <<"charlie">>
+User <<"charlie">> offline. Storing.
+Client disconnected
+User logged in: <<"charlie">>
+Client disconnected
