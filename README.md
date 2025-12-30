@@ -20,7 +20,8 @@ The system consists of two main node types:
 
 ## Prerequisites
 
-*   **Erlang/OTP**: 24+ (Tested with current massive installation).
+*   **Erlang/OTP**: 24+ (Must include `mnesia` application).
+    *   *Debian/Ubuntu*: `sudo apt-get install erlang-mnesia`
 *   **Python 3**: For running verification scripts.
 *   **Netcat (nc)**: Optional, for manual testing.
 
