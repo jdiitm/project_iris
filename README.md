@@ -83,6 +83,17 @@ Simulates Alice sending a sequence of messages to Charlie (who is offline).
 *Expected Output*: `SUCCESS: Received all messages in correct order.`
 *Note*: The system stores messages persistently in Mnesia. When Charlie logs in, the Edge node queries the Core node for ordered offline messages and delivers them.
 
+### 3. Performance Benchmark (`benchmark_iris.py`)
+Stress tests the system to measure throughput and latency.
+```bash
+./benchmark_iris.py
+```
+**Typical Results** (Localhost):
+*   **Throughput**: > 1000 msgs/sec
+*   **Avg Latency**: < 1ms
+*   **P99 Latency**: < 2ms
+*   **Internal Routing Latency**: ~160 microseconds (via Telemetry)
+
 ## Recent Improvements
 *   **Portability & Autodetection**: The build system now automatically detects a valid Erlang installation (with `mnesia`) and adapts to the machine's hostname. No manual configuration is required.
 *   **Dynamic Node Discovery**: Support for variable hostnames (fixes `localhost` hardcoding).

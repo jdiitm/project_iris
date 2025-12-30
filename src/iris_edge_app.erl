@@ -3,9 +3,10 @@
 -export([start/2, stop/1]).
 
 start(_Type, _Args) ->
-    %% Get port from env or default
-    Port = application:get_env(iris_edge, port, 8085),
-    io:format("DEBUG: Starting Edge App. Port: ~p, IsInteger: ~p~n", [Port, is_integer(Port)]),
+    %% Get postart(_StartType, _StartArgs) ->
+    {ok, Port} = application:get_env(iris_edge, port),
+    io:format("Starting Edge App on port ~p...~n", [Port]),
+    iris_router:start_link(), %% Start the router gen_server
     iris_edge_listener:start_link(Port).
 
 stop(_State) ->

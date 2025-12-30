@@ -42,7 +42,7 @@ wait_for_socket(cast, {socket_ready, Socket}, Data) ->
 connected(enter, _OldState, _Data) ->
     keep_state_and_data;
 
-connected(info, {tcp, Socket, Bin}, Data = #data{buffer = Buff}) ->
+connected(info, {tcp, _Socket, Bin}, Data = #data{buffer = Buff}) ->
     NewBuff = <<Buff/binary, Bin/binary>>,
     process_buffer(NewBuff, Data);
 
