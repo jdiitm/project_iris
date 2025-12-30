@@ -122,6 +122,16 @@ Based on the benchmark data and your current hardware (Intel i7-12850HX, 32GB RA
     *   **Verified Peak**: **1,100,000 messages/sec**.
     *   **Recommended Max**: ~800,000 messages/sec (for consistent low latency).
 
+### 7. Extreme Scale & Flaw Detection (Stress Test Findings)
+We pushed the system to the limit with **800,000 real local connections** (using IP aliasing) and active **Chaos Monkey** disruption.
+
+*   **PASSED**: The system **did not crash**. It successfully accepted connections and routed traffic until CPU saturation.
+*   **PASSED**: **Memory Usage** remained linear (~7.5GB for 800k connections).
+*   **FLAW FOUND**: **Control Plane Starvation**. Under 100% CPU load, administrative RPC calls (e.g., for monitoring queues) became unresponsive.
+    *   *Mitigation*: In production, run the control plane (monitoring/mgmt) with higher process priority or on a dedicated core.
+*   **FLAW FOUND**: **Queue Buildup**. Latency degrades significantly beyond 1.1M msgs/sec as message queues grow faster than the single-threaded router can process.
+    *   *Mitigation*: Shard the `iris_router` (e.g., consistent hashing pool) to utilize all cores for routing logic.
+
 ## Recent Improvements
 *   **Portability & Autodetection**: The build system now automatically detects a valid Erlang installation (with `mnesia`) and adapts to the machine's hostname. No manual configuration is required.
 *   **Dynamic Node Discovery**: Support for variable hostnames (fixes `localhost` hardcoding).
