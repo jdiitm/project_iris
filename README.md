@@ -100,6 +100,15 @@ Simulates 1 Million+ users with active connection killing (Chaos Monkey).
 *   **Achieved**: **1.1 Million messages/sec** (Peak Ingress)
 *   **Conditions**: 500 concurrent workers, 20% random drops, 50% offline storage writes.
 
+### 5. Benchmark Findings (WhatsApp Scale Comparison)
+| Metric | WhatsApp Target | Project Iris Achieved | Status |
+| :--- | :--- | :--- | :--- |
+| **Concurrent Connections** | Millions | Tested 10k (Extrapolated: >1M limit dependent on RAM) | ✅ Scalable |
+| **Memory per Connection** | Very Low | **~8.6 KB** | ✅ Ultra-Low |
+| **Messages per Second** | Billions/Day (~tens of k/sec) | **~1,100,000 / sec** (Peak Ingress) | ✅ Exceeds |
+| **Latency (P99)** | < 100 ms | **~1.0 ms** | ✅ Instant |
+| **CPU Efficiency** | Low | High Efficiency (Idle mostly inactive) | ✅ Optimized |
+
 ## Recent Improvements
 *   **Portability & Autodetection**: The build system now automatically detects a valid Erlang installation (with `mnesia`) and adapts to the machine's hostname. No manual configuration is required.
 *   **Dynamic Node Discovery**: Support for variable hostnames (fixes `localhost` hardcoding).
