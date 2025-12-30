@@ -38,26 +38,49 @@ def main():
         login(alice, "alice")
 
         # Alice sends to Charlie (who is offline)
-        send_msg(alice, "charlie", "Offline Msg")
+        print("Sending ordered offline messages...")
+        send_msg(alice, "charlie", "Msg 1")
+        time.sleep(0.1)
+        send_msg(alice, "charlie", "Msg 2")
+        time.sleep(0.1)
+        send_msg(alice, "charlie", "Msg 3")
         
         alice.close()
 
         print("Waiting...")
-        time.sleep(1)
+        time.sleep(2)
 
         # Charlie logs in
         charlie = create_socket()
         login(charlie, "charlie")
         
-        # Charlie should receive offline message
-        # Note: In iris_edge_conn.erl, offline messages are just printed?
-        # Let's check source code.
+        # Charlie should receive ordered messages
+        # Since this is TCP, they might arrive in one packet (e.g., b'Msg 1Msg 2Msg 3')
         
-        data = receive_msg(charlie)
-        if data:
-             print("SUCCESS: Charlie received offline message.")
+        received_buffer = b""
+        start_time = time.time()
+        while time.time() - start_time < 5:
+            try:
+                chunk = receive_msg(charlie)
+                if chunk:
+                    received_buffer += chunk
+            except Exception:
+                pass
+            
+            if b"Msg 1" in received_buffer and b"Msg 2" in received_buffer and b"Msg 3" in received_buffer:
+                break
+            time.sleep(0.1)
+
+        print(f"Total Received: {received_buffer}")
+        
+        expected_seq = b"Msg 1Msg 2Msg 3"
+        if expected_seq in received_buffer:
+             print("SUCCESS: Received all messages in correct order.")
         else:
-             print("FAILURE: Charlie did not receive message.")
+             print(f"FAILURE: Buffer mismatch. Got {received_buffer}")
+             sys.exit(1)
+                
+        print("ALL TESTS PASSED")
              # The code might just print it to stdout in edge node, not send it to socket?
         
         charlie.close()

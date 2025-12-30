@@ -9,14 +9,14 @@ The system consists of two main node types:
 1.  **Core Node (`iris_core`)**:
     *   Acts as the central registry for user presence.
     *   Maintains a global user-to-node mapping using **Mnesia** (Distributed Erlang Database).
-    *   Handles offline message storage (currently log-based simulation).
-    *   **Note**: Uses Mnesia transactions for consistency and replication.
+    *   **Offline Storage**: Uses Mnesia `offline_msg` table (`disc_copies`) for persistent, ordered message storage.
+    *   **Note**: Uses Mnesia transactions for atomic operations.
 
 2.  **Edge Nodes (`iris_edge`)**:
     *   Handle TCP connections from clients.
     *   Protocols: Custom binary protocol over TCP.
     *   Forwards login and routing requests to the Core Node.
-    *   Delivers messages to connected users.
+    *   Delivers messages to connected users (including stored offline messages).
 
 ## Prerequisites
 
@@ -76,12 +76,12 @@ python3 test_iris.py
 *Expected Output*: `SUCCESS: Bob received the message.`
 
 ### 2. Offline Storage Test (`test_offline.py`)
-Simulates Alice sending a message to Charlie (who is offline).
+Simulates Alice sending a sequence of messages to Charlie (who is offline).
 ```bash
-python3 test_offline.py
+./test_offline.py
 ```
-*Expected Output*: `SUCCESS: Charlie received offline message.`
-*Note*: The system now fully supports offline message retrieval. When Charlie logs in, the Edge node queries the Core node for offline messages (stored in `offline_msgs.dets`) and delivers them.
+*Expected Output*: `SUCCESS: Received all messages in correct order.`
+*Note*: The system stores messages persistently in Mnesia. When Charlie logs in, the Edge node queries the Core node for ordered offline messages and delivers them.
 
 ## Recent Improvements
 *   **Portability & Autodetection**: The build system now automatically detects a valid Erlang installation (with `mnesia`) and adapts to the machine's hostname. No manual configuration is required.
