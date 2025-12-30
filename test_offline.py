@@ -18,6 +18,11 @@ def login(sock, user):
     if b"LOGIN_OK" not in ack:
         raise Exception(f"Login failed for {user}: {ack}")
     print(f"Login successful for {user}")
+    # Return any extra data that might have been coalesced with LOGIN_OK
+    parts = ack.split(b"LOGIN_OK")
+    if len(parts) > 1 and len(parts[1]) > 0:
+        return parts[1]
+    return b""
 
 def send_msg(sock, target, msg):
     print(f"Sending message to {target}: {msg}")
@@ -53,13 +58,16 @@ def main():
         # No artificial wait needed if Mnesia transaction is atomic/fast
         
         # Charlie logs in
+        # Charlie logs in
         charlie = create_socket()
-        login(charlie, "charlie")
+        extra_data = login(charlie, "charlie")
+        print(f"DEBUG: extra_data from login: {extra_data}")
+
         
         # Charlie should receive ordered messages
         # Since this is TCP, they might arrive in one packet (e.g., b'Msg 1Msg 2Msg 3')
         
-        received_buffer = b""
+        received_buffer = extra_data
         start_time = time.time()
         while time.time() - start_time < 5:
             try:

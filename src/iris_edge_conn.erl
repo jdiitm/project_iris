@@ -8,7 +8,8 @@
 -record(data, {
     socket :: gen_tcp:socket(),
     user :: binary(),
-    buffer = <<>> :: binary()
+    buffer = <<>> :: binary(),
+    timeouts = 0 :: integer()
 }).
 
 -define(CORE_NODE, core_node()).
@@ -34,8 +35,8 @@ callback_mode() -> [state_functions, state_enter].
 wait_for_socket(enter, _OldState, _Data) ->
     keep_state_and_data;
 wait_for_socket(cast, {socket_ready, Socket}, Data) ->
-    %% Now we own the socket, set active once
-    inet:setopts(Socket, [{active, once}]),
+    %% Now we own the socket, set active once + send_timeout (2s)
+    inet:setopts(Socket, [{active, once}, {send_timeout, 2000}]),
     {next_state, connected, Data#data{socket = Socket}}.
 
 %% STATE: connected
@@ -51,12 +52,37 @@ connected(info, {tcp_closed, _Socket}, Data) ->
     {stop, normal, Data};
 connected(info, {tcp_error, _Socket, _Reason}, Data) ->
     {stop, normal, Data};
-connected(info, {deliver_msg, Msg}, Data = #data{socket = Socket}) ->
+connected(info, {deliver_msg, Msg}, Data = #data{socket = Socket, user = User, timeouts = T}) ->
     %% Message delivered from Router
     io:format("Delivering message to client: ~p (size ~p)~n", [Msg, byte_size(Msg)]),
-    Res = gen_tcp:send(Socket, Msg),
-    io:format("gen_tcp:send result: ~p~n", [Res]),
-    {keep_state, Data}.
+    case gen_tcp:send(Socket, Msg) of
+        ok -> 
+            {keep_state, Data#data{timeouts = 0}}; %% Reset timeouts on success
+        {error, timeout} ->
+            if T < 5 ->
+                io:format("WARNING: Client slow. Fallback to Offline Storage. (Streak: ~p)~n", [T+1]),
+                %% 1. Store Offline
+                rpc:call(?CORE_NODE, iris_offline_storage, store, [User, Msg]),
+                %% 2. Keep Connection
+                {keep_state, Data#data{timeouts = T + 1}};
+            true ->
+                io:format("CRITICAL: Client zombie (5 timeouts). Terminating.~n"),
+                {stop, normal, Data}
+            end;
+        {error, enobufs} ->
+             %% If buffer immediately full, treat as timeout/slow
+             if T < 5 ->
+                io:format("WARNING: Client buffer full. Fallback to Offline. (Streak: ~p)~n", [T+1]),
+                rpc:call(?CORE_NODE, iris_offline_storage, store, [User, Msg]),
+                {keep_state, Data#data{timeouts = T + 1}};
+             true -> 
+                io:format("CRITICAL: Client buffer zombie. Terminating.~n"),
+                {stop, normal, Data}
+             end;
+        {error, Reason} ->
+            io:format("Client send error: ~p. Terminating.~n", [Reason]),
+            {stop, normal, Data}
+    end.
 
 process_buffer(Bin, Data = #data{socket = Socket}) ->
     case iris_proto:decode(Bin) of

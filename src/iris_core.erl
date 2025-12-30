@@ -8,10 +8,19 @@
 %% Application Callbacks
 start(_StartType, _StartArgs) ->
     %% Check if we are the core node
-    [Name, _Host] = string:tokens(atom_to_list(node()), "@"),
-    case Name of
-        "iris_core" -> init_db();
-        _ -> ok %% Not core, skip DB init
+    io:format("App Start. Node: ~p~n", [node()]),
+    Parts = string:tokens(atom_to_list(node()), "@"),
+    io:format("Node Parts: ~p~n", [Parts]),
+    case Parts of
+        ["iris_core", _] -> 
+            io:format("Initializing DB on Core...~n"),
+            init_db();
+        ["iris_core"] -> %% Handle no host case
+            io:format("Initializing DB on Core (No Host)...~n"),
+            init_db();
+        _ -> 
+            io:format("Not Core. Skipping DB init.~n"),
+            ok
     end,
     supervisor:start_link({local, ?MODULE}, ?MODULE, []).
 
@@ -26,8 +35,11 @@ init([]) ->
 
 init_db() ->
     %% Ensure Mnesia is stopped for schema check (bootstrap)
+    io:format("Stopping Mnesia...~n"),
     mnesia:stop(),
+    io:format("Creating Schema...~n"),
     mnesia:create_schema([node()]),
+    io:format("Starting Mnesia...~n"),
     mnesia:start(),
     
     case mnesia:create_table(presence, 
