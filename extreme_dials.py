@@ -30,14 +30,14 @@ def main():
     print("[2] Compiling & Starting Generator...")
     run_cmd("erlc -o ebin src/iris_extreme_gen.erl")
     
-    # Start Chaos Monkey on Target
-    print("    [!] Releasing Chaos Monkey (Interval: 100ms)...")
-    chaos_cmd = f"/usr/bin/erl -sname chaos_starter -hidden -noshell -pa ebin -eval \"rpc:call('{node}', chaos_monkey, start, [100, 5]), init:stop().\""
+    # Start Chaos Monkey on Target (Extreme Mode: 50ms interval, 10 kills)
+    print("    [!] Releasing Extreme Chaos Monkey (Interval: 50ms, Kills: 10)...")
+    chaos_cmd = f"/usr/bin/erl -sname chaos_starter -hidden -noshell -pa ebin -eval \"rpc:call('{node}', chaos_monkey, start, [50, 10]), init:stop().\""
     run_cmd(chaos_cmd)
     
     # Start separate erlang node for generation
-    # It will spawn 800k procs. Needs high ulimit.
-    gen_cmd = f"/usr/bin/erl -sname gen_node -hidden -noshell -pa ebin -eval \"iris_extreme_gen:start(800000, 60), timer:sleep(infinity).\""
+    # 800k connections, 600 seconds (10 mins)
+    gen_cmd = f"/usr/bin/erl -sname gen_node -hidden -noshell -pa ebin -eval \"iris_extreme_gen:start(800000, 600), timer:sleep(infinity).\""
     p_gen = subprocess.Popen(gen_cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     
     # 3. Monitor Loop
@@ -47,9 +47,9 @@ def main():
         max_q = 0
         for i in range(100):
             time.sleep(2)
-            # Check Router Queue
-            # rpc call to check queue len
-            q_cmd = f"/usr/bin/erl -sname mon -hidden -noshell -pa ebin -eval \"Q = rpc:call('{node}', erlang, process_info, [whereis(iris_router), message_queue_len]), io:format('~p', [Q]), init:stop().\""
+            # Check Router Queue (Monitor Worker 1 as sample)
+            mon_name = f"mon_{int(time.time() * 1000)}"
+            q_cmd = f"/usr/bin/erl -sname {mon_name} -hidden -noshell -pa ebin -eval \"Q = rpc:call('{node}', erlang, process_info, [whereis(iris_router_1), message_queue_len]), io:format('~p', [Q]), init:stop().\""
             try:
                 out = subprocess.check_output(q_cmd, shell=True).decode()
                 # Output format: {message_queue_len, 50}
