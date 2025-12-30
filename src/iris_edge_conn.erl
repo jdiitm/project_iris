@@ -49,11 +49,15 @@ connected(info, {tcp, Socket, Bin}, Data) ->
             %% Register with Core
             rpc:call(?CORE_NODE, iris_core, register_user, [User, node(), self()]),
             %% Retrieve Offline Messages
-            case rpc:call(?CORE_NODE, iris_core, lookup_user, [User]) of
-                 _ -> 
-                    %% For simplicity, we just check and print offline msgs here, 
-                    %% normally we would iterate and send them.
-                     ok
+            case rpc:call(?CORE_NODE, iris_core, retrieve_offline, [User]) of
+                 Msgs when is_list(Msgs) ->
+                     io:format("Retrieved ~p offline msgs for ~p~n", [length(Msgs), User]),
+                     lists:foreach(fun(Msg) ->
+                         io:format("Sending offline msg to client: ~p~n", [Msg]),
+                         gen_tcp:send(Socket, Msg)
+                     end, Msgs);
+                 Error ->
+                     io:format("Error retrieving offline msgs: ~p~n", [Error])
             end,
             inet:setopts(Socket, [{active, once}]),
             {keep_state, Data#data{user = User}};
@@ -84,8 +88,9 @@ connected(info, {tcp_error, _Socket, _Reason}, Data) ->
 
 connected(info, {deliver_msg, Msg}, Data = #data{socket = Socket}) ->
     %% Message delivered from Router
-    io:format("Delivering message to client: ~p~n", [Msg]),
-    gen_tcp:send(Socket, Msg),
+    io:format("Delivering message to client: ~p (size ~p)~n", [Msg, byte_size(Msg)]),
+    Res = gen_tcp:send(Socket, Msg),
+    io:format("gen_tcp:send result: ~p~n", [Res]),
     {keep_state, Data}.
 
 terminate(_Reason, _State, _Data) ->

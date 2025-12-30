@@ -3,7 +3,7 @@
 -behaviour(supervisor).
 
 -export([start/2, stop/1, init/1]).
--export([register_user/3, lookup_user/1, store_offline/2]).
+-export([register_user/3, lookup_user/1, store_offline/2, retrieve_offline/1]).
 
 %% Application Callbacks
 start(_StartType, _StartArgs) ->
@@ -35,7 +35,8 @@ init_db() ->
         Err -> io:format("Mnesia Init Error: ~p~n", [Err])
     end,
     iris_rocksdb:init(),
-    io:format("Core DB Initialized.~n").
+    io:format("Core DB Initialized. Mnesia Status: ~p~n", [mnesia:system_info(is_running)]),
+    io:format("Mnesia Local Tables: ~p~n", [mnesia:system_info(local_tables)]).
 
 register_user(User, Node, Pid) ->
     F = fun() ->
@@ -52,3 +53,6 @@ lookup_user(User) ->
 store_offline(User, Msg) ->
     %% Only called on Core
     iris_rocksdb:store(User, Msg).
+
+retrieve_offline(User) ->
+    iris_rocksdb:retrieve(User).

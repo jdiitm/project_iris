@@ -1,8 +1,33 @@
 DEBUG: Starting Edge App. Port: 8085, IsInteger: true
 Edge Listener started on port 8085
 User logged in: <<"alice">>
+Error retrieving offline msgs: {badrpc,
+                                {'EXIT',
+                                 {badarg,
+                                  [{dets,lookup,
+                                    ["offline_msgs.dets",<<"alice">>],
+                                    [{file,"dets.erl"},{line,1259}]},
+                                   {iris_rocksdb,retrieve,1,
+                                    [{file,"src/iris_rocksdb.erl"},{line,20}]},
+                                   {iris_core,retrieve_offline,1,[]}]}}}
 User logged in: <<"bob">>
+Error retrieving offline msgs: {badrpc,
+                                {'EXIT',
+                                 {badarg,
+                                  [{dets,lookup,
+                                    ["offline_msgs.dets",<<"bob">>],
+                                    [{file,"dets.erl"},{line,1259}]},
+                                   {iris_rocksdb,retrieve,1,
+                                    [{file,"src/iris_rocksdb.erl"},{line,20}]},
+                                   {iris_core,retrieve_offline,1,[]}]}}}
 Sending msg to <<"bob">>
-RPC Error routing to <<"bob">>: nodedown
+RPC Error routing to <<"bob">>: {'EXIT',
+                                 {undef,
+                                  [{mnesia,dirty_read,[presence,<<"bob">>],[]},
+                                   {iris_core,lookup_user,1,
+                                    [{file,"src/iris_core.erl"},{line,48}]}]}}
 Client disconnected
 Client disconnected
+=INFO REPORT==== 30-Dec-2025::17:12:52.876405 ===
+SIGTERM received - shutting down
+

@@ -8,9 +8,9 @@ The system consists of two main node types:
 
 1.  **Core Node (`iris_core`)**:
     *   Acts as the central registry for user presence.
-    *   Maintains a global user-to-node mapping using **ETS** (Erlang Term Storage).
+    *   Maintains a global user-to-node mapping using **Mnesia** (Distributed Erlang Database).
     *   Handles offline message storage (currently log-based simulation).
-    *   **Note**: Originally designed for Mnesia, refactored to ETS for portability (running without system-level Mnesia dependency).
+    *   **Note**: Uses Mnesia transactions for consistency and replication.
 
 2.  **Edge Nodes (`iris_edge`)**:
     *   Handle TCP connections from clients.
@@ -35,21 +35,26 @@ make clean && make
 
 ## Running the System
 
-Start the Core Node and at least one Edge Node in separate terminals. The system is configured to dynamically resolve node names based on your hostname.
+The system uses a `Makefile` to simplify starting nodes with the correct configuration and Erlang binary paths.
 
 ### 1. Start Core Node
 ```bash
-erl -sname iris_core -pa ebin -eval "application:ensure_all_started(iris_core)."
+make start_core
 ```
-*Wait for "Core DB (ETS) Initialized" message.*
+*Wait for "Core DB Initialized" message.*
 
-### 2. Start Edge Node
+### 2. Start Edge Node 1 (Port 8085)
 ```bash
-erl -sname iris_edge1 -pa ebin -iris_edge port 8085 -eval "application:ensure_all_started(iris_edge)."
+make start_edge1
 ```
 *Wait for "Edge Listener started on port 8085".*
 
-**Note**: The default port is **8085** (changed from 8000 to avoid conflicts).
+### 3. Start Edge Node 2 (Port 8086)
+```bash
+make start_edge2
+```
+
+**Note**: The Makefile is configured to explicitly use `/usr/bin/erl` to ensure `mnesia` is available. If running manually, ensure you are using an Erlang installation that includes the `mnesia` and `runtime_tools` applications.
 
 ## Client Protocol
 
@@ -75,9 +80,10 @@ Simulates Alice sending a message to Charlie (who is offline).
 ```bash
 python3 test_offline.py
 ```
-*Expected Output*: `SUCCESS: Charlie received offline message.` (Note: Currently verifies routing to storage; delivery logic is a placeholder).
+*Expected Output*: `SUCCESS: Charlie received offline message.`
+*Note*: The system now fully supports offline message retrieval. When Charlie logs in, the Edge node queries the Core node for offline messages (stored in `offline_msgs.dets`) and delivers them.
 
 ## Recent Improvements
 *   **Dynamic Node Discovery**: Support for variable hostnames (fixes `localhost` hardcoding).
 *   **Robustness**: Fixed TCP listener configuration bugs (`badarg` crashes).
-*   **Dependency Removal**: Replaced Mnesia with ETS for lighter-weight deployment.
+*   **Mnesia Adoption**: Replaced ETS with Mnesia for distributed presence and transactional integrity.
