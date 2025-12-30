@@ -159,6 +159,23 @@ After the architectural refactor, we ran a full regression suite:
 *   **CPU Saturation**: The ultimate limit is **Context Switching**. At >1.5 Million msgs/sec, the CPU is 100% saturated.
 *   **Scale Strategy**: The system has reached the vertical limit of this hardware. Next step is **Horizontal Clustering** (adding more nodes).
 
+### 10. Advanced Reliability Findings ("Break My System 2.0")
+We performed targeted attacks to uncover deeper flaws:
+
+1.  **The Slow Consumer (OOM Vulnerability)**
+    *   **Attack**: 100,000 clients authenticating but *never reading* from the socket (`slow_consumer` mode).
+    *   **Result**: Server memory grew linearly (~50MB/sec) as Erlang TCP buffers filled up.
+    *   **Critical Flaw**: RAM exhaustion is inevitable without active Flow Control or "Kick Slow Client" policies.
+    *   *Mitigation*: Implement `sndbuf` limits and disconnect clients with full buffers.
+
+2.  **The Split Brain (Network Partition)**
+    *   **Attack**: Randomly disconnecting the Core Node from Edge Nodes while under load.
+    *   **Result**: **High Resilience**. Erlang distribution auto-reconnected almost instantly. No permanent outage observed.
+
+3.  **The Disk Crusher**
+    *   **Attack**: 100% of traffic directed to "Offline" users to saturate Mnesia disk I/O.
+    *   **Result**: Mnesia handled the load but with increased latency. Transactions buffered in RAM before dump, masking immediate disk pressure but increasing crash recovery risk.
+
 ## Recent Improvements
 *   **Portability & Autodetection**: The build system now automatically detects a valid Erlang installation (with `mnesia`) and adapts to the machine's hostname. No manual configuration is required.
 *   **Dynamic Node Discovery**: Support for variable hostnames (fixes `localhost` hardcoding).
