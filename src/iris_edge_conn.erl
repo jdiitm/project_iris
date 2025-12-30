@@ -7,7 +7,8 @@
 
 -record(data, {
     socket :: gen_tcp:socket(),
-    user :: binary()
+    user :: binary(),
+    buffer = <<>> :: binary()
 }).
 
 -define(CORE_NODE, core_node()).
@@ -41,13 +42,31 @@ wait_for_socket(cast, {socket_ready, Socket}, Data) ->
 connected(enter, _OldState, _Data) ->
     keep_state_and_data;
 
-connected(info, {tcp, Socket, Bin}, Data) ->
-    %% Handle Incoming Data
+connected(info, {tcp, Socket, Bin}, Data = #data{buffer = Buff}) ->
+    NewBuff = <<Buff/binary, Bin/binary>>,
+    process_buffer(NewBuff, Data);
+
+connected(info, {tcp_closed, _Socket}, Data) ->
+    io:format("Client disconnected~n"),
+    {stop, normal, Data};
+connected(info, {tcp_error, _Socket, _Reason}, Data) ->
+    {stop, normal, Data};
+connected(info, {deliver_msg, Msg}, Data = #data{socket = Socket}) ->
+    %% Message delivered from Router
+    io:format("Delivering message to client: ~p (size ~p)~n", [Msg, byte_size(Msg)]),
+    Res = gen_tcp:send(Socket, Msg),
+    io:format("gen_tcp:send result: ~p~n", [Res]),
+    {keep_state, Data}.
+
+process_buffer(Bin, Data = #data{socket = Socket}) ->
     case iris_proto:decode(Bin) of
-        {login, User} ->
+        {{login, User}, Rest} ->
             io:format("User logged in: ~p~n", [User]),
             %% Register with Core
             rpc:call(?CORE_NODE, iris_core, register_user, [User, node(), self()]),
+            %% Send Login ACK to ensure synchronization
+            gen_tcp:send(Socket, <<3, "LOGIN_OK">>),
+            
             %% Retrieve Offline Messages
             case rpc:call(?CORE_NODE, iris_core, retrieve_offline, [User]) of
                  Msgs when is_list(Msgs) ->
@@ -59,39 +78,33 @@ connected(info, {tcp, Socket, Bin}, Data) ->
                  Error ->
                      io:format("Error retrieving offline msgs: ~p~n", [Error])
             end,
-            inet:setopts(Socket, [{active, once}]),
-            {keep_state, Data#data{user = User}};
+            process_buffer(Rest, Data#data{user = User});
         
-        {send_message, Target, Msg} ->
+        {{send_message, Target, Msg}, Rest} ->
             io:format("Sending msg to ~p~n", [Target]),
             iris_router:route(Target, Msg),
-            inet:setopts(Socket, [{active, once}]),
-            keep_state_and_data;
+            process_buffer(Rest, Data);
 
-        {ack, MsgId} ->
+        {{ack, MsgId}, Rest} ->
             io:format("Ack received: ~p~n", [MsgId]),
+            process_buffer(Rest, Data);
+
+        {{error, _}, _} ->
+             %% Error or incomplete. If known error, maybe skip? 
+             %% But for now let's assume it means "more data needed" or disconnect.
+             %% Actually iris_proto returns {error,...} for bad packet or unknown.
+             %% If unknown, we might be stuck. But decode returns {more, Bin} too.
+             %% Wait, I didn't verify if iris_proto returns {error, ...} for unknown.
+             %% My modified iris_proto returns { {error, ...}, <<>> }.
+             %% Need to handle 'more'.
+             io:format("Protocol Error or Unknown~n"),
+             inet:setopts(Socket, [{active, once}]),
+             {keep_state, Data#data{buffer = <<>>}}; %% flushing buffer on error? tough choice.
+
+        {more, _} ->
             inet:setopts(Socket, [{active, once}]),
-            keep_state_and_data;
-
-        Error ->
-            io:format("Protocol Error: ~p~n", [Error]),
-            inet:setopts(Socket, [{active, once}]),
-            keep_state_and_data
-    end;
-
-connected(info, {tcp_closed, _Socket}, Data) ->
-    io:format("Client disconnected~n"),
-    {stop, normal, Data};
-
-connected(info, {tcp_error, _Socket, _Reason}, Data) ->
-    {stop, normal, Data};
-
-connected(info, {deliver_msg, Msg}, Data = #data{socket = Socket}) ->
-    %% Message delivered from Router
-    io:format("Delivering message to client: ~p (size ~p)~n", [Msg, byte_size(Msg)]),
-    Res = gen_tcp:send(Socket, Msg),
-    io:format("gen_tcp:send result: ~p~n", [Res]),
-    {keep_state, Data}.
+            {keep_state, Data#data{buffer = Bin}}
+    end.
 
 terminate(_Reason, _State, _Data) ->
     ok.

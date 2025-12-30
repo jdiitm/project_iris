@@ -58,11 +58,11 @@ make start_edge2
 
 ## Client Protocol
 
-The system uses a simple binary protocol (Big-Endian):
-
-1.  **Login**: `<<1, User/binary>>`
-2.  **Send Message**: `<<2, TargetLen:16, Target:TargetLen/binary, Msg/binary>>`
-3.  **Ack**: `<<3, MsgId/binary>>` (Server -> Client)
+### Simple Binary Protocol
+1.  **Login**: `0x01` | `User` (binary)
+    *   Server responds with **ACK**: `0x03` | `"LOGIN_OK"`
+2.  **Send Message**: `0x02` | `TargetLen` (16-bit) | `Target` (binary) | `MsgLen` (16-bit) | `Msg` (binary)
+3.  **Ack**: `0x03` | `MsgId` (binary)
 
 ## Verification
 

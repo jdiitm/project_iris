@@ -13,13 +13,17 @@ def login(sock, user):
     print(f"Logging in as {user}...")
     payload = b'\x01' + user.encode('utf-8')
     sock.sendall(payload)
-    time.sleep(0.5)
+    # Wait for Login ACK
+    ack = sock.recv(1024)
+    if b"LOGIN_OK" not in ack:
+        raise Exception(f"Login failed for {user}: {ack}")
+    print(f"Login successful for {user}")
 
 def send_msg(sock, target, msg):
     print(f"Sending message to {target}: {msg}")
     target_bytes = target.encode('utf-8')
     msg_bytes = msg.encode('utf-8')
-    payload = b'\x02' + struct.pack('>H', len(target_bytes)) + target_bytes + msg_bytes
+    payload = b'\x02' + struct.pack('>H', len(target_bytes)) + target_bytes + struct.pack('>H', len(msg_bytes)) + msg_bytes
     sock.sendall(payload)
 
 def receive_msg(sock):
@@ -40,16 +44,14 @@ def main():
         # Alice sends to Charlie (who is offline)
         print("Sending ordered offline messages...")
         send_msg(alice, "charlie", "Msg 1")
-        time.sleep(0.1)
         send_msg(alice, "charlie", "Msg 2")
-        time.sleep(0.1)
         send_msg(alice, "charlie", "Msg 3")
         
         alice.close()
 
-        print("Waiting...")
-        time.sleep(2)
-
+        print("Logged out Alice. Logging in Charlie...")
+        # No artificial wait needed if Mnesia transaction is atomic/fast
+        
         # Charlie logs in
         charlie = create_socket()
         login(charlie, "charlie")
