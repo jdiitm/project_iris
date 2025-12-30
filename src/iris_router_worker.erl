@@ -39,6 +39,7 @@ handle_cast({route, User, Msg, StartTime}, Ref) ->
         {ok, _Node, Pid} ->
             Pid ! {deliver_msg, Msg};
         {error, not_found} ->
+            io:format("Router: Storing offline msg for ~p: ~p~n", [User, Msg]),
             rpc:call(?CORE_NODE, iris_core, store_offline, [User, Msg]);
         {badrpc, Reason} ->
             io:format("RPC Error routing to ~p: ~p~n", [User, Reason])

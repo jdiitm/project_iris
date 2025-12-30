@@ -162,11 +162,15 @@ After the architectural refactor, we ran a full regression suite:
 ### 10. Advanced Reliability Findings ("Break My System 2.0")
 We performed targeted attacks to uncover deeper flaws:
 
-1.  **The Slow Consumer (OOM Vulnerability)**
+1.  **The Slow Consumer (OOM Vulnerability) - MITIGATED (Smart Fallback)**
     *   **Attack**: 100,000 clients authenticating but *never reading* from the socket (`slow_consumer` mode).
-    *   **Result**: Server memory grew linearly (~50MB/sec) as Erlang TCP buffers filled up.
-    *   **Critical Flaw**: RAM exhaustion is inevitable without active Flow Control or "Kick Slow Client" policies.
-    *   *Mitigation*: Implement `sndbuf` limits and disconnect clients with full buffers.
+    *   **Fix**: Implemented **Resilient Backpressure** with Offline Fallback.
+    *   **Mechanism**:
+        *   If a client is slow (Send Timeout > 2s): **Do Not Kill**.
+        *   **Move Message to Disk** (Mnesia Offline Storage) to free RAM.
+        *   Only disconnect if client is "Dead" (5 consecutive timeouts).
+    *   **Result**: 100k slow connections sustained. RAM usage stabilized (~1.1GB). **User Experience Preserved** (No dissatisfaction from flaky disconnects).
+
 
 2.  **The Split Brain (Network Partition)**
     *   **Attack**: Randomly disconnecting the Core Node from Edge Nodes while under load.

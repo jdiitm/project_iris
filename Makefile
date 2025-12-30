@@ -13,7 +13,13 @@ HOSTNAME := $(shell hostname -s)
 ERL_FILES = $(wildcard src/*.erl)
 BEAM_FILES = $(patsubst src/%.erl,ebin/%.beam,$(ERL_FILES))
 
-all: check_deps $(BEAM_FILES)
+APP_SRC = $(wildcard src/*.app.src)
+APP_FILES = $(patsubst src/%.app.src,ebin/%.app,$(APP_SRC))
+
+all: check_deps $(BEAM_FILES) $(APP_FILES)
+
+ebin/%.app: src/%.app.src
+	cp $< $@
 
 ebin/%.beam: src/%.erl
 	$(ERLC) -o ebin $<
