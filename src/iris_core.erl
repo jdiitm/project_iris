@@ -25,21 +25,26 @@ init([]) ->
 %% API
 
 init_db() ->
-    %% Use ETS instead of Mnesia due to missing dependency
-    try ets:new(presence, [named_table, public, set, {keypos, 2}]) of
-        _ -> io:format("Core DB (ETS) Initialized.~n")
-    catch
-        _:_ -> io:format("Core DB (ETS) already exists.~n")
+    mnesia:create_schema([node()]),
+    mnesia:start(),
+    case mnesia:create_table(presence, 
+        [{ram_copies, [node()]}, 
+         {attributes, [user_id, node, pid]}]) of
+        {atomic, ok} -> ok;
+        {aborted, {already_exists, presence}} -> ok;
+        Err -> io:format("Mnesia Init Error: ~p~n", [Err])
     end,
     iris_rocksdb:init(),
-    ok.
+    io:format("Core DB Initialized.~n").
 
 register_user(User, Node, Pid) ->
-    ets:insert(presence, {presence, User, Node, Pid}),
-    {atomic, ok}.
+    F = fun() ->
+        mnesia:write({presence, User, Node, Pid})
+    end,
+    mnesia:activity(transaction, F).
 
 lookup_user(User) ->
-    case ets:lookup(presence, User) of
+    case mnesia:dirty_read(presence, User) of
         [{presence, User, Node, Pid}] -> {ok, Node, Pid};
         [] -> {error, not_found}
     end.
