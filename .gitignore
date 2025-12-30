@@ -1,0 +1,6 @@
+Mnesia*
+ebin/*.beam
+*.dump
+__pycache__/
+*.pyc
+erl_crash.dump

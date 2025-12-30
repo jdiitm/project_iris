@@ -1,10 +1,31 @@
 -module(iris_load_gen).
--export([start/2, worker_init/3]).
+-export([start/2, start_idle/1, worker_init/3, idle_worker_init/1]).
 
 %% Config
 -define(TARGET_HOST, {127,0,0,1}).
 -define(TARGET_PORT, 8085).
 -define(TOTAL_USERS, 1000000).
+
+%% Start Idle Connections (for Memory Benchmarking)
+start_idle(Count) ->
+    io:format("Spawning ~p idle connections...~n", [Count]),
+    lists:foreach(fun(I) ->
+        spawn(?MODULE, idle_worker_init, [I]),
+        if I rem 1000 == 0 -> timer:sleep(100); true -> ok end %% Ramp up gently
+    end, lists:seq(1, Count)),
+    io:format("All idle connections spawned.~n").
+
+idle_worker_init(Id) ->
+    case gen_tcp:connect(?TARGET_HOST, ?TARGET_PORT, [binary, {packet, 0}, {active, false}]) of
+        {ok, Sock} ->
+            User = list_to_binary("idle_" ++ integer_to_list(Id)),
+            gen_tcp:send(Sock, <<1, User/binary>>),
+            %% Wait for ACK
+            gen_tcp:recv(Sock, 0),
+            %% Hold connection forever
+            receive stop -> ok end;
+        _ -> ok
+    end.
 
 %% Start Load Gen
 %% Workers: Number of concurrent connections to maintain.
