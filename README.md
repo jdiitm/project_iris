@@ -54,7 +54,7 @@ make start_edge1
 make start_edge2
 ```
 
-**Note**: The Makefile is configured to explicitly use `/usr/bin/erl` to ensure `mnesia` is available. If running manually, ensure you are using an Erlang installation that includes the `mnesia` and `runtime_tools` applications.
+*Note*: The `Makefile` includes "smart detection" logic. It will automatically search for an `erl` executable in your path or standard locations (like `/usr/bin/erl`) that supports `mnesia`. If found, it uses that binary potentially overriding your default `erl` to ensure the system runs correctly.
 
 ## Client Protocol
 
@@ -84,6 +84,7 @@ python3 test_offline.py
 *Note*: The system now fully supports offline message retrieval. When Charlie logs in, the Edge node queries the Core node for offline messages (stored in `offline_msgs.dets`) and delivers them.
 
 ## Recent Improvements
+*   **Portability & Autodetection**: The build system now automatically detects a valid Erlang installation (with `mnesia`) and adapts to the machine's hostname. No manual configuration is required.
 *   **Dynamic Node Discovery**: Support for variable hostnames (fixes `localhost` hardcoding).
 *   **Robustness**: Fixed TCP listener configuration bugs (`badarg` crashes).
 *   **Mnesia Adoption**: Replaced ETS with Mnesia for distributed presence and transactional integrity.

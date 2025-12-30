@@ -8,10 +8,10 @@
 %% Application Callbacks
 start(_StartType, _StartArgs) ->
     %% Check if we are the core node
-    NodeName = atom_to_list(node()),
-    case string:str(NodeName, "iris_core") of
-        0 -> ok; %% Not core, skip DB init
-        _ -> init_db()
+    [Name, _Host] = string:tokens(atom_to_list(node()), "@"),
+    case Name of
+        "iris_core" -> init_db();
+        _ -> ok %% Not core, skip DB init
     end,
     supervisor:start_link({local, ?MODULE}, ?MODULE, []).
 
