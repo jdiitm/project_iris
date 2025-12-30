@@ -9,20 +9,27 @@ def create_socket(port=8085):
     s.connect(('localhost', port))
     return s
 
+    msg_bytes = msg.encode('utf-8')
+    payload = b'\x02' + struct.pack('>H', len(target_bytes)) + target_bytes + msg_bytes
+    sock.sendall(payload)
+
 def login(sock, user):
     # Cmd 1 + User bytes
     print(f"Logging in as {user}...")
     payload = b'\x01' + user.encode('utf-8')
     sock.sendall(payload)
-    # The server doesn't respond to login, just logs it.
-    time.sleep(0.5)
+    # Wait for Login ACK
+    ack = sock.recv(1024)
+    if b"LOGIN_OK" not in ack:
+        raise Exception(f"Login failed for {user}: {ack}")
+    print(f"Login successful for {user}")
 
 def send_msg(sock, target, msg):
     # Cmd 2 + TargetLen(16) + Target + Msg
     print(f"Sending message to {target}: {msg}")
     target_bytes = target.encode('utf-8')
     msg_bytes = msg.encode('utf-8')
-    payload = b'\x02' + struct.pack('>H', len(target_bytes)) + target_bytes + msg_bytes
+    payload = b'\x02' + struct.pack('>H', len(target_bytes)) + target_bytes + struct.pack('>H', len(msg_bytes)) + msg_bytes
     sock.sendall(payload)
 
 def receive_msg(sock):

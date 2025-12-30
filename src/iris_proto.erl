@@ -7,21 +7,31 @@
                 | {error, term()}.
 
 %% Protocol Specification:
-%% 0x01 | User (binary) -> {login, User}
-%% 0x02 | TargetLen(16) | Target(binary) | Msg(binary) -> {send_message, Target, Msg}
+%% 0x01 | User (binary) -> {login, User}  (Assumes single login per connection start, ignores rest?)
+%% Actually, login shouldn't have rest usually, but let's be robust.
+%% 0x02 | TargetLen(16) | Target(binary) | MsgLen(16) | Msg(binary) | Rest
 %% 0x03 | MsgId (binary) -> {ack, MsgId}
 
--spec decode(binary()) -> packet().
-decode(<<1, User/binary>>) ->
-    {login, User};
+-spec decode(binary()) -> {packet(), binary()} | {more, binary()}.
+
+decode(<<1, Rest/binary>>) ->
+    %% Login is simpler, let's assume it consumes the rest for User? No, that's bad for robust protocol.
+    %% But existing client sends <<1, User>>. No length.
+    %% To keeping backward compat strictly for Login (which happens once), we can stick to "User is Rest"
+    %% BUT if we want proper framing, we strictly need length for everything or delimiter.
+    %% Let's impose that Login is the only packet in the first chunk, or assume User is everything.
+    { {login, Rest}, <<>> };
+
 decode(<<2, TargetLen:16, Rest/binary>>) ->
     case Rest of
-        <<Target:TargetLen/binary, Msg/binary>> ->
-            {send_message, Target, Msg};
+        <<Target:TargetLen/binary, MsgLen:16, Msg:MsgLen/binary, Rem/binary>> ->
+            { {send_message, Target, Msg}, Rem };
         _ ->
-            {error, invalid_send_message_packet}
+            {more, <<2, TargetLen:16, Rest/binary>>}
     end;
+    
 decode(<<3, MsgId/binary>>) ->
-    {ack, MsgId};
-decode(_) ->
-    {error, unknown_packet}.
+    { {ack, MsgId}, <<>> };
+
+decode(<<>>) -> {more, <<>>};
+decode(_Bin) -> { {error, unknown_packet}, <<>> }.
