@@ -1,6 +1,6 @@
 # Auto-detect a valid Erlang executable that has Mnesia
-ERL_CANDIDATES := erl /usr/bin/erl
-ERL := $(shell for e in $(ERL_CANDIDATES); do if $$e -noshell -eval 'case code:lib_dir(mnesia) of {error,_}->halt(1);_->halt(0) end' 2>/dev/null; then echo $$e; break; fi; done)
+ERL_CANDIDATES := erl /usr/bin/erl /usr/local/bin/erl /opt/homebrew/bin/erl
+ERL := $(shell for e in $(ERL_CANDIDATES); do if command -v $$e >/dev/null && $$e -noshell -eval 'case code:lib_dir(mnesia) of {error,_}->halt(1);_->halt(0) end' 2>/dev/null; then echo $$e; break; fi; done)
 
 # Fallback if no valid Erlang found (check_deps will fail later with details)
 ifeq ($(ERL),)
@@ -32,3 +32,11 @@ start_edge1: all
 
 start_edge2: all
 	$(ERL) -detached -pa ebin -sname iris_edge2 -iris_edge port 8086 -eval "application:ensure_all_started(iris_edge)"
+
+stop:
+	@echo "Stopping nodes..."
+	@$(ERL) -noshell -sname stopper -eval "rpc:call('iris_edge2@$(HOSTNAME)', init, stop, []), \
+	                                     rpc:call('iris_edge1@$(HOSTNAME)', init, stop, []), \
+	                                     rpc:call('iris_core@$(HOSTNAME)', init, stop, []), \
+	                                     init:stop()."
+	@echo "Nodes stopped."
