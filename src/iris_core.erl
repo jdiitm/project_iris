@@ -25,16 +25,28 @@ init([]) ->
 %% API
 
 init_db() ->
+    %% Ensure Mnesia is stopped for schema check (bootstrap)
+    mnesia:stop(),
     mnesia:create_schema([node()]),
     mnesia:start(),
+    
     case mnesia:create_table(presence, 
         [{ram_copies, [node()]}, 
          {attributes, [user_id, node, pid]}]) of
         {atomic, ok} -> ok;
         {aborted, {already_exists, presence}} -> ok;
-        Err -> io:format("Mnesia Init Error: ~p~n", [Err])
+        Err1 -> io:format("Mnesia Init Error (presence): ~p~n", [Err1])
     end,
-    iris_rocksdb:init(),
+    
+    case mnesia:create_table(offline_msg, 
+        [{disc_copies, [node()]}, 
+         {type, bag},
+         {attributes, [user_id, timestamp, msg]}]) of
+        {atomic, ok} -> ok;
+        {aborted, {already_exists, offline_msg}} -> ok;
+        Err2 -> io:format("Mnesia Init Error (offline_msg): ~p~n", [Err2])
+    end,
+    
     io:format("Core DB Initialized. Mnesia Status: ~p~n", [mnesia:system_info(is_running)]),
     io:format("Mnesia Local Tables: ~p~n", [mnesia:system_info(local_tables)]).
 
@@ -52,7 +64,7 @@ lookup_user(User) ->
 
 store_offline(User, Msg) ->
     %% Only called on Core
-    iris_rocksdb:store(User, Msg).
+    iris_offline_storage:store(User, Msg).
 
 retrieve_offline(User) ->
-    iris_rocksdb:retrieve(User).
+    iris_offline_storage:retrieve(User).
