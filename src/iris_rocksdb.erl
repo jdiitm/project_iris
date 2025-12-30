@@ -6,18 +6,19 @@
 %% We will use DETS for simplicity of key-value storage.
 
 -define(DB_FILE, "offline_msgs.dets").
+-define(DB_NAME, offline_msgs).
 
 init() ->
     %% Open or create the DETS file
-    dets:open_file(?DB_FILE, [{type, bag}]).
+    dets:open_file(?DB_NAME, [{file, ?DB_FILE}, {type, bag}]).
 
 store(User, Msg) ->
     %% Store message for user. 'bag' type allows multiple messages per user.
-    dets:insert(?DB_FILE, {User, Msg}).
+    dets:insert(?DB_NAME, {User, Msg}).
 
 retrieve(User) ->
     %% Get all messages for user
-    Msgs = dets:lookup(?DB_FILE, User),
+    Msgs = dets:lookup(?DB_NAME, User),
     %% Remove them after retrieval (pop behavior)
-    dets:delete_object(?DB_FILE, User), 
+    dets:delete(?DB_NAME, User), 
     [Msg || {_, Msg} <- Msgs].
