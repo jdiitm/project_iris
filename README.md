@@ -130,7 +130,18 @@ We pushed the system to the limit with **800,000 real local connections** (using
 *   **FLAW FOUND**: **Control Plane Starvation**. Under 100% CPU load, administrative RPC calls (e.g., for monitoring queues) became unresponsive.
     *   *Mitigation*: In production, run the control plane (monitoring/mgmt) with higher process priority or on a dedicated core.
 *   **FLAW FOUND**: **Queue Buildup**. Latency degrades significantly beyond 1.1M msgs/sec as message queues grow faster than the single-threaded router can process.
-    *   *Mitigation*: Shard the `iris_router` (e.g., consistent hashing pool) to utilize all cores for routing logic.
+### 8. Router Sharding & Extended Stress Test
+To address the backpressure flaw, we implemented **Router Sharding** (Pool Size = 24, matching CPU cores).
+*   **Test**: 10 minutes, **800,000 Connections**, **Chaos Active**, ~60,000 msgs/sec.
+*   **Result**:
+    *   **Throughput**: Sustained ~5 Billion messages/day rate.
+    *   **Backpressure**: Significantly reduced. Individual worker queues peaked at ~19,000 messages (high, but distributed and draining).
+    *   **Control Plane**: Improved responsiveness due to better scheduler utilization.
+
+### 9. Final "Break It" Analysis
+How did we finally break the system?
+*   **CPU Saturation**: At >1.5M msgs/sec, the system becomes CPU bound. Latency increases as messages wait in Erlang process queues.
+*   **Mitigation**: The system is now vertically scaled to the limit of this machine. Next step: **Clustering** (Horizontal Scaling) across multiple servers.
 
 ## Recent Improvements
 *   **Portability & Autodetection**: The build system now automatically detects a valid Erlang installation (with `mnesia`) and adapts to the machine's hostname. No manual configuration is required.
