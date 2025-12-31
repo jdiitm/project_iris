@@ -15,13 +15,10 @@ store(User, Msg) ->
 retrieve(User) ->
     %% Read all messages for user
     F = fun() ->
-        %% Use match_object to get all records for this user based on primary key part?
-        %% Mnesia bag tables key is the first element, but here we scan by User (field 1).
-        %% Wait, {offline_msg, User, ...}. Yes, User is key.
         Msgs = mnesia:read(offline_msg, User),
         io:format("OfflineStore: Read ~p msgs for ~p~n", [length(Msgs), User]),
-        %% Delete them after reading
-        lists:foreach(fun(Rec) -> mnesia:delete_object(Rec) end, Msgs),
+        %% Efficiently delete all messages for this user
+        mnesia:delete({offline_msg, User}),
         Msgs
     end,
     case mnesia:activity(transaction, F) of

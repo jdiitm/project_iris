@@ -94,6 +94,24 @@ def main():
              # The code might just print it to stdout in edge node, not send it to socket?
         
         charlie.close()
+        
+        print("Verifying Deletion (Re-login Charlie)...")
+        charlie2 = create_socket()
+        extra_data2 = login(charlie2, "charlie")
+        
+        # Check if any messages arrive
+        charlie2.settimeout(2.0)
+        try:
+            chunk = charlie2.recv(1024)
+            if chunk:
+                 print(f"FAILURE: Received data after deletion: {chunk}")
+                 sys.exit(1)
+            else:
+                 print("SUCCESS: No messages received (Clean).")
+        except socket.timeout:
+             print("SUCCESS: No messages received (Timeout as expected).")
+             
+        charlie2.close()
     except Exception as e:
         print(f"Test Crashed: {e}")
         sys.exit(1)
