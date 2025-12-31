@@ -20,7 +20,10 @@ batch_spawn(N, StatsPid, Duration, Mode) ->
     batch_spawn(N-1, StatsPid, Duration, Mode).
 
 worker_init(Id, StatsPid, Duration, IpOffset, Mode) ->
-    SrcIp = {127,0,0, IpOffset},
+    %% Cycle through 127.0.0.1 - 127.0.0.20
+    %% This allows ~64k * 20 = 1.28 Million possible connections
+    AliasIdx = (Id rem 20) + 1, 
+    SrcIp = {127,0,0, AliasIdx},
     Opts = [binary, {packet, 0}, {active, false}, {ip, SrcIp}, {reuseaddr, true}],
     
     case gen_tcp:connect(?TARGET_HOST, ?TARGET_PORT, Opts) of
