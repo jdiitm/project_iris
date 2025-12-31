@@ -1,5 +1,5 @@
 -module(chaos_monkey).
--export([start/0, start/2, stop/0, loop/2]).
+-export([start/0, start/2, stop/0, loop/2, kill_system/2, system_loop/2]).
 
 %% Start with default: Kill 1 connection every 500ms
 start() ->
@@ -14,6 +14,7 @@ stop() ->
     ?MODULE ! stop,
     unregister(?MODULE).
 
+%% --- Connection Killer Loop ---
 loop(Interval, Count) ->
     receive
         stop -> 
@@ -27,6 +28,26 @@ loop(Interval, Count) ->
         %% Kill random victims
         kill_random(Victims, Count),
         loop(Interval, Count)
+    end.
+
+%% --- System Process Killer ---
+kill_system(Interval, Targets) ->
+    Pid = spawn(?MODULE, system_loop, [Interval, Targets]),
+    io:format("[CHAOS] System Killer active. Targeting: ~p~n", [Targets]),
+    Pid.
+
+system_loop(Interval, Targets) ->
+    receive
+        stop -> ok
+    after Interval ->
+        Target = lists:nth(rand:uniform(length(Targets)), Targets),
+        case whereis(Target) of
+            undefined -> ok;
+            Pid ->
+                io:format("[CHAOS] SNIPER: Killing system process ~p (~p)~n", [Target, Pid]),
+                exit(Pid, kill)
+        end,
+        system_loop(Interval, Targets)
     end.
 
 kill_random([], _) -> ok;
