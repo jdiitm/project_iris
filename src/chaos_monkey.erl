@@ -5,6 +5,11 @@
 start() ->
     start(500, 1.0).
 
+%% corrupt_pids: Sends garbage to random processes
+start(IntervalMs, corrupt_pids) ->
+    Pid = spawn(?MODULE, loop, [IntervalMs, corrupt_pids]),
+    register(?MODULE, Pid),
+    io:format("Chaos Monkey started (Corrupt PIDs mode). Interval: ~p ms.~n", [IntervalMs]);
 start(IntervalMs, KillCount) ->
     Pid = spawn(?MODULE, loop, [IntervalMs, KillCount]),
     register(?MODULE, Pid),
@@ -15,6 +20,37 @@ stop() ->
     unregister(?MODULE).
 
 %% --- Connection Killer Loop ---
+kill_random([], _) -> ok;
+kill_random(_, 0) -> ok;
+kill_random(Victims, N) ->
+    Len = length(Victims),
+    Idx = rand:uniform(Len),
+    Victim = lists:nth(Idx, Victims),
+    io:format("[CHAOS] Killing process ~p~n", [Victim]),
+    exit(Victim, kill),
+    kill_random(lists:delete(Victim, Victims), N - 1).
+
+corrupt_random([], _) -> ok;
+corrupt_random(_, 0) -> ok;
+corrupt_random(Victims, N) ->
+    Len = length(Victims),
+    Idx = rand:uniform(Len),
+    Victim = lists:nth(Idx, Victims),
+    %% Send garbage binary to trigger potential match crashes or memory fill
+    Victim ! <<0:256>>, 
+    corrupt_random(lists:delete(Victim, Victims), N - 1).
+
+loop(Interval, corrupt_pids) ->
+    receive
+        stop -> 
+            io:format("Chaos Monkey (Corrupt Mode) stopped.~n"),
+            ok
+    after Interval ->
+        %% Target ANY process
+        Victims = processes(),
+        corrupt_random(Victims, 10), %% Corrupt 10 processes per tick
+        loop(Interval, corrupt_pids)
+    end;
 loop(Interval, Count) ->
     receive
         stop -> 
@@ -49,13 +85,3 @@ system_loop(Interval, Targets) ->
         end,
         system_loop(Interval, Targets)
     end.
-
-kill_random([], _) -> ok;
-kill_random(_, 0) -> ok;
-kill_random(Victims, N) ->
-    Len = length(Victims),
-    Idx = rand:uniform(Len),
-    Victim = lists:nth(Idx, Victims),
-    io:format("[CHAOS] Killing process ~p~n", [Victim]),
-    exit(Victim, kill),
-    kill_random(lists:delete(Victim, Victims), N - 1).

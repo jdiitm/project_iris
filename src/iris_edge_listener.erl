@@ -12,10 +12,11 @@ start_link(Port) ->
     gen_server:start_link({local, ?MODULE}, ?MODULE, [Port], []).
 
 init([Port]) ->
-    {ok, LSock} = gen_tcp:listen(Port, [binary, {packet, 0}, {active, false}, {reuseaddr, true}]),
-    io:format("Edge Listener started on port ~p~n", [Port]),
-    %% Spawn the first acceptor
-    spawn_acceptor(LSock),
+    %% Tuning: High backlog for burst connections
+    {ok, LSock} = gen_tcp:listen(Port, [binary, {packet, 0}, {active, false}, {reuseaddr, true}, {backlog, 4096}]),
+    io:format("Edge Listener started on port ~p (Pool Size: 100)~n", [Port]),
+    %% Tuning: Spawn 100 parallel acceptors
+    [spawn_acceptor(LSock) || _ <- lists:seq(1, 100)],
     {ok, #state{lsock = LSock}}.
 
 spawn_acceptor(LSock) ->
