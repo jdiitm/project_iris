@@ -7,7 +7,6 @@
 store(User, Msg) ->
     Timestamp = os:system_time(millisecond),
     F = fun() ->
-        io:format("OfflineStore: Writing ~p for ~p~n", [Msg, User]),
         mnesia:write({offline_msg, User, Timestamp, Msg})
     end,
     mnesia:activity(transaction, F).
@@ -15,8 +14,8 @@ store(User, Msg) ->
 retrieve(User) ->
     %% Read all messages for user
     F = fun() ->
-        Msgs = mnesia:read(offline_msg, User),
-        io:format("OfflineStore: Read ~p msgs for ~p~n", [length(Msgs), User]),
+        %% Acquire write lock immediately to avoid upgrade deadlocks/overhead
+        Msgs = mnesia:read(offline_msg, User, write),
         %% Efficiently delete all messages for this user
         mnesia:delete({offline_msg, User}),
         Msgs
