@@ -1,6 +1,13 @@
+![Erlang](https://img.shields.io/badge/Core-Erlang-red)
+![Python](https://img.shields.io/badge/Tests-Python-blue)
 # Project Iris
 
 A distributed messaging system built in Erlang, designed to demonstrate core concepts of distributed systems: node connectivity, user presence, message routing, and offline storage.
+
+## Tech Stack
+
+- **Core Service:** Erlang (OTP)
+- **Testing & Tooling:** Python
 
 ## Architecture
 
