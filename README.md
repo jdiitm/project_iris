@@ -332,3 +332,11 @@ We have formalized the verification process into a master "A-Z" suite that valid
 *   **[Comprehensive Verification Report](reports/COMPREHENSIVE_REPORT.md)**: The master report detailing all test results.
 *   **[Global Architecture Report](reports/GLOBAL_ARCHITECTURE.md)**: Details on the 5-Billion scale architecture, Batching, and Local Switching.
 *   **[Scalability Projection](reports/SCALABILITY_PROJECTION.md)**: Mathematical proof for 1 Billion users/minute.
+
+### 22. Feature: Presence & Last Seen (WhatsApp-Style)
+We added a scalable "Online/Last Seen" system designed for 5 Billion Users.
+
+*   **Real-Time Online**: RAM-based presence table.
+*   **Last Seen**: Persistent disc storage (`user_status`), batched for performance.
+*   **Network Optimization**: Clients **PULL** status (`GetStatus`) to save bandwidth. No background broadcasts.
+*   **Performance**: Buffer-based writes handle "Thundering Herd" regional disconnects.

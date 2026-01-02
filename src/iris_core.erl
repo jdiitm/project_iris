@@ -5,6 +5,7 @@
 -export([start/2, stop/1, init/1]).
 -export([register_user/3, lookup_user/1, store_offline/2, store_batch/2, retrieve_offline/1]).
 -export([get_bucket_count/1, set_bucket_count/2]).
+-export([update_status/2, get_status/1]).
 
 %% Application Callbacks
 start(_StartType, _StartArgs) ->
@@ -30,7 +31,17 @@ stop(_State) ->
 
 %% Supervisor Callbacks
 init([]) ->
-    {ok, {{one_for_all, 0, 1}, []}}.
+    %% Start 100 Status Batchers
+    Batchers = [
+        #{id => list_to_atom("iris_status_batcher_" ++ integer_to_list(I)),
+          start => {iris_status_batcher, start_link, [I]},
+          restart => permanent,
+          shutdown => 5000,
+          type => worker,
+          modules => [iris_status_batcher]}
+        || I <- lists:seq(0, 99)
+    ],
+    {ok, {{one_for_one, 10, 60}, Batchers}}.
 
 %% API
 
@@ -66,6 +77,14 @@ init_db() ->
         {atomic, ok} -> ok;
         {aborted, {already_exists, user_meta}} -> ok;
         Err3 -> io:format("Mnesia Init Error (user_meta): ~p~n", [Err3])
+    end,
+
+    case mnesia:create_table(user_status, 
+        [{disc_copies, [node()]}, 
+         {attributes, [user_id, last_seen]}]) of
+        {atomic, ok} -> ok;
+        {aborted, {already_exists, user_status}} -> ok;
+        Err4 -> io:format("Mnesia Init Error (user_status): ~p~n", [Err4])
     end,
     
     io:format("Core DB Initialized. Mnesia Status: ~p~n", [mnesia:system_info(is_running)]),
@@ -107,3 +126,27 @@ set_bucket_count(User, Count) ->
         mnesia:write({user_meta, User, Count})
     end,
     mnesia:activity(transaction, F).
+
+%% PRESENCE APIs
+
+update_status(User, online) ->
+    %% Online status is implicit via register_user
+    ok;
+update_status(User, offline) ->
+    %% 1. Remove from RAM (Real-time Online Status)
+    mnesia:dirty_delete(presence, User),
+    %% 2. Delegate Last Seen persistence to Batcher
+    iris_status_batcher:submit(User, offline).
+
+get_status(User) ->
+    %% 1. Check RAM (Online)
+    case mnesia:dirty_read(presence, User) of
+        [{presence, User, _, _}] -> 
+            {online, true, 0};
+        [] -> 
+            %% 2. Check Disc (Last Seen)
+            case mnesia:dirty_read(user_status, User) of
+                [{user_status, User, LastSeen}] -> {online, false, LastSeen};
+                [] -> {online, false, 0} % Never seen
+            end
+    end.

@@ -1,5 +1,5 @@
 -module(iris_proto).
--export([decode/1, unpack_batch/1]).
+-export([decode/1, unpack_batch/1, encode_status/3]).
 
 -type packet() :: {login, binary()}
                 | {send_message, binary(), binary()}
@@ -48,8 +48,22 @@ decode(<<4, TargetLen:16, Rest/binary>>) ->
              {more, <<4, TargetLen:16, Rest/binary>>}
     end;
 
+decode(<<5, TargetLen:16, Rest/binary>>) ->
+    case Rest of
+        <<Target:TargetLen/binary, Rem/binary>> ->
+             { {get_status, Target}, Rem };
+        _ ->
+             {more, <<5, TargetLen:16, Rest/binary>>}
+    end;
+
 decode(<<>>) -> {more, <<>>};
 decode(_Bin) -> { {error, unknown_packet}, <<>> }.
+
+encode_status(User, State, Time) ->
+    StateByte = case State of online -> 1; offline -> 0 end,
+    U = User, %% User is already binary
+    ULen = byte_size(U),
+    <<6, ULen:16, U/binary, StateByte, Time:64>>.
 
 unpack_batch(Blob) -> unpack_batch(Blob, []).
 unpack_batch(<<>>, Acc) -> lists:reverse(Acc);

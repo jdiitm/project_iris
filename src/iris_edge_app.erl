@@ -14,6 +14,10 @@ start(_Type, _Args) ->
     %% Public named table for fast O(1) local lookup
     ets:new(local_presence, [set, named_table, public, {read_concurrency, true}, {write_concurrency, true}]),
     
+    %% Optimization: Presence Cache (TTL-based)
+    %% Stores {User, Status, Timestamp, InsertTime}
+    ets:new(presence_cache, [set, named_table, public, {read_concurrency, true}, {write_concurrency, true}]),
+    
     lists:foreach(fun(I) -> 
         iris_router_worker:start_link(I) 
     end, lists:seq(1, PoolSize)),

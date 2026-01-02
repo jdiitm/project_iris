@@ -28,13 +28,13 @@ clean:
 ERL_FLAGS := $(shell ./scripts/auto_tune.sh)
 
 start_core: all
-	$(ERL) -detached $(ERL_FLAGS) -pa ebin -sname iris_core -eval "application:ensure_all_started(iris_core)"
+	$(ERL) -noshell -noinput $(ERL_FLAGS) -pa ebin -sname iris_core -eval "application:ensure_all_started(iris_core)" &
 
 start_edge1: all
-	$(ERL) -detached $(ERL_FLAGS) -pa ebin -sname iris_edge1 -iris_edge port 8085 -eval "application:ensure_all_started(iris_edge)"
+	$(ERL) -noshell -noinput $(ERL_FLAGS) -pa ebin -sname iris_edge1 -iris_edge port 8085 -eval "application:ensure_all_started(iris_edge)" &
 
 start_edge2: all
-	$(ERL) -detached $(ERL_FLAGS) -pa ebin -sname iris_edge2 -iris_edge port 8086 -eval "application:ensure_all_started(iris_edge)"
+	$(ERL) -noshell -noinput $(ERL_FLAGS) -pa ebin -sname iris_edge2 -iris_edge port 8086 -eval "application:ensure_all_started(iris_edge)" &
 
 stop:
 	@echo "Stopping nodes..."
