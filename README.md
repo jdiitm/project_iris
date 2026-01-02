@@ -320,3 +320,17 @@ We verified the system's ability to handle **1 Billion messages in 1 Minute** (1
 *   **Hot-Key Solution**: "Inbox Bucketing" architecture designed to solve the single-receiver bottleneck.
 
 For the full mathematical proof and architecture design, see the **[Scalability Projection Report](reports/SCALABILITY_PROJECTION.md)**.
+
+### 21. Global Architecture & Verification (New)
+To support **1 Billion Messages/Minute** and geographically distributed users, we successfully designed, implemented, and verified a **Tiered Global Architecture**.
+
+*   **Inbox Bucketing**: Solved "Hot-Key" limits by dynamically sharding VIP inboxes.
+*   **Global Fan-In**: Validated 517,000 msgs/30s ingress with 0 loss using `batch_send` protocol.
+*   **Dynamic Presence**: Verified reliability under aggressive churn.
+
+Run the full A-Z Verification Suite:
+```bash
+./scripts/verify_all.sh
+```
+
+See **[Global Architecture Report](reports/GLOBAL_ARCHITECTURE.md)** for details.

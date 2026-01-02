@@ -1,13 +1,6 @@
-# Auto-detect a valid Erlang executable that has Mnesia
-ERL_CANDIDATES := erl /usr/bin/erl /usr/local/bin/erl /opt/homebrew/bin/erl
-ERL := $(shell for e in $(ERL_CANDIDATES); do if command -v $$e >/dev/null && $$e -noshell -eval 'case code:lib_dir(mnesia) of {error,_}->halt(1);_->halt(0) end' 2>/dev/null; then echo $$e; break; fi; done)
-
-# Fallback if no valid Erlang found (check_deps will fail later with details)
-ifeq ($(ERL),)
-ERL := erl
-endif
-
-ERLC ?= erlc
+# Makefile for Project Iris
+ERL = /usr/bin/erl
+ERLC = /usr/bin/erlc
 HOSTNAME := $(shell hostname -s)
 
 ERL_FILES = $(wildcard src/*.erl)

@@ -1,39 +1,60 @@
 -module(iris_offline_storage).
--export([store/2, retrieve/1]).
+-export([store/3, store_batch/3, retrieve/2]).
 
 %% Mnesia table definition (created in iris_core:init_db/0):
 %% {offline_msg, User, Timestamp, Msg}
 
-store(User, Msg) ->
+store(User, Msg, Count) ->
     Timestamp = os:system_time(millisecond),
+    %% Determine Partition
+    BucketID = erlang:phash2(Msg, Count),
+    Key = {User, BucketID},
+    
     F = fun() ->
-        mnesia:write({offline_msg, User, Timestamp, Msg})
+        mnesia:write({offline_msg, Key, Timestamp, Msg})
     end,
     mnesia:activity(transaction, F).
 
-retrieve(User) ->
-    %% Read all messages for user
+store_batch(User, Msgs, Count) ->
+    Timestamp = os:system_time(millisecond),
+    %% Group messages by Bucket
+    BucketedMsgs = lists:foldl(fun(Msg, Acc) ->
+        Bucket = erlang:phash2(Msg, Count),
+        orddict:append(Bucket, Msg, Acc)
+    end, orddict:new(), Msgs),
+    
     F = fun() ->
-        %% Acquire write lock immediately to avoid upgrade deadlocks/overhead
-        Msgs = mnesia:read(offline_msg, User, write),
-        %% Efficiently delete all messages for this user
-        mnesia:delete({offline_msg, User}),
-        Msgs
+        lists:foreach(fun({Bucket, Batch}) ->
+             Key = {User, Bucket},
+             mnesia:write({offline_msg, Key, Timestamp, Batch})
+        end, orddict:to_list(BucketedMsgs))
     end,
+    mnesia:activity(transaction, F).
+
+retrieve(User, Count) ->
+    %% Read messages from all buckets
+    F = fun() ->
+        %% Iterate all buckets 0..Count-1
+        Lists = lists:map(fun(ID) ->
+            Key = {User, ID},
+            Msgs = mnesia:read(offline_msg, Key, write),
+            mnesia:delete({offline_msg, Key}),
+            Msgs
+        end, lists:seq(0, Count - 1)),
+        lists:append(Lists)
+    end,
+    
     case mnesia:activity(transaction, F) of
         {atomic, Records} ->
-            %% Records is a list of {offline_msg, User, Ts, Msg}
-            %% Sort by timestamp
-            Sorted = lists:sort(fun({_, _, Ts1, _}, {_, _, Ts2, _}) -> Ts1 =< Ts2 end, Records),
-            %% Extract Msgs
-            [Msg || {_, _, _, Msg} <- Sorted];
+            sort_and_extract(Records);
         Records when is_list(Records) ->
-             %% Sometimes activity returns result directly if not explicitly {atomic, ...} depending on type?
-             %% Transaction returns {atomic, Val} or {aborted, Reason}.
-             %% Let's stick to matching result of activity/2.
-             Sorted = lists:sort(fun({_, _, Ts1, _}, {_, _, Ts2, _}) -> Ts1 =< Ts2 end, Records),
-             [Msg || {_, _, _, Msg} <- Sorted];
-         Error ->
-             io:format("Error retrieving offline msgs: ~p~n", [Error]),
-             []
+            sort_and_extract(Records);
+        Error ->
+            io:format("Error retrieving offline msgs: ~p~n", [Error]),
+            []
     end.
+
+sort_and_extract(Records) ->
+    Sorted = lists:sort(fun({_, _, Ts1, _}, {_, _, Ts2, _}) -> Ts1 =< Ts2 end, Records),
+    RawMsgs = [Msg || {_, _, _, Msg} <- Sorted],
+    lists:flatten(RawMsgs).

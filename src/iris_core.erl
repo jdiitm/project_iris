@@ -3,7 +3,8 @@
 -behaviour(supervisor).
 
 -export([start/2, stop/1, init/1]).
--export([register_user/3, lookup_user/1, store_offline/2, retrieve_offline/1]).
+-export([register_user/3, lookup_user/1, store_offline/2, store_batch/2, retrieve_offline/1]).
+-export([get_bucket_count/1, set_bucket_count/2]).
 
 %% Application Callbacks
 start(_StartType, _StartArgs) ->
@@ -58,6 +59,14 @@ init_db() ->
         {aborted, {already_exists, offline_msg}} -> ok;
         Err2 -> io:format("Mnesia Init Error (offline_msg): ~p~n", [Err2])
     end,
+
+    case mnesia:create_table(user_meta, 
+        [{disc_copies, [node()]}, 
+         {attributes, [user_id, bucket_count]}]) of
+        {atomic, ok} -> ok;
+        {aborted, {already_exists, user_meta}} -> ok;
+        Err3 -> io:format("Mnesia Init Error (user_meta): ~p~n", [Err3])
+    end,
     
     io:format("Core DB Initialized. Mnesia Status: ~p~n", [mnesia:system_info(is_running)]),
     io:format("Mnesia Local Tables: ~p~n", [mnesia:system_info(local_tables)]).
@@ -76,7 +85,25 @@ lookup_user(User) ->
 
 store_offline(User, Msg) ->
     %% Only called on Core
-    iris_offline_storage:store(User, Msg).
+    Count = get_bucket_count(User),
+    iris_offline_storage:store(User, Msg, Count).
+
+store_batch(User, Msgs) ->
+    Count = get_bucket_count(User),
+    iris_offline_storage:store_batch(User, Msgs, Count).
 
 retrieve_offline(User) ->
-    iris_offline_storage:retrieve(User).
+    Count = get_bucket_count(User),
+    iris_offline_storage:retrieve(User, Count).
+
+get_bucket_count(User) ->
+    case mnesia:dirty_read(user_meta, User) of
+        [{user_meta, User, Count}] -> Count;
+        [] -> 1
+    end.
+
+set_bucket_count(User, Count) ->
+    F = fun() ->
+        mnesia:write({user_meta, User, Count})
+    end,
+    mnesia:activity(transaction, F).
