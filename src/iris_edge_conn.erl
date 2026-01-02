@@ -122,35 +122,47 @@ process_buffer(Bin, Data = #data{socket = Socket}) ->
             process_buffer(Rest, Data);
 
         {{get_status, TargetUser}, Rest} ->
-            %% Pull-based status check
-            case rpc:call(?CORE_NODE, iris_core, get_status, [TargetUser]) of
-                {online, true, _} -> 
-                     gen_tcp:send(Socket, iris_proto:encode_status(TargetUser, online, 0));
-                {online, false, LastSeen} ->
-                     gen_tcp:send(Socket, iris_proto:encode_status(TargetUser, offline, LastSeen))
+            %% Pull-based status check with EDGE CACHING
+            Now = os:system_time(seconds),
+            CacheResult = ets:lookup(presence_cache, TargetUser),
+            StatusTuple = case CacheResult of
+                [{TargetUser, CachedStatus, CachedTime, InsertTime}] 
+                  when Now - InsertTime < 5 -> 
+                     %% Cache Hit
+                     {CachedStatus, CachedTime};
+                [{_, _, _, _}] ->
+                     %% Cache EXPIRED
+                     fetch_and_cache(TargetUser, Now);
+                [] ->
+                     %% Cache EMPTY
+                     fetch_and_cache(TargetUser, Now)
             end,
+            
+            {FinalState, FinalTime} = StatusTuple,
+            gen_tcp:send(Socket, iris_proto:encode_status(TargetUser, FinalState, FinalTime)),
             process_buffer(Rest, Data);
 
         {{ack, MsgId}, Rest} ->
-            %% io:format("Ack received: ~p~n", [MsgId]),
             process_buffer(Rest, Data);
 
         {{error, _}, _} ->
-             %% Error or incomplete. If known error, maybe skip? 
-             %% But for now let's assume it means "more data needed" or disconnect.
-             %% Actually iris_proto returns {error,...} for bad packet or unknown.
-             %% If unknown, we might be stuck. But decode returns {more, Bin} too.
-             %% Wait, I didn't verify if iris_proto returns {error, ...} for unknown.
-             %% My modified iris_proto returns { {error, ...}, <<>> }.
-             %% Need to handle 'more'.
              io:format("Protocol Error or Unknown~n"),
              inet:setopts(Socket, [{active, once}]),
-             {keep_state, Data#data{buffer = <<>>}}; %% flushing buffer on error? tough choice.
+             {keep_state, Data#data{buffer = <<>>}};
 
         {more, _} ->
             inet:setopts(Socket, [{active, once}]),
             {keep_state, Data#data{buffer = Bin}}
     end.
+
+fetch_and_cache(TargetUser, Now) ->
+    Result = case rpc:call(?CORE_NODE, iris_core, get_status, [TargetUser]) of
+        {online, true, _} -> {online, 0};
+        {online, false, LS} -> {offline, LS}
+    end,
+    {S, T} = Result,
+    ets:insert(presence_cache, {TargetUser, S, T, Now}),
+    Result.
 
 terminate(_Reason, _State, #data{user = User}) ->
     case User of
