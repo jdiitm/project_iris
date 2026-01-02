@@ -61,8 +61,8 @@ connected(info, {deliver_msg, Msg}, Data = #data{socket = Socket, user = User, t
         {error, timeout} ->
             if T < 5 ->
                 io:format("WARNING: Client slow. Fallback to Offline Storage. (Streak: ~p)~n", [T+1]),
-                %% 1. Store Offline
-                rpc:call(?CORE_NODE, iris_offline_storage, store, [User, Msg]),
+                %% 1. Store Offline via Core (handles bucketing)
+                rpc:call(?CORE_NODE, iris_core, store_offline, [User, Msg]),
                 %% 2. Keep Connection
                 {keep_state, Data#data{timeouts = T + 1}};
             true ->
@@ -73,7 +73,7 @@ connected(info, {deliver_msg, Msg}, Data = #data{socket = Socket, user = User, t
              %% If buffer immediately full, treat as timeout/slow
              if T < 5 ->
                 io:format("WARNING: Client buffer full. Fallback to Offline. (Streak: ~p)~n", [T+1]),
-                rpc:call(?CORE_NODE, iris_offline_storage, store, [User, Msg]),
+                rpc:call(?CORE_NODE, iris_core, store_offline, [User, Msg]),
                 {keep_state, Data#data{timeouts = T + 1}};
              true -> 
                 io:format("CRITICAL: Client buffer zombie. Terminating.~n"),
