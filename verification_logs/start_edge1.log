@@ -1,0 +1,6 @@
+[AUTO-TUNE] WARNING: ulimit -n (1048576) is lower than target (1657412).
+[AUTO-TUNE] Capping +P/+Q to 1048576 (minus buffer) to prevent crash.
+[AUTO-TUNE] Detected Available RAM: 25290 MB
+[AUTO-TUNE] Target Capacity: 1381177 Connections
+[AUTO-TUNE] Final Flags: +P 1043576 +Q 1043576
+/usr/bin/erl -detached +P 1043576 +Q 1043576 +K true +sbwt none -pa ebin -sname iris_edge1 -iris_edge port 8085 -eval "application:ensure_all_started(iris_edge)"

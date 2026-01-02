@@ -90,6 +90,10 @@ process_buffer(Bin, Data = #data{socket = Socket}) ->
             io:format("User logged in: ~p~n", [User]),
             %% Register with Core
             rpc:call(?CORE_NODE, iris_core, register_user, [User, node(), self()]),
+
+            %% Optimization: Register Locally for switching
+            ets:insert(local_presence, {User, self()}),
+
             %% Send Login ACK to ensure synchronization
             gen_tcp:send(Socket, <<3, "LOGIN_OK">>),
             
@@ -138,5 +142,10 @@ process_buffer(Bin, Data = #data{socket = Socket}) ->
             {keep_state, Data#data{buffer = Bin}}
     end.
 
-terminate(_Reason, _State, _Data) ->
+terminate(_Reason, _State, #data{user = User}) ->
+    %% Optimization: Cleanup Local Cache
+    case User of
+        undefined -> ok;
+        _ -> ets:delete(local_presence, User)
+    end,
     ok.

@@ -1,0 +1,45 @@
+[AUTO-TUNE] WARNING: ulimit -n (1048576) is lower than target (1679013).
+[AUTO-TUNE] Capping +P/+Q to 1048576 (minus buffer) to prevent crash.
+[AUTO-TUNE] Detected Available RAM: 25619 MB
+[AUTO-TUNE] Target Capacity: 1399178 Connections
+[AUTO-TUNE] Final Flags: +P 1043576 +Q 1043576
+[AUTO-TUNE] WARNING: ulimit -n (1048576) is lower than target (1678999).
+[AUTO-TUNE] Capping +P/+Q to 1048576 (minus buffer) to prevent crash.
+[AUTO-TUNE] Detected Available RAM: 25619 MB
+[AUTO-TUNE] Target Capacity: 1399166 Connections
+[AUTO-TUNE] Final Flags: +P 1043576 +Q 1043576
+[AUTO-TUNE] WARNING: ulimit -n (1048576) is lower than target (1675507).
+[AUTO-TUNE] Capping +P/+Q to 1048576 (minus buffer) to prevent crash.
+[AUTO-TUNE] Detected Available RAM: 25566 MB
+[AUTO-TUNE] Target Capacity: 1396256 Connections
+[AUTO-TUNE] Final Flags: +P 1043576 +Q 1043576
+[AUTO-TUNE] WARNING: ulimit -n (1048576) is lower than target (1682416).
+[AUTO-TUNE] Capping +P/+Q to 1048576 (minus buffer) to prevent crash.
+[AUTO-TUNE] Detected Available RAM: 25671 MB
+[AUTO-TUNE] Target Capacity: 1402014 Connections
+[AUTO-TUNE] Final Flags: +P 1043576 +Q 1043576
+[AUTO-TUNE] WARNING: ulimit -n (1048576) is lower than target (1101192).
+[AUTO-TUNE] Capping +P/+Q to 1048576 (minus buffer) to prevent crash.
+[AUTO-TUNE] Detected Available RAM: 16802 MB
+[AUTO-TUNE] Target Capacity: 917660 Connections
+[AUTO-TUNE] Final Flags: +P 1043576 +Q 1043576
+--- WhatsApp-Scale Benchmark Suite ---
+[1] Restarting Nodes...
+[2] Baseline: 0.56 MB RAM, 0.0% CPU
+[3] Spawning 10000 idle connections...
+    Waiting 10s for connections to stabilize...
+    Loaded: 0.56 MB RAM
+    Delta: 0.00 MB for 10000 conns
+    Memory per Connection: 0.00 KB (Excellent!)
+[4] Running High-Throughput Load Test...
+    Throughput: 2,255,891 msgs/sec
+    Avg CPU Usage: 0.0%
+[5] Checking Latency (P50/P99)...
+    P99 Latency: 0.14 ms
+
+--- Summary Findings ---
+1. Concurrent Connections: 10000 verified (Capacity > 1M)
+2. Memory per Connection:  0.00 KB (Target: Very Low)
+3. Messages per Second:    2,255,891 (Target: >30k)
+4. Latency (P99):          0.14 ms (Target: <100ms)
+5. CPU Usage:              0.0% under Max Load

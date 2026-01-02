@@ -1,0 +1,12 @@
+--- STRESS TEST: Offline Delete Cycle (100 users, avg 10 msgs) ---
+[1] Filling Offline Storage...
+[1] Storage Filled in 0.01s.
+[1.5] Waiting 120s for Erlang ingestion queues to drain...
+[2] Starting Consumers...
+
+[3] Done in 0.03s
+Total Users: 100
+Successful Consumes: 0
+Verified Clean: 0
+Rate: 3794.96 users/sec
+WARNING: Low consumption rate.

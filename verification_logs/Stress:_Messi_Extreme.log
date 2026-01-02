@@ -1,0 +1,78 @@
+[AUTO-TUNE] WARNING: ulimit -n (1048576) is lower than target (1651009).
+[AUTO-TUNE] Capping +P/+Q to 1048576 (minus buffer) to prevent crash.
+[AUTO-TUNE] Detected Available RAM: 25192 MB
+[AUTO-TUNE] Target Capacity: 1375841 Connections
+[AUTO-TUNE] Final Flags: +P 1043576 +Q 1043576
+[AUTO-TUNE] WARNING: ulimit -n (1048576) is lower than target (1651011).
+[AUTO-TUNE] Capping +P/+Q to 1048576 (minus buffer) to prevent crash.
+[AUTO-TUNE] Detected Available RAM: 25192 MB
+[AUTO-TUNE] Target Capacity: 1375843 Connections
+[AUTO-TUNE] Final Flags: +P 1043576 +Q 1043576
+[AUTO-TUNE] WARNING: ulimit -n (1048576) is lower than target (1648353).
+[AUTO-TUNE] Capping +P/+Q to 1048576 (minus buffer) to prevent crash.
+[AUTO-TUNE] Detected Available RAM: 25151 MB
+[AUTO-TUNE] Target Capacity: 1373628 Connections
+[AUTO-TUNE] Final Flags: +P 1043576 +Q 1043576
+[AUTO-TUNE] WARNING: ulimit -n (1048576) is lower than target (1644307).
+[AUTO-TUNE] Capping +P/+Q to 1048576 (minus buffer) to prevent crash.
+[AUTO-TUNE] Detected Available RAM: 25090 MB
+[AUTO-TUNE] Target Capacity: 1370256 Connections
+[AUTO-TUNE] Final Flags: +P 1043576 +Q 1043576
+[AUTO-TUNE] WARNING: ulimit -n (1048576) is lower than target (1566368).
+[AUTO-TUNE] Capping +P/+Q to 1048576 (minus buffer) to prevent crash.
+[AUTO-TUNE] Detected Available RAM: 23900 MB
+[AUTO-TUNE] Target Capacity: 1305307 Connections
+[AUTO-TUNE] Final Flags: +P 1043576 +Q 1043576
+--- EXTREME MESSI TEST ---
+Configuration: 1000 Fans. Time Scale: 1.0
+Total Duration: 300.0s
+Schedule: [(60.0, 'ONLINE'), (180.0, 'OFFLINE'), (60.0, 'ONLINE')]
+
+[MESSI] Lifecycle Started at 17:27:05
+Starting 1000 Fan Threads (with ramp-up)...
+[MESSI] Logged IN (Online)
+[  10s] State: ONLINE  | Sent:        0 | Recv:   134151 | Diff:  -134151
+[  20s] State: ONLINE  | Sent:        0 | Recv:   287933 | Diff:  -287933
+[  30s] State: ONLINE  | Sent:        0 | Recv:   441434 | Diff:  -441434
+[  40s] State: ONLINE  | Sent:        0 | Recv:   612078 | Diff:  -612078
+[  50s] State: ONLINE  | Sent:        0 | Recv:   764790 | Diff:  -764790
+
+[MESSI] Switching from ONLINE to OFFLINE
+[  60s] State: OFFLINE | Sent:        0 | Recv:   931237 | Diff:  -931237
+[  70s] State: OFFLINE | Sent:        0 | Recv:   931237 | Diff:  -931237
+[  80s] State: OFFLINE | Sent:        0 | Recv:   931237 | Diff:  -931237
+[  90s] State: OFFLINE | Sent:        0 | Recv:   931237 | Diff:  -931237
+[ 100s] State: OFFLINE | Sent:        0 | Recv:   931237 | Diff:  -931237
+[ 110s] State: OFFLINE | Sent:        0 | Recv:   931237 | Diff:  -931237
+[ 120s] State: OFFLINE | Sent:        0 | Recv:   931237 | Diff:  -931237
+[ 130s] State: OFFLINE | Sent:        0 | Recv:   931237 | Diff:  -931237
+[ 140s] State: OFFLINE | Sent:        0 | Recv:   931237 | Diff:  -931237
+[ 150s] State: OFFLINE | Sent:        0 | Recv:   931237 | Diff:  -931237
+[ 160s] State: OFFLINE | Sent:        0 | Recv:   931237 | Diff:  -931237
+[ 170s] State: OFFLINE | Sent:        0 | Recv:   931237 | Diff:  -931237
+[ 180s] State: OFFLINE | Sent:        0 | Recv:   931237 | Diff:  -931237
+[ 190s] State: OFFLINE | Sent:        0 | Recv:   931237 | Diff:  -931237
+[ 200s] State: OFFLINE | Sent:        0 | Recv:   931237 | Diff:  -931237
+[ 210s] State: OFFLINE | Sent:        0 | Recv:   931237 | Diff:  -931237
+[ 220s] State: OFFLINE | Sent:        0 | Recv:   931237 | Diff:  -931237
+[ 230s] State: OFFLINE | Sent:        0 | Recv:   931237 | Diff:  -931237
+[ 240s] State: OFFLINE | Sent:        0 | Recv:   931237 | Diff:  -931237
+
+[MESSI] Switching from OFFLINE to ONLINE
+[MESSI] Logged IN (Online)
+[ 250s] State: ONLINE  | Sent:        0 | Recv:   931443 | Diff:  -931443
+[ 260s] State: ONLINE  | Sent:        0 | Recv:   931443 | Diff:  -931443
+[ 270s] State: ONLINE  | Sent:        0 | Recv:   931443 | Diff:  -931443
+[ 280s] State: ONLINE  | Sent:        0 | Recv:   931443 | Diff:  -931443
+[ 290s] State: ONLINE  | Sent:        0 | Recv:   931443 | Diff:  -931443
+[ 300s] State: ONLINE  | Sent:        0 | Recv:   931443 | Diff:  -931443
+
+[MESSI] Switching from ONLINE to END
+[MESSI] Worker Finished
+[ 310s] State: ONLINE  | Sent: 12764917 | Recv:   931443 | Diff: 11833474
+
+--- FINAL RESULTS ---
+Total Sent:     12764917
+Total Received: 931443
+Loss:           11833474 (92.7031%)
+VERDICT: FAIL (Data Loss or Counting Error)
