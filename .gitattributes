@@ -1,0 +1,9 @@
+# Mark Python test scripts as documentation or non-primary
+tests/**/*.py linguist-documentation
+scripts/**/*.py linguist-documentation
+
+# Or mark them as generated if appropriate
+# tests/**/*.py linguist-generated
+
+# Explicitly reinforce Erlang
+*.erl linguist-language=Erlang
