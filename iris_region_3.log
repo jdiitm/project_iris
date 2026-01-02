@@ -1,0 +1,111 @@
+Eshell V13.2.2.5  (abort with ^G)
+(iris_region_3@j)1> Starting Edge App on port 8093...
+(iris_region_3@j)1> Starting Router Pool (Size: 24)...
+(iris_region_3@j)1> Edge Listener started on port 8093 (Pool Size: 100)
+(iris_region_3@j)1> User logged in: <<"sender_3_0">>
+(iris_region_3@j)1> User logged in: <<"sender_3_1">>
+(iris_region_3@j)1> Client disconnected
+(iris_region_3@j)1> User logged in: <<"sender_3_0">>
+(iris_region_3@j)1> Client disconnected
+(iris_region_3@j)1> User logged in: <<"sender_3_1">>
+(iris_region_3@j)1> Client disconnected
+(iris_region_3@j)1> User logged in: <<"sender_3_1">>
+(iris_region_3@j)1> Client disconnected
+(iris_region_3@j)1> User logged in: <<"sender_3_0">>
+(iris_region_3@j)1> Client disconnected
+(iris_region_3@j)1> User logged in: <<"sender_3_0">>
+(iris_region_3@j)1> Client disconnected
+(iris_region_3@j)1> User logged in: <<"sender_3_1">>
+(iris_region_3@j)1> Client disconnected
+(iris_region_3@j)1> Client disconnected
+(iris_region_3@j)1> User logged in: <<"sender_3_0">>
+(iris_region_3@j)1> User logged in: <<"sender_3_1">>
+(iris_region_3@j)1> Client disconnected
+(iris_region_3@j)1> User logged in: <<"sender_3_0">>
+(iris_region_3@j)1> Client disconnected
+(iris_region_3@j)1> User logged in: <<"sender_3_1">>
+(iris_region_3@j)1> Client disconnected
+(iris_region_3@j)1> User logged in: <<"sender_3_0">>
+(iris_region_3@j)1> Client disconnected
+(iris_region_3@j)1> User logged in: <<"sender_3_1">>
+(iris_region_3@j)1> Client disconnected
+(iris_region_3@j)1> User logged in: <<"sender_3_0">>
+(iris_region_3@j)1> Client disconnected
+(iris_region_3@j)1> User logged in: <<"sender_3_1">>
+(iris_region_3@j)1> Client disconnected
+(iris_region_3@j)1> User logged in: <<"sender_3_1">>
+(iris_region_3@j)1> Client disconnected
+(iris_region_3@j)1> User logged in: <<"sender_3_0">>
+(iris_region_3@j)1> Client disconnected
+(iris_region_3@j)1> User logged in: <<"sender_3_1">>
+(iris_region_3@j)1> Client disconnected
+(iris_region_3@j)1> User logged in: <<"sender_3_0">>
+(iris_region_3@j)1> Client disconnected
+(iris_region_3@j)1> User logged in: <<"sender_3_1">>
+(iris_region_3@j)1> Client disconnected
+(iris_region_3@j)1> User logged in: <<"sender_3_0">>
+(iris_region_3@j)1> Client disconnected
+(iris_region_3@j)1> User logged in: <<"sender_3_1">>
+(iris_region_3@j)1> Client disconnected
+(iris_region_3@j)1> User logged in: <<"sender_3_0">>
+(iris_region_3@j)1> Client disconnected
+(iris_region_3@j)1> User logged in: <<"sender_3_1">>
+(iris_region_3@j)1> Client disconnected
+(iris_region_3@j)1> User logged in: <<"sender_3_0">>
+(iris_region_3@j)1> Client disconnected
+(iris_region_3@j)1> User logged in: <<"sender_3_1">>
+(iris_region_3@j)1> Client disconnected
+(iris_region_3@j)1> User logged in: <<"sender_3_0">>
+(iris_region_3@j)1> Client disconnected
+(iris_region_3@j)1> User logged in: <<"sender_3_1">>
+(iris_region_3@j)1> Client disconnected
+(iris_region_3@j)1> User logged in: <<"sender_3_0">>
+(iris_region_3@j)1> Client disconnected
+(iris_region_3@j)1> User logged in: <<"sender_3_1">>
+(iris_region_3@j)1> Client disconnected
+(iris_region_3@j)1> User logged in: <<"sender_3_0">>
+(iris_region_3@j)1> Client disconnected
+(iris_region_3@j)1> User logged in: <<"sender_3_0">>
+(iris_region_3@j)1> Client disconnected
+(iris_region_3@j)1> User logged in: <<"sender_3_1">>
+(iris_region_3@j)1> Client disconnected
+(iris_region_3@j)1> User logged in: <<"sender_3_0">>
+(iris_region_3@j)1> Client disconnected
+(iris_region_3@j)1> User logged in: <<"sender_3_1">>
+(iris_region_3@j)1> Client disconnected
+(iris_region_3@j)1> User logged in: <<"sender_3_0">>
+(iris_region_3@j)1> Client disconnected
+(iris_region_3@j)1> User logged in: <<"sender_3_1">>
+(iris_region_3@j)1> Client disconnected
+(iris_region_3@j)1> User logged in: <<"sender_3_0">>
+(iris_region_3@j)1> Client disconnected
+(iris_region_3@j)1> User logged in: <<"sender_3_1">>
+(iris_region_3@j)1> Client disconnected
+(iris_region_3@j)1> User logged in: <<"sender_3_0">>
+(iris_region_3@j)1> Client disconnected
+(iris_region_3@j)1> User logged in: <<"sender_3_1">>
+(iris_region_3@j)1> Client disconnected
+(iris_region_3@j)1> User logged in: <<"sender_3_0">>
+(iris_region_3@j)1> Client disconnected
+(iris_region_3@j)1> User logged in: <<"sender_3_1">>
+(iris_region_3@j)1> Client disconnected
+(iris_region_3@j)1> User logged in: <<"sender_3_1">>
+(iris_region_3@j)1> Client disconnected
+(iris_region_3@j)1> User logged in: <<"sender_3_0">>
+(iris_region_3@j)1> Client disconnected
+(iris_region_3@j)1> User logged in: <<"sender_3_0">>
+(iris_region_3@j)1> Client disconnected
+(iris_region_3@j)1> User logged in: <<"sender_3_1">>
+(iris_region_3@j)1> Client disconnected
+(iris_region_3@j)1> User logged in: <<"sender_3_0">>
+(iris_region_3@j)1> Client disconnected
+(iris_region_3@j)1> User logged in: <<"sender_3_1">>
+(iris_region_3@j)1> Client disconnected
+(iris_region_3@j)1> User logged in: <<"sender_3_1">>
+(iris_region_3@j)1> Client disconnected
+(iris_region_3@j)1> User logged in: <<"sender_3_0">>
+(iris_region_3@j)1> User logged in: <<"vip_global">>
+(iris_region_3@j)1> Client disconnected
+(iris_region_3@j)1> Client disconnected
+(iris_region_3@j)1> Client disconnected
+(iris_region_3@j)1> 

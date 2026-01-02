@@ -3,7 +3,7 @@
 -behaviour(supervisor).
 
 -export([start/2, stop/1, init/1]).
--export([register_user/3, lookup_user/1, store_offline/2, retrieve_offline/1]).
+-export([register_user/3, lookup_user/1, store_offline/2, store_batch/2, retrieve_offline/1]).
 -export([get_bucket_count/1, set_bucket_count/2]).
 
 %% Application Callbacks
@@ -87,6 +87,10 @@ store_offline(User, Msg) ->
     %% Only called on Core
     Count = get_bucket_count(User),
     iris_offline_storage:store(User, Msg, Count).
+
+store_batch(User, Msgs) ->
+    Count = get_bucket_count(User),
+    iris_offline_storage:store_batch(User, Msgs, Count).
 
 retrieve_offline(User) ->
     Count = get_bucket_count(User),

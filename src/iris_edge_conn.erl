@@ -111,6 +111,12 @@ process_buffer(Bin, Data = #data{socket = Socket}) ->
             iris_router:route(Target, Msg),
             process_buffer(Rest, Data);
 
+        {{batch_send, Target, Blob}, Rest} ->
+            %% Optimized Fan-In: Directly store batch to Core
+            Msgs = iris_proto:unpack_batch(Blob),
+            rpc:call(?CORE_NODE, iris_core, store_batch, [Target, Msgs]),
+            process_buffer(Rest, Data);
+
         {{ack, MsgId}, Rest} ->
             %% io:format("Ack received: ~p~n", [MsgId]),
             process_buffer(Rest, Data);

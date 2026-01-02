@@ -1,5 +1,5 @@
 -module(iris_offline_storage).
--export([store/3, retrieve/2]).
+-export([store/3, store_batch/3, retrieve/2]).
 
 %% Mnesia table definition (created in iris_core:init_db/0):
 %% {offline_msg, User, Timestamp, Msg}
@@ -12,6 +12,22 @@ store(User, Msg, Count) ->
     
     F = fun() ->
         mnesia:write({offline_msg, Key, Timestamp, Msg})
+    end,
+    mnesia:activity(transaction, F).
+
+store_batch(User, Msgs, Count) ->
+    Timestamp = os:system_time(millisecond),
+    %% Group messages by Bucket
+    BucketedMsgs = lists:foldl(fun(Msg, Acc) ->
+        Bucket = erlang:phash2(Msg, Count),
+        orddict:append(Bucket, Msg, Acc)
+    end, orddict:new(), Msgs),
+    
+    F = fun() ->
+        lists:foreach(fun({Bucket, Batch}) ->
+             Key = {User, Bucket},
+             mnesia:write({offline_msg, Key, Timestamp, Batch})
+        end, orddict:to_list(BucketedMsgs))
     end,
     mnesia:activity(transaction, F).
 
@@ -40,4 +56,5 @@ retrieve(User, Count) ->
 
 sort_and_extract(Records) ->
     Sorted = lists:sort(fun({_, _, Ts1, _}, {_, _, Ts2, _}) -> Ts1 =< Ts2 end, Records),
-    [Msg || {_, _, _, Msg} <- Sorted].
+    RawMsgs = [Msg || {_, _, _, Msg} <- Sorted],
+    lists:flatten(RawMsgs).

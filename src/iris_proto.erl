@@ -1,5 +1,5 @@
 -module(iris_proto).
--export([decode/1]).
+-export([decode/1, unpack_batch/1]).
 
 -type packet() :: {login, binary()}
                 | {send_message, binary(), binary()}
@@ -37,5 +37,22 @@ decode(<<2, TargetLen:16, Rest/binary>>) ->
 decode(<<3, MsgId/binary>>) ->
     { {ack, MsgId}, <<>> };
 
+decode(<<4, _/binary>> = Bin) when byte_size(Bin) < 7 ->
+     {more, Bin}; %% Need TLen(2)+BLen(4) min
+
+decode(<<4, TargetLen:16, Rest/binary>>) ->
+    case Rest of
+        <<Target:TargetLen/binary, BatchLen:32, BatchBlob:BatchLen/binary, Rem/binary>> ->
+             { {batch_send, Target, BatchBlob}, Rem };
+        _ ->
+             {more, <<4, TargetLen:16, Rest/binary>>}
+    end;
+
 decode(<<>>) -> {more, <<>>};
 decode(_Bin) -> { {error, unknown_packet}, <<>> }.
+
+unpack_batch(Blob) -> unpack_batch(Blob, []).
+unpack_batch(<<>>, Acc) -> lists:reverse(Acc);
+unpack_batch(<<Len:16, Msg:Len/binary, Rest/binary>>, Acc) ->
+    unpack_batch(Rest, [Msg | Acc]);
+unpack_batch(_, Acc) -> lists:reverse(Acc). %% Tolerant of trailing garbage

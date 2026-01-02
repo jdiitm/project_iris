@@ -1,0 +1,15 @@
+Eshell V13.2.2.5  (abort with ^G)
+(iris_core@j)1> App Start. Node: iris_core@j
+(iris_core@j)1> Node Parts: ["iris_core","j"]
+(iris_core@j)1> Initializing DB on Core...
+(iris_core@j)1> Stopping Mnesia...
+(iris_core@j)1> Creating Schema...
+(iris_core@j)1> =INFO REPORT==== 2-Jan-2026::15:53:46.105697 ===
+    application: mnesia
+    exited: stopped
+    type: temporary
+
+(iris_core@j)1> Starting Mnesia...
+(iris_core@j)1> Core DB Initialized. Mnesia Status: yes
+(iris_core@j)1> Mnesia Local Tables: [user_meta,offline_msg,presence,schema]
+(iris_core@j)1> 
