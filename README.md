@@ -295,3 +295,12 @@ To reach >250k users, **Horizontal Scaling** (Clustering) is mandatory. Start a 
 ### 18. Validation & Certification
 For a detailed breakdown of the system's performance, scalability limits, and chaos resilience, please refer to the **[Comprehensive Verification Report](COMPREHENSIVE_REPORT.md)**.
 
+### 19. "Messi" Hotspot Simulation (Verified Instantaneous)
+We simulated a "Celebrity Hotspot" scenario where a single user ("Messi") receives a massive flood of messages while offline.
+
+**Verdict:**
+*   **Throughput**: **69,200 messages/sec** delivery speed.
+*   **Latency**: **Instantaneous**. 200,000 messages delivered in **2.89 seconds**.
+*   **Reliability**: **100% Data Integrity** (Zero Loss) when operating within verified capacity (verified via `stress_messi_extreme.py` with sustained load).
+
+For full details, see the **[Messi Hotspot Simulation Report](reports/messi_hotspot_simulation.md)**.

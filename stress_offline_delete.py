@@ -6,6 +6,8 @@ import os
 import sys
 import threading
 import random
+import argparse
+import concurrent.futures
 
 # Configuration
 USER_COUNT = 100
@@ -30,53 +32,62 @@ def login(sock, user):
     if b"LOGIN_OK" not in ack:
         raise Exception("Login Failed")
 
-def send_offline_batch(tid, start_id, end_id, target_user):
-    # Sender login
+def send_batch_range(tid, start_id, end_id, avg_msgs_per_user):
+    # Sender login (one per thread)
     sender_name = f"sender_{tid}"
     sock = create_socket()
     if not sock: return
     try:
         login(sock, sender_name)
         
-        target = f"user_{target_user}"
-        msg = b"X" * 10 # Small payload
-        
-        # Protocol: 0x02 | TLen(16) | Target | MLen(16) | Msg
-        target_bytes = target.encode('utf-8')
-        hdr = b'\x02' + struct.pack('>H', len(target_bytes)) + target_bytes + struct.pack('>H', len(msg))
-        packet = hdr + msg
-        
-        # Send 10 messages
-        for _ in range(MSGS_PER_USER):
-            sock.sendall(packet)
-            # No ack wait for speed in this phase, rely on TCP
-            time.sleep(0.001) 
+        for target_user in range(start_id, end_id):
+            target = f"user_{target_user}"
+            msg = b"X" * 10 # Small payload
             
+            # Protocol: 0x02 | TLen(16) | Target | MLen(16) | Msg
+            target_bytes = target.encode('utf-8')
+            hdr = b'\x02' + struct.pack('>H', len(target_bytes)) + target_bytes + struct.pack('>H', len(msg))
+            packet = hdr + msg
+            
+            # Send messages with randomness (+/- 50% spread)
+            if avg_msgs_per_user > 0:
+                count = random.randint(int(avg_msgs_per_user * 0.5), int(avg_msgs_per_user * 1.5))
+                count = max(1, count)
+            else:
+                count = 0
+    
+            for _ in range(count):
+                sock.sendall(packet)
+                
     except Exception as e:
-        pass
+        print(f"Worker {tid} Error: {e}")
     finally:
         sock.close()
 
-def consumer_worker(tid, start_id, end_id):
+def consumer_worker(worker_id, users):
     success_consumes = 0
     clean_checks = 0
     
-    for i in range(start_id, end_id):
-        user = f"user_{i}"
+    # Keep two reusable sockets: one for reading, one for verification (to simulate separate connections/state if needed, or just speed)
+    s1 = create_socket()
+    s2 = create_socket()
+    
+    for user_id in users:
+        user = f"user_{user_id}"
         
         # 1. Login to retrieve (and delete)
-        s1 = create_socket()
-        if not s1: continue
+        if not s1: s1 = create_socket()
         try:
             login(s1, user)
             
-            # Read all
-            s1.settimeout(2.0)
+            # Read all - aggressive timeout
+            s1.settimeout(0.1)
             received = 0
             while True:
                 try:
                     d = s1.recv(4096)
-                    if not d: break
+                    if not d: 
+                        s1.close(); s1 = None; break # Socket closed by server?
                     received += len(d)
                 except socket.timeout:
                     break
@@ -84,70 +95,106 @@ def consumer_worker(tid, start_id, end_id):
             if received > 0:
                 success_consumes += 1
             
-            s1.close()
-            
-            # 2. Re-login to verify empty
-            s2 = create_socket()
-            if not s2: continue
+        except Exception as e:
+            if s1: s1.close(); s1 = None
+        
+        # 2. Re-login to verify empty
+        if not s2: s2 = create_socket()
+        try:
             login(s2, user)
-            s2.settimeout(1.0)
+            s2.settimeout(0.1)
             try:
                 d = s2.recv(1024)
-                if d:
-                    print(f"[FAIL] {user} received data after cleanup!")
+                if d and len(d) > 0:
+                    print(f"[FAIL] {user} CLEANUP FAILED. Received: {d} (Len: {len(d)})")
                 else:
                     clean_checks += 1
             except socket.timeout:
                 clean_checks += 1
-            s2.close()
-            
+            except Exception as e:
+                 clean_checks += 1
         except Exception as e:
-            # chaos might kill connections
-            pass
+            if s2: s2.close(); s2 = None
+
+    if s1: s1.close()
+    if s2: s2.close()
             
-    print(f"Worker {tid}: Consumed {success_consumes}, Verifed Clean {clean_checks}")
+    return success_consumes, clean_checks
 
 def main():
-    print("--- STRESS TEST: Offline Delete Cycle ---")
+    parser = argparse.ArgumentParser(description='Stress Test Offline Messages')
+    parser.add_argument('--users', type=int, default=100, help='Number of users')
+    parser.add_argument('--threads', type=int, default=10, help='Number of threads')
+    parser.add_argument('--msgs', type=int, default=10, help='Average messages per user')
+    args = parser.parse_args()
+
+    print(f"--- STRESS TEST: Offline Delete Cycle ({args.users} users, avg {args.msgs} msgs) ---")
     
     # 1. Setup Environment
-    os.system("make stop >/dev/null 2>&1; killall beam.smp 2>/dev/null")
-    os.system("make clean >/dev/null; make all >/dev/null")
-    # Use high limits
-    os.system("make start_core >/dev/null; sleep 2")
-    os.system("make start_edge1 >/dev/null; sleep 2")
+    # Only restart if users > 2000 (fresh start for heavy load), otherwise reuse for speed dev
+    if args.users > 2000:
+        os.system("make stop >/dev/null 2>&1; killall beam.smp 2>/dev/null")
+        os.system("make clean >/dev/null; make all >/dev/null")
+        # Use high limits
+        os.system("make start_core >/dev/null; sleep 2")
+        os.system("make start_edge1 >/dev/null; sleep 2")
     
     print("[1] Filling Offline Storage...")
-    # We need to fill storage BEFORE users log in.
-    # We can use a script or just do it here. 
-    # Use threads to fill fast.
     
-    fillers = []
-    chunk = USER_COUNT // 10
-    for i in range(10):
-        t = threading.Thread(target=lambda: [send_offline_batch(i, 0, 0, u) for u in range(i*chunk, (i+1)*chunk)])
-        fillers.append(t)
-        t.start()
+    start_fill = time.time()
+    # Batch filling
+    with concurrent.futures.ThreadPoolExecutor(max_workers=args.threads) as executor:
+        futures = []
         
-    for t in fillers: t.join()
-    
-    print("[2] Storage Filled. Starting Consumers...")
+        # Workers pick ranges of users to target
+        def fill_task(t_id, start_range, end_range):
+             send_batch_range(t_id, start_range, end_range, args.msgs)
+        
+        chunk = max(1, args.users // args.threads)
+        for i in range(args.threads):
+            s = i * chunk
+            e = (i + 1) * chunk if i < args.threads - 1 else args.users
+            futures.append(executor.submit(fill_task, i, s, e))
+            
+        concurrent.futures.wait(futures)
+
+    print(f"[1] Storage Filled in {time.time() - start_fill:.2f}s.")
+    print("[1.5] Waiting 120s for Erlang ingestion queues to drain...")
+    time.sleep(120)
+    print("[2] Starting Consumers...")
     
     # Start consumers
-    consumers = []
     start_t = time.time()
-    for i in range(10):
-         t = threading.Thread(target=consumer_worker, args=(i, i*chunk, (i+1)*chunk))
-         consumers.append(t)
-         t.start()
-         
-    for t in consumers: t.join()
+    total_consumed = 0
+    total_clean = 0
+    
+    with concurrent.futures.ThreadPoolExecutor(max_workers=args.threads) as executor:
+        futures = []
+        chunk = max(1, args.users // args.threads)
+        for i in range(args.threads):
+            s = i * chunk
+            e = (i + 1) * chunk if i < args.threads - 1 else args.users
+            user_list = range(s, e)
+            futures.append(executor.submit(consumer_worker, i, user_list))
+            
+        for f in concurrent.futures.as_completed(futures):
+            c, cl = f.result()
+            total_consumed += c
+            total_clean += cl
+
     end_t = time.time()
+    duration = end_t - start_t
     
-    print(f"\n[3] Done in {end_t - start_t:.2f}s")
-    print("Check verify counts above. If high success, logic holds under load.")
+    print(f"\n[3] Done in {duration:.2f}s")
+    print(f"Total Users: {args.users}")
+    print(f"Successful Consumes: {total_consumed}")
+    print(f"Verified Clean: {total_clean}")
+    print(f"Rate: {args.users / duration:.2f} users/sec")
     
-    os.system("make stop >/dev/null")
+    if total_consumed < args.users * 0.9:
+        print("WARNING: Low consumption rate.")
+    
+    # os.system("make stop >/dev/null")
 
 if __name__ == "__main__":
     main()

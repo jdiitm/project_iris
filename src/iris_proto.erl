@@ -20,7 +20,11 @@ decode(<<1, Rest/binary>>) ->
     %% To keeping backward compat strictly for Login (which happens once), we can stick to "User is Rest"
     %% BUT if we want proper framing, we strictly need length for everything or delimiter.
     %% Let's impose that Login is the only packet in the first chunk, or assume User is everything.
+    %% Let's impose that Login is the only packet in the first chunk, or assume User is everything.
     { {login, Rest}, <<>> };
+
+decode(<<2, _/binary>> = Bin) when byte_size(Bin) < 3 ->
+    {more, Bin};  %% Partial header
 
 decode(<<2, TargetLen:16, Rest/binary>>) ->
     case Rest of

@@ -54,7 +54,7 @@ connected(info, {tcp_error, _Socket, _Reason}, Data) ->
     {stop, normal, Data};
 connected(info, {deliver_msg, Msg}, Data = #data{socket = Socket, user = User, timeouts = T}) ->
     %% Message delivered from Router
-    io:format("Delivering message to client: ~p (size ~p)~n", [Msg, byte_size(Msg)]),
+    %% io:format("Delivering message to client: ~p (size ~p)~n", [Msg, byte_size(Msg)]),
     case gen_tcp:send(Socket, Msg) of
         ok -> 
             {keep_state, Data#data{timeouts = 0}}; %% Reset timeouts on success
@@ -96,9 +96,9 @@ process_buffer(Bin, Data = #data{socket = Socket}) ->
             %% Retrieve Offline Messages
             case rpc:call(?CORE_NODE, iris_core, retrieve_offline, [User]) of
                  Msgs when is_list(Msgs) ->
-                     io:format("Retrieved ~p offline msgs for ~p~n", [length(Msgs), User]),
+                     %% io:format("Retrieved ~p offline msgs for ~p~n", [length(Msgs), User]),
                      lists:foreach(fun(Msg) ->
-                         io:format("Sending offline msg to client: ~p~n", [Msg]),
+                         %% io:format("Sending offline msg to client: ~p~n", [Msg]),
                          gen_tcp:send(Socket, Msg)
                      end, Msgs);
                  Error ->
@@ -107,12 +107,12 @@ process_buffer(Bin, Data = #data{socket = Socket}) ->
             process_buffer(Rest, Data#data{user = User});
         
         {{send_message, Target, Msg}, Rest} ->
-            io:format("Sending msg to ~p~n", [Target]),
+            %% io:format("Sending msg to ~p~n", [Target]),
             iris_router:route(Target, Msg),
             process_buffer(Rest, Data);
 
         {{ack, MsgId}, Rest} ->
-            io:format("Ack received: ~p~n", [MsgId]),
+            %% io:format("Ack received: ~p~n", [MsgId]),
             process_buffer(Rest, Data);
 
         {{error, _}, _} ->
