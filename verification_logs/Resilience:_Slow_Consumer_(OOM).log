@@ -1,0 +1,83 @@
+[AUTO-TUNE] WARNING: ulimit -n (1048576) is lower than target (1678504).
+[AUTO-TUNE] Capping +P/+Q to 1048576 (minus buffer) to prevent crash.
+[AUTO-TUNE] Detected Available RAM: 25611 MB
+[AUTO-TUNE] Target Capacity: 1398754 Connections
+[AUTO-TUNE] Final Flags: +P 1043576 +Q 1043576
+[AUTO-TUNE] WARNING: ulimit -n (1048576) is lower than target (1678478).
+[AUTO-TUNE] Capping +P/+Q to 1048576 (minus buffer) to prevent crash.
+[AUTO-TUNE] Detected Available RAM: 25611 MB
+[AUTO-TUNE] Target Capacity: 1398732 Connections
+[AUTO-TUNE] Final Flags: +P 1043576 +Q 1043576
+[AUTO-TUNE] WARNING: ulimit -n (1048576) is lower than target (1672116).
+[AUTO-TUNE] Capping +P/+Q to 1048576 (minus buffer) to prevent crash.
+[AUTO-TUNE] Detected Available RAM: 25514 MB
+[AUTO-TUNE] Target Capacity: 1393430 Connections
+[AUTO-TUNE] Final Flags: +P 1043576 +Q 1043576
+[AUTO-TUNE] WARNING: ulimit -n (1048576) is lower than target (1664722).
+[AUTO-TUNE] Capping +P/+Q to 1048576 (minus buffer) to prevent crash.
+[AUTO-TUNE] Detected Available RAM: 25401 MB
+[AUTO-TUNE] Target Capacity: 1387269 Connections
+[AUTO-TUNE] Final Flags: +P 1043576 +Q 1043576
+Starting EXTREME Load Gen (slow_consumer): 100000 connections...
+All workers spawned.
+[AUTO-TUNE] Detected Available RAM: 1821 MB
+[AUTO-TUNE] Target Capacity: 250000 Connections
+[AUTO-TUNE] Final Flags: +P 300000 +Q 300000
+
+--- SCENARIO: The Slow Consumer (Memory Exhaustion) ---
+[*] Setting up nodes...
+[*] Starting Slow Consumers (100k connections)...
+[0s] Edge Node RAM: 683.65 MB
+[2s] Edge Node RAM: 1205.46 MB
+[4s] Edge Node RAM: 1568.53 MB
+[6s] Edge Node RAM: 2109.88 MB
+[8s] Edge Node RAM: 2730.50 MB
+[10s] Edge Node RAM: 3075.80 MB
+[12s] Edge Node RAM: 3433.12 MB
+[14s] Edge Node RAM: 3577.27 MB
+[16s] Edge Node RAM: 4086.71 MB
+[18s] Edge Node RAM: 4321.48 MB
+[20s] Edge Node RAM: 4578.59 MB
+[22s] Edge Node RAM: 4934.17 MB
+[24s] Edge Node RAM: 5316.25 MB
+[26s] Edge Node RAM: 5965.18 MB
+[28s] Edge Node RAM: 6329.55 MB
+[30s] Edge Node RAM: 6731.27 MB
+[32s] Edge Node RAM: 7064.39 MB
+[34s] Edge Node RAM: 7565.24 MB
+[36s] Edge Node RAM: 8181.92 MB
+[38s] Edge Node RAM: 8631.05 MB
+[40s] Edge Node RAM: 9421.45 MB
+[42s] Edge Node RAM: 9810.78 MB
+[44s] Edge Node RAM: 10080.26 MB
+[46s] Edge Node RAM: 10415.08 MB
+[48s] Edge Node RAM: 10808.36 MB
+[50s] Edge Node RAM: 11938.22 MB
+[52s] Edge Node RAM: 12311.68 MB
+[54s] Edge Node RAM: 12891.98 MB
+[56s] Edge Node RAM: 13040.11 MB
+[58s] Edge Node RAM: 13348.45 MB
+[60s] Edge Node RAM: 13781.36 MB
+[62s] Edge Node RAM: 14160.44 MB
+[64s] Edge Node RAM: 14431.34 MB
+[66s] Edge Node RAM: 14643.42 MB
+[68s] Edge Node RAM: 15040.02 MB
+[70s] Edge Node RAM: 15440.99 MB
+[72s] Edge Node RAM: 15665.98 MB
+[74s] Edge Node RAM: 16427.24 MB
+[76s] Edge Node RAM: 16771.78 MB
+[78s] Edge Node RAM: 17103.16 MB
+[80s] Edge Node RAM: 17750.22 MB
+[82s] Edge Node RAM: 18082.62 MB
+[84s] Edge Node RAM: 18372.54 MB
+[86s] Edge Node RAM: 18652.12 MB
+[88s] Edge Node RAM: 19076.04 MB
+[90s] Edge Node RAM: 19248.64 MB
+[92s] Edge Node RAM: 19326.71 MB
+[94s] Edge Node RAM: 19750.54 MB
+[96s] Edge Node RAM: 20156.45 MB
+[98s] Edge Node RAM: 20689.08 MB
+!!! DANGER !!! RAM Exceeded 20GB
+[100s] Edge Node RAM: 20981.91 MB
+!!! DANGER !!! RAM Exceeded 20GB
+!!! CRASH DETECTED !!! Node died.

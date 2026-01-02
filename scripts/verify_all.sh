@@ -52,6 +52,9 @@ run_test "Hot-Key Bucketing (VIP)" "python3 test_hotkey_bucketing.py"
 # This script handles its own Cluster Setup (Client-managed)
 run_test "Global Fan-In & Reliability" "python3 stress_global_fan_in.py"
 
+# 4. Geo-Scale Optimization (Local Switching)
+run_test "Geo-Scale Local Switching" "python3 stress_geo_scale.py"
+
 echo "=============================================="
 echo "   ALL TESTS PASSED SUCCESSFULLY              "
 echo "=============================================="

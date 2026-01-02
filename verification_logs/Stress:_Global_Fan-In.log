@@ -1,0 +1,27 @@
+[17:32:20] --- Setting up Global Cluster ---
+rm: cannot remove '*.log': No such file or directory
+[17:32:22] Promoting vip_global to 50 buckets...
+[17:32:23] Started Region 1 on port 8091
+[17:32:23] Started Region 1 on port 8091
+[17:32:23] Started Region 2 on port 8092
+[17:32:23] Started Region 2 on port 8092
+[17:32:23] Started Region 3 on port 8093
+[17:32:23] Started Region 3 on port 8093
+[17:32:23] Started Region 4 on port 8094
+[17:32:23] Started Region 4 on port 8094
+[17:32:23] Started Region 5 on port 8095
+[17:32:23] Started Region 5 on port 8095
+[17:32:28] Cluster Ready.
+[17:32:28] --- Starting Simulation (30s) ---
+[17:33:06] --- Verifying Results ---
+[17:33:06] Stats: {'vip_sent': 496000, 'normal_sent': 0, 'vip_received': 496000, 'normal_received': 0, 'errors': 252}
+[17:33:06] Draining VIP Inbox...
+[17:33:08] VIP Sent: 496000
+[17:33:08] VIP Received (Background + Final): 496000 (496000 + 0)
+[17:33:08] SUCCESS: VIP Integrity Verified (Nine 9s)
+[17:33:08] Checking Normal User Samples...
+[17:33:09] User normal_1: Received 0 messages
+[17:33:10] User normal_2: Received 0 messages
+[17:33:11] User normal_3: Received 0 messages
+[17:33:12] User normal_4: Received 0 messages
+[17:33:13] User normal_5: Received 0 messages

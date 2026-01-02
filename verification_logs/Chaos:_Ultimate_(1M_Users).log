@@ -1,0 +1,136 @@
+sudo: a password is required
+sudo: a password is required
+sudo: a password is required
+sudo: a password is required
+sudo: a password is required
+sudo: a password is required
+sudo: a password is required
+sudo: a password is required
+sudo: a password is required
+sudo: a password is required
+sudo: a password is required
+sudo: a password is required
+sudo: a password is required
+sudo: a password is required
+sudo: a password is required
+sudo: a password is required
+sudo: a password is required
+sudo: a password is required
+sudo: a password is required
+sudo: a password is required
+[AUTO-TUNE] WARNING: ulimit -n (1048576) is lower than target (1743223).
+[AUTO-TUNE] Capping +P/+Q to 1048576 (minus buffer) to prevent crash.
+[AUTO-TUNE] Detected Available RAM: 26599 MB
+[AUTO-TUNE] Target Capacity: 1452686 Connections
+[AUTO-TUNE] Final Flags: +P 1043576 +Q 1043576
+[AUTO-TUNE] WARNING: ulimit -n (1048576) is lower than target (1743218).
+[AUTO-TUNE] Capping +P/+Q to 1048576 (minus buffer) to prevent crash.
+[AUTO-TUNE] Detected Available RAM: 26599 MB
+[AUTO-TUNE] Target Capacity: 1452682 Connections
+[AUTO-TUNE] Final Flags: +P 1043576 +Q 1043576
+src/chaos_resources.erl:28:12: Warning: variable 'List' is unused
+%   28| mem_worker(List, 0, _) ->
+%     |            ^
+
+src/iris_extreme_gen.erl:22:37: Warning: variable 'IpOffset' is unused
+%   22| worker_init(Id, StatsPid, Duration, IpOffset, Mode) ->
+%     |                                     ^
+
+[AUTO-TUNE] WARNING: ulimit -n (1048576) is lower than target (1725990).
+[AUTO-TUNE] Capping +P/+Q to 1048576 (minus buffer) to prevent crash.
+[AUTO-TUNE] Detected Available RAM: 26336 MB
+[AUTO-TUNE] Target Capacity: 1438325 Connections
+[AUTO-TUNE] Final Flags: +P 1043576 +Q 1043576
+[AUTO-TUNE] WARNING: ulimit -n (1048576) is lower than target (1714711).
+[AUTO-TUNE] Capping +P/+Q to 1048576 (minus buffer) to prevent crash.
+[AUTO-TUNE] Detected Available RAM: 26164 MB
+[AUTO-TUNE] Target Capacity: 1428926 Connections
+[AUTO-TUNE] Final Flags: +P 1043576 +Q 1043576
+[AUTO-TUNE] Detected Available RAM: 2537 MB
+[AUTO-TUNE] Target Capacity: 250000 Connections
+[AUTO-TUNE] Final Flags: +P 300000 +Q 300000
+Stopping nodes...
+Nodes stopped.
+sudo: a password is required
+sudo: a password is required
+sudo: a password is required
+sudo: a password is required
+sudo: a password is required
+sudo: a password is required
+sudo: a password is required
+sudo: a password is required
+sudo: a password is required
+sudo: a password is required
+sudo: a password is required
+sudo: a password is required
+sudo: a password is required
+sudo: a password is required
+sudo: a password is required
+sudo: a password is required
+sudo: a password is required
+sudo: a password is required
+sudo: a password is required
+sudo: a password is required
+
+============================================================
+ PROJECT IRIS: ULTIMATE CHAOS (1M USERS)
+============================================================
+Target: 1000000 Users | 3-Step Verification | PID Corruption
+[INIT] Setting up IP Aliases (127.0.0.1 - 127.0.0.20)...
+
+============================================================
+ PHASE 1: THE MILLION MARCH (Ramp Up)
+============================================================
+Allowing 60s for ramp up...
+[RAMP-UP] Process Count: 26098
+[RAMP-UP] Total Memory: 1666.30 MB
+[RAMP-UP] Process Count: 46118
+[RAMP-UP] Total Memory: 3485.67 MB
+[RAMP-UP] Process Count: 110985
+[RAMP-UP] Total Memory: 5588.59 MB
+[RAMP-UP] Process Count: 160008
+[RAMP-UP] Total Memory: 9481.86 MB
+[RAMP-UP] Process Count: 187074
+[RAMP-UP] Total Memory: 10413.23 MB
+
+============================================================
+ PHASE 2: DISK CRUSHER (Mnesia Stress)
+============================================================
+[FLOODING] Process Count: 214431
+[FLOODING] Total Memory: 12354.72 MB
+[FLOODING] Process Count: 237197
+[FLOODING] Total Memory: 15579.46 MB
+
+============================================================
+ PHASE 3: PROTOCOL CORRUPTION
+============================================================
+[CHAOS] Starting PID Corruption (Random Garbage Messages)...
+[CHAOS] Starting Sniper (Kill Router)...
+Holding Load for 120 seconds...
+[CHAOS-HOLD] Process Count: {badrpc,nodedown}
+[CHAOS-HOLD] Process Count: {badrpc,nodedown}
+[CHAOS-HOLD] Process Count: {badrpc,nodedown}
+[CHAOS-HOLD] Process Count: {badrpc,nodedown}
+[CHAOS-HOLD] Process Count: {badrpc,nodedown}
+[CHAOS-HOLD] Process Count: {badrpc,nodedown}
+[CHAOS-HOLD] Process Count: {badrpc,nodedown}
+[CHAOS-HOLD] Process Count: {badrpc,nodedown}
+[CHAOS-HOLD] Process Count: {badrpc,nodedown}
+[CHAOS-HOLD] Process Count: {badrpc,nodedown}
+[CHAOS-HOLD] Process Count: {badrpc,nodedown}
+[CHAOS-HOLD] Process Count: {badrpc,nodedown}
+[CHAOS-HOLD] Process Count: {badrpc,nodedown}
+[CHAOS-HOLD] Process Count: {badrpc,nodedown}
+
+============================================================
+ PHASE 4: RECOVERY
+============================================================
+[RECOVERY] Process Count: {badrpc,nodedown}
+[RECOVERY] Process Count: {badrpc,nodedown}
+[RECOVERY] Process Count: {badrpc,nodedown}
+[RECOVERY] Process Count: {badrpc,nodedown}
+
+============================================================
+ TEST COMPLETE
+============================================================
+[CLEAN] Cleaning IP Aliases...

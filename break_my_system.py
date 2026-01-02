@@ -58,7 +58,9 @@ def run_oom():
             if not mem:
                 print("!!! CRASH DETECTED !!! Node died.")
                 break
-            kb = int(mem)
+            # Handle multiple PIDs (e.g., epmd, beam.smp, erl)
+            # Take the maximum memory usage found
+            kb = max([int(x) for x in mem.split() if x.strip().isdigit()])
             print(f"[{i*2}s] Edge Node RAM: {kb/1024:.2f} MB")
             if kb > 20*1024*1024: # 20GB
                 print("!!! DANGER !!! RAM Exceeded 20GB")

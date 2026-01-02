@@ -1,0 +1,149 @@
+[AUTO-TUNE] WARNING: ulimit -n (1048576) is lower than target (1719321).
+[AUTO-TUNE] Capping +P/+Q to 1048576 (minus buffer) to prevent crash.
+[AUTO-TUNE] Detected Available RAM: 26234 MB
+[AUTO-TUNE] Target Capacity: 1432768 Connections
+[AUTO-TUNE] Final Flags: +P 1043576 +Q 1043576
+[AUTO-TUNE] WARNING: ulimit -n (1048576) is lower than target (1719433).
+[AUTO-TUNE] Capping +P/+Q to 1048576 (minus buffer) to prevent crash.
+[AUTO-TUNE] Detected Available RAM: 26236 MB
+[AUTO-TUNE] Target Capacity: 1432861 Connections
+[AUTO-TUNE] Final Flags: +P 1043576 +Q 1043576
+[AUTO-TUNE] WARNING: ulimit -n (1048576) is lower than target (1708735).
+[AUTO-TUNE] Capping +P/+Q to 1048576 (minus buffer) to prevent crash.
+[AUTO-TUNE] Detected Available RAM: 26073 MB
+[AUTO-TUNE] Target Capacity: 1423946 Connections
+[AUTO-TUNE] Final Flags: +P 1043576 +Q 1043576
+[AUTO-TUNE] WARNING: ulimit -n (1048576) is lower than target (1699022).
+[AUTO-TUNE] Capping +P/+Q to 1048576 (minus buffer) to prevent crash.
+[AUTO-TUNE] Detected Available RAM: 25925 MB
+[AUTO-TUNE] Target Capacity: 1415852 Connections
+[AUTO-TUNE] Final Flags: +P 1043576 +Q 1043576
+Starting EXTREME Load Gen (offline_flood): 100000 connections...
+All workers spawned.
+[AUTO-TUNE] Detected Available RAM: 15633 MB
+[AUTO-TUNE] Target Capacity: 853822 Connections
+[AUTO-TUNE] Final Flags: +P 1024586 +Q 1024586
+
+--- SCENARIO: The Disk Crusher (Offline Message Flood) ---
+[*] Setting up nodes...
+[*] Starting Offline Flood (100k connections)...
+[0s] Mnesia DB Size: 820K
+[2s] Mnesia DB Size: 692K
+[4s] Mnesia DB Size: 744K
+[6s] Mnesia DB Size: 820K
+[8s] Mnesia DB Size: 556K
+[10s] Mnesia DB Size: 564K
+[12s] Mnesia DB Size: 564K
+[14s] Mnesia DB Size: 772K
+[16s] Mnesia DB Size: 656K
+[18s] Mnesia DB Size: 724K
+[20s] Mnesia DB Size: 628K
+[22s] Mnesia DB Size: 680K
+[24s] Mnesia DB Size: 684K
+[26s] Mnesia DB Size: 720K
+[28s] Mnesia DB Size: 720K
+[30s] Mnesia DB Size: 724K
+[32s] Mnesia DB Size: 888K
+[34s] Mnesia DB Size: 672K
+[36s] Mnesia DB Size: 696K
+[38s] Mnesia DB Size: 668K
+[40s] Mnesia DB Size: 696K
+[42s] Mnesia DB Size: 600K
+[44s] Mnesia DB Size: 860K
+[46s] Mnesia DB Size: 632K
+[48s] Mnesia DB Size: 648K
+[50s] Mnesia DB Size: 652K
+[52s] Mnesia DB Size: 656K
+[54s] Mnesia DB Size: 656K
+[56s] Mnesia DB Size: 656K
+[58s] Mnesia DB Size: 660K
+[60s] Mnesia DB Size: 664K
+[62s] Mnesia DB Size: 668K
+[64s] Mnesia DB Size: 748K
+[66s] Mnesia DB Size: 752K
+[68s] Mnesia DB Size: 756K
+[70s] Mnesia DB Size: 756K
+[72s] Mnesia DB Size: 760K
+[74s] Mnesia DB Size: 760K
+[76s] Mnesia DB Size: 764K
+[78s] Mnesia DB Size: 720K
+[80s] Mnesia DB Size: 720K
+[82s] Mnesia DB Size: 724K
+[84s] Mnesia DB Size: 724K
+[86s] Mnesia DB Size: 728K
+[88s] Mnesia DB Size: 732K
+[90s] Mnesia DB Size: 736K
+[92s] Mnesia DB Size: 736K
+[94s] Mnesia DB Size: 740K
+[96s] Mnesia DB Size: 744K
+[98s] Mnesia DB Size: 744K
+[100s] Mnesia DB Size: 748K
+[102s] Mnesia DB Size: 752K
+[104s] Mnesia DB Size: 756K
+[106s] Mnesia DB Size: 756K
+[108s] Mnesia DB Size: 768K
+[110s] Mnesia DB Size: 772K
+[112s] Mnesia DB Size: 788K
+[114s] Mnesia DB Size: 788K
+[116s] Mnesia DB Size: 800K
+[118s] Mnesia DB Size: 804K
+[120s] Mnesia DB Size: 808K
+[122s] Mnesia DB Size: 812K
+[124s] Mnesia DB Size: 816K
+[126s] Mnesia DB Size: 532K
+[128s] Mnesia DB Size: 588K
+[130s] Mnesia DB Size: 596K
+[132s] Mnesia DB Size: 600K
+[134s] Mnesia DB Size: 604K
+[136s] Mnesia DB Size: 604K
+[138s] Mnesia DB Size: 604K
+[140s] Mnesia DB Size: 604K
+[142s] Mnesia DB Size: 604K
+[144s] Mnesia DB Size: 604K
+[146s] Mnesia DB Size: 604K
+[148s] Mnesia DB Size: 604K
+[150s] Mnesia DB Size: 604K
+[152s] Mnesia DB Size: 604K
+[154s] Mnesia DB Size: 604K
+[156s] Mnesia DB Size: 604K
+[158s] Mnesia DB Size: 604K
+[160s] Mnesia DB Size: 604K
+[162s] Mnesia DB Size: 604K
+[164s] Mnesia DB Size: 604K
+[166s] Mnesia DB Size: 604K
+[168s] Mnesia DB Size: 604K
+[170s] Mnesia DB Size: 580K
+[172s] Mnesia DB Size: 580K
+[174s] Mnesia DB Size: 580K
+[176s] Mnesia DB Size: 580K
+[178s] Mnesia DB Size: 580K
+[180s] Mnesia DB Size: 580K
+[182s] Mnesia DB Size: 580K
+[184s] Mnesia DB Size: 580K
+[186s] Mnesia DB Size: 580K
+[188s] Mnesia DB Size: 580K
+[190s] Mnesia DB Size: 580K
+[192s] Mnesia DB Size: 580K
+[194s] Mnesia DB Size: 580K
+[196s] Mnesia DB Size: 580K
+[198s] Mnesia DB Size: 580K
+[200s] Mnesia DB Size: 580K
+[202s] Mnesia DB Size: 580K
+[204s] Mnesia DB Size: 580K
+[206s] Mnesia DB Size: 580K
+[208s] Mnesia DB Size: 580K
+[210s] Mnesia DB Size: 580K
+[212s] Mnesia DB Size: 580K
+[214s] Mnesia DB Size: 580K
+[216s] Mnesia DB Size: 580K
+[218s] Mnesia DB Size: 580K
+[220s] Mnesia DB Size: 580K
+[222s] Mnesia DB Size: 580K
+[224s] Mnesia DB Size: 580K
+[226s] Mnesia DB Size: 580K
+[228s] Mnesia DB Size: 580K
+[230s] Mnesia DB Size: 580K
+[232s] Mnesia DB Size: 580K
+[234s] Mnesia DB Size: 580K
+[236s] Mnesia DB Size: 580K
+[238s] Mnesia DB Size: 580K

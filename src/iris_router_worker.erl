@@ -35,14 +35,22 @@ handle_call(_Request, _From, State) ->
     {reply, error, State}.
 
 handle_cast({route, User, Msg, StartTime}, Ref) ->
-    case rpc:call(?CORE_NODE, iris_core, lookup_user, [User]) of
-        {ok, _Node, Pid} ->
-            Pid ! {deliver_msg, Msg};
-        {error, not_found} ->
-            io:format("Router: Storing offline msg for ~p: ~p~n", [User, Msg]),
-            rpc:call(?CORE_NODE, iris_core, store_offline, [User, Msg]);
-        {badrpc, Reason} ->
-            io:format("RPC Error routing to ~p: ~p~n", [User, Reason])
+    %% Optimization: Local Switching Search
+    case ets:lookup(local_presence, User) of
+        [{User, LocalPid}] ->
+            %% FOUND LOCAL: Bypass Core RPC entirely
+            LocalPid ! {deliver_msg, Msg};
+        [] ->
+            %% NOT LOCAL: Fallback to Global Core RPC
+            case rpc:call(?CORE_NODE, iris_core, lookup_user, [User]) of
+                {ok, _Node, Pid} ->
+                    Pid ! {deliver_msg, Msg};
+                {error, not_found} ->
+                     io:format("Router: Storing offline msg for ~p: ~p~n", [User, Msg]),
+                     rpc:call(?CORE_NODE, iris_core, store_offline, [User, Msg]);
+                {badrpc, Reason} ->
+                     io:format("RPC Error routing to ~p: ~p~n", [User, Reason])
+            end
     end,
     End = os:system_time(microsecond),
     Diff = End - StartTime,

@@ -1,0 +1,37 @@
+[AUTO-TUNE] WARNING: ulimit -n (1048576) is lower than target (1643562).
+[AUTO-TUNE] Capping +P/+Q to 1048576 (minus buffer) to prevent crash.
+[AUTO-TUNE] Detected Available RAM: 25078 MB
+[AUTO-TUNE] Target Capacity: 1369635 Connections
+[AUTO-TUNE] Final Flags: +P 1043576 +Q 1043576
+[AUTO-TUNE] WARNING: ulimit -n (1048576) is lower than target (1643218).
+[AUTO-TUNE] Capping +P/+Q to 1048576 (minus buffer) to prevent crash.
+[AUTO-TUNE] Detected Available RAM: 25073 MB
+[AUTO-TUNE] Target Capacity: 1369349 Connections
+[AUTO-TUNE] Final Flags: +P 1043576 +Q 1043576
+[AUTO-TUNE] WARNING: ulimit -n (1048576) is lower than target (1615926).
+[AUTO-TUNE] Capping +P/+Q to 1048576 (minus buffer) to prevent crash.
+[AUTO-TUNE] Detected Available RAM: 24657 MB
+[AUTO-TUNE] Target Capacity: 1346605 Connections
+[AUTO-TUNE] Final Flags: +P 1043576 +Q 1043576
+[AUTO-TUNE] WARNING: ulimit -n (1048576) is lower than target (1611602).
+[AUTO-TUNE] Capping +P/+Q to 1048576 (minus buffer) to prevent crash.
+[AUTO-TUNE] Detected Available RAM: 24591 MB
+[AUTO-TUNE] Target Capacity: 1343002 Connections
+[AUTO-TUNE] Final Flags: +P 1043576 +Q 1043576
+src/iris_extreme_gen.erl:22:37: Warning: variable 'IpOffset' is unused
+%   22| worker_init(Id, StatsPid, Duration, IpOffset, Mode) ->
+%     |                                     ^
+
+Chaos Monkey started with interval 50 ms. Beware!
+[AUTO-TUNE] WARNING: ulimit -n (1048576) is lower than target (1618680).
+[AUTO-TUNE] Capping +P/+Q to 1048576 (minus buffer) to prevent crash.
+[AUTO-TUNE] Detected Available RAM: 24699 MB
+[AUTO-TUNE] Target Capacity: 1348900 Connections
+[AUTO-TUNE] Final Flags: +P 1043576 +Q 1043576
+--- EXTREME SCALE TEST: 800,000 Real Connections ---
+[1] Target: iris_edge1@j
+[2] Compiling & Starting Generator...
+    [!] Releasing Extreme Chaos Monkey (Interval: 50ms, Kills: 10)...
+[3] Ramping up (this takes ~80s)... Monitoring System...
+
+[4] Done. Checking Logs...

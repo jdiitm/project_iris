@@ -117,7 +117,10 @@ def main():
     print(f"Throughput:     {msgs_per_sec:.2f} msgs/sec")
     print(f"Total CPU Time: {cpu_total_seconds:.4f}s")
     print(f"CPU Cost/Msg:   {cpu_per_msg*1_000_000:.2f} microseconds")
-    print(f"Est. Max RPS (1 Core): {1.0/cpu_per_msg:.2f}")
+    if cpu_per_msg > 0:
+        print(f"Est. Max RPS (1 Core): {1.0/cpu_per_msg:.2f}")
+    else:
+        print("Est. Max RPS (1 Core): Infinite (CPU < Measurement Threshold)")
     
     os.system("make stop >/dev/null")
 

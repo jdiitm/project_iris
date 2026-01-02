@@ -1,0 +1,14 @@
+--- Iris Benchmark Tool ---
+Messages: 1000
+Payload: 64 bytes
+Starting benchmark...
+
+--- Results ---
+Total Time: 0.070s
+Throughput: 14369.81 msgs/sec
+Latency (us):
+  Min: 18.81
+  Max: 40680.89
+  Avg: 69.00
+  P50: 21.64
+  P99: 185.43

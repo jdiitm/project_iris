@@ -1,0 +1,10 @@
+[17:33:15] --- Setting up Geo Cluster ---
+rm: cannot remove '*.log': No such file or directory
+[17:33:17] Started Region 1 on port 8091
+[17:33:17] Started Region 2 on port 8092
+[17:33:22] Cluster Ready.
+[17:33:22] --- PHASE 1: INTRA-REGION FLOOD (Local Switching) ---
+[17:33:42] Phase 1 Stats: {'intra_sent': 99766, 'intra_received': 2449, 'inter_sent': 0, 'inter_received': 0, 'errors': 0}
+[17:33:42] --- PHASE 2: INTER-REGION FLOOD (Core RPC) ---
+[17:34:02] Phase 2 Stats: {'intra_sent': 0, 'intra_received': 0, 'inter_sent': 99708, 'inter_received': 2432, 'errors': 0}
+[17:34:02] Test Complete.

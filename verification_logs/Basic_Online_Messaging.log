@@ -1,0 +1,7 @@
+Logging in as alice...
+Login successful for alice
+Logging in as bob...
+Login successful for bob
+Sending message to bob: Hello Bob!
+Received: b'Hello Bob!'
+SUCCESS: Bob received the message.

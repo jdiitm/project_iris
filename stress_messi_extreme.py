@@ -229,6 +229,7 @@ def main():
         print("VERDICT: PASS (Nine 9s Reliability Verified)")
     else:
         print("VERDICT: FAIL (Data Loss or Counting Error)")
+        sys.exit(1)
         
     os.system("make stop >/dev/null")
 
