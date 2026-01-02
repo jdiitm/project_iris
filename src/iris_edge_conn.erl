@@ -121,6 +121,16 @@ process_buffer(Bin, Data = #data{socket = Socket}) ->
             rpc:call(?CORE_NODE, iris_core, store_batch, [Target, Msgs]),
             process_buffer(Rest, Data);
 
+        {{get_status, TargetUser}, Rest} ->
+            %% Pull-based status check
+            case rpc:call(?CORE_NODE, iris_core, get_status, [TargetUser]) of
+                {online, true, _} -> 
+                     gen_tcp:send(Socket, iris_proto:encode_status(TargetUser, online, 0));
+                {online, false, LastSeen} ->
+                     gen_tcp:send(Socket, iris_proto:encode_status(TargetUser, offline, LastSeen))
+            end,
+            process_buffer(Rest, Data);
+
         {{ack, MsgId}, Rest} ->
             %% io:format("Ack received: ~p~n", [MsgId]),
             process_buffer(Rest, Data);
@@ -143,9 +153,12 @@ process_buffer(Bin, Data = #data{socket = Socket}) ->
     end.
 
 terminate(_Reason, _State, #data{user = User}) ->
-    %% Optimization: Cleanup Local Cache
     case User of
         undefined -> ok;
-        _ -> ets:delete(local_presence, User)
+        _ -> 
+            %% Optimization: Cleanup Local Cache
+            ets:delete(local_presence, User),
+            %% Update Status to Offline (Async Cast via Batcher)
+            rpc:cast(?CORE_NODE, iris_core, update_status, [User, offline])
     end,
     ok.
