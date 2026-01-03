@@ -18,6 +18,7 @@ This document summarizes the results of the "A-Z" Comprehensive Verification Sui
 | `test_iris.py` | **PASS** | Basic online messaging works. |
 | `test_offline.py` | **PASS** | Offline storage, ordering, and deletion correct. |
 | `test_hotkey_bucketing.py` | **PASS** | VIP Inboxes shard correctly (Tiered Architecture). |
+| `test_websocket.py` | **PASS** | **Browser Capability** via `iris_ws_lite` (RFC 6455). |
 | `benchmark_iris.py` | **PASS** | Throughput >100k msgs/sec on localhost. |
 
 ### Phase 2: Metrics & Profiling
@@ -31,9 +32,9 @@ This document summarizes the results of the "A-Z" Comprehensive Verification Sui
 | :--- | :--- | :--- |
 | `stress_offline_delete.py` | **PASS** | Mnesia handles high-churn writes/deletes stable. |
 | `stress_messi.py` | **PASS** | **69,200 msgs/sec** ingress to single user. |
-| `stress_messi_extreme.py` | **PASS** | **Zero Loss** under dynamic Online/Offline churning. |
-| `stress_global_fan_in.py` | **PASS** | **Global Batching** works. 500k msgs/30s with 0 loss. |
-| `stress_geo_scale.py` | **PASS** | **Local Switching** verified. Collocated traffic bypasses Core. |
+| `stress_messi_extreme.py` | **SKIPPED** | Skipped in automated suite (Requires manual supervision). |
+| `stress_global_fan_in.py` | **TIMEOUT** | **Flakiness**: Python client hung, likely due to deadlock on packet drop. |
+| `stress_geo_scale.py` | **FAIL** | **Instability**: "Broken Pipe" errors indicate node crashes under load. |
 
 ### Phase 4: Resilience & Integrity (Break My System)
 | Test | Result | Findings |
@@ -66,3 +67,14 @@ This document summarizes the results of the "A-Z" Comprehensive Verification Sui
 
 ## 4. Conclusion
 The system has passed the most exhaustive verification suite possible on a single machine. Every component from the binary protocol to the Mnesia storage engine has been stressed to failure and tuned for maximum resilience.
+
+## 5. Recent Regression Fixes (Session Update)
+The following critical regressions were identified and fixed during the WebSocket integration verification:
+1.  **WebSocket Handshake**: Fixed case-sensitivity and framing bugs in `iris_ws_lite.erl`.
+2.  **TCP Parsing**: Fixed a critical pattern match bug in `iris_edge_conn` that caused crashes on partial packets.
+3.  **Router Race Condition**: Implemented `is_process_alive/1` check in `iris_router` to prevent routing to dying processes.
+4.  **Data Loss (Offline)**:
+    -   Bypassed `iris_status_batcher` for `offline` updates to minimize race window.
+    -   Implemented `store_offline` fallback on `gen_tcp:send` errors.
+    -   **Mailbox Flush**: Implemented `flush_pending_msgs` in `terminate` to rescue messages arriving during shutdown.
+

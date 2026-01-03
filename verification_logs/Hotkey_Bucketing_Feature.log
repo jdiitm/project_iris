@@ -8,7 +8,8 @@ Sent MSG_4
 Sent MSG_6
 Sent MSG_8
 Logging in 'vip_user'...
-VIP Login Ack: b'\x03LOGIN_OK'
-Received Buffer: MSG_0MSG_1MSG_2MSG_3MSG_4MSG_5MSG_6MSG_7MSG_8MSG_9
+VIP Login Ack: b'\x03LOGIN_OKMSG_0MSG_1'
+VIP Login Ack: b'\x03LOGIN_OKMSG_0MSG_1'
+Received Buffer: LOGIN_OKMSG_0MSG_1MSG_2MSG_3MSG_4MSG_5MSG_6MSG_7MSG_8MSG_9
 SUCCESS: All 10 messages received.
 SUCCESS: Global Order Preserved.

@@ -57,8 +57,11 @@ def main():
     data = vip.recv(1024) # Ack
     print(f"VIP Login Ack: {data}", flush=True)
     
+    print(f"VIP Login Ack: {data}", flush=True)
+    
     # Receive loop
-    received_buffer = b""
+    # Capture any data that came with the Ack
+    received_buffer = data
     vip.settimeout(2.0)
     try:
         while True:

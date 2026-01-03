@@ -22,7 +22,13 @@ start(_Type, _Args) ->
         iris_router_worker:start_link(I) 
     end, lists:seq(1, PoolSize)),
     
-    iris_edge_listener:start_link(Port).
+    %% Start TCP Listener
+    iris_edge_listener:start_link(Port),
+
+    %% Start WebSocket Listener (Port + 1)
+    WsPort = Port + 1,
+    io:format("Starting WebSocket Listener on port ~p...~n", [WsPort]),
+    iris_edge_listener:start_link(WsPort, iris_ws_lite).
 
 stop(_State) ->
     ok.

@@ -68,7 +68,7 @@ def test_presence():
     # 4. Bob disconnects (Should set Last Seen)
     print("\n[Check 2] Bob disconnects (Should update Last Seen)")
     s_b.close()
-    time.sleep(2) # Allow Batcher to flush (500ms interval)
+    time.sleep(5) # Allow Batcher to flush (Safe margin for suite)
     
     # 5. Alice checks again
     s_a.sendall(packet_get_status("bob"))

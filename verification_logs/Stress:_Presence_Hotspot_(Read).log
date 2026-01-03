@@ -1,0 +1,30 @@
+[AUTO-TUNE] WARNING: ulimit -n (1048576) is lower than target (1658212).
+[AUTO-TUNE] Capping +P/+Q to 1048576 (minus buffer) to prevent crash.
+[AUTO-TUNE] Detected Available RAM: 25302 MB
+[AUTO-TUNE] Target Capacity: 1381844 Connections
+[AUTO-TUNE] Final Flags: +P 1043576 +Q 1043576
+[AUTO-TUNE] WARNING: ulimit -n (1048576) is lower than target (1658234).
+[AUTO-TUNE] Capping +P/+Q to 1048576 (minus buffer) to prevent crash.
+[AUTO-TUNE] Detected Available RAM: 25302 MB
+[AUTO-TUNE] Target Capacity: 1381862 Connections
+[AUTO-TUNE] Final Flags: +P 1043576 +Q 1043576
+[AUTO-TUNE] WARNING: ulimit -n (1048576) is lower than target (1653670).
+[AUTO-TUNE] Capping +P/+Q to 1048576 (minus buffer) to prevent crash.
+[AUTO-TUNE] Detected Available RAM: 25233 MB
+[AUTO-TUNE] Target Capacity: 1378059 Connections
+[AUTO-TUNE] Final Flags: +P 1043576 +Q 1043576
+[AUTO-TUNE] WARNING: ulimit -n (1048576) is lower than target (1652002).
+[AUTO-TUNE] Capping +P/+Q to 1048576 (minus buffer) to prevent crash.
+[AUTO-TUNE] Detected Available RAM: 25207 MB
+[AUTO-TUNE] Target Capacity: 1376669 Connections
+[AUTO-TUNE] Final Flags: +P 1043576 +Q 1043576
+--- PRESENCE HOTSPOT TEST (1 Fans polling 'messi_the_goat') ---
+Messi is Online.
+
+--- RESULTS ---
+Total Requests: 526725
+Duration:       10.00s
+Throughput:     52668.58 Ops/Sec
+Errors:         0
+Avg Latency:    0.02 ms
+P99 Latency:    0.07 ms

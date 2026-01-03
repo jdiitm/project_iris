@@ -80,97 +80,42 @@ connected(info, {deliver_msg, Msg}, Data = #data{socket = Socket, user = User, t
                 {stop, normal, Data}
              end;
         {error, Reason} ->
-            io:format("Client send error: ~p. Terminating.~n", [Reason]),
+            io:format("Client send error: ~p. Storing offline.~n", [Reason]),
+            rpc:call(?CORE_NODE, iris_core, store_offline, [User, Msg]),
             {stop, normal, Data}
     end.
 
-process_buffer(Bin, Data = #data{socket = Socket}) ->
+process_buffer(Bin, Data = #data{socket = Socket, user = CurrentUser}) ->
     case iris_proto:decode(Bin) of
-        {{login, User}, Rest} ->
-            io:format("User logged in: ~p~n", [User]),
-            %% Register with Core
-            rpc:call(?CORE_NODE, iris_core, register_user, [User, node(), self()]),
-
-            %% Optimization: Register Locally for switching
-            ets:insert(local_presence, {User, self()}),
-
-            %% Send Login ACK to ensure synchronization
-            gen_tcp:send(Socket, <<3, "LOGIN_OK">>),
-            
-            %% Retrieve Offline Messages
-            case rpc:call(?CORE_NODE, iris_core, retrieve_offline, [User]) of
-                 Msgs when is_list(Msgs) ->
-                     %% io:format("Retrieved ~p offline msgs for ~p~n", [length(Msgs), User]),
-                     lists:foreach(fun(Msg) ->
-                         %% io:format("Sending offline msg to client: ~p~n", [Msg]),
-                         gen_tcp:send(Socket, Msg)
-                     end, Msgs);
-                 Error ->
-                     io:format("Error retrieving offline msgs: ~p~n", [Error])
-            end,
-            process_buffer(Rest, Data#data{user = User});
-        
-        {{send_message, Target, Msg}, Rest} ->
-            %% io:format("Sending msg to ~p~n", [Target]),
-            iris_router:route(Target, Msg),
-            process_buffer(Rest, Data);
-
-        {{batch_send, Target, Blob}, Rest} ->
-            %% Optimized Fan-In: Directly store batch to Core
-            Msgs = iris_proto:unpack_batch(Blob),
-            rpc:call(?CORE_NODE, iris_core, store_batch, [Target, Msgs]),
-            process_buffer(Rest, Data);
-
-        {{get_status, TargetUser}, Rest} ->
-            %% Pull-based status check with EDGE CACHING
-            Now = os:system_time(seconds),
-            CacheResult = ets:lookup(presence_cache, TargetUser),
-            StatusTuple = case CacheResult of
-                [{TargetUser, CachedStatus, CachedTime, InsertTime}] 
-                  when Now - InsertTime < 5 -> 
-                     %% Cache Hit
-                     {CachedStatus, CachedTime};
-                [{_, _, _, _}] ->
-                     %% Cache EXPIRED
-                     fetch_and_cache(TargetUser, Now);
-                [] ->
-                     %% Cache EMPTY
-                     fetch_and_cache(TargetUser, Now)
-            end,
-            
-            {FinalState, FinalTime} = StatusTuple,
-            gen_tcp:send(Socket, iris_proto:encode_status(TargetUser, FinalState, FinalTime)),
-            process_buffer(Rest, Data);
-
-        {{ack, MsgId}, Rest} ->
-            process_buffer(Rest, Data);
-
-        {{error, _}, _} ->
-             io:format("Protocol Error or Unknown~n"),
-             inet:setopts(Socket, [{active, once}]),
-             {keep_state, Data#data{buffer = <<>>}};
-
         {more, _} ->
             inet:setopts(Socket, [{active, once}]),
-            {keep_state, Data#data{buffer = Bin}}
+            {keep_state, Data#data{buffer = Bin}};
+
+        {Packet, Rest} ->
+            %% Delegate to Logic Module
+            {ok, NewUser, Actions} = iris_session:handle_packet(Packet, CurrentUser, self(), ?MODULE),
+            
+            %% Execute Actions
+            lists:foreach(fun
+                ({send, Msg}) -> gen_tcp:send(Socket, Msg);
+                ({send_batch, Msgs}) -> [gen_tcp:send(Socket, M) || M <- Msgs];
+                (close) -> gen_statem:stop({shutdown, closed})
+            end, Actions),
+            
+            process_buffer(Rest, Data#data{user = NewUser})
     end.
 
-fetch_and_cache(TargetUser, Now) ->
-    Result = case rpc:call(?CORE_NODE, iris_core, get_status, [TargetUser]) of
-        {online, true, _} -> {online, 0};
-        {online, false, LS} -> {offline, LS}
-    end,
-    {S, T} = Result,
-    ets:insert(presence_cache, {TargetUser, S, T, Now}),
-    Result.
 
 terminate(_Reason, _State, #data{user = User}) ->
-    case User of
-        undefined -> ok;
-        _ -> 
-            %% Optimization: Cleanup Local Cache
-            ets:delete(local_presence, User),
-            %% Update Status to Offline (Async Cast via Batcher)
-            rpc:cast(?CORE_NODE, iris_core, update_status, [User, offline])
-    end,
+    flush_pending_msgs(User),
+    iris_session:terminate(User),
     ok.
+
+flush_pending_msgs(User) ->
+    receive
+        {deliver_msg, Msg} ->
+            io:format("Terminating: Saving pending msg for ~p~n", [User]),
+            rpc:call(?CORE_NODE, iris_core, store_offline, [User, Msg]),
+            flush_pending_msgs(User)
+    after 0 -> ok
+    end.

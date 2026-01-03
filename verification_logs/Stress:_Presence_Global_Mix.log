@@ -1,0 +1,29 @@
+[AUTO-TUNE] WARNING: ulimit -n (1048576) is lower than target (1641897).
+[AUTO-TUNE] Capping +P/+Q to 1048576 (minus buffer) to prevent crash.
+[AUTO-TUNE] Detected Available RAM: 25053 MB
+[AUTO-TUNE] Target Capacity: 1368248 Connections
+[AUTO-TUNE] Final Flags: +P 1043576 +Q 1043576
+[AUTO-TUNE] WARNING: ulimit -n (1048576) is lower than target (1641882).
+[AUTO-TUNE] Capping +P/+Q to 1048576 (minus buffer) to prevent crash.
+[AUTO-TUNE] Detected Available RAM: 25053 MB
+[AUTO-TUNE] Target Capacity: 1368235 Connections
+[AUTO-TUNE] Final Flags: +P 1043576 +Q 1043576
+[AUTO-TUNE] WARNING: ulimit -n (1048576) is lower than target (1649490).
+[AUTO-TUNE] Capping +P/+Q to 1048576 (minus buffer) to prevent crash.
+[AUTO-TUNE] Detected Available RAM: 25169 MB
+[AUTO-TUNE] Target Capacity: 1374575 Connections
+[AUTO-TUNE] Final Flags: +P 1043576 +Q 1043576
+[AUTO-TUNE] WARNING: ulimit -n (1048576) is lower than target (1649029).
+[AUTO-TUNE] Capping +P/+Q to 1048576 (minus buffer) to prevent crash.
+[AUTO-TUNE] Detected Available RAM: 25162 MB
+[AUTO-TUNE] Target Capacity: 1374191 Connections
+[AUTO-TUNE] Final Flags: +P 1043576 +Q 1043576
+--- GLOBAL PRESENCE SIMULATION (Mix: 10% Messi, 90% Random) ---
+Messi is Online.
+
+--- RESULTS ---
+Total Requests: 776799
+Hotspot Requests (Messi): 77541 (Avg Latency: 0.809 ms)
+Random Requests (Global): 699258 (Avg Latency: 0.977 ms)
+
+Throughput: 51649.60 Ops/Sec

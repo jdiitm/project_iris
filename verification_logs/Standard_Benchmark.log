@@ -4,11 +4,11 @@ Payload: 64 bytes
 Starting benchmark...
 
 --- Results ---
-Total Time: 0.070s
-Throughput: 14369.81 msgs/sec
+Total Time: 0.157s
+Throughput: 6354.61 msgs/sec
 Latency (us):
-  Min: 18.81
-  Max: 40680.89
-  Avg: 69.00
-  P50: 21.64
-  P99: 185.43
+  Min: 35.43
+  Max: 40992.25
+  Avg: 154.55
+  P50: 61.66
+  P99: 461.83

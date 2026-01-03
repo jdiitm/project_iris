@@ -1,53 +1,22 @@
-[AUTO-TUNE] WARNING: ulimit -n (1048576) is lower than target (1620454).
+[AUTO-TUNE] WARNING: ulimit -n (1048576) is lower than target (1640593).
 [AUTO-TUNE] Capping +P/+Q to 1048576 (minus buffer) to prevent crash.
-[AUTO-TUNE] Detected Available RAM: 24726 MB
-[AUTO-TUNE] Target Capacity: 1350379 Connections
+[AUTO-TUNE] Detected Available RAM: 25033 MB
+[AUTO-TUNE] Target Capacity: 1367161 Connections
 [AUTO-TUNE] Final Flags: +P 1043576 +Q 1043576
-[AUTO-TUNE] WARNING: ulimit -n (1048576) is lower than target (1620148).
+[AUTO-TUNE] WARNING: ulimit -n (1048576) is lower than target (1640606).
 [AUTO-TUNE] Capping +P/+Q to 1048576 (minus buffer) to prevent crash.
-[AUTO-TUNE] Detected Available RAM: 24721 MB
-[AUTO-TUNE] Target Capacity: 1350124 Connections
+[AUTO-TUNE] Detected Available RAM: 25033 MB
+[AUTO-TUNE] Target Capacity: 1367172 Connections
 [AUTO-TUNE] Final Flags: +P 1043576 +Q 1043576
-[AUTO-TUNE] WARNING: ulimit -n (1048576) is lower than target (1612530).
+[AUTO-TUNE] WARNING: ulimit -n (1048576) is lower than target (1630520).
 [AUTO-TUNE] Capping +P/+Q to 1048576 (minus buffer) to prevent crash.
-[AUTO-TUNE] Detected Available RAM: 24605 MB
-[AUTO-TUNE] Target Capacity: 1343775 Connections
+[AUTO-TUNE] Detected Available RAM: 24879 MB
+[AUTO-TUNE] Target Capacity: 1358767 Connections
 [AUTO-TUNE] Final Flags: +P 1043576 +Q 1043576
-[AUTO-TUNE] WARNING: ulimit -n (1048576) is lower than target (1607954).
+[AUTO-TUNE] WARNING: ulimit -n (1048576) is lower than target (1628245).
 [AUTO-TUNE] Capping +P/+Q to 1048576 (minus buffer) to prevent crash.
-[AUTO-TUNE] Detected Available RAM: 24535 MB
-[AUTO-TUNE] Target Capacity: 1339962 Connections
+[AUTO-TUNE] Detected Available RAM: 24845 MB
+[AUTO-TUNE] Target Capacity: 1356871 Connections
 [AUTO-TUNE] Final Flags: +P 1043576 +Q 1043576
 Starting EXTREME Load Gen (normal): 50000 connections...
 All workers spawned.
-[AUTO-TUNE] WARNING: ulimit -n (1048576) is lower than target (1188622).
-[AUTO-TUNE] Capping +P/+Q to 1048576 (minus buffer) to prevent crash.
-[AUTO-TUNE] Detected Available RAM: 18136 MB
-[AUTO-TUNE] Target Capacity: 990519 Connections
-[AUTO-TUNE] Final Flags: +P 1043576 +Q 1043576
-
---- SCENARIO: The Split Brain (Network Partitions) ---
-[*] Setting up nodes...
-[*] Starting Load (50k connections)...
-[*] Starting Distribution Chaos (Disconnect random node every 5s)...
-[0s] Connected Nodes: [iris_core@j]
-[5s] Connected Nodes: [iris_core@j]
-[10s] Connected Nodes: [iris_core@j]
-[15s] Connected Nodes: [iris_core@j]
-[20s] Connected Nodes: [iris_core@j]
-[25s] Connected Nodes: [iris_core@j]
-[30s] Connected Nodes: [iris_core@j]
-[35s] Connected Nodes: [iris_core@j]
-[40s] Connected Nodes: [iris_core@j]
-[45s] Connected Nodes: [iris_core@j]
-[50s] Connected Nodes: [iris_core@j]
-[55s] Connected Nodes: [iris_core@j]
-[60s] Connected Nodes: [iris_core@j]
-[65s] Connected Nodes: [iris_core@j]
-[70s] Connected Nodes: [iris_core@j]
-[75s] Connected Nodes: [iris_core@j]
-[80s] Connected Nodes: [iris_core@j]
-[85s] Connected Nodes: {badrpc,nodedown}
-[90s] Connected Nodes: {badrpc,nodedown}
-[95s] Connected Nodes: {badrpc,nodedown}
-Killed

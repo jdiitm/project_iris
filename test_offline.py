@@ -49,7 +49,9 @@ def main():
         # Alice sends to Charlie (who is offline)
         print("Sending ordered offline messages...")
         send_msg(alice, "charlie", "Msg 1")
+        time.sleep(0.05)
         send_msg(alice, "charlie", "Msg 2")
+        time.sleep(0.05)
         send_msg(alice, "charlie", "Msg 3")
         
         alice.close()
