@@ -1,32 +1,32 @@
-[AUTO-TUNE] WARNING: ulimit -n (1048576) is lower than target (1643562).
+[AUTO-TUNE] WARNING: ulimit -n (1048576) is lower than target (1613167).
 [AUTO-TUNE] Capping +P/+Q to 1048576 (minus buffer) to prevent crash.
-[AUTO-TUNE] Detected Available RAM: 25078 MB
-[AUTO-TUNE] Target Capacity: 1369635 Connections
+[AUTO-TUNE] Detected Available RAM: 24614 MB
+[AUTO-TUNE] Target Capacity: 1344306 Connections
 [AUTO-TUNE] Final Flags: +P 1043576 +Q 1043576
-[AUTO-TUNE] WARNING: ulimit -n (1048576) is lower than target (1643218).
+[AUTO-TUNE] WARNING: ulimit -n (1048576) is lower than target (1612204).
 [AUTO-TUNE] Capping +P/+Q to 1048576 (minus buffer) to prevent crash.
-[AUTO-TUNE] Detected Available RAM: 25073 MB
-[AUTO-TUNE] Target Capacity: 1369349 Connections
+[AUTO-TUNE] Detected Available RAM: 24600 MB
+[AUTO-TUNE] Target Capacity: 1343504 Connections
 [AUTO-TUNE] Final Flags: +P 1043576 +Q 1043576
-[AUTO-TUNE] WARNING: ulimit -n (1048576) is lower than target (1615926).
+[AUTO-TUNE] WARNING: ulimit -n (1048576) is lower than target (1611812).
 [AUTO-TUNE] Capping +P/+Q to 1048576 (minus buffer) to prevent crash.
-[AUTO-TUNE] Detected Available RAM: 24657 MB
-[AUTO-TUNE] Target Capacity: 1346605 Connections
+[AUTO-TUNE] Detected Available RAM: 24594 MB
+[AUTO-TUNE] Target Capacity: 1343177 Connections
 [AUTO-TUNE] Final Flags: +P 1043576 +Q 1043576
-[AUTO-TUNE] WARNING: ulimit -n (1048576) is lower than target (1611602).
+[AUTO-TUNE] WARNING: ulimit -n (1048576) is lower than target (1607750).
 [AUTO-TUNE] Capping +P/+Q to 1048576 (minus buffer) to prevent crash.
-[AUTO-TUNE] Detected Available RAM: 24591 MB
-[AUTO-TUNE] Target Capacity: 1343002 Connections
+[AUTO-TUNE] Detected Available RAM: 24532 MB
+[AUTO-TUNE] Target Capacity: 1339792 Connections
 [AUTO-TUNE] Final Flags: +P 1043576 +Q 1043576
 src/iris_extreme_gen.erl:22:37: Warning: variable 'IpOffset' is unused
 %   22| worker_init(Id, StatsPid, Duration, IpOffset, Mode) ->
 %     |                                     ^
 
 Chaos Monkey started with interval 50 ms. Beware!
-[AUTO-TUNE] WARNING: ulimit -n (1048576) is lower than target (1618680).
+[AUTO-TUNE] WARNING: ulimit -n (1048576) is lower than target (1630022).
 [AUTO-TUNE] Capping +P/+Q to 1048576 (minus buffer) to prevent crash.
-[AUTO-TUNE] Detected Available RAM: 24699 MB
-[AUTO-TUNE] Target Capacity: 1348900 Connections
+[AUTO-TUNE] Detected Available RAM: 24872 MB
+[AUTO-TUNE] Target Capacity: 1358352 Connections
 [AUTO-TUNE] Final Flags: +P 1043576 +Q 1043576
 --- EXTREME SCALE TEST: 800,000 Real Connections ---
 [1] Target: iris_edge1@j

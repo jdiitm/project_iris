@@ -1,4 +1,5 @@
 import socket
+import os
 import struct
 import time
 import threading
@@ -70,6 +71,13 @@ def worker(idx):
 
 def run_test():
     print(f"--- GLOBAL PRESENCE SIMULATION (Mix: 10% Messi, 90% Random) ---")
+
+    # Restart Server
+    os.system("make stop >/dev/null 2>&1; killall beam.smp 2>/dev/null")
+    os.system("make clean >/dev/null; make all >/dev/null")
+    os.system("make start_core >/dev/null; sleep 2")
+    os.system("make start_edge1 >/dev/null; sleep 2")
+    
     
     # login Messi
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

@@ -1,6 +1,24 @@
-[AUTO-TUNE] WARNING: ulimit -n (1048576) is lower than target (1650548).
+[AUTO-TUNE] WARNING: ulimit -n (1048576) is lower than target (1654047).
 [AUTO-TUNE] Capping +P/+Q to 1048576 (minus buffer) to prevent crash.
-[AUTO-TUNE] Detected Available RAM: 25185 MB
-[AUTO-TUNE] Target Capacity: 1375457 Connections
+[AUTO-TUNE] Detected Available RAM: 25238 MB
+[AUTO-TUNE] Target Capacity: 1378373 Connections
 [AUTO-TUNE] Final Flags: +P 1043576 +Q 1043576
-/usr/bin/erl -detached +P 1043576 +Q 1043576 +K true +sbwt none -pa ebin -sname iris_core -eval "application:ensure_all_started(iris_core)"
+/usr/bin/erl -noshell -noinput +P 1043576 +Q 1043576 +K true +sbwt none -pa ebin -sname iris_core -eval "application:ensure_all_started(iris_core)" &
+App Start. Node: iris_core@j
+Node Parts: ["iris_core","j"]
+Initializing DB on Core...
+Stopping Mnesia...
+Creating Schema...
+=INFO REPORT==== 3-Jan-2026::08:36:59.441446 ===
+    application: mnesia
+    exited: stopped
+    type: temporary
+
+Starting Mnesia...
+Core DB Initialized. Mnesia Status: yes
+Mnesia Local Tables: [user_status,user_meta,offline_msg,presence,schema]
+Batch Write Error: ok
+Batch Write Error: ok
+Batch Write Error: ok
+Batch Write Error: ok
+Batch Write Error: ok

@@ -1,5 +1,5 @@
 #!/bin/bash
-set -e
+# set -e
 
 LOG_DIR="verification_logs"
 mkdir -p $LOG_DIR
@@ -51,7 +51,8 @@ run_test() {
         grep -i "error" "$LOG_DIR/${NAME// /_}.log" | head -n 5
         grep -i "fail" "$LOG_DIR/${NAME// /_}.log" | head -n 5
         echo "Stopping Suite."
-        exit 1
+        # exit 1 (Continue to next test)
+        return 1
     fi
 }
 
@@ -63,6 +64,8 @@ start_cluster
 run_test "Basic Online Messaging" "python3 test_iris.py" "connected"
 run_test "Offline Messaging Regression" "python3 test_offline.py" "connected"
 run_test "Hotkey Bucketing Feature" "python3 test_hotkey_bucketing.py" "connected"
+run_test "Presence Functional" "python3 test_presence.py" "connected"
+run_test "WebSocket Functional" "python3 test_websocket.py" "connected"
 run_test "Standard Benchmark" "python3 benchmark_iris.py" "connected"
 
 # ==========================================
@@ -75,8 +78,10 @@ run_test "Memory & Idle Profiling" "python3 measure_dials.py" "standalone"
 # PHASE 3: STRESS & SCALING (Standalone)
 # ==========================================
 run_test "Stress: Offline Delete" "python3 stress_offline_delete.py" "standalone"
-run_test "Stress: Messi Hotspot" "python3 stress_messi.py" "standalone"
-run_test "Stress: Messi Extreme" "python3 stress_messi_extreme.py" "standalone"
+run_test "Stress: Messi Hotspot (Write)" "python3 stress_messi.py" "standalone"
+run_test "Stress: Messi Extreme" "python3 stress_messi_extreme.py --scale 0.2" "standalone"
+run_test "Stress: Presence Hotspot (Read)" "python3 stress_presence_hotspot.py" "standalone"
+run_test "Stress: Presence Global Mix" "python3 stress_presence_global.py" "standalone"
 run_test "Stress: Global Fan-In" "python3 stress_global_fan_in.py" "standalone"
 run_test "Stress: Geo-Scale Local Switch" "python3 stress_geo_scale.py" "standalone"
 

@@ -1,0 +1,39 @@
+[AUTO-TUNE] WARNING: ulimit -n (1048576) is lower than target (1654494).
+[AUTO-TUNE] Capping +P/+Q to 1048576 (minus buffer) to prevent crash.
+[AUTO-TUNE] Detected Available RAM: 25245 MB
+[AUTO-TUNE] Target Capacity: 1378745 Connections
+[AUTO-TUNE] Final Flags: +P 1043576 +Q 1043576
+[AUTO-TUNE] WARNING: ulimit -n (1048576) is lower than target (1654494).
+[AUTO-TUNE] Capping +P/+Q to 1048576 (minus buffer) to prevent crash.
+[AUTO-TUNE] Detected Available RAM: 25245 MB
+[AUTO-TUNE] Target Capacity: 1378745 Connections
+[AUTO-TUNE] Final Flags: +P 1043576 +Q 1043576
+[AUTO-TUNE] WARNING: ulimit -n (1048576) is lower than target (1642543).
+[AUTO-TUNE] Capping +P/+Q to 1048576 (minus buffer) to prevent crash.
+[AUTO-TUNE] Detected Available RAM: 25063 MB
+[AUTO-TUNE] Target Capacity: 1368786 Connections
+[AUTO-TUNE] Final Flags: +P 1043576 +Q 1043576
+[AUTO-TUNE] WARNING: ulimit -n (1048576) is lower than target (1643427).
+[AUTO-TUNE] Capping +P/+Q to 1048576 (minus buffer) to prevent crash.
+[AUTO-TUNE] Detected Available RAM: 25076 MB
+[AUTO-TUNE] Target Capacity: 1369523 Connections
+[AUTO-TUNE] Final Flags: +P 1043576 +Q 1043576
+[AUTO-TUNE] WARNING: ulimit -n (1048576) is lower than target (1642804).
+[AUTO-TUNE] Capping +P/+Q to 1048576 (minus buffer) to prevent crash.
+[AUTO-TUNE] Detected Available RAM: 25067 MB
+[AUTO-TUNE] Target Capacity: 1369004 Connections
+[AUTO-TUNE] Final Flags: +P 1043576 +Q 1043576
+--- 'MESSI' HOTSPOT TEST ---
+Scenario: 10000 fans sending 5 msgs each to 'messi'. Total: 50000
+
+[1] FLOOD PHASE (Messi Offline)
+[1] Flood Complete in 0.75s
+[1] Ingestion Rate: 66554.07 msgs/sec
+
+[1.5] Waiting 30s (Walking onto the pitch / Queue Drain)...
+
+[2] ONLINE BURST PHASE
+
+[MESSI] Coming Online... Expecting ~50000 messages.
+[MESSI] Received 5781 messages (69372 bytes) in 5.0316s
+[MESSI] Speed: 1148.94 msgs/sec

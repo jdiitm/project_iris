@@ -1,45 +1,45 @@
-[AUTO-TUNE] WARNING: ulimit -n (1048576) is lower than target (1679013).
+[AUTO-TUNE] WARNING: ulimit -n (1048576) is lower than target (1653402).
 [AUTO-TUNE] Capping +P/+Q to 1048576 (minus buffer) to prevent crash.
-[AUTO-TUNE] Detected Available RAM: 25619 MB
-[AUTO-TUNE] Target Capacity: 1399178 Connections
+[AUTO-TUNE] Detected Available RAM: 25228 MB
+[AUTO-TUNE] Target Capacity: 1377835 Connections
 [AUTO-TUNE] Final Flags: +P 1043576 +Q 1043576
-[AUTO-TUNE] WARNING: ulimit -n (1048576) is lower than target (1678999).
+[AUTO-TUNE] WARNING: ulimit -n (1048576) is lower than target (1653326).
 [AUTO-TUNE] Capping +P/+Q to 1048576 (minus buffer) to prevent crash.
-[AUTO-TUNE] Detected Available RAM: 25619 MB
-[AUTO-TUNE] Target Capacity: 1399166 Connections
+[AUTO-TUNE] Detected Available RAM: 25227 MB
+[AUTO-TUNE] Target Capacity: 1377772 Connections
 [AUTO-TUNE] Final Flags: +P 1043576 +Q 1043576
-[AUTO-TUNE] WARNING: ulimit -n (1048576) is lower than target (1675507).
+[AUTO-TUNE] WARNING: ulimit -n (1048576) is lower than target (1651384).
 [AUTO-TUNE] Capping +P/+Q to 1048576 (minus buffer) to prevent crash.
-[AUTO-TUNE] Detected Available RAM: 25566 MB
-[AUTO-TUNE] Target Capacity: 1396256 Connections
+[AUTO-TUNE] Detected Available RAM: 25198 MB
+[AUTO-TUNE] Target Capacity: 1376154 Connections
 [AUTO-TUNE] Final Flags: +P 1043576 +Q 1043576
-[AUTO-TUNE] WARNING: ulimit -n (1048576) is lower than target (1682416).
+[AUTO-TUNE] WARNING: ulimit -n (1048576) is lower than target (1642814).
 [AUTO-TUNE] Capping +P/+Q to 1048576 (minus buffer) to prevent crash.
-[AUTO-TUNE] Detected Available RAM: 25671 MB
-[AUTO-TUNE] Target Capacity: 1402014 Connections
+[AUTO-TUNE] Detected Available RAM: 25067 MB
+[AUTO-TUNE] Target Capacity: 1369012 Connections
 [AUTO-TUNE] Final Flags: +P 1043576 +Q 1043576
-[AUTO-TUNE] WARNING: ulimit -n (1048576) is lower than target (1101192).
+[AUTO-TUNE] WARNING: ulimit -n (1048576) is lower than target (1295516).
 [AUTO-TUNE] Capping +P/+Q to 1048576 (minus buffer) to prevent crash.
-[AUTO-TUNE] Detected Available RAM: 16802 MB
-[AUTO-TUNE] Target Capacity: 917660 Connections
+[AUTO-TUNE] Detected Available RAM: 19768 MB
+[AUTO-TUNE] Target Capacity: 1079597 Connections
 [AUTO-TUNE] Final Flags: +P 1043576 +Q 1043576
 --- WhatsApp-Scale Benchmark Suite ---
 [1] Restarting Nodes...
-[2] Baseline: 0.56 MB RAM, 0.0% CPU
+[2] Baseline: 68.07 MB RAM, 31.3% CPU
 [3] Spawning 10000 idle connections...
     Waiting 10s for connections to stabilize...
-    Loaded: 0.56 MB RAM
-    Delta: 0.00 MB for 10000 conns
-    Memory per Connection: 0.00 KB (Excellent!)
+    Loaded: 236.08 MB RAM
+    Delta: 168.01 MB for 10000 conns
+    Memory per Connection: 17.20 KB (Excellent!)
 [4] Running High-Throughput Load Test...
-    Throughput: 2,255,891 msgs/sec
-    Avg CPU Usage: 0.0%
+    Throughput: 1,313,762 msgs/sec
+    Avg CPU Usage: 320.0%
 [5] Checking Latency (P50/P99)...
-    P99 Latency: 0.14 ms
+    P99 Latency: 0.07 ms
 
 --- Summary Findings ---
 1. Concurrent Connections: 10000 verified (Capacity > 1M)
-2. Memory per Connection:  0.00 KB (Target: Very Low)
-3. Messages per Second:    2,255,891 (Target: >30k)
-4. Latency (P99):          0.14 ms (Target: <100ms)
-5. CPU Usage:              0.0% under Max Load
+2. Memory per Connection:  17.20 KB (Target: Very Low)
+3. Messages per Second:    1,313,762 (Target: >30k)
+4. Latency (P99):          0.07 ms (Target: <100ms)
+5. CPU Usage:              320.0% under Max Load

@@ -43,8 +43,16 @@ handle_cast({route, User, Msg, StartTime}, Ref) ->
         [] ->
             %% NOT LOCAL: Fallback to Global Core RPC
             case rpc:call(?CORE_NODE, iris_core, lookup_user, [User]) of
-                {ok, _Node, Pid} ->
-                    Pid ! {deliver_msg, Msg};
+                {ok, Node, Pid} ->
+                    IsLocal = (Node == node()),
+                    IsAlive = if IsLocal -> is_process_alive(Pid); true -> true end,
+                    
+                    if IsAlive ->
+                        Pid ! {deliver_msg, Msg};
+                    true ->
+                        io:format("Router: Local PID dead for ~p. Storing offline.~n", [User]),
+                        rpc:call(?CORE_NODE, iris_core, store_offline, [User, Msg])
+                    end;
                 {error, not_found} ->
                      io:format("Router: Storing offline msg for ~p: ~p~n", [User, Msg]),
                      rpc:call(?CORE_NODE, iris_core, store_offline, [User, Msg]);
