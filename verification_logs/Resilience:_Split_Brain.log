@@ -20,3 +20,34 @@
 [AUTO-TUNE] Final Flags: +P 1043576 +Q 1043576
 Starting EXTREME Load Gen (normal): 50000 connections...
 All workers spawned.
+[AUTO-TUNE] WARNING: ulimit -n (1048576) is lower than target (1063160).
+[AUTO-TUNE] Capping +P/+Q to 1048576 (minus buffer) to prevent crash.
+[AUTO-TUNE] Detected Available RAM: 16222 MB
+[AUTO-TUNE] Target Capacity: 885967 Connections
+[AUTO-TUNE] Final Flags: +P 1043576 +Q 1043576
+
+--- SCENARIO: The Split Brain (Network Partitions) ---
+[*] Setting up nodes...
+[*] Starting Load (50k connections)...
+[*] Starting Distribution Chaos (Disconnect random node every 5s)...
+[0s] Connected Nodes: [iris_core@j]
+[5s] Connected Nodes: [iris_core@j]
+[10s] Connected Nodes: [iris_core@j]
+[15s] Connected Nodes: [iris_core@j]
+[20s] Connected Nodes: [iris_core@j]
+[25s] Connected Nodes: [iris_core@j]
+[30s] Connected Nodes: [iris_core@j]
+[35s] Connected Nodes: [iris_core@j]
+[40s] Connected Nodes: [iris_core@j]
+[45s] Connected Nodes: [iris_core@j]
+[50s] Connected Nodes: [iris_core@j]
+[55s] Connected Nodes: [iris_core@j]
+[60s] Connected Nodes: [iris_core@j]
+[65s] Connected Nodes: [iris_core@j]
+[70s] Connected Nodes: [iris_core@j]
+[75s] Connected Nodes: {badrpc,nodedown}
+[80s] Connected Nodes: {badrpc,nodedown}
+[85s] Connected Nodes: {badrpc,nodedown}
+[90s] Connected Nodes: {badrpc,nodedown}
+[95s] Connected Nodes: {badrpc,nodedown}
+Killed
