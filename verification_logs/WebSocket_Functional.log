@@ -1,10 +1,2 @@
-/home/j/.gemini/antigravity/scratch/project_iris/test_websocket.py:68: DeprecationWarning: There is no current event loop
-  asyncio.get_event_loop().run_until_complete(test_websocket())
 Connecting to ws://localhost:8086...
-[92m[PASS][0m Connected to WebSocket.
-Logging in as web_user...
-Received ACK: b'\x03LOGIN_OK'
-[92m[PASS][0m Login Successful.
-Sending message to web_user...
-Received: b'Hello from Browser!'
-[92m[PASS][0m Message Loopback Successful.
+[91m[FAIL][0m Error: did not receive a valid HTTP response

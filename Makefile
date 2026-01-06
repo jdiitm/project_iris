@@ -1,6 +1,6 @@
 # Makefile for Project Iris
-ERL = /usr/bin/erl
-ERLC = /usr/bin/erlc
+ERL = erl
+ERLC = erlc
 HOSTNAME := $(shell hostname -s)
 
 ERL_FILES = $(wildcard src/*.erl)

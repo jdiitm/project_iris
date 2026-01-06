@@ -1,25 +1,6 @@
-[AUTO-TUNE] WARNING: ulimit -n (1048576) is lower than target (1654800).
-[AUTO-TUNE] Capping +P/+Q to 1048576 (minus buffer) to prevent crash.
-[AUTO-TUNE] Detected Available RAM: 25250 MB
-[AUTO-TUNE] Target Capacity: 1379000 Connections
-[AUTO-TUNE] Final Flags: +P 1043576 +Q 1043576
-[AUTO-TUNE] WARNING: ulimit -n (1048576) is lower than target (1653100).
-[AUTO-TUNE] Capping +P/+Q to 1048576 (minus buffer) to prevent crash.
-[AUTO-TUNE] Detected Available RAM: 25224 MB
-[AUTO-TUNE] Target Capacity: 1377584 Connections
-[AUTO-TUNE] Final Flags: +P 1043576 +Q 1043576
-[AUTO-TUNE] WARNING: ulimit -n (1048576) is lower than target (1632211).
-[AUTO-TUNE] Capping +P/+Q to 1048576 (minus buffer) to prevent crash.
-[AUTO-TUNE] Detected Available RAM: 24905 MB
-[AUTO-TUNE] Target Capacity: 1360176 Connections
-[AUTO-TUNE] Final Flags: +P 1043576 +Q 1043576
---- UNIT COST BENCHMARK ---
-Monitoring Erlang PID: 383204
-
---- RESULTS ---
-Total Messages: 500000
-Total Time:     6.2206s
-Throughput:     80377.46 msgs/sec
-Total CPU Time: 3.0600s
-CPU Cost/Msg:   6.12 microseconds
-Est. Max RPS (1 Core): 163398.69
+[AUTO-TUNE] Detected Available RAM: 4096 MB
+[AUTO-TUNE] Target Capacity: 250000 Connections
+[AUTO-TUNE] Final Flags: +P 300000 +Q 300000
+[AUTO-TUNE] Detected Available RAM: 4096 MB
+[AUTO-TUNE] Target Capacity: 250000 Connections
+[AUTO-TUNE] Final Flags: +P 300000 +Q 300000

@@ -21,21 +21,22 @@ def run_split_brain():
     print("\n--- SCENARIO: The Split Brain (Network Partitions) ---")
     setup()
     
-    node = "iris_edge1@j" # Simplify logic, assume 'j' hostname
+    hostname = subprocess.check_output("hostname -s", shell=True).decode().strip()
+    node = f"iris_edge1@{hostname}"
     
     # 1. Start Load (Normal Mode) - 50k connections
     print("[*] Starting Load (50k connections)...")
-    run_cmd(f"/usr/bin/erl -sname gen_load -hidden -noshell -pa ebin -eval \"iris_extreme_gen:start(50000, 300, normal), timer:sleep(infinity).\"", bg=True)
+    run_cmd(f"erl -sname gen_load -hidden -noshell -pa ebin -eval \"iris_extreme_gen:start(50000, 300, normal), timer:sleep(infinity).\"", bg=True)
     
     # 2. Start Chaos Dist
     print("[*] Starting Distribution Chaos (Disconnect random node every 5s)...")
-    run_cmd(f"/usr/bin/erl -sname chaos_dist -hidden -noshell -pa ebin -eval \"rpc:call('{node}', chaos_dist, start, [5000]), init:stop().\"")
+    run_cmd(f"erl -sname chaos_dist -hidden -noshell -pa ebin -eval \"rpc:call('{node}', chaos_dist, start, [5000]), init:stop().\"")
     
     # 3. Monitor
     for i in range(20):
         time.sleep(5)
         # Check if nodes are connected
-        out = subprocess.check_output(f"/usr/bin/erl -sname check_{i} -hidden -noshell -pa ebin -eval \"N = rpc:call('{node}', erlang, nodes, []), io:format('~p', [N]), init:stop().\"", shell=True).decode()
+        out = subprocess.check_output(f"erl -sname check_{i} -hidden -noshell -pa ebin -eval \"N = rpc:call('{node}', erlang, nodes, []), io:format('~p', [N]), init:stop().\"", shell=True).decode()
         print(f"[{i*5}s] Connected Nodes: {out.strip()}")
         
     run_cmd("make stop >/dev/null")
@@ -47,7 +48,7 @@ def run_oom():
     # 1. Start Slow Consumer Load - 100k connections flooding each other
     # But NOT reading.
     print("[*] Starting Slow Consumers (100k connections)...")
-    p = run_cmd(f"/usr/bin/erl -sname gen_oom -hidden -noshell -pa ebin -eval \"iris_extreme_gen:start(100000, 300, slow_consumer), timer:sleep(infinity).\"", bg=True)
+    p = run_cmd(f"erl -sname gen_oom -hidden -noshell -pa ebin -eval \"iris_extreme_gen:start(100000, 300, slow_consumer), timer:sleep(infinity).\"", bg=True)
     
     # 2. Monitor RAM
     try:
@@ -76,14 +77,15 @@ def run_disk():
     
     # 1. Start Offline Flood - 100k connections sending to offline users
     print("[*] Starting Offline Flood (100k connections)...")
-    p = run_cmd(f"/usr/bin/erl -sname gen_disk -hidden -noshell -pa ebin -eval \"iris_extreme_gen:start(100000, 300, offline_flood), timer:sleep(infinity).\"", bg=True)
+    p = run_cmd(f"erl -sname gen_disk -hidden -noshell -pa ebin -eval \"iris_extreme_gen:start(100000, 300, offline_flood), timer:sleep(infinity).\"", bg=True)
     
     # 2. Monitor Disk I/O (via Mnesia Dir size)
     try:
         for i in range(120):
             time.sleep(2)
             # Check size of Mnesia dir
-            size_out = subprocess.getoutput("du -sh Mnesia.iris_core@j | awk '{print $1}'")
+            hostname = subprocess.check_output("hostname -s", shell=True).decode().strip()
+            size_out = subprocess.getoutput(f"du -sh Mnesia.iris_core@{hostname} | awk '{{print $1}}'")
             print(f"[{i*2}s] Mnesia DB Size: {size_out}")
     except KeyboardInterrupt:
         pass

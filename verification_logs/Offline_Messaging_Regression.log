@@ -7,8 +7,8 @@ Sending message to charlie: Msg 3
 Logged out Alice. Logging in Charlie...
 Logging in as charlie...
 Login successful for charlie
-DEBUG: extra_data from login: b''
-Received: b'Msg 1Msg 2Msg 3'
+DEBUG: extra_data from login: b'Msg 1Msg 2Msg 3'
+Timeout waiting for message
 Total Received: b'Msg 1Msg 2Msg 3'
 SUCCESS: Received all messages in correct order.
 ALL TESTS PASSED

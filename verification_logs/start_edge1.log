@@ -1,11 +1,9 @@
-[AUTO-TUNE] WARNING: ulimit -n (1048576) is lower than target (1654321).
-[AUTO-TUNE] Capping +P/+Q to 1048576 (minus buffer) to prevent crash.
-[AUTO-TUNE] Detected Available RAM: 25242 MB
-[AUTO-TUNE] Target Capacity: 1378601 Connections
-[AUTO-TUNE] Final Flags: +P 1043576 +Q 1043576
-/usr/bin/erl -noshell -noinput +P 1043576 +Q 1043576 +K true +sbwt none -pa ebin -sname iris_edge1 -iris_edge port 8085 -eval "application:ensure_all_started(iris_edge)" &
+[AUTO-TUNE] Detected Available RAM: 4096 MB
+[AUTO-TUNE] Target Capacity: 250000 Connections
+[AUTO-TUNE] Final Flags: +P 300000 +Q 300000
+erl -noshell -noinput +P 300000 +Q 300000 +K true +sbwt none -pa ebin -sname iris_edge1 -iris_edge port 8085 -eval "application:ensure_all_started(iris_edge)" &
 Starting Edge App on port 8085...
-Starting Router Pool (Size: 24)...
+Starting Router Pool (Size: 8)...
 Listener started on port 8085 (Handler: iris_edge_conn)
 Starting WebSocket Listener on port 8086...
 Listener started on port 8086 (Handler: iris_ws_lite)
@@ -17,8 +15,8 @@ User logged in: <<"alice">>
 Router: Storing offline msg for <<"charlie">>: <<"Msg 1">>
 Router: Storing offline msg for <<"charlie">>: <<"Msg 2">>
 Client disconnected
-User logged in: <<"charlie">>
 Router: Storing offline msg for <<"charlie">>: <<"Msg 3">>
+User logged in: <<"charlie">>
 Client disconnected
 User logged in: <<"charlie">>
 Client disconnected

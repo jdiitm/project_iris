@@ -17,8 +17,16 @@ if [ -f /proc/meminfo ]; then
          KB_CACH=$(grep ^Cached /proc/meminfo | awk '{print $2}')
          KB_AVAILABLE=$((KB_FREE + KB_BUFF + KB_CACH))
     fi
+elif [[ "$(uname)" == "Darwin" ]]; then
+    # macOS detection
+    BYTES_TOTAL=$(sysctl -n hw.memsize)
+    # Estimate available as Total - (Wired + Compress) is hard, 
+    # so we take a safe 60% of TOTAL for MacOS to account for WindowServer/kernel usage.
+    # Bash doesn't do float, so we multiply by 6 and divide by 10.
+    BYTES_AVAILABLE=$((BYTES_TOTAL * 6 / 10))
+    KB_AVAILABLE=$((BYTES_AVAILABLE / 1024))
 else
-    # Fallback for non-Linux (e.g., Mac/BSD - minimal support)
+    # Fallback for non-Linux (e.g., BSD - minimal support)
     KB_AVAILABLE=4194304 # Assume 4GB
 fi
 

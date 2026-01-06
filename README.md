@@ -340,3 +340,12 @@ We added a scalable "Online/Last Seen" system designed for 5 Billion Users.
 *   **Last Seen**: Persistent disc storage (`user_status`), batched for performance.
 *   **Network Optimization**: Clients **PULL** status (`GetStatus`) to save bandwidth. No background broadcasts.
 *   **Performance**: Buffer-based writes handle "Thundering Herd" regional disconnects.
+
+### 23. Refactoring & Production Roadmap
+A comprehensive code review identified **45+ specific refactoring recommendations** for achieving:
+- **99.99% Availability** (Multi-node Core, Circuit Breakers)
+- **Global Scale** (Sharded Storage, Multi-Region CRDT)
+- **Zero Message Loss** (WAL, Acknowledgments)
+- **Production Observability** (Structured Logging, Prometheus Metrics, Distributed Tracing)
+
+For the complete analysis with code examples and a 10-week implementation timeline, see the **[Refactoring Recommendations](docs/REFACTORING_RECOMMENDATIONS.md)**.

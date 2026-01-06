@@ -1,6 +1,6 @@
-beam.smp: no process found
-rm: cannot remove '*.log': No such file or directory
-beam.smp: no process found
+No matching processes belonging to you were found
+rm: *.log: No such file or directory
+No matching processes belonging to you were found
 [*] Setting up nodes...
 
 --- TEST: Real-Time Online Check ---
@@ -12,11 +12,11 @@ RAW RESP: b'\x06\x00\x03bob\x01\x00\x00\x00\x00\x00\x00\x00\x00'
 Result: {'user': 'bob', 'state': 'online', 'time': 0}
 
 [Check 2] Bob disconnects (Should update Last Seen)
-Result: {'user': 'bob', 'state': 'offline', 'time': 1767409640}
-Last Seen Timestamp: 1767409640 (Current: 1767409645)
+Result: {'user': 'bob', 'state': 'offline', 'time': 1767632945}
+Last Seen Timestamp: 1767632945 (Current: 1767632950)
 
 --- TEST: Persistence (Restart Core) ---
 [Check 3] Alice checks Bob after Restart (Should verify persistence)
-Result: {'user': 'bob', 'state': 'offline', 'time': 1767409640}
+Result: {'user': 'bob', 'state': 'offline', 'time': 1767632945}
 
 >>> PASS: Presence Feature Verified <<<
