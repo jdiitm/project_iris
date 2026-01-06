@@ -55,21 +55,21 @@ def setup_cluster():
     # Start Core (Detached)
     # Start Core (Attached via Subprocess)
     core_log = open("iris_core.log", "w")
-    cmd_core = ["/usr/bin/erl", "-setcookie", "iris_secret", "-pa", "ebin", 
+    cmd_core = ["erl", "-setcookie", "iris_secret", "-pa", "ebin", 
                 "-sname", "iris_core", "-eval", "application:ensure_all_started(iris_core)"]
     subprocess.Popen(cmd_core, stdout=core_log, stderr=core_log)
     time.sleep(2)
     
     # Promote VIP
     log(f"Promoting {VIP_USER} to {VIP_BUCKET_COUNT} buckets...")
-    promote_cmd = f"/usr/bin/erl -setcookie iris_secret -sname client_promote -noshell -eval \"rpc:call(iris_core@j, iris_core, set_bucket_count, [<<\\\"{VIP_USER}\\\">>, {VIP_BUCKET_COUNT}]), init:stop().\""
+    promote_cmd = f"erl -setcookie iris_secret -sname client_promote -noshell -eval \"rpc:call(iris_core@j, iris_core, set_bucket_count, [<<\\\"{VIP_USER}\\\">>, {VIP_BUCKET_COUNT}]), init:stop().\""
     os.system(promote_cmd)
     
     # Start Regions
     for i in range(1, NUM_REGIONS + 1):
         port = 8090 + i
         region_log = open(f"iris_region_{i}.log", "w")
-        cmd_region = ["/usr/bin/erl", "-setcookie", "iris_secret", "-pa", "ebin", 
+        cmd_region = ["erl", "-setcookie", "iris_secret", "-pa", "ebin", 
                       "-sname", f"iris_region_{i}", "-iris_edge", "port", str(port), 
                       "-eval", "application:ensure_all_started(iris_edge)"]
         subprocess.Popen(cmd_region, stdout=region_log, stderr=region_log)

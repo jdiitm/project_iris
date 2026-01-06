@@ -1,45 +1,33 @@
-[AUTO-TUNE] WARNING: ulimit -n (1048576) is lower than target (1653402).
-[AUTO-TUNE] Capping +P/+Q to 1048576 (minus buffer) to prevent crash.
-[AUTO-TUNE] Detected Available RAM: 25228 MB
-[AUTO-TUNE] Target Capacity: 1377835 Connections
-[AUTO-TUNE] Final Flags: +P 1043576 +Q 1043576
-[AUTO-TUNE] WARNING: ulimit -n (1048576) is lower than target (1653326).
-[AUTO-TUNE] Capping +P/+Q to 1048576 (minus buffer) to prevent crash.
-[AUTO-TUNE] Detected Available RAM: 25227 MB
-[AUTO-TUNE] Target Capacity: 1377772 Connections
-[AUTO-TUNE] Final Flags: +P 1043576 +Q 1043576
-[AUTO-TUNE] WARNING: ulimit -n (1048576) is lower than target (1651384).
-[AUTO-TUNE] Capping +P/+Q to 1048576 (minus buffer) to prevent crash.
-[AUTO-TUNE] Detected Available RAM: 25198 MB
-[AUTO-TUNE] Target Capacity: 1376154 Connections
-[AUTO-TUNE] Final Flags: +P 1043576 +Q 1043576
-[AUTO-TUNE] WARNING: ulimit -n (1048576) is lower than target (1642814).
-[AUTO-TUNE] Capping +P/+Q to 1048576 (minus buffer) to prevent crash.
-[AUTO-TUNE] Detected Available RAM: 25067 MB
-[AUTO-TUNE] Target Capacity: 1369012 Connections
-[AUTO-TUNE] Final Flags: +P 1043576 +Q 1043576
-[AUTO-TUNE] WARNING: ulimit -n (1048576) is lower than target (1295516).
-[AUTO-TUNE] Capping +P/+Q to 1048576 (minus buffer) to prevent crash.
-[AUTO-TUNE] Detected Available RAM: 19768 MB
-[AUTO-TUNE] Target Capacity: 1079597 Connections
-[AUTO-TUNE] Final Flags: +P 1043576 +Q 1043576
+[AUTO-TUNE] Detected Available RAM: 4096 MB
+[AUTO-TUNE] Target Capacity: 250000 Connections
+[AUTO-TUNE] Final Flags: +P 300000 +Q 300000
+[AUTO-TUNE] Detected Available RAM: 4096 MB
+[AUTO-TUNE] Target Capacity: 250000 Connections
+[AUTO-TUNE] Final Flags: +P 300000 +Q 300000
+[AUTO-TUNE] Detected Available RAM: 4096 MB
+[AUTO-TUNE] Target Capacity: 250000 Connections
+[AUTO-TUNE] Final Flags: +P 300000 +Q 300000
+[AUTO-TUNE] Detected Available RAM: 4096 MB
+[AUTO-TUNE] Target Capacity: 250000 Connections
+[AUTO-TUNE] Final Flags: +P 300000 +Q 300000
+ps: illegal option -- -
+usage: ps [-AaCcEefhjlMmrSTvwXx] [-O fmt | -o fmt] [-G gid[,gid...]]
+          [-g grp[,grp...]] [-u [uid,uid...]]
+          [-p pid[,pid...]] [-t tty[,tty...]] [-U user[,user...]]
+       ps [-L]
 --- WhatsApp-Scale Benchmark Suite ---
 [1] Restarting Nodes...
-[2] Baseline: 68.07 MB RAM, 31.3% CPU
-[3] Spawning 10000 idle connections...
-    Waiting 10s for connections to stabilize...
-    Loaded: 236.08 MB RAM
-    Delta: 168.01 MB for 10000 conns
-    Memory per Connection: 17.20 KB (Excellent!)
-[4] Running High-Throughput Load Test...
-    Throughput: 1,313,762 msgs/sec
-    Avg CPU Usage: 320.0%
-[5] Checking Latency (P50/P99)...
-    P99 Latency: 0.07 ms
-
---- Summary Findings ---
-1. Concurrent Connections: 10000 verified (Capacity > 1M)
-2. Memory per Connection:  17.20 KB (Target: Very Low)
-3. Messages per Second:    1,313,762 (Target: >30k)
-4. Latency (P99):          0.07 ms (Target: <100ms)
-5. CPU Usage:              320.0% under Max Load
+Traceback (most recent call last):
+  File "/Users/jd/side/project_iris/measure_dials.py", line 139, in <module>
+    main()
+  File "/Users/jd/side/project_iris/measure_dials.py", line 49, in main
+    base_rss, base_cpu = get_process_stats(edge_pid)
+  File "/Users/jd/side/project_iris/measure_dials.py", line 24, in get_process_stats
+    out = run_command(f"ps -p {pid} -o rss,%cpu --no-headers")
+  File "/Users/jd/side/project_iris/measure_dials.py", line 12, in run_command
+    return subprocess.check_output(cmd, shell=shell).decode('utf-8').strip()
+  File "/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/subprocess.py", line 424, in check_output
+    return run(*popenargs, stdout=PIPE, timeout=timeout, check=True,
+  File "/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/subprocess.py", line 528, in run
+    raise CalledProcessError(retcode, process.args,
+subprocess.CalledProcessError: Command 'ps -p 28519 -o rss,%cpu --no-headers' returned non-zero exit status 1.

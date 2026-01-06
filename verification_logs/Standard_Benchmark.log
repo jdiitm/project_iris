@@ -1,14 +1,4 @@
 --- Iris Benchmark Tool ---
 Messages: 1000
 Payload: 64 bytes
-Starting benchmark...
-
---- Results ---
-Total Time: 0.157s
-Throughput: 6354.61 msgs/sec
-Latency (us):
-  Min: 35.43
-  Max: 40992.25
-  Avg: 154.55
-  P50: 61.66
-  P99: 461.83
+Benchmark failed: [Errno 61] Connection refused
