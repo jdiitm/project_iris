@@ -16,11 +16,25 @@
 
 -define(RETRY_INTERVAL, 5000). %% 5 Seconds
 
--define(CORE_NODE, core_node()).
+%% Dynamic Core node discovery with failover
+get_core_node() ->
+    case iris_core_registry:get_core() of
+        {ok, Node} -> Node;
+        {error, _} -> legacy_core_node()
+    end.
 
-core_node() ->
+legacy_core_node() ->
     [_, Host] = string:tokens(atom_to_list(node()), "@"),
     list_to_atom("iris_core@" ++ Host).
+
+%% Generate unique 16-byte message ID without crypto
+generate_msg_id() ->
+    %% Combine monotonic time, unique integer, and node hash for uniqueness
+    Time = erlang:monotonic_time(),
+    Unique = erlang:unique_integer([positive]),
+    NodeHash = erlang:phash2(node()),
+    %% Pack into 16 bytes
+    <<Time:64, Unique:32, NodeHash:32>>.
 
 %% API
 start_link(Socket) ->
@@ -59,7 +73,8 @@ connected(info, {tcp_error, _Socket, _Reason}, Data) ->
     {stop, normal, Data};
 connected(info, {deliver_msg, Msg}, Data = #data{socket = Socket, user = User, pending_acks = Pending}) ->
     %% Wrap in Reliable Packet
-    MsgId = crypto:strong_rand_bytes(16),
+    %% Generate unique MsgId without crypto module
+    MsgId = generate_msg_id(),
     Packet = iris_proto:encode_reliable_msg(MsgId, Msg),
     
     %% Store in Pending Acks
@@ -74,7 +89,7 @@ connected(info, {deliver_msg, Msg}, Data = #data{socket = Socket, user = User, p
             %% But if timeout, we might want to just queue it?
             %% Let's stick to simple "Store Offline if Send Fails" for now.
             logger:warning("Send failed for ~p. Storing offline.", [User]),
-            iris_circuit_breaker:call(?CORE_NODE, iris_core, store_offline, [User, Msg]),
+            iris_circuit_breaker:call(get_core_node(), iris_core, store_offline, [User, Msg]),
             {keep_state, Data}
     end;
 
@@ -86,7 +101,7 @@ connected(info, check_acks, Data = #data{pending_acks = Pending, user = User, re
     NewPending = maps:filter(fun(MsgId, {Msg, Ts, _Retries}) ->
         if (Now - Ts) > 10 ->
             logger:warning("Msg ~p timed out (No ACK). Moving to offline storage.", [MsgId]),
-            iris_circuit_breaker:call(?CORE_NODE, iris_core, store_offline, [User, Msg]),
+            iris_circuit_breaker:call(get_core_node(), iris_core, store_offline, [User, Msg]),
             false; %% Remove from map
         true -> 
             true
@@ -109,8 +124,19 @@ process_buffer(Bin, Data = #data{socket = Socket, user = CurrentUser}) ->
             %% Execute Actions
             %% Execute Actions & Update State
             NewData = lists:foldl(fun
-                ({send, Msg}, D) -> gen_tcp:send(Socket, Msg), D;
-                ({send_batch, Msgs}, D) -> [gen_tcp:send(Socket, M) || M <- Msgs], D;
+                ({send, Msg}, D) -> 
+                    _ = gen_tcp:send(Socket, Msg), 
+                    D;
+                ({send_batch, Msgs}, D) -> 
+                    _ = [gen_tcp:send(Socket, M) || M <- Msgs], 
+                    D;
+                ({deliver_msg, Msg}, D = #data{pending_acks = P}) ->
+                    %% Wrap in reliable message format
+                    MsgId = generate_msg_id(),
+                    OutPacket = iris_proto:encode_reliable_msg(MsgId, Msg),
+                    NewP = maps:put(MsgId, {Msg, os:system_time(seconds), 0}, P),
+                    _ = gen_tcp:send(Socket, OutPacket),
+                    D#data{pending_acks = NewP};
                 ({ack_received, MsgId}, D = #data{pending_acks = P}) -> 
                     %% Remove from pending
                     D#data{pending_acks = maps:remove(MsgId, P)};
@@ -130,7 +156,7 @@ flush_pending_msgs(User) ->
     receive
         {deliver_msg, Msg} ->
             io:format("Terminating: Saving pending msg for ~p~n", [User]),
-            rpc:call(?CORE_NODE, iris_core, store_offline, [User, Msg]),
+            rpc:call(get_core_node(), iris_core, store_offline, [User, Msg]),
             flush_pending_msgs(User)
     after 0 -> ok
     end.

@@ -71,6 +71,20 @@ unpack_batch(<<Len:16, Msg:Len/binary, Rest/binary>>, Acc) ->
     unpack_batch(Rest, [Msg | Acc]);
 unpack_batch(_, Acc) -> lists:reverse(Acc). %% Tolerant of trailing garbage
 
+%% Encode reliable message with proper framing (includes MsgLen)
 encode_reliable_msg(MsgId, Msg) ->
     IdLen = byte_size(MsgId),
-    <<16, IdLen:16, MsgId/binary, Msg/binary>>.
+    MsgLen = byte_size(Msg),
+    <<16, IdLen:16, MsgId/binary, MsgLen:32, Msg/binary>>.
+
+%% Decode reliable message (opcode 16)
+decode_reliable_msg(<<16, IdLen:16, Rest/binary>>) when byte_size(Rest) >= IdLen + 4 ->
+    <<MsgId:IdLen/binary, MsgLen:32, Tail/binary>> = Rest,
+    case Tail of
+        <<Msg:MsgLen/binary, Rem/binary>> ->
+            {{reliable_msg, MsgId, Msg}, Rem};
+        _ ->
+            {more, <<16, IdLen:16, Rest/binary>>}
+    end;
+decode_reliable_msg(Bin) ->
+    {more, Bin}.

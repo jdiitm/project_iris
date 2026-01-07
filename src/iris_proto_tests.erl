@@ -180,7 +180,8 @@ test_encode_reliable_msg() ->
     Result = iris_proto:encode_reliable_msg(MsgId, Msg),
     
     IdLen = byte_size(MsgId),
-    Expected = <<16, IdLen:16, MsgId/binary, Msg/binary>>,
+    MsgLen = byte_size(Msg),
+    Expected = <<16, IdLen:16, MsgId/binary, MsgLen:32, Msg/binary>>,
     ?assertEqual(Expected, Result).
 
 %% =============================================================================

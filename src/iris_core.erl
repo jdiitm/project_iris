@@ -48,12 +48,24 @@ init([]) ->
                  period => 60},
 
     Children = [
+        %% Core Registry: Registers this Core with pg for Edge discovery
+        #{id => iris_core_registry,
+          start => {iris_core_registry, start_link, []},
+          type => worker,
+          restart => permanent},
+          
         %% Status Batcher Supervisor: Manages the 100 workers
         #{id => iris_status_batcher_sup,
           start => {iris_status_batcher_sup, start_link, [100]},
           type => supervisor,
           restart => permanent}
     ],
+
+    %% Register this Core node with pg for Edge discovery
+    spawn(fun() -> 
+        timer:sleep(1000), % Wait for registry to start
+        iris_core_registry:join() 
+    end),
 
     {ok, {SupFlags, Children}}.
 
@@ -79,13 +91,10 @@ lookup_user(User) ->
     end.
 
 store_offline(User, Msg) ->
-    %% Rationale: Metrics tagging before storage call.
-    telemetry:execute([iris, core, storage], #{count => 1}, #{action => store}),
     Count = get_bucket_count(User),
     iris_offline_storage:store(User, Msg, Count).
 
 store_batch(User, Msgs) ->
-    telemetry:execute([iris, core, storage], #{count => length(Msgs)}, #{action => store_batch}),
     Count = get_bucket_count(User),
     iris_offline_storage:store_batch(User, Msgs, Count).
 

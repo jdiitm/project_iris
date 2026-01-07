@@ -1,0 +1,55 @@
+Listener started on port 8085 (Handler: iris_edge_conn)
+Listener started on port 8086 (Handler: iris_ws_lite)
+EDGE_STARTED
+User logged in: <<"alice">>
+Client disconnected
+User logged in: <<"charlie">>
+Client disconnected
+User logged in: <<"charlie">>
+Client disconnected
+User logged in: <<"alice">>
+Client disconnected
+User logged in: <<"charlie">>
+Client disconnected
+User logged in: <<"charlie">>
+Client disconnected
+User logged in: <<"alice">>
+User logged in: <<"bob">>
+Client disconnected
+Client disconnected
+User logged in: <<"alice">>
+Client disconnected
+User logged in: <<"charlie">>
+Client disconnected
+User logged in: <<"charlie">>
+Client disconnected
+User logged in: <<"alice">>
+User logged in: <<"bob">>
+Client disconnected
+Client disconnected
+User logged in: <<"alice">>
+Client disconnected
+User logged in: <<"charlie">>
+Client disconnected
+User logged in: <<"charlie">>
+Client disconnected
+User logged in: <<"alice">>
+User logged in: <<"bob">>
+Client disconnected
+Client disconnected
+User logged in: <<"alice">>
+Client disconnected
+User logged in: <<"charlie">>
+Client disconnected
+User logged in: <<"charlie">>
+Client disconnected
+User logged in: <<"alice">>
+Client disconnected
+User logged in: <<"charlie">>
+Client disconnected
+User logged in: <<"charlie">>
+Client disconnected
+User logged in: <<"bench_sender">>
+User logged in: <<"bench_receiver">>
+Client disconnected
+Client disconnected
