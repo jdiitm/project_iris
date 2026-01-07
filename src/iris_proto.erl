@@ -1,5 +1,5 @@
 -module(iris_proto).
--export([decode/1, unpack_batch/1, encode_status/3]).
+-export([decode/1, unpack_batch/1, encode_status/3, encode_reliable_msg/2]).
 
 -type packet() :: {login, binary()}
                 | {send_message, binary(), binary()}
@@ -70,3 +70,7 @@ unpack_batch(<<>>, Acc) -> lists:reverse(Acc);
 unpack_batch(<<Len:16, Msg:Len/binary, Rest/binary>>, Acc) ->
     unpack_batch(Rest, [Msg | Acc]);
 unpack_batch(_, Acc) -> lists:reverse(Acc). %% Tolerant of trailing garbage
+
+encode_reliable_msg(MsgId, Msg) ->
+    IdLen = byte_size(MsgId),
+    <<16, IdLen:16, MsgId/binary, Msg/binary>>.

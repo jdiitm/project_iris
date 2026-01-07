@@ -13,7 +13,7 @@ store(User, Msg, Count) ->
     F = fun() ->
         mnesia:write({offline_msg, Key, Timestamp, Msg})
     end,
-    mnesia:activity(transaction, F).
+    mnesia:activity(async_dirty, F).
 
 store_batch(User, Msgs, Count) ->
     Timestamp = os:system_time(millisecond),
@@ -29,7 +29,7 @@ store_batch(User, Msgs, Count) ->
              mnesia:write({offline_msg, Key, Timestamp, Batch})
         end, orddict:to_list(BucketedMsgs))
     end,
-    mnesia:activity(transaction, F).
+    mnesia:activity(async_dirty, F).
 
 retrieve(User, Count) ->
     %% Read messages from all buckets

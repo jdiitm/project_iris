@@ -18,9 +18,11 @@ start(_Type, _Args) ->
     %% Stores {User, Status, Timestamp, InsertTime}
     ets:new(presence_cache, [set, named_table, public, {read_concurrency, true}, {write_concurrency, true}]),
     
-    lists:foreach(fun(I) -> 
-        iris_router_worker:start_link(I) 
-    end, lists:seq(1, PoolSize)),
+    %% Start Circuit Breaker
+    iris_circuit_breaker:start_link(),
+
+    %% Start Router Supervisor
+    {ok, _} = iris_router_sup:start_link(PoolSize),
     
     %% Start TCP Listener
     iris_edge_listener:start_link(Port),

@@ -9,9 +9,15 @@ BEAM_FILES = $(patsubst src/%.erl,ebin/%.beam,$(ERL_FILES))
 APP_SRC = $(wildcard src/*.app.src)
 APP_FILES = $(patsubst src/%.app.src,ebin/%.app,$(APP_SRC))
 
-all: check_deps $(BEAM_FILES) $(APP_FILES) test
+APPUP_SRC = $(wildcard src/*.appup.src)
+APPUP_FILES = $(patsubst src/%.appup.src,ebin/%.appup,$(APPUP_SRC))
+
+all: check_deps $(BEAM_FILES) $(APP_FILES) $(APPUP_FILES) test
 
 ebin/%.app: src/%.app.src
+	cp $< $@
+
+ebin/%.appup: src/%.appup.src
 	cp $< $@
 
 ebin/%.beam: src/%.erl

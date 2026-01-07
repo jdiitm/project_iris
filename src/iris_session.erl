@@ -63,8 +63,8 @@ handle_packet({get_status, TargetUser}, User, _Pid, _Mod) ->
     Resp = iris_proto:encode_status(TargetUser, FinalState, FinalTime),
     {ok, User, [{send, Resp}]};
 
-handle_packet({ack, _MsgId}, User, _Pid, _Mod) ->
-    {ok, User, []};
+handle_packet({ack, MsgId}, User, _Pid, _Mod) ->
+    {ok, User, [{ack_received, MsgId}]};
 
 handle_packet({error, _}, User, _Pid, _Mod) ->
      io:format("Protocol Error~n"),
