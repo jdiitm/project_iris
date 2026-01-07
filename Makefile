@@ -9,7 +9,7 @@ BEAM_FILES = $(patsubst src/%.erl,ebin/%.beam,$(ERL_FILES))
 APP_SRC = $(wildcard src/*.app.src)
 APP_FILES = $(patsubst src/%.app.src,ebin/%.app,$(APP_SRC))
 
-all: check_deps $(BEAM_FILES) $(APP_FILES)
+all: check_deps $(BEAM_FILES) $(APP_FILES) test
 
 ebin/%.app: src/%.app.src
 	cp $< $@
@@ -19,6 +19,16 @@ ebin/%.beam: src/%.erl
 
 check_deps:
 	@$(ERL) -noshell -eval 'case code:lib_dir(mnesia) of {error, _} -> io:format("Error: mnesia application not found in Erlang lib (~s).~n", [code:root_dir()]), init:stop(1); _ -> init:stop(0) end.' || (echo "FAILED: Valid Erlang with Mnesia not found. Please set ERL variable." && exit 1)
+
+# Run unit tests
+test: $(BEAM_FILES)
+	@echo "Running EUnit tests..."
+	@$(ERL) -pa ebin -noshell -eval "case eunit:test([iris_session_tests, iris_proto_tests], []) of ok -> init:stop(0); error -> init:stop(1) end."
+
+# Run tests with verbose output
+test-verbose: $(BEAM_FILES)
+	@echo "Running EUnit tests (verbose)..."
+	@$(ERL) -pa ebin -noshell -eval "case eunit:test([iris_session_tests, iris_proto_tests], [verbose]) of ok -> init:stop(0); error -> init:stop(1) end."
 
 clean:
 	rm -f ebin/*.beam

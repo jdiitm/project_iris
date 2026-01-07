@@ -40,6 +40,23 @@ Compile the project using the provided Makefile:
 make clean && make
 ```
 
+> **Note**: Unit tests run automatically as part of the build. All 57 tests must pass for the build to succeed.
+
+### Running Tests Manually
+```bash
+# Run all unit tests (compact output)
+make test
+
+# Run with verbose output
+make test-verbose
+```
+
+**Test Coverage:**
+| Module | Tests | Coverage |
+|--------|-------|----------|
+| `iris_session_tests` | 30 | Session handling, login, messaging, status, terminate |
+| `iris_proto_tests` | 27 | Protocol encode/decode, batch unpacking, edge cases |
+
 ## Running the System
 
 The system uses a `Makefile` to simplify starting nodes with the correct configuration and Erlang binary paths.
