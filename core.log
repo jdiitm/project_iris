@@ -1,29 +1,6 @@
-=INFO REPORT==== 8-Jan-2026::00:46:20.049362 ===
-    application: mnesia
-    exited: stopped
-    type: temporary
-
-CORE_STARTED
-Batch Write Error: ok
-Batch Write Error: ok
-Batch Write Error: ok
-Batch Write Error: ok
-Batch Write Error: ok
-Batch Write Error: ok
-Batch Write Error: ok
-Batch Write Error: ok
-Batch Write Error: ok
-Batch Write Error: ok
-Batch Write Error: ok
-Batch Write Error: ok
-Batch Write Error: ok
-Batch Write Error: ok
-Batch Write Error: ok
-Batch Write Error: ok
-Batch Write Error: ok
-Batch Write Error: ok
-Batch Write Error: ok
-Batch Write Error: ok
-Batch Write Error: ok
-Batch Write Error: ok
-Batch Write Error: ok
+[AUTO-TUNE] Detected Available RAM: 9830 MB
+[AUTO-TUNE] Target Capacity: 536870 Connections
+[AUTO-TUNE] Final Flags: +P 644244 +Q 644244
+Running EUnit tests...
+  All 58 tests passed.
+erl -noshell -noinput +P 644244 +Q 644244 +K true +sbwt none -pa ebin -sname iris_core -eval "application:ensure_all_started(iris_core)" &
