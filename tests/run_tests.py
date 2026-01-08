@@ -231,7 +231,7 @@ def ensure_cluster_running() -> bool:
             timeout=300  # 5 minutes for compilation
         )
 
-        # Try to start cluster
+        # Try to start cluster (Core)
         result = subprocess.run(
             ["make", "start_core"],
             cwd=str(PROJECT_ROOT),
@@ -241,6 +241,7 @@ def ensure_cluster_running() -> bool:
         )
         time.sleep(2)
         
+        # Start Edge
         result = subprocess.run(
             ["make", "start_edge1"],
             cwd=str(PROJECT_ROOT),
@@ -248,12 +249,29 @@ def ensure_cluster_running() -> bool:
             text=True,
             timeout=60
         )
-        time.sleep(2)
         
+        # Wait for port 8085 (Edge Node)
+        log_info("Waiting for Edge Node (8085)...")
+        if not wait_for_port(8085, timeout=30):
+            log_warn("Edge node port 8085 did not open in time.")
+            return False
+            
         return True
     except Exception as e:
         log_warn(f"Could not start cluster: {e}")
         return False
+
+def wait_for_port(port: int, timeout: int = 30) -> bool:
+    """Wait for a TCP port to open."""
+    import socket
+    start_time = time.time()
+    while time.time() - start_time < timeout:
+        try:
+            with socket.create_connection(("localhost", port), timeout=1):
+                return True
+        except (OSError, ConnectionRefusedError):
+            time.sleep(0.5)
+    return False
 
 def stop_cluster():
     """Stop the Iris cluster."""
