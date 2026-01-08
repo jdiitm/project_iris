@@ -221,6 +221,16 @@ def ensure_cluster_running() -> bool:
     log_info("Ensuring cluster is running...")
     
     try:
+        # Build first (can take time on CI)
+        log_info("Building project...")
+        subprocess.run(
+            ["make", "all"],
+            cwd=str(PROJECT_ROOT),
+            capture_output=True,
+            text=True,
+            timeout=300  # 5 minutes for compilation
+        )
+
         # Try to start cluster
         result = subprocess.run(
             ["make", "start_core"],
