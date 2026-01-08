@@ -3,9 +3,14 @@
 
 -include_lib("kernel/include/inet.hrl").
 
--define(CORE_NODE, core_node()).
+%% Dynamic Core node discovery with failover
+get_core_node() ->
+    case iris_core_registry:get_core() of
+        {ok, Node} -> Node;
+        {error, _} -> legacy_core_node()
+    end.
 
-core_node() ->
+legacy_core_node() ->
     [_, Host] = string:tokens(atom_to_list(node()), "@"),
     list_to_atom("iris_core@" ++ Host).
 
@@ -14,21 +19,23 @@ core_node() ->
 handle_packet({login, User}, _Current, TransportPid, _Mod) ->
     io:format("User logged in: ~p~n", [User]),
     %% Register with Core
-    rpc:call(?CORE_NODE, iris_core, register_user, [User, node(), TransportPid]),
+    rpc:call(get_core_node(), iris_core, register_user, [User, node(), TransportPid]),
 
     %% Optimization: Register Locally for switching
     ets:insert(local_presence, {User, TransportPid}),
 
     %% Retrieve Offline Messages
-    OfflineMsgs = case rpc:call(?CORE_NODE, iris_core, retrieve_offline, [User]) of
+    OfflineMsgs = case rpc:call(get_core_node(), iris_core, retrieve_offline, [User]) of
          Msgs when is_list(Msgs) -> Msgs;
          Error -> 
              io:format("Error retrieving offline msgs: ~p~n", [Error]),
              []
     end,
     
-    %% Actions: Ack Login + Send Offline Msgs
-    Actions = [{send, <<3, "LOGIN_OK">>}] ++ [{send, Msg} || Msg <- OfflineMsgs],
+    %% Actions: Ack Login first
+    %% Then schedule offline messages to be delivered via reliable transport
+    %% We use deliver_msg actions to ensure they go through the reliable path
+    Actions = [{send, <<3, "LOGIN_OK">>}] ++ [{deliver_msg, Msg} || Msg <- OfflineMsgs],
     {ok, User, Actions};
 
 handle_packet({send_message, Target, Msg}, User, _Pid, _Mod) ->
@@ -39,7 +46,7 @@ handle_packet({send_message, Target, Msg}, User, _Pid, _Mod) ->
 handle_packet({batch_send, Target, Blob}, User, _Pid, _Mod) ->
     %% Optimized Fan-In
     Msgs = iris_proto:unpack_batch(Blob),
-    rpc:call(?CORE_NODE, iris_core, store_batch, [Target, Msgs]),
+    rpc:call(get_core_node(), iris_core, store_batch, [Target, Msgs]),
     {ok, User, []};
 
 handle_packet({get_status, TargetUser}, User, _Pid, _Mod) ->
@@ -63,15 +70,15 @@ handle_packet({get_status, TargetUser}, User, _Pid, _Mod) ->
     Resp = iris_proto:encode_status(TargetUser, FinalState, FinalTime),
     {ok, User, [{send, Resp}]};
 
-handle_packet({ack, _MsgId}, User, _Pid, _Mod) ->
-    {ok, User, []};
+handle_packet({ack, MsgId}, User, _Pid, _Mod) ->
+    {ok, User, [{ack_received, MsgId}]};
 
 handle_packet({error, _}, User, _Pid, _Mod) ->
      io:format("Protocol Error~n"),
      {ok, User, []}. %% Or close?
 
 fetch_and_cache(TargetUser, Now) ->
-    Result = case rpc:call(?CORE_NODE, iris_core, get_status, [TargetUser]) of
+    Result = case rpc:call(get_core_node(), iris_core, get_status, [TargetUser]) of
         {online, true, _} -> {online, 0};
         {online, false, LS} -> {offline, LS}
     end,
@@ -84,5 +91,5 @@ terminate(User) ->
         undefined -> ok;
         _ -> 
             ets:delete(local_presence, User),
-            rpc:cast(?CORE_NODE, iris_core, update_status, [User, offline])
+            rpc:cast(get_core_node(), iris_core, update_status, [User, offline])
     end.

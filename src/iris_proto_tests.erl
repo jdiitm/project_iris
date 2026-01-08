@@ -27,6 +27,7 @@ iris_proto_test_() ->
      {"Encode status offline", fun test_encode_status_offline/0},
      {"Encode status long username", fun test_encode_status_long_user/0},
      {"Encode status unicode user", fun test_encode_status_unicode/0},
+     {"Encode reliable msg", fun test_encode_reliable_msg/0},
      
      %% Unpack batch tests
      {"Unpack batch multiple messages", fun test_unpack_batch_multiple/0},
@@ -172,6 +173,16 @@ test_encode_status_unicode() ->
     <<6, RetLen:16, RetUser:RetLen/binary, 0, 9999:64>> = Result,
     ?assertEqual(ULen, RetLen),
     ?assertEqual(User, RetUser).
+
+test_encode_reliable_msg() ->
+    MsgId = <<"id_123">>,
+    Msg = <<"payload">>,
+    Result = iris_proto:encode_reliable_msg(MsgId, Msg),
+    
+    IdLen = byte_size(MsgId),
+    MsgLen = byte_size(Msg),
+    Expected = <<16, IdLen:16, MsgId/binary, MsgLen:32, Msg/binary>>,
+    ?assertEqual(Expected, Result).
 
 %% =============================================================================
 %% Unpack Batch Tests

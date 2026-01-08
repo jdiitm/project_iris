@@ -245,18 +245,19 @@ test_ack_ok() ->
     MsgId = <<"msg-12345">>,
     
     Result = iris_session:handle_packet({ack, MsgId}, User, self(), tcp),
-    ?assertMatch({ok, User, []}, Result).
+    ?assertMatch({ok, User, [{ack_received, MsgId}]}, Result).
 
 test_ack_empty_msgid() ->
     User = <<"acker">>,
     Result = iris_session:handle_packet({ack, <<>>}, User, self(), tcp),
-    ?assertMatch({ok, User, []}, Result).
+    ?assertMatch({ok, User, [{ack_received, <<>>}]}, Result).
 
 test_ack_preserves_user() ->
     User = <<"specific_user">>,
     Result = iris_session:handle_packet({ack, <<"id">>}, User, self(), tcp),
     {ok, ReturnedUser, _} = Result,
     ?assertEqual(User, ReturnedUser).
+
 
 %% =============================================================================
 %% Error Packet Tests
@@ -319,17 +320,18 @@ test_unicode_username() ->
 test_binary_nulls() ->
     User = <<"user\0name">>,
     Result = iris_session:handle_packet({ack, <<"msgid">>}, User, self(), tcp),
-    ?assertMatch({ok, User, []}, Result).
+    ?assertMatch({ok, User, [{ack_received, <<"msgid">>}]}, Result).
 
 test_long_username() ->
     User = binary:copy(<<"x">>, 1024),  %% 1KB username
     Result = iris_session:handle_packet({ack, <<"id">>}, User, self(), tcp),
-    ?assertMatch({ok, User, []}, Result).
+    ?assertMatch({ok, User, [{ack_received, <<"id">>}]}, Result).
 
 test_empty_username() ->
     User = <<>>,
     Result = iris_session:handle_packet({ack, <<"id">>}, User, self(), tcp),
-    ?assertMatch({ok, <<>>, []}, Result).
+    ?assertMatch({ok, <<>>, [{ack_received, <<"id">>}]}, Result).
+
 
 %% =============================================================================
 %% Protocol Response Format Tests
@@ -353,9 +355,6 @@ test_status_response_format() ->
     ?assertEqual(0, Status),  %% offline
     ?assertEqual(9999, Time).
 
-%% =============================================================================
-%% Transport Module Tests
-%% =============================================================================
 
 test_transport_modules() ->
     User = <<"transport_user">>,
@@ -365,9 +364,9 @@ test_transport_modules() ->
     R2 = iris_session:handle_packet({ack, <<"id">>}, User, self(), ws),
     R3 = iris_session:handle_packet({ack, <<"id">>}, User, self(), undefined),
     
-    ?assertMatch({ok, User, []}, R1),
-    ?assertMatch({ok, User, []}, R2),
-    ?assertMatch({ok, User, []}, R3).
+    ?assertMatch({ok, User, [{ack_received, <<"id">>}]}, R1),
+    ?assertMatch({ok, User, [{ack_received, <<"id">>}]}, R2),
+    ?assertMatch({ok, User, [{ack_received, <<"id">>}]}, R3).
 
 %% =============================================================================
 %% Integration Tests

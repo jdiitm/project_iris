@@ -1,0 +1,20 @@
+%% iris_edge.appup.src
+{"0.2.0",
+ [{"0.1.0", [
+    {add_module, iris_router_sup},
+    {add_module, iris_circuit_breaker},
+    {update, iris_edge_conn, {advanced, []}},
+    {update, iris_router_worker, {advanced, []}},
+    {load_module, iris_proto},       %% Proto changed (new opcode)
+    {load_module, iris_session},     %% Session changed (ack action)
+    {load_module, iris_edge_app},    %% App changed (sup start)
+    {load_module, iris_core},        %% Core changed (clustering)
+    {load_module, iris_offline_storage}
+ ]}],
+ [{"0.1.0", [
+    {update, iris_edge_conn, {advanced, []}},
+    {update, iris_router_worker, {advanced, []}},
+    {delete_module, iris_router_sup},
+    {delete_module, iris_circuit_breaker}
+ ]}]
+}.
