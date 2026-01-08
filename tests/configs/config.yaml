@@ -1,0 +1,81 @@
+# Test Configuration
+
+# Default configuration for all tests
+default:
+  cluster:
+    core_enabled: true
+    edge_count: 1
+    edge_start_port: 8085
+  
+  timeouts:
+    test_default_seconds: 120
+    cluster_start_seconds: 30
+    message_receive_seconds: 5
+  
+  resource_limits:
+    max_memory_mb: 4096
+    max_cpu_percent: 80
+    max_connections: 1000
+  
+  logging:
+    structured: true
+    console_output: true
+    log_level: INFO
+
+---
+# CI Tier 0 Configuration
+ci_tier0:
+  inherits: default
+  
+  suites:
+    - unit
+    - integration
+  
+  timeouts:
+    test_default_seconds: 60
+  
+  resource_limits:
+    max_connections: 100
+  
+  fail_fast: true
+  
+  logging:
+    console_output: false
+
+---
+# CI Tier 1 Configuration
+ci_tier1:
+  inherits: default
+  
+  suites:
+    - resilience
+    - performance_light
+    - chaos_controlled
+  
+  timeouts:
+    test_default_seconds: 300
+  
+  resource_limits:
+    max_connections: 500
+  
+  fail_fast: false
+
+---
+# Laptop-safe Configuration
+laptop_safe:
+  inherits: default
+  
+  cluster:
+    edge_count: 1
+  
+  resource_limits:
+    max_memory_mb: 2048
+    max_cpu_percent: 50
+    max_connections: 200
+  
+  timeouts:
+    test_default_seconds: 60
+  
+  # Exclude heavy tests
+  exclude_suites:
+    - stress

@@ -4,3 +4,9 @@ ebin/*.beam
 __pycache__/
 *.pyc
 erl_crash.dump
+
+# Test artifacts (auto-generated)
+tests/artifacts/runs/
+tests/artifacts/logs/*.jsonl
+tests/artifacts/metrics/*.json
+*.log

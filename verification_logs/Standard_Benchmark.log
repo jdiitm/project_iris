@@ -1,4 +1,0 @@
---- Iris Benchmark Tool ---
-Messages: 1000
-Payload: 64 bytes
-Benchmark failed: [Errno 61] Connection refused

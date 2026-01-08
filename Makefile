@@ -36,6 +36,30 @@ test-verbose: $(BEAM_FILES)
 	@echo "Running EUnit tests (verbose)..."
 	@$(ERL) -pa ebin -noshell -eval "case eunit:test([iris_session_tests, iris_proto_tests], [verbose]) of ok -> init:stop(0); error -> init:stop(1) end."
 
+# Run all tests via unified test runner
+test-all: $(BEAM_FILES)
+	@echo "Running all tests..."
+	@python3 tests/run_tests.py --all
+
+# Run CI Tier 0 tests (required on every merge)
+test-tier0: $(BEAM_FILES)
+	@echo "Running Tier 0 tests..."
+	@python3 tests/run_tests.py --tier 0
+
+# Run CI Tier 1 tests (nightly/manual)
+test-tier1: $(BEAM_FILES)
+	@echo "Running Tier 1 tests..."
+	@python3 tests/run_tests.py --tier 1
+
+# Run integration tests only
+test-integration: $(BEAM_FILES)
+	@echo "Running integration tests..."
+	@python3 tests/run_tests.py --suite integration
+
+# List available tests
+test-list:
+	@python3 tests/run_tests.py --list
+
 clean:
 	rm -f ebin/*.beam
 
