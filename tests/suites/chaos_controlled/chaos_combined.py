@@ -186,12 +186,16 @@ def main():
         print("\n[INIT] Restarting environment...")
         os.system("make stop >/dev/null 2>&1; killall beam.smp >/dev/null 2>&1")
         apply_network_chaos(False)
-        run_cmd("make clean && make all")
+        # Ensure we use the correct Erlang
+        erl_path = "/usr/bin/erl" if os.path.exists("/usr/bin/erl") else "erl"
+        make_cmd = f"PATH=/usr/bin:$PATH make ERL={erl_path}"
+        
+        run_cmd(f"{make_cmd} clean && {make_cmd} all")
         os.system("erlc -o ebin src/chaos_resources.erl src/chaos_monkey.erl src/iris_extreme_gen.erl 2>/dev/null")
         # Redirect output to avoid blocking
-        os.system("make start_core >/dev/null 2>&1")
+        os.system(f"{make_cmd} start_core >/dev/null 2>&1")
         time.sleep(2)
-        os.system("make start_edge1 >/dev/null 2>&1")
+        os.system(f"{make_cmd} start_edge1 >/dev/null 2>&1")
         time.sleep(2)
     
     monitor = SystemMonitor(edge_node, args.log)

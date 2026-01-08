@@ -3,7 +3,7 @@ ERL = erl
 ERLC = erlc
 HOSTNAME := $(shell hostname -s)
 
-ERL_FILES = $(wildcard src/*.erl)
+ERL_FILES = $(filter-out %_tests.erl, $(wildcard src/*.erl))
 BEAM_FILES = $(patsubst src/%.erl,ebin/%.beam,$(ERL_FILES))
 
 APP_SRC = $(wildcard src/*.app.src)
@@ -12,7 +12,7 @@ APP_FILES = $(patsubst src/%.app.src,ebin/%.app,$(APP_SRC))
 APPUP_SRC = $(wildcard src/*.appup.src)
 APPUP_FILES = $(patsubst src/%.appup.src,ebin/%.appup,$(APPUP_SRC))
 
-all: check_deps $(BEAM_FILES) $(APP_FILES) $(APPUP_FILES) test
+all: check_deps $(BEAM_FILES) $(APP_FILES) $(APPUP_FILES)
 
 ebin/%.app: src/%.app.src
 	cp $< $@
