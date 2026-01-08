@@ -227,7 +227,7 @@ def ensure_cluster_running() -> bool:
             cwd=str(PROJECT_ROOT),
             capture_output=True,
             text=True,
-            timeout=30
+            timeout=60
         )
         time.sleep(2)
         
@@ -236,7 +236,7 @@ def ensure_cluster_running() -> bool:
             cwd=str(PROJECT_ROOT),
             capture_output=True,
             text=True,
-            timeout=30
+            timeout=60
         )
         time.sleep(2)
         
