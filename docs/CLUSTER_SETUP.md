@@ -1,104 +1,113 @@
-# Multi-Node Cluster Setup Guide
+# Hybrid Cloud Cluster Setup Guide (Project Iris)
 
-This guide details how to turn two independent Linux Mint laptops into a unified **Project Iris** cluster.
+This guide details how to deploy a **Hybrid Cloud Cluster** for Project Iris, consisting of:
+*   **Core Tier**: 2 x Linux Mint Laptops (Localhost/Home Network).
+*   **Edge Tier**: Public Cloud Instances (AWS/GCP/Azure Free Tier).
 
-## Architecture
-*   **Laptop A (Core Node)**: Runs `iris_core` (Mnesia Master, Presence DB).
-*   **Laptop B (Edge Node)**: Runs `iris_edge` (Accepts Client Connections).
+> [!IMPORTANT]
+> **Networking Challenge**: Cloud VMs cannot connect to your home laptops directly due to NAT/Firewalls.
+> **Solution**: We will use a Mesh VPN (**Tailscale** or **ZeroTier**) to flatten the network. This is the simplest, most robust way to achieve connectivity without port forwarding or public IPs.
 
-## Prerequisites (Both Machines)
-1.  **OS**: Linux Mint 22.1 (Verified).
-2.  **Dependencies**:
-    ```bash
-    sudo apt-get update
-    sudo apt-get install git make erlang-base erlang-mnesia erlang-runtime-tools erlang-crypto erlang-public-key erlang-ssl erlang-inets python3
-    ```
-3.  **Codebase**:
-    ```bash
-    git clone https://github.com/your-repo/project_iris.git
-    cd project_iris
-    make clean && make
-    ```
+## 1. Architecture
 
-## Step 1: Networking & Hostnames
+| Role | Node Name | Location | Function |
+| :--- | :--- | :--- | :--- |
+| **Core 1** | `iris_core1@laptop-a` | Laptop A (Home) | Mnesia Master, User Registry |
+| **Core 2** | `iris_core2@laptop-b` | Laptop B (Home) | Mnesia Replica (High Availability) |
+| **Edge 1** | `iris_edge1@cloud-vm` | Cloud VM (Public) | Client Gateway 1 |
+| **Edge 2** | `iris_edge2@cloud-vm` | Cloud VM (Public) | Client Gateway 2 |
 
-Erlang nodes communicate using **Hostnames**. You must ensure both machines can resolve each other by name.
+## 2. Prerequisites (All Nodes)
 
-### 1.1 Identify IP Addresses
-Run `ip addr` on both machines to find their LAN IPs (e.g., `192.168.1.10` and `192.168.1.11`).
-
-### 1.2 Configure `/etc/hosts` (On BOTH Machines)
-Edit the hosts file:
+### 2.1 Install Dependencies
+On **Laptops** and **Cloud VMs**:
 ```bash
-sudo nano /etc/hosts
+# Ubuntu/Debian/Mint
+sudo apt-get update
+sudo apt-get install git make erlang-base erlang-mnesia erlang-runtime-tools erlang-crypto erlang-public-key erlang-ssl erlang-inets python3 curl
 ```
-Add entries for **both** machines. Example:
+
+### 2.2 Install Tailscale (The "Magic" Network)
+This connects your Cloud VMs and Laptops into a private, secure mesh network.
+```bash
+curl -fsSL https://tailscale.com/install.sh | sh
+sudo tailscale up
+```
+*   Authenticate all machines to the same Tailscale account.
+*   Note the **Tailscale IP addresses** (Starts with `100.x.y.z`) for each machine.
+
+## 3. Configuration
+
+### 3.1 Clone & Build
+On all nodes:
+```bash
+git clone https://github.com/your-repo/project_iris.git
+cd project_iris
+make clean && make
+```
+
+### 3.2 Hosts File (DNS Resolution)
+Edit `/etc/hosts` on **ALL** machines (Laptops & VMs). Add the Tailscale IPs:
 ```text
-127.0.0.1       localhost
-192.168.1.10    laptop-core    # Machine A
-192.168.1.11    laptop-edge    # Machine B
+# Tailscale Mesh IPs
+100.10.20.1    laptop-a
+100.10.20.2    laptop-b
+100.50.60.1    cloud-edge-1
 ```
-*Tip: Use meaningful names like `laptop-core` and `laptop-edge`.*
 
-### 1.3 Verify Connectivity
-From `laptop-edge`, ping `laptop-core`:
+## 4. Start the Cluster
+
+### 4.1 Start Core Tier (Local Laptops)
+
+**Laptop A (Core 1):**
 ```bash
-ping laptop-core
+# Start master node
+erl -name iris_core1@laptop-a -setcookie iris_secret -pa ebin -s iris_app
 ```
-*(If this fails, check your Wi-Fi/Switch).*
 
-## Step 2: The Magic Cookie 🍪
-
-Erlang nodes will only talk to nodes that share the exact same "Cookie" (a shared secret string).
-
-### 2.1 Set the Cookie
-You can set this via command line flags, or by creating a `.erlang.cookie` file.
-**We will use the command line flag method for simplicity in the Makefile.**
-
-*No action needed here, we will pass `-setcookie secret_iris_cookie` when starting.*
-
-## Step 3: Start the Cluster
-
-### 3.1 Start Core (Machine A)
-On `laptop-core`:
+**Laptop B (Core 2):**
 ```bash
-# Start Core with specific name and cookie
-erl -name iris_core@laptop-core -setcookie iris_secret -pa ebin -s iris_app
+# Start replica node and join cluster
+erl -name iris_core2@laptop-b -setcookie iris_secret -pa ebin -s iris_app
 ```
-*Or if using our Makefile (you may need to edit it to accept custom names, or just use raw command):*
+*(In the Erlang shell of Core 2, connect to Core 1)*:
+```erlang
+net_adm:ping('iris_core1@laptop-a').
+% Expected: pong
+```
+
+### 4.2 Start Edge Tier (Cloud VMs)
+
+**Cloud VM (Edge 1):**
 ```bash
-make start_core
-# WARN: The default Makefile uses '-sname' (short name). 
-# For multi-machine, we usually need '-name' (long name) with IP/FQDN 
-# OR ensure 'sname' works because domains match.
-# Recommendation: Use raw 'erl' command above for first test.
+# Start Edge and point to BOTH Cores
+erl -name iris_edge1@cloud-edge-1 -setcookie iris_secret -pa ebin \
+    -eval "application:ensure_all_started(iris)" \
+    -iris_core_nodes "['iris_core1@laptop-a', 'iris_core2@laptop-b']"
 ```
 
-### 3.2 Start Edge (Machine B)
-On `laptop-edge`:
-```bash
-# Start Edge and tell it where Core is
-erl -name iris_edge1@laptop-edge -setcookie iris_secret -pa ebin -eval "application:ensure_all_started(iris)" -iris_core_node iris_core@laptop-core
-```
+## 5. Verification
 
-## Step 4: Verification
-
-### 4.1 Check Connection (From Core)
-In the Erlang shell on `laptop-core`:
+### 5.1 Verify Connectivity from Cloud
+On the Cloud VM, check if it sees the laptops:
 ```erlang
 nodes().
-% Expected: ['iris_edge1@laptop-edge']
+% Expected: ['iris_core1@laptop-a', 'iris_core2@laptop-b']
 ```
 
-### 4.2 Verify Mnesia (From Edge)
-In the Erlang shell on `laptop-edge`:
-```erlang
-mnesia:system_info(running_db_nodes).
-% Expected: ['iris_core@laptop-core', 'iris_edge1@laptop-edge']
+### 5.2 Verify Latency
+Run a ping test from Cloud VM to Laptop:
+```bash
+ping laptop-a
+# If latency is >100ms, expect higher end-to-end messaging latency.
+# Tailscale is usually very efficient (WireGuard based).
 ```
 
-## Troubleshooting
-*   **Firewall**: Linux Mint has `ufw` enabled by default.
-    *   Allow traffic: `sudo ufw allow 4369/tcp` (EPMD) and `sudo ufw allow 9000:9100/tcp` (Erlang Distribution range).
-    *   Or for testing: `sudo ufw disable`.
-*   **Cookie Mismatch**: Ensure `-setcookie` string is IDENTICAL.
+## 6. Running the Stress Test
+To certify this hybrid cluster, run the verification suite from the **Cloud VM** (as it simulates external clients):
+
+```bash
+# On Cloud VM
+python3 verify_all.py
+```
+This will generate traffic from the cloud, routing through your home laptops, proving true Hybrid Cloud capability!
