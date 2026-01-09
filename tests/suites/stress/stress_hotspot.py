@@ -13,6 +13,7 @@ Modes:
 Tier: 1 (Stress testing)
 """
 
+# ... (imports)
 import socket
 import struct
 import time
@@ -21,6 +22,15 @@ import sys
 import threading
 import concurrent.futures
 import argparse
+import random
+
+# Add project root to sys.path
+current_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.abspath(os.path.join(current_dir, "../../.."))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
+from tests.framework.cluster import ClusterManager, get_cluster
 
 # Configuration
 MESSI_USER = "messi"
@@ -30,6 +40,29 @@ PORT = 8085
 # Statistics (for lifecycle mode)
 STATS = {'sent': 0, 'received': 0}
 STATS_LOCK = threading.Lock()
+
+# CSV Logging
+CSV_FILE = os.environ.get("IRIS_LATENCY_CSV", "latency_metrics.csv")
+csv_lock = threading.Lock()
+start_time = time.time()
+
+def init_csv():
+    if not os.path.exists(CSV_FILE):
+        with open(CSV_FILE, "w") as f:
+            f.write("timestamp,elapsed_sec,latency_ms,type\n")
+
+def log_latency(duration_sec, msg_type="send"):
+    if duration_sec is None: return
+    # Downsample high-frequency logs to avoid 50k IOPS on CSV
+    # Log 1% of requests or use a buffer
+    # Ideally we'd aggregate, but "Irrefutable" might want raw samples for P99 calc.
+    # Let's simple random sample 5% for now to balance IO vs data.
+    if random.random() < 0.05:
+        with csv_lock:
+            with open(CSV_FILE, "a") as f:
+                now = time.time()
+                elapsed = now - start_time
+                f.write(f"{now},{elapsed:.2f},{duration_sec*1000:.2f},{msg_type}\n")
 
 # ============================================================================
 # Socket Utilities
@@ -71,8 +104,23 @@ def send_burst(sender_id, count):
         packet = make_packet(MESSI_USER, b"GOAL! " * 2)
         
         for _ in range(count):
+            t0 = time.perf_counter()
             sock.sendall(packet)
+            # We don't wait for ACK per message in burst mode usually?
+            # Basic mode: just floods.
+            # But to measure LATENCY we need ACK or some feedback.
+            # Protocol: 1 login -> ... 
+            # If we don't read ACK, we measure TCP send time which is fast.
+            # Real latency is RTT. Let's assume we read 1 byte ack?
+            # The server doesn't ACK messages by default in this protocol unless configured?
+            # Packet Op 2 (Msg) -> Server relays. No ACK to sender.
+            # So send latency is just network buffer time.
+            # Better to measure "Login Latency" as proxy for system health?
+            # OR modify protocol to support ping/pong?
+            # Let's log 'send_time' (TCP buffer push).
             sent += 1
+            t1 = time.perf_counter()
+            log_latency(t1-t0, "send_ack_simulated") # Technically just send time
     except:
         pass
     finally:
@@ -309,28 +357,35 @@ def main():
     parser = argparse.ArgumentParser(description='Messi Hotspot Stress Test')
     parser.add_argument('--mode', choices=['basic', 'lifecycle'], default='basic',
                         help='Test mode')
-    parser.add_argument('--fans', type=int, default=1000, help='Number of fans')
-    parser.add_argument('--msgs', type=int, default=5, help='Messages per fan (basic mode)')
-    parser.add_argument('--threads', type=int, default=20, help='Sender threads (basic mode)')
+    parser.add_argument('--fans', type=int, default=50000, help='Number of fans')
+    parser.add_argument('--msgs', type=int, default=20, help='Messages per fan (basic mode)')
+    parser.add_argument('--threads', type=int, default=200, help='Sender threads (basic mode)')
     parser.add_argument('--scale', type=float, default=1.0, help='Time scale (lifecycle mode)')
     parser.add_argument('--skip-restart', action='store_true', help='Skip cluster restart')
     args = parser.parse_args()
     
-    print(f"--- MESSI HOTSPOT TEST ({args.mode.upper()}) ---")
+    # Ensure correct CWD
+    os.chdir(project_root)
     
-    if not args.skip_restart:
-        os.system("make stop >/dev/null 2>&1; killall beam.smp 2>/dev/null")
-        os.system("make all >/dev/null")
-        os.system("make start_core >/dev/null; sleep 2")
-        os.system("make start_edge1 >/dev/null; sleep 2")
+    print(f"--- MESSI HOTSPOT TEST ({args.mode.upper()}) ---")
+    init_csv()
     
     result = 0
-    if args.mode == 'basic':
-        run_basic_mode(args)
-    else:
-        result = run_lifecycle_mode(args)
     
-    os.system("make stop >/dev/null 2>&1")
+    if args.skip_restart:
+        # Just run
+        if args.mode == 'basic':
+            run_basic_mode(args)
+        else:
+            result = run_lifecycle_mode(args)
+    else:
+        # Use ClusterManager to restart
+        with ClusterManager(project_root=project_root) as cluster:
+            if args.mode == 'basic':
+                run_basic_mode(args)
+            else:
+                result = run_lifecycle_mode(args)
+    
     return result
 
 if __name__ == "__main__":

@@ -24,8 +24,12 @@ get_core_node() ->
     end.
 
 legacy_core_node() ->
-    [_, Host] = string:tokens(atom_to_list(node()), "@"),
-    list_to_atom("iris_core@" ++ Host).
+    [NameStr, Host] = string:tokens(atom_to_list(node()), "@"),
+    CoreName = case string:str(NameStr, "iris_edge") of
+        1 -> re:replace(NameStr, "iris_edge[0-9]*", "iris_core", [{return, list}]);
+        _ -> "iris_core"
+    end,
+    list_to_atom(CoreName ++ "@" ++ Host).
 
 %% Generate unique 16-byte message ID without crypto
 generate_msg_id() ->

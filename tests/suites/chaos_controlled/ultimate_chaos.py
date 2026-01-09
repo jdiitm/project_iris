@@ -13,7 +13,8 @@ DURATION = 300       # 5 Minutes
 
 def get_node_name(short_name):
     hostname = subprocess.check_output("hostname -s", shell=True).decode().strip()
-    return f"{short_name}@{hostname}"
+    suffix = os.environ.get("IRIS_NODE_SUFFIX", "")
+    return f"{short_name}{suffix}@{hostname}"
 
 EDGE_FULL = get_node_name(EDGE_NODE)
 
@@ -69,14 +70,21 @@ def main():
     # 0. Prep
     setup_ip_aliases()
     os.system("make stop >/dev/null 2>&1; killall beam.smp >/dev/null 2>&1")
-    run_cmd("make clean && make all")
+    
+    # Ensure we use the correct Erlang
+    # Ensure we use the correct Erlang
+    erl_path = "/usr/bin/erl" if os.path.exists("/usr/bin/erl") else "erl"
+    suffix = os.environ.get("IRIS_NODE_SUFFIX", "")
+    make_cmd = f"PATH=/usr/bin:$PATH NODE_SUFFIX={suffix} make ERL={erl_path}"
+    
+    run_cmd(f"{make_cmd} clean && {make_cmd} all")
     os.system("erlc -o ebin src/chaos_resources.erl src/chaos_monkey.erl src/iris_extreme_gen.erl")
     
-    run_cmd("make start_core")
+    run_cmd(f"{make_cmd} start_core")
     time.sleep(2)
     # Start Edge with Higher limits explicitly just in case makefile doesn't catch it
     # But makefile has +P 2000000 so we are good.
-    run_cmd("make start_edge1")
+    run_cmd(f"{make_cmd} start_edge1")
     time.sleep(5)
     
     # 1. Ramp Up (The Million March)

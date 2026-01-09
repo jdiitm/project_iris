@@ -61,7 +61,16 @@ if [ "$OS_ULIMIT" != "unlimited" ]; then
         echo "[AUTO-TUNE] WARNING: ulimit -n ($OS_ULIMIT) is lower than target ($LIMIT_Q)." >&2
         echo "[AUTO-TUNE] Capping +P/+Q to $OS_ULIMIT (minus buffer) to prevent crash." >&2
         # Leave room for shell/VM overhead
-        SAFE_LIMIT=$((OS_ULIMIT - 5000))
+        if [ "$OS_ULIMIT" -gt 6000 ]; then
+            SAFE_LIMIT=$((OS_ULIMIT - 5000))
+        else
+            SAFE_LIMIT=$((OS_ULIMIT - 100))
+        fi
+        
+        # Absolute floor
+        if [ "$SAFE_LIMIT" -lt 256 ]; then
+            SAFE_LIMIT=256
+        fi
         LIMIT_Q=$SAFE_LIMIT
         LIMIT_P=$SAFE_LIMIT
     fi
