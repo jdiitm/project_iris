@@ -1,0 +1,6 @@
+timestamp,scenario,duration_sec,status
+1767937829.352368,split_brain,120.00,PASS
+1767937858.0897648,split_brain,10.00,PASS
+1767947671.88506,split_brain,60.00,PASS
+1767947759.0558746,disk_pressure,60.00,PASS
+1767947852.8356788,oom_survival,60.00,WARNING

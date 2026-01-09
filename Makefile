@@ -1,5 +1,5 @@
 # Makefile for Project Iris
-ERL = erl
+ERL ?= /usr/bin/erl
 ERLC = erlc
 HOSTNAME := $(shell hostname -s)
 
@@ -68,18 +68,31 @@ clean:
 ERL_FLAGS := $(shell ./scripts/auto_tune.sh)
 
 start_core: all
-	$(ERL) -noshell -noinput $(ERL_FLAGS) -pa ebin -sname iris_core -eval "application:ensure_all_started(iris_core)" >/dev/null 2>&1 &
+	$(ERL) -noshell -noinput $(ERL_FLAGS) -pa ebin -sname iris_core$(NODE_SUFFIX) -eval "application:ensure_all_started(iris_core)" >core.log 2>&1 &
 
 start_edge1: all
-	$(ERL) -noshell -noinput $(ERL_FLAGS) -pa ebin -sname iris_edge1 -iris_edge port 8085 -eval "application:ensure_all_started(iris_edge)" >/dev/null 2>&1 &
+	$(ERL) -noshell -noinput $(ERL_FLAGS) -pa ebin -sname iris_edge1$(NODE_SUFFIX) -iris_edge port 8085 -eval "application:ensure_all_started(iris_edge)" >edge1.log 2>&1 &
 
 start_edge2: all
-	$(ERL) -noshell -noinput $(ERL_FLAGS) -pa ebin -sname iris_edge2 -iris_edge port 8086 -eval "application:ensure_all_started(iris_edge)" >/dev/null 2>&1 &
+	$(ERL) -noshell -noinput $(ERL_FLAGS) -pa ebin -sname iris_edge2$(NODE_SUFFIX) -iris_edge port 8086 -eval "application:ensure_all_started(iris_edge)" >edge2.log 2>&1 &
+
+start_edge3: all
+	$(ERL) -noshell -noinput $(ERL_FLAGS) -pa ebin -sname iris_edge3$(NODE_SUFFIX) -iris_edge port 8087 -eval "application:ensure_all_started(iris_edge)" >edge3.log 2>&1 &
+
+start_edge4: all
+	$(ERL) -noshell -noinput $(ERL_FLAGS) -pa ebin -sname iris_edge4$(NODE_SUFFIX) -iris_edge port 8088 -eval "application:ensure_all_started(iris_edge)" >edge4.log 2>&1 &
+
+start_edge5: all
+	$(ERL) -noshell -noinput $(ERL_FLAGS) -pa ebin -sname iris_edge5$(NODE_SUFFIX) -iris_edge port 8089 -eval "application:ensure_all_started(iris_edge)" >edge5.log 2>&1 &
 
 stop:
 	@echo "Stopping nodes..."
-	@$(ERL) -noshell -sname stopper -eval "rpc:call('iris_edge2@$(HOSTNAME)', init, stop, []), \
-	                                     rpc:call('iris_edge1@$(HOSTNAME)', init, stop, []), \
-	                                     rpc:call('iris_core@$(HOSTNAME)', init, stop, []), \
-	                                     init:stop()."
+	@$(ERL) -noshell -sname stopper_$(shell date +%s) -eval "lists:foreach(fun(N) -> rpc:call(N, init, stop, []) end, \
+	            [ 'iris_edge5$(NODE_SUFFIX)@$(HOSTNAME)', \
+	              'iris_edge4$(NODE_SUFFIX)@$(HOSTNAME)', \
+	              'iris_edge3$(NODE_SUFFIX)@$(HOSTNAME)', \
+	              'iris_edge2$(NODE_SUFFIX)@$(HOSTNAME)', \
+	              'iris_edge1$(NODE_SUFFIX)@$(HOSTNAME)', \
+	              'iris_core$(NODE_SUFFIX)@$(HOSTNAME)' ]), \
+	     init:stop()."
 	@echo "Nodes stopped."

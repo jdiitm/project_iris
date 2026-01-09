@@ -28,7 +28,8 @@ class ClusterManager:
         self,
         project_root: Optional[Path] = None,
         core_port: int = 4369,  # Erlang EPMD
-        edge_port: int = 8085
+        edge_port: int = 8085,
+        default_edge_count: int = 1
     ):
         if project_root:
             self.project_root = Path(project_root)
@@ -40,6 +41,7 @@ class ClusterManager:
         
         self.core_port = core_port
         self.edge_port = edge_port
+        self.default_edge_count = default_edge_count
         self._core_proc: Optional[subprocess.Popen] = None
         self._edge_procs: List[subprocess.Popen] = []
         self._hostname = self._get_hostname()
@@ -124,9 +126,10 @@ class ClusterManager:
         
         return success
     
-    def start(self, edge_count: int = 1) -> bool:
+    def start(self, edge_count: Optional[int] = None) -> bool:
         """Start full cluster (core + edges)."""
-        print("[Cluster] Starting cluster...")
+        count = edge_count if edge_count is not None else self.default_edge_count
+        print(f"[Cluster] Starting cluster with {count} edges...")
         
         # Clean any existing processes
         self.force_stop()
@@ -141,10 +144,8 @@ class ClusterManager:
             print("[Cluster] Core node failed to start")
             return False
         
-        time.sleep(2)
-        
         # Start edges
-        for i in range(1, edge_count + 1):
+        for i in range(1, count + 1):
             port = 8085 + i - 1  # 8085, 8086, etc.
             if not self.start_edge(port=port, edge_id=i):
                 print(f"[Cluster] Edge {i} failed to start")
@@ -191,6 +192,11 @@ class ClusterManager:
             import shutil
             for mnesia_dir in self.project_root.glob("Mnesia.*"):
                 shutil.rmtree(mnesia_dir, ignore_errors=True)
+            for log_file in self.project_root.glob("*.log"):
+                try:
+                    os.remove(log_file)
+                except:
+                    pass
         except Exception:
             pass
         
@@ -208,10 +214,39 @@ class ClusterManager:
         """Check if minimum cluster is healthy (core + 1 edge)."""
         health = self.health_check()
         return health.get("edge_8085", False)
-    
+
+    def wait_until(self, condition_func, timeout=30, description="condition"):
+        """Wait until condition_func returns True."""
+        start = time.time()
+        while time.time() - start < timeout:
+            if condition_func():
+                return True
+            time.sleep(0.5)
+        print(f"[Cluster] Timeout waiting for {description}")
+        return False
+
+    def wait_for_log(self, filename: str, pattern: str, timeout=30) -> bool:
+        """Wait for a pattern to appear in a log file."""
+        log_path = self.project_root / filename
+        start = time.time()
+        
+        while time.time() - start < timeout:
+            if log_path.exists():
+                try:
+                    with open(log_path, 'r', errors='ignore') as f:
+                        if pattern in f.read():
+                            return True
+                except Exception:
+                    pass
+            time.sleep(0.5)
+        
+        print(f"[Cluster] Timeout waiting for '{pattern}' in {filename}")
+        return False
+
     def __enter__(self):
         """Context manager entry - start cluster."""
-        self.start()
+        if not self.start():
+            raise RuntimeError("Cluster failed to start")
         return self
     
     def __exit__(self, exc_type, exc_val, exc_tb):
@@ -245,3 +280,4 @@ def stop_cluster():
     global _cluster
     if _cluster:
         _cluster.stop()
+

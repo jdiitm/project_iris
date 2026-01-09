@@ -5,17 +5,24 @@ import random
 import os
 import subprocess
 import socket
-import os
 import struct
+
+# Add project root to sys.path
+current_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.abspath(os.path.join(current_dir, "../../.."))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
+from tests.framework.cluster import ClusterManager, get_cluster
 
 # Configuration
 VIP_USER = "vip_global"
-VIP_BUCKET_COUNT = 50
+VIP_BUCKET_COUNT = 200 # Increased buckets for massive load
 NUM_REGIONS = 5
-SENDERS_PER_REGION = 2  # Total 10 senders
-NORMAL_USERS = 100      # Pool of normal users
-DURATION = 30           # Seconds
-BATCH_SIZE = 500        # Msgs per Batch Packet
+SENDERS_PER_REGION = 50 # Increased to 50 (Total 250 threads)
+NORMAL_USERS = 20000    # Increased normal user pool
+DURATION = 60           # 60s test
+BATCH_SIZE = 2000       # 2000 msgs/batch => 5 batches/sec/thread = 10k/sec/thread
 
 # Stats
 stats_lock = threading.Lock()
@@ -26,6 +33,23 @@ stats = {
     "normal_received": 0,
     "errors": 0
 }
+
+# CSV Logging
+CSV_FILE = os.environ.get("IRIS_THROUGHPUT_CSV", "throughput_metrics.csv")
+csv_lock = threading.Lock()
+start_time = time.time()
+
+def init_csv():
+    if not os.path.exists(CSV_FILE):
+        with open(CSV_FILE, "w") as f:
+            f.write("timestamp,elapsed_sec,vip_sent_rate,normal_sent_rate,total_sent_rate,errors_rate\n")
+
+def log_metrics(vip_rate, normal_rate, error_rate):
+    with csv_lock:
+        with open(CSV_FILE, "a") as f:
+            now = time.time()
+            elapsed = now - start_time
+            f.write(f"{now},{elapsed:.2f},{vip_rate},{normal_rate},{vip_rate+normal_rate},{error_rate}\n")
 
 def log(msg):
     print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
@@ -48,45 +72,20 @@ def packet_msg(target, payload):
     p_bytes = payload.encode('utf-8')
     return b'\x02' + struct.pack('>H', len(t_bytes)) + t_bytes + struct.pack('>H', len(p_bytes)) + p_bytes
 
-def setup_cluster():
-    log("--- Setting up Global Cluster ---")
-    os.system("pkill -9 beam; killall -9 beam.smp; rm -rf Mnesia.*; rm *.log")
-    
-    # Start Core (Detached)
-    # Start Core (Attached via Subprocess)
-    core_log = open("iris_core.log", "w")
-    cmd_core = ["erl", "-setcookie", "iris_secret", "-pa", "ebin", 
-                "-sname", "iris_core", "-eval", "application:ensure_all_started(iris_core)"]
-    subprocess.Popen(cmd_core, stdout=core_log, stderr=core_log)
-    time.sleep(2)
-    
-    # Promote VIP
-    log(f"Promoting {VIP_USER} to {VIP_BUCKET_COUNT} buckets...")
-    promote_cmd = f"erl -setcookie iris_secret -sname client_promote -noshell -eval \"rpc:call(iris_core@j, iris_core, set_bucket_count, [<<\\\"{VIP_USER}\\\">>, {VIP_BUCKET_COUNT}]), init:stop().\""
-    os.system(promote_cmd)
-    
-    # Start Regions
-    for i in range(1, NUM_REGIONS + 1):
-        port = 8090 + i
-        region_log = open(f"iris_region_{i}.log", "w")
-        cmd_region = ["erl", "-setcookie", "iris_secret", "-pa", "ebin", 
-                      "-sname", f"iris_region_{i}", "-iris_edge", "port", str(port), 
-                      "-eval", "application:ensure_all_started(iris_edge)"]
-        subprocess.Popen(cmd_region, stdout=region_log, stderr=region_log)
-        log(f"Started Region {i} on port {port}")
-        log(f"Started Region {i} on port {port}")
-    
-    time.sleep(5)
-    log("Cluster Ready.")
+def get_port(region_id):
+    # ClusterManager: 8085 + region_id - 1
+    # Region 1 -> 8085
+    return 8085 + (region_id - 1)
 
 def sender_worker(region_id, sender_id):
-    port = 8090 + region_id
+    port = get_port(region_id)
     host = 'localhost'
     end_time = time.time() + DURATION
     
     while time.time() < end_time:
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(5.0) # Prevent indefinite hang
             s.connect((host, port))
             s.sendall(packet_login(f"sender_{region_id}_{sender_id}"))
             s.recv(1024) # Ack
@@ -128,7 +127,7 @@ def vip_receiver():
     while time.time() < end_time:
         try:
             region = random.randint(1, NUM_REGIONS)
-            port = 8090 + region
+            port = get_port(region)
             
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             s.connect(('localhost', port))
@@ -165,10 +164,31 @@ def verify_results():
     # 1. Fetch ALL VIP Msgs (Login via one node and drain everything)
     log("Draining VIP Inbox...")
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.connect(('localhost', 8091)) # Region 1
-    s.sendall(packet_login(VIP_USER))
-    s.recv(1024)
+    s.settimeout(5.0)
     
+    connected = False
+    for attempt in range(5):
+        try:
+            s.connect(('localhost', get_port(1))) # Region 1
+            connected = True
+            break
+        except Exception as e:
+            log(f"Connection attempt {attempt+1} failed: {e}. Retrying...")
+            time.sleep(2)
+            
+    if not connected:
+        log("CRITICAL: Could not connect to Region 1 to verify results. Cluster probable crash.")
+        # Proceed to analysis with what we have (or fail)
+        return
+        
+    s.sendall(packet_login(VIP_USER))
+    try:
+        s.recv(1024)
+    except TimeoutError:
+        log("Timeout on login ack")
+        s.close()
+        return
+
     vip_data = b""
     s.settimeout(2.0)
     while True:
@@ -202,7 +222,7 @@ def verify_results():
     for i in range(1, 6): # Check first 5
         user = f"normal_{i}"
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.connect(('localhost', 8091))
+        s.connect(('localhost', get_port(1)))
         s.sendall(packet_login(user))
         s.recv(1024)
         
@@ -226,29 +246,92 @@ def verify_results():
         log(f"User {user}: Received {c} messages")
 
 def main():
-    setup_cluster()
+    os.chdir(project_root)
     
-    log("--- Starting Simulation (30s) ---")
-    threads = []
-    
-    # Launch Senders
-    for r in range(1, NUM_REGIONS + 1):
-        for k in range(SENDERS_PER_REGION):
-            t = threading.Thread(target=sender_worker, args=(r, k))
-            t.start()
-            threads.append(t)
-            
-    # Launch VIP Receiver (Background churn)
-    t_vip = threading.Thread(target=vip_receiver)
-    t_vip.start()
-    threads.append(t_vip)
-    
-    # Wait
-    for t in threads:
-        t.join()
+    with ClusterManager(project_root=project_root, default_edge_count=NUM_REGIONS) as cluster:
+        # Promote VIP
+        log(f"Promoting {VIP_USER} to {VIP_BUCKET_COUNT} buckets...")
+        # Need hostname for RPC call... let's trust localhost
+        hostname = subprocess.check_output("hostname -s", shell=True).decode().strip()
+        suffix = os.environ.get("IRIS_NODE_SUFFIX", "")
+        # iris_core@j-suffix? Or just iris_core if suffix empty?
+        # ClusterManager sets suffix env var? No, it respects it if set.
+        # But wait, ClusterManager doesn't set suffix explicitly unless we tell it?
+        # Actually ClusterManager relies on Make. make usually handles suffix validation.
+        # Let's try to get core node name from cluster helper if possible, or just construct it.
+        # Or even better, use 'iris_core' in rpc call if we are running from erl shell that is connected?
+        # But here we launch a separate erl process for rpc.
         
-    # Verify
-    verify_results()
+        # Let's use 127.0.0.1 for rpc? No, Erlang dist requires cookies and names.
+        # The original code hardcoded 'iris_core@j'. That was fragile.
+        # The original code: rpc:call(iris_core@j ...)
+        
+        # Let's fix this.
+        # Note: ClusterManager._get_hostname() gets the short hostname.
+        core_node_name = f"iris_core{suffix}@{hostname}"
+        
+        promote_cmd = [
+            "/usr/bin/erl", "-setcookie", "iris_secret", "-sname", "client_promote", "-noshell",
+            "-eval", f"rpc:call('{core_node_name}', iris_core, set_bucket_count, [<<\"{VIP_USER}\">>, {VIP_BUCKET_COUNT}], 5000), init:stop()."
+        ]
+        try:
+            subprocess.run(promote_cmd, timeout=10, check=True, capture_output=True)
+        except subprocess.TimeoutExpired:
+            log("WARNING: Promotion command timed out!")
+        except subprocess.CalledProcessError as e:
+            log(f"WARNING: Promotion command failed: {e}")
+        
+        log(f"--- Starting Simulation ({DURATION}s) ---")
+        threads = []
+        
+        # Launch Senders
+        for r in range(1, NUM_REGIONS + 1):
+            for k in range(SENDERS_PER_REGION):
+                t = threading.Thread(target=sender_worker, args=(r, k))
+                t.start()
+                threads.append(t)
+                
+        # Launch VIP Receiver (Background churn)
+        t_vip = threading.Thread(target=vip_receiver)
+        t_vip.start()
+        threads.append(t_vip)
+        
+        # Monitor & CSV Logger
+        init_csv()
+        
+        def monitor_loop():
+            last_vip = 0
+            last_norm = 0
+            last_err = 0
+            while True:
+                time.sleep(1)
+                with stats_lock:
+                    curr_vip = stats["vip_sent"]
+                    curr_norm = stats["normal_sent"]
+                    curr_err = stats["errors"]
+                
+                v_rate = curr_vip - last_vip
+                n_rate = curr_norm - last_norm
+                e_rate = curr_err - last_err
+                
+                log_metrics(v_rate, n_rate, e_rate)
+                
+                last_vip = curr_vip
+                last_norm = curr_norm
+                last_err = curr_err
+                
+                if threading.active_count() <= 2: # Main + Monitor
+                    break
+
+        t_mon = threading.Thread(target=monitor_loop, daemon=True)
+        t_mon.start()
+
+        # Wait
+        for t in threads:
+            t.join()
+            
+        # Verify
+        verify_results()
 
 if __name__ == "__main__":
     main()

@@ -1,0 +1,3 @@
+timestamp,experiment,duration_sec,result
+1767947973.6561086,cpu_burn,90,PASS
+1767947981.992265,process_killer,90,PASS

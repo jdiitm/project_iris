@@ -218,6 +218,14 @@ def benchmark_latency():
             log.metric("latency_avg_ms", statistics.mean(latencies))
             
             log.info("result", f"Latency P50:{p50:.2f}ms P90:{p90:.2f}ms P99:{p99:.2f}ms")
+            
+            # Assertion
+            if p99 > 5.0:
+                log.error("assertion_failed", f"P99 Latency {p99:.2f}ms exceeds limit 5.0ms")
+                # raise Exception(f"P99 Latency {p99:.2f}ms exceeds limit 5.0ms") 
+                # For now just log verify_all doesn't fail on python print only output unless checks exit code
+                # But here we are inside a function. We should return False?
+                return False
         
         return True
 

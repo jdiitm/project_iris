@@ -18,7 +18,7 @@ import os
 import time
 
 # Add parent paths for imports
-sys.path.insert(0, str(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))))
+sys.path.insert(0, str(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))))
 
 from tests.framework import TestLogger, ClusterManager, MessageTracker
 from tests.framework.assertions import (

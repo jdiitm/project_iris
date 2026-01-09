@@ -159,8 +159,8 @@ def main():
         concurrent.futures.wait(futures)
 
     print(f"[1] Storage Filled in {time.time() - start_fill:.2f}s.")
-    print("[1.5] Waiting 120s for Erlang ingestion queues to drain...")
-    time.sleep(120)
+    print("[1.5] Waiting 10s for Erlang ingestion queues to drain...")
+    time.sleep(10)
     print("[2] Starting Consumers...")
     
     # Start consumers

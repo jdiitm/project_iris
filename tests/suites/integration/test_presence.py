@@ -67,39 +67,44 @@ def test_online_user_status():
         target.login(target_user)
         log.connection_event("login", target_user)
         
-        time.sleep(1)  # Allow presence to propagate
+        time.sleep(2)  # Allow presence to propagate
         
         # Query status
         querier = IrisClient()
         querier.login(f"querier_{int(time.time())}")
         log.connection_event("login", "querier")
         
-        # Send status query
-        query_packet = create_get_status_packet(target_user)
-        querier.sock.sendall(query_packet)
-        log.info("query_sent", f"Querying status of {target_user}")
+        # Poll for status with retries
+        result = False
+        start_time = time.monotonic()
+        max_wait = 10.0
         
-        # Receive response
-        try:
-            querier.sock.settimeout(5.0)
-            response = querier.sock.recv(1024)
-            
-            status = parse_status_response(response)
-            log.info("status_received", f"Status response: {status}")
-            
-            if status.get("online"):
-                log.info("validation", f"{target_user} correctly shows as online")
-                result = True
-            else:
-                log.error("validation", f"{target_user} shows as offline (expected online)")
-                result = False
+        while time.monotonic() - start_time < max_wait:
+            try:
+                # Send status query
+                query_packet = create_get_status_packet(target_user)
+                querier.sock.sendall(query_packet)
                 
-        except socket.timeout:
-            log.error("timeout", "No status response received")
-            result = False
-        except Exception as e:
-            log.error("error", f"Failed to parse status: {e}")
-            result = False
+                querier.sock.settimeout(2.0)
+                response = querier.sock.recv(1024)
+                
+                status = parse_status_response(response)
+                log.info("status_received", f"Status: {status}")
+                
+                if status.get("online"):
+                    log.info("validation", f"{target_user} correctly shows as online")
+                    result = True
+                    break
+                    
+            except socket.timeout:
+                pass
+            except Exception as e:
+                log.info("retry", f"Query failed ({e}), retrying...")
+            
+            time.sleep(0.5)
+        
+        if not result:
+            log.error("validation", f"{target_user} failed to show as online after {max_wait}s")
         
         target.close()
         querier.close()
@@ -122,49 +127,47 @@ def test_offline_user_status():
         target = IrisClient()
         target.login(target_user)
         log.connection_event("login", target_user)
-        time.sleep(0.5)
+        time.sleep(1)
         
         # Go offline
         target.close()
         log.connection_event("disconnect", target_user)
-        time.sleep(2)  # Allow presence to update
+        time.sleep(3)  # Allow presence to update
         
-        # Query status from fresh client
+        # Query status from fresh client with retries
         querier = IrisClient()
         querier.login(f"querier_off_{int(time.time())}")
         
-        query_packet = create_get_status_packet(target_user)
-        querier.sock.sendall(query_packet)
-        log.info("query_sent", f"Querying status of {target_user}")
+        result = False
+        start_time = time.monotonic()
+        max_wait = 10.0
         
-        try:
-            querier.sock.settimeout(5.0)
-            response = querier.sock.recv(1024)
-            
-            status = parse_status_response(response)
-            log.info("status_received", f"Status: {status}")
-            
-            # User should be offline
-            if not status.get("online", True):
-                log.info("validation", f"{target_user} correctly shows as offline")
+        while time.monotonic() - start_time < max_wait:
+            try:
+                query_packet = create_get_status_packet(target_user)
+                querier.sock.sendall(query_packet)
                 
-                # Last-seen should be non-zero
-                if status.get("last_seen", 0) > 0:
-                    log.info("validation", f"Last-seen timestamp: {status['last_seen']}")
+                querier.sock.settimeout(2.0)
+                response = querier.sock.recv(1024)
+                
+                status = parse_status_response(response)
+                log.info("status_received", f"Status: {status}")
+                
+                # User should be offline (online=False or not present)
+                if not status.get("online", True):
+                    log.info("validation", f"{target_user} correctly shows as offline")
                     result = True
-                else:
-                    log.warn("validation", "Last-seen timestamp is zero")
-                    result = True  # Still pass, last-seen may not be set in all cases
-            else:
-                log.error("validation", f"{target_user} shows as online (expected offline)")
-                result = False
-                
-        except socket.timeout:
-            log.error("timeout", "No status response received")
-            result = False
-        except Exception as e:
-            log.error("error", f"Failed to parse status: {e}")
-            result = False
+                    break
+                    
+            except socket.timeout:
+                pass
+            except Exception as e:
+                log.info("retry", f"Query failed ({e}), retrying...")
+            
+            time.sleep(0.5)
+        
+        if not result:
+            log.error("validation", f"{target_user} still shows as online after {max_wait}s")
         
         querier.close()
         

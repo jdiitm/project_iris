@@ -107,8 +107,12 @@ legacy_core_node() ->
         'nonode@nohost' ->
             {error, no_cores_available};
         Node ->
-            [_, Host] = string:tokens(atom_to_list(Node), "@"),
-            CoreNode = list_to_atom("iris_core@" ++ Host),
+            [NameStr, Host] = string:tokens(atom_to_list(Node), "@"),
+            CoreName = case string:str(NameStr, "iris_edge") of
+                1 -> re:replace(NameStr, "iris_edge[0-9]*", "iris_core", [{return, list}]);
+                _ -> "iris_core"
+            end,
+            CoreNode = list_to_atom(CoreName ++ "@" ++ Host),
             case net_adm:ping(CoreNode) of
                 pong -> {ok, CoreNode};
                 pang -> {error, no_cores_available}

@@ -197,7 +197,7 @@ def discover_tests(suite: str) -> List[Dict[str, Any]]:
             "suite": suite,
             "type": "erlang",
             "path": str(test_file),
-            "command": f"erl -pa {PROJECT_ROOT}/ebin -pa {suite_dir} -noshell -eval \"eunit:test({module}, []), init:stop().\""
+            "command": f"/usr/bin/erl -pa {PROJECT_ROOT}/ebin -pa {suite_dir} -noshell -eval \"eunit:test({module}, []), init:stop().\""
         })
     
     return tests
@@ -221,29 +221,40 @@ def ensure_cluster_running() -> bool:
     log_info("Ensuring cluster is running...")
     
     try:
+        # Get suffix for this run
+        suffix = os.environ.get("IRIS_NODE_SUFFIX", "")
+        make_args = [f"NODE_SUFFIX={suffix}"] if suffix else []
+        
+        # Force stop any existing cluster
+        stop_cluster()
+        time.sleep(2)
+
         # Build first (can take time on CI)
         log_info("Building project...")
-        subprocess.run(
-            ["make", "all"],
+        result = subprocess.run(
+            ["make", "all"] + make_args,
             cwd=str(PROJECT_ROOT),
             capture_output=True,
             text=True,
             timeout=300  # 5 minutes for compilation
         )
+        if result.returncode != 0:
+            log_warn(f"Build failed: {result.stderr}")
+            return False
 
         # Try to start cluster (Core)
         result = subprocess.run(
-            ["make", "start_core"],
+            ["make", "start_core"] + make_args,
             cwd=str(PROJECT_ROOT),
             capture_output=True,
             text=True,
             timeout=60
         )
-        time.sleep(2)
+        time.sleep(3)  # Give Mnesia time to initialize
         
         # Start Edge
         result = subprocess.run(
-            ["make", "start_edge1"],
+            ["make", "start_edge1"] + make_args,
             cwd=str(PROJECT_ROOT),
             capture_output=True,
             text=True,
@@ -384,9 +395,21 @@ def run_suite(suite_name: str, run_dir: Path, require_cluster: bool = True) -> S
     if require_cluster and suite_name not in ["unit"]:
         ensure_cluster_running()
     
+    # Suite-specific timeouts (seconds)
+    suite_timeouts = {
+        "integration": 120,
+        "resilience": 600,       # 10 min for resilience
+        "chaos_controlled": 600, # 10 min for chaos
+        "stress": 600,           # 10 min for stress
+        "performance_light": 300,# 5 min for performance
+        "unit": 60,
+    }
+    timeout = suite_timeouts.get(suite_name, 300)  # Default 5 min
+
+    
     results = []
     for test in tests:
-        result = run_test(test, run_dir)
+        result = run_test(test, run_dir, timeout=timeout)
         results.append(result)
     
     duration = time.time() - start_time
@@ -544,6 +567,11 @@ Examples:
     # Capture start resources
     start_snapshot = get_resource_snapshot()
     log_info(f"Initial resources - CPU: {start_snapshot.cpu_percent:.1f}%, Disk: {start_snapshot.disk_free_gb:.1f}GB")
+    
+    # Generate unique suffix for this run to avoid zombie process conflicts
+    run_suffix = f"_{int(time.time())}"
+    os.environ["IRIS_NODE_SUFFIX"] = run_suffix
+    log_info(f"Using node suffix: {run_suffix}")
     
     # Run suites
     suite_results = []

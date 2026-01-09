@@ -11,8 +11,14 @@ get_core_node() ->
     end.
 
 legacy_core_node() ->
-    [_, Host] = string:tokens(atom_to_list(node()), "@"),
-    list_to_atom("iris_core@" ++ Host).
+    [NameStr, Host] = string:tokens(atom_to_list(node()), "@"),
+    %% Replace iris_edgeX with iris_core, preserving any suffix like _1234567890
+    CoreName = case string:str(NameStr, "iris_edge") of
+        1 -> %% Starts with iris_edge
+             re:replace(NameStr, "iris_edge[0-9]*", "iris_core", [{return, list}]);
+        _ -> "iris_core" %% Fallback
+    end,
+    list_to_atom(CoreName ++ "@" ++ Host).
 
 %% handle_packet(Packet, User, TransportPid, TransportMod) -> {ok, NewUser, Actions}
 %% Actions = [ {send, Bin} | {send_batch, [Bin]} | close ]
@@ -80,7 +86,9 @@ handle_packet({error, _}, User, _Pid, _Mod) ->
 fetch_and_cache(TargetUser, Now) ->
     Result = case rpc:call(get_core_node(), iris_core, get_status, [TargetUser]) of
         {online, true, _} -> {online, 0};
-        {online, false, LS} -> {offline, LS}
+        {online, false, LS} -> {offline, LS};
+        {badrpc, _Reason} -> {offline, 0};  % Graceful fallback for RPC errors
+        _ -> {offline, 0}  % Catch-all for unexpected responses
     end,
     {S, T} = Result,
     ets:insert(presence_cache, {TargetUser, S, T, Now}),

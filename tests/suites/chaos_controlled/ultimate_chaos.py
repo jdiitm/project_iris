@@ -13,7 +13,8 @@ DURATION = 300       # 5 Minutes
 
 def get_node_name(short_name):
     hostname = subprocess.check_output("hostname -s", shell=True).decode().strip()
-    return f"{short_name}@{hostname}"
+    suffix = os.environ.get("IRIS_NODE_SUFFIX", "")
+    return f"{short_name}{suffix}@{hostname}"
 
 EDGE_FULL = get_node_name(EDGE_NODE)
 
@@ -71,8 +72,10 @@ def main():
     os.system("make stop >/dev/null 2>&1; killall beam.smp >/dev/null 2>&1")
     
     # Ensure we use the correct Erlang
+    # Ensure we use the correct Erlang
     erl_path = "/usr/bin/erl" if os.path.exists("/usr/bin/erl") else "erl"
-    make_cmd = f"PATH=/usr/bin:$PATH make ERL={erl_path}"
+    suffix = os.environ.get("IRIS_NODE_SUFFIX", "")
+    make_cmd = f"PATH=/usr/bin:$PATH NODE_SUFFIX={suffix} make ERL={erl_path}"
     
     run_cmd(f"{make_cmd} clean && {make_cmd} all")
     os.system("erlc -o ebin src/chaos_resources.erl src/chaos_monkey.erl src/iris_extreme_gen.erl")

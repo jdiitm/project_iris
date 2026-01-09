@@ -5,5 +5,5 @@
   {registered, [iris_core]},
   {applications, [kernel, stdlib, mnesia]},
   {mod, {iris_core, []}},
-  {env, []}
+  {env, [{auto_init_db, true}]}
  ]}.
