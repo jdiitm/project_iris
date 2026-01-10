@@ -85,7 +85,19 @@ start_edge4: all
 start_edge5: all
 	$(ERL) -noshell -noinput $(ERL_FLAGS) -pa ebin -sname iris_edge5$(NODE_SUFFIX) -iris_edge port 8089 -eval "application:ensure_all_started(iris_edge)" >edge5.log 2>&1 &
 
+# ... (Previous targets)
+
+# Distributed Cluster Targets (Public Cloud / Hybrid)
+# Usage: make start_core_dist NAME=iris_core1@laptop-a COOKIE=secret
+start_core_dist: all
+	$(ERL) -noshell -noinput $(ERL_FLAGS) -pa ebin -name $(NAME) -setcookie $(COOKIE) -s iris_app >core.log 2>&1 &
+
+# Usage: make start_edge_dist NAME=iris_edge1@cloud-vm COOKIE=secret CORE=iris_core1@laptop-a
+start_edge_dist: all
+	$(ERL) -noshell -noinput $(ERL_FLAGS) -pa ebin -name $(NAME) -setcookie $(COOKIE) -eval "application:ensure_all_started(iris)" -iris_core_nodes "['$(CORE)']" >edge.log 2>&1 &
+
 stop:
+# ...
 	@echo "Stopping nodes..."
 	@$(ERL) -noshell -sname stopper_$(shell date +%s) -eval "lists:foreach(fun(N) -> rpc:call(N, init, stop, []) end, \
 	            [ 'iris_edge5$(NODE_SUFFIX)@$(HOSTNAME)', \
