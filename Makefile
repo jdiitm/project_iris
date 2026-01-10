@@ -90,11 +90,11 @@ start_edge5: all
 # Distributed Cluster Targets (Public Cloud / Hybrid)
 # Usage: make start_core_dist NAME=iris_core1@laptop-a COOKIE=secret
 start_core_dist: all
-	$(ERL) -noshell -noinput $(ERL_FLAGS) -pa ebin -name $(NAME) -setcookie $(COOKIE) -s iris_app >core.log 2>&1 &
+	$(ERL) -noshell -noinput $(ERL_FLAGS) -pa ebin -name $(NAME) -setcookie $(COOKIE) -eval "application:ensure_all_started(iris_core)" >core.log 2>&1 &
 
 # Usage: make start_edge_dist NAME=iris_edge1@cloud-vm COOKIE=secret CORE=iris_core1@laptop-a
 start_edge_dist: all
-	$(ERL) -noshell -noinput $(ERL_FLAGS) -pa ebin -name $(NAME) -setcookie $(COOKIE) -eval "application:ensure_all_started(iris)" -iris_core_nodes "['$(CORE)']" >edge.log 2>&1 &
+	$(ERL) -noshell -noinput $(ERL_FLAGS) -pa ebin -name $(NAME) -setcookie $(COOKIE) -eval "application:ensure_all_started(iris_edge)" -iris_core_nodes "['$(CORE)']" >edge.log 2>&1 &
 
 stop:
 # ...

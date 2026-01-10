@@ -62,13 +62,13 @@ Edit `/etc/hosts` on **ALL** machines (Laptops & VMs). Add the Tailscale IPs:
 **Laptop A (Core 1):**
 ```bash
 # Start master node
-erl -name iris_core1@laptop-a -setcookie iris_secret -pa ebin -s iris_app
+erl -name iris_core1@laptop-a -setcookie iris_secret -pa ebin -eval "application:ensure_all_started(iris_core)"
 ```
 
 **Laptop B (Core 2):**
 ```bash
 # Start replica node and join cluster
-erl -name iris_core2@laptop-b -setcookie iris_secret -pa ebin -s iris_app
+erl -name iris_core2@laptop-b -setcookie iris_secret -pa ebin -eval "application:ensure_all_started(iris_core)"
 ```
 *(In the Erlang shell of Core 2, connect to Core 1)*:
 ```erlang
@@ -82,7 +82,7 @@ net_adm:ping('iris_core1@laptop-a').
 ```bash
 # Start Edge and point to BOTH Cores
 erl -name iris_edge1@cloud-edge-1 -setcookie iris_secret -pa ebin \
-    -eval "application:ensure_all_started(iris)" \
+    -eval "application:ensure_all_started(iris_edge)" \
     -iris_core_nodes "['iris_core1@laptop-a', 'iris_core2@laptop-b']"
 ```
 
