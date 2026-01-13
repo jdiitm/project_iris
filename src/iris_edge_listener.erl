@@ -21,8 +21,8 @@ init([Port, HandlerMod]) ->
     %% Tuning: High backlog for burst connections
     {ok, LSock} = gen_tcp:listen(Port, [binary, {packet, 0}, {active, false}, {reuseaddr, true}, {backlog, 4096}]),
     io:format("Listener started on port ~p (Handler: ~p)~n", [Port, HandlerMod]),
-    %% Tuning: Spawn 100 parallel acceptors
-    [spawn_acceptor(LSock, HandlerMod) || _ <- lists:seq(1, 100)],
+    %% Tuning: Spawn 500 parallel acceptors
+    [spawn_acceptor(LSock, HandlerMod) || _ <- lists:seq(1, 500)],
     {ok, #state{lsock = LSock, handler = HandlerMod}}.
 
 spawn_acceptor(LSock, HandlerMod) ->
@@ -38,8 +38,15 @@ acceptor(LSock, HandlerMod) ->
             HandlerMod:set_socket(Pid, Sock),
             %% Loop for next connection
             acceptor(LSock, HandlerMod);
+        {error, emfile} ->
+            %% Silent backoff on EMFILE to prevent log flood
+            timer:sleep(1000),
+            acceptor(LSock, HandlerMod);
         Error ->
-            io:format("Accept Error: ~p~n", [Error])
+            %% Other errors: Log and backoff
+            io:format("Accept Error: ~p. Retrying in 200ms...~n", [Error]),
+            timer:sleep(200),
+            acceptor(LSock, HandlerMod)
     end.
 
 handle_call(_Request, _From, State) -> {reply, ok, State}.

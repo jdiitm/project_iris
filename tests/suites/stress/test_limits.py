@@ -86,7 +86,7 @@ def get_metrics(node_name):
     mb = get_memory_usage()
         
     # Get Procs via Erlang
-    cmd = f"erl -sname probe_{int(time.time()*1000)} -hidden -noshell -pa ebin -eval \"io:format('~p', [rpc:call('{node_name}', erlang, system_info, [process_count])]), init:stop().\""
+    cmd = f"erl -setcookie iris_secret -sname probe_{int(time.time()*1000)} -hidden -noshell -pa ebin -eval \"io:format('~p', [rpc:call('{node_name}', erlang, system_info, [process_count])]), init:stop().\""
     try:
         procs = int(run_cmd(cmd).strip())
     except:
@@ -120,7 +120,7 @@ def main():
         # Mode: 'normal' (Wait for login)
         
         # We need a long timeout for the generator
-        cmd = f"erl +P 2000000 -sname gen_lim -hidden -noshell -pa ebin -eval \"iris_extreme_gen:start({args.users}, 1200, normal), timer:sleep(infinity).\""
+        cmd = f"erl +P 2000000 -setcookie iris_secret -sname gen_lim -hidden -noshell -pa ebin -eval \"iris_extreme_gen:start({args.users}, 1200, normal), timer:sleep(infinity).\""
         p_load = run_cmd(cmd, bg=True)
         
         max_ram = 0

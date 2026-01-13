@@ -216,6 +216,31 @@ def list_all_tests() -> Dict[str, List[Dict]]:
 # Test Execution
 # ============================================================================
 
+def mesh_cluster(suffix: str):
+    """Force mesh the cluster nodes."""
+    log_info("Meshing cluster nodes...")
+    try:
+        # Match Makefile's $(shell hostname -s)
+        hostname = subprocess.check_output(["hostname", "-s"], text=True).strip()
+        core = f"iris_core{suffix}@{hostname}"
+        edge = f"iris_edge1{suffix}@{hostname}"
+        
+        # RPC call to force mesh
+        cmd = [
+            "erl", "-noshell", "-sname", f"mesher_{int(time.time())}", 
+            "-setcookie", "iris_secret",
+            "-eval", f"io:format('Ping: ~p~n', [rpc:call('{edge}', net_adm, ping, ['{core}'])]), init:stop()."
+        ]
+        
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        if "pong" not in res.stdout:
+            log_warn(f"Mesh might have failed: {res.stdout}")
+        else:
+            log_info("Cluster meshed successfully")
+            
+    except Exception as e:
+        log_warn(f"Mesh error: {e}")
+
 def ensure_cluster_running() -> bool:
     """Ensure the Iris cluster is running."""
     log_info("Ensuring cluster is running...")
@@ -266,6 +291,9 @@ def ensure_cluster_running() -> bool:
         if not wait_for_port(8085, timeout=30):
             log_warn("Edge node port 8085 did not open in time.")
             return False
+            
+        # Mesh the cluster
+        mesh_cluster(suffix)
             
         return True
     except Exception as e:

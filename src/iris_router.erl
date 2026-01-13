@@ -20,16 +20,10 @@ core_node() ->
 start_link() -> ignore. %% Compatibility
 
 route(User, Msg) ->
-    Start = os:system_time(microsecond),
-    WorkerId = (erlang:phash2(User, ?POOL_SIZE) + 1),
-    WorkerName = list_to_atom("iris_router_" ++ integer_to_list(WorkerId)),
-    gen_server:cast(WorkerName, {route, User, Msg, Start}).
+    %% Switch to Async Router for Planetary Scale
+    %% Sub-millisecond local lookup + Non-blocking remote delivery
+    iris_async_router:route_async(User, Msg).
 
 get_stats() ->
-    %% Aggregate from all workers
-    lists:foldl(fun(Id, {TotalMsgs, TotalAvg}) -> 
-        {M, A} = iris_router_worker:get_stats(Id),
-        %% Weighted average calculation is complex. 
-        %% Simplified: Sum Messages, Average of Averages (Approx)
-        {TotalMsgs + M, TotalAvg + A} 
-    end, {0, 0}, lists:seq(1, ?POOL_SIZE)).
+    %% Delegate to async router stats
+    iris_async_router:get_stats().

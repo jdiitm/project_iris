@@ -121,11 +121,11 @@ class SystemMonitor:
         elapsed = time.time() - self.start_time
         
         # Process count
-        proc_cmd = f"erl -sname probe_{int(time.time()*1000)} -hidden -noshell -pa ebin -eval \"io:format('~p', [rpc:call('{self.edge_node}', erlang, system_info, [process_count])]), init:stop().\""
+        proc_cmd = f"erl -setcookie iris_secret -sname probe_{int(time.time()*1000)} -hidden -noshell -pa ebin -eval \"io:format('~p', [rpc:call('{self.edge_node}', erlang, system_info, [process_count])]), init:stop().\""
         proc_count = run_cmd(proc_cmd, ignore_fail=True).strip()
         
         # Memory
-        mem_cmd = f"erl -sname probe_m_{int(time.time()*1000)} -hidden -noshell -pa ebin -eval \"io:format('~p', [rpc:call('{self.edge_node}', erlang, memory, [total])]), init:stop().\""
+        mem_cmd = f"erl -setcookie iris_secret -sname probe_m_{int(time.time()*1000)} -hidden -noshell -pa ebin -eval \"io:format('~p', [rpc:call('{self.edge_node}', erlang, memory, [total])]), init:stop().\""
         mem_raw = run_cmd(mem_cmd, ignore_fail=True).strip()
         mem_mb = int(mem_raw) / 1024 / 1024 if mem_raw.isdigit() else 0
         
@@ -170,22 +170,22 @@ def apply_network_chaos(enable=True):
 
 def start_chaos_monkey(edge_node, kill_rate=100, interval=1):
     log(f"[CHAOS] Starting chaos monkey (kill {kill_rate} procs/s)...")
-    cmd = f"erl -sname monkey -hidden -noshell -pa ebin -eval \"rpc:call('{edge_node}', chaos_monkey, start, [{kill_rate}, {interval}]), init:stop().\""
+    cmd = f"erl -setcookie iris_secret -sname monkey -hidden -noshell -pa ebin -eval \"rpc:call('{edge_node}', chaos_monkey, start, [{kill_rate}, {interval}]), init:stop().\""
     run_cmd(cmd, ignore_fail=True)
 
 def stop_chaos_monkey(edge_node):
     log("[CHAOS] Stopping chaos monkey...")
-    cmd = f"erl -sname monkey_stop -hidden -noshell -pa ebin -eval \"rpc:call('{edge_node}', chaos_monkey, stop, []), init:stop().\""
+    cmd = f"erl -setcookie iris_secret -sname monkey_stop -hidden -noshell -pa ebin -eval \"rpc:call('{edge_node}', chaos_monkey, stop, []), init:stop().\""
     run_cmd(cmd, ignore_fail=True)
 
 def stress_cpu(edge_node, cores=8):
     log(f"[CHAOS] Burning {cores} CPU cores...")
-    cmd = f"erl -sname cpu_burn -hidden -noshell -pa ebin -eval \"rpc:call('{edge_node}', chaos_resources, burn_cpu, [{cores}]), init:stop().\""
+    cmd = f"erl -setcookie iris_secret -sname cpu_burn -hidden -noshell -pa ebin -eval \"rpc:call('{edge_node}', chaos_resources, burn_cpu, [{cores}]), init:stop().\""
     run_cmd(cmd, ignore_fail=True)
 
 def stress_memory(edge_node, mb=2000):
     log(f"[CHAOS] Eating {mb}MB memory...")
-    cmd = f"erl -sname mem_eat -hidden -noshell -pa ebin -eval \"rpc:call('{edge_node}', chaos_resources, eat_memory, [{mb}]), init:stop().\""
+    cmd = f"erl -setcookie iris_secret -sname mem_eat -hidden -noshell -pa ebin -eval \"rpc:call('{edge_node}', chaos_resources, eat_memory, [{mb}]), init:stop().\""
     run_cmd(cmd, ignore_fail=True)
 
 # ============================================================================
@@ -212,7 +212,9 @@ def main():
     log(f"Chaos features: Network={config['enable_network_chaos']}, CPU={config['enable_cpu_stress']}, Memory={config['enable_memory_stress']}")
     
     # cleanup previous chaos just in case
-    apply_network_chaos(False)
+    # cleanup previous chaos just in case
+    if config['enable_network_chaos']:
+        apply_network_chaos(False)
     init_chaos_csv()
     
     with ClusterManager(project_root=project_root) as cluster:
@@ -229,13 +231,13 @@ def main():
         try:
             # Phase 1: Ramp Up
             print_section("PHASE 1: RAMP UP")
-            load_cmd = f"/usr/bin/erl +P 2000000 -sname loader -hidden -noshell -pa ebin -eval \"iris_extreme_gen:start({config['user_count']}, {config['duration'] + 60}, normal), timer:sleep(infinity).\""
+            load_cmd = f"/usr/bin/erl +P 2000000 -setcookie iris_secret -sname loader -hidden -noshell -pa ebin -eval \"iris_extreme_gen:start({config['user_count']}, {config['duration'] + 60}, normal), timer:sleep(infinity).\""
             processes.append(run_cmd(load_cmd, async_run=True))
             monitor.monitor_loop(config['ramp_time'], "RAMP")
             
             # Phase 2: Offline Flood
             print_section("PHASE 2: OFFLINE FLOOD")
-            flood_cmd = f"/usr/bin/erl +P 2000000 -sname flooder -hidden -noshell -pa ebin -eval \"iris_extreme_gen:start({config['offline_workers']}, {config['duration']}, offline_flood), timer:sleep(infinity).\""
+            flood_cmd = f"/usr/bin/erl +P 2000000 -setcookie iris_secret -sname flooder -hidden -noshell -pa ebin -eval \"iris_extreme_gen:start({config['offline_workers']}, {config['duration']}, offline_flood), timer:sleep(infinity).\""
             processes.append(run_cmd(flood_cmd, async_run=True))
             monitor.monitor_loop(30, "FLOOD")
             
@@ -264,7 +266,9 @@ def main():
             
             # Phase 4: Recovery
             print_section("PHASE 4: RECOVERY")
-            apply_network_chaos(False)
+            print_section("PHASE 4: RECOVERY")
+            if config['enable_network_chaos']:
+                apply_network_chaos(False)
             stop_chaos_monkey(edge_node)
             monitor.monitor_loop(30, "RECOVERY")
             
@@ -274,7 +278,8 @@ def main():
             log("Aborted by user.")
         finally:
             log("Cleaning up...")
-            apply_network_chaos(False)
+            if 'config' in locals() and config.get('enable_network_chaos'):
+                apply_network_chaos(False)
             for p in processes:
                 if p:
                     try: p.kill() 

@@ -21,9 +21,7 @@ start_link() ->
 %% @doc Register this node as a Core node (call from iris_core startup)
 -spec join() -> ok.
 join() ->
-    pg:join(?PG_GROUP, self()),
-    logger:info("Core node ~p joined registry", [node()]),
-    ok.
+    gen_server:call(?SERVER, join_pg).
 
 %% @doc Unregister this node as a Core node
 -spec leave() -> ok.
@@ -82,11 +80,27 @@ init([]) ->
     end,
     {ok, #{}}.
 
+handle_call(join_pg, _From, State) ->
+    pg:join(?PG_GROUP, self()),
+    pg:join(iris_shards, self()), %% CRITICAL: Join sharding group
+    logger:info("Core node ~p joined registry (Groups: ~p, iris_shards)", [node(), ?PG_GROUP]),
+    {reply, ok, State};
+
 handle_call(_Request, _From, State) ->
     {reply, ok, State}.
 
 handle_cast(_Msg, State) ->
     {noreply, State}.
+
+handle_info({route_remote, User, Msg}, State) ->
+    %% Receive message from Edge Router and store offline
+    %% Spawning to avoid blocking this registry process
+    spawn(fun() -> 
+        try iris_core:store_offline(User, Msg)
+        catch E:R -> logger:error("Failed to store routed msg: ~p:~p", [E, R])
+        end
+    end),
+    {noreply, State};
 
 handle_info(_Info, State) ->
     {noreply, State}.
@@ -106,15 +120,29 @@ legacy_core_node() ->
     case node() of
         'nonode@nohost' ->
             {error, no_cores_available};
-        Node ->
-            [NameStr, Host] = string:tokens(atom_to_list(Node), "@"),
-            CoreName = case string:str(NameStr, "iris_edge") of
-                1 -> re:replace(NameStr, "iris_edge[0-9]*", "iris_core", [{return, list}]);
-                _ -> "iris_core"
-            end,
-            CoreNode = list_to_atom(CoreName ++ "@" ++ Host),
-            case net_adm:ping(CoreNode) of
-                pong -> {ok, CoreNode};
-                pang -> {error, no_cores_available}
+        _ ->
+            %% FIXED: Do not assume Core is on the same host (Tokyo vs Bangalore)
+            %% Scan connected nodes for anything looking like a core
+            Connected = nodes(connected),
+            case [N || N <- Connected, string:str(atom_to_list(N), "iris_core") > 0] of
+                 [Core|_] -> {ok, Core};
+                 [] -> 
+                      %% Emergency Fallback: Try Configured IPs + Local Derived
+                      LocalCore = local_derived_core(),
+                      ConfigNodes = application:get_env(iris_edge, core_nodes, []),
+                      Candidates = [LocalCore | ConfigNodes],
+                      
+                      case lists:search(fun(N) -> net_adm:ping(N) == pong end, Candidates) of
+                          {value, LiveCore} -> {ok, LiveCore};
+                          false -> {error, no_cores_available}
+                      end
             end
     end.
+
+local_derived_core() ->
+    [NameStr, Host] = string:tokens(atom_to_list(node()), "@"),
+    CoreName = case string:str(NameStr, "iris_edge") of
+        1 -> re:replace(NameStr, "iris_edge[0-9]*", "iris_core", [{return, list}]);
+        _ -> "iris_core"
+    end,
+    list_to_atom(CoreName ++ "@" ++ Host).
