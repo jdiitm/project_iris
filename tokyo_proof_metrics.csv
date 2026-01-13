@@ -1,0 +1,6 @@
+Timestamp,Elapsed,Event,Status,Sent,Recv,LatencyAvg,Throughput
+2026-01-11T01:09:11.479070,0.0,LoadStart,OK,0,0,0,0
+2026-01-11T01:09:13.896465,2.4,HealthCheck,OK,0,0,0,0
+2026-01-11T01:09:21.229747,9.8,HealthCheck,OK,535,13,0,0
+2026-01-11T01:09:27.853998,16.4,HealthCheck,FAIL,0,0,0,0
+2026-01-11T01:09:34.528175,23.1,HealthCheck,FAIL,0,0,0,0

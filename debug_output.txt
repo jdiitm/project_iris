@@ -1,0 +1,39 @@
+=== STDOUT ===
+
+============================================================
+Running: test_hotkey_basic
+============================================================
+[16:39:14] [INFO] test_start: Test test_hotkey_basic started
+[16:39:14] [INFO] setup: VIP user: celebrity_1768235954, 10 fans, 5 msgs each
+[16:39:14] [INFO] metric: total_sent: 50 
+[16:39:14] [INFO] flood_complete: Sent 50 messages to celebrity_1768235954
+[16:39:16] [INFO] connection_login: User celebrity_1768235954 login
+[16:39:18] [INFO] metric: total_received: 0 
+[16:39:18] [INFO] receive_complete: VIP received 0/50 messages
+[16:39:18] [INFO] metric: delivery_rate: 0.0 %
+[16:39:18] [ERROR] result: Test FAILED - Only 0.0% delivery
+[16:39:18] [INFO] test_end: Test test_hotkey_basic completed in 4008.47ms
+✗ FAILED: test_hotkey_basic
+
+============================================================
+Running: test_hotkey_sustained_load
+============================================================
+[16:39:18] [INFO] test_start: Test test_hotkey_sustained started
+[16:39:18] [INFO] setup: Sustained load test: 20 fans x 10 msgs
+[16:39:18] [INFO] connection_login: User megastar_1768235958 login
+[16:39:21] [INFO] metric: messages_sent: 200 
+[16:39:21] [INFO] metric: messages_received: 200 
+[16:39:21] [INFO] metric: flood_duration_s: 0.016053686995292082 
+[16:39:21] [INFO] metric: ingestion_rate_msgs_sec: 12458.197301258719 
+[16:39:21] [INFO] result: Ingestion rate: 12458 msgs/sec
+[16:39:21] [INFO] result: Test PASSED
+[16:39:21] [INFO] test_end: Test test_hotkey_sustained completed in 3019.47ms
+✓ PASSED: test_hotkey_sustained_load
+
+============================================================
+Results: 1/2 passed
+============================================================
+
+=== STDERR ===
+
+=== EXIT CODE: 1 ===

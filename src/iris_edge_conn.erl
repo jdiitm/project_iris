@@ -71,7 +71,7 @@ connected(info, {tcp, _Socket, Bin}, Data = #data{buffer = Buff}) ->
     process_buffer(NewBuff, Data);
 
 connected(info, {tcp_closed, _Socket}, Data) ->
-    io:format("Client disconnected~n"),
+    %% io:format("Client disconnected~n"),
     {stop, normal, Data};
 connected(info, {tcp_error, _Socket, _Reason}, Data) ->
     {stop, normal, Data};
@@ -141,8 +141,9 @@ process_buffer(Bin, Data = #data{socket = Socket, user = CurrentUser}) ->
                     NewP = maps:put(MsgId, {Msg, os:system_time(seconds), 0}, P),
                     _ = gen_tcp:send(Socket, OutPacket),
                     D#data{pending_acks = NewP};
-                ({ack_received, MsgId}, D = #data{pending_acks = P}) -> 
+                ({ack_received, MsgId}, D = #data{pending_acks = P, user = AckUser}) -> 
                     %% Remove from pending
+                    %% io:format("[ACK] Received for ~p from ~s~n", [MsgId, AckUser]),
                     D#data{pending_acks = maps:remove(MsgId, P)};
                 (close, _D) -> gen_statem:stop({shutdown, closed}), error(closed)
             end, Data, Actions),
@@ -159,7 +160,7 @@ terminate(_Reason, _State, #data{user = User}) ->
 flush_pending_msgs(User) ->
     receive
         {deliver_msg, Msg} ->
-            io:format("Terminating: Saving pending msg for ~p~n", [User]),
+            %% io:format("Terminating: Saving pending msg for ~p~n", [User]),
             rpc:call(get_core_node(), iris_core, store_offline, [User, Msg]),
             flush_pending_msgs(User)
     after 0 -> ok

@@ -21,6 +21,9 @@ start_link() ->
 %%%===================================================================
 
 init([]) ->
+    %% Ensure PG (Default Scope) is started safely
+    try pg:start_link() catch _:_ -> ok end,
+
     %% Get configuration
     {ok, Port} = application:get_env(iris_edge, port),
     PoolSize = erlang:system_info(schedulers),
@@ -31,7 +34,7 @@ init([]) ->
     
     %% Create ETS tables owned by THIS supervisor process (permanent)
     %% These tables survive child crashes because the supervisor owns them
-    ets:new(local_presence, [set, named_table, public, 
+    ets:new(local_presence_v2, [set, named_table, public, 
                              {read_concurrency, true}, 
                              {write_concurrency, true}]),
     
@@ -58,18 +61,19 @@ init([]) ->
             shutdown => 5000,
             type => worker,
             modules => [iris_circuit_breaker]
-        },
-        
-        %% Router Supervisor - manages router worker pool
+        }
+    ] ++ [
+        %% ROUTER POOL (Multi-Core Optimization)
+        %% Spawn 8 router shards to utilize all vCPUs
         #{
-            id => iris_router_sup,
-            start => {iris_router_sup, start_link, [PoolSize]},
+            id => list_to_atom("iris_async_router_" ++ integer_to_list(I)),
+            start => {iris_async_router, start_link, [I]},
             restart => permanent,
-            shutdown => infinity,
-            type => supervisor,
-            modules => [iris_router_sup]
-        },
-        
+            shutdown => 5000,
+            type => worker,
+            modules => [iris_async_router]
+        } || I <- lists:seq(1, 8)
+    ] ++ [
         %% TCP Listener - handles raw TCP connections
         #{
             id => iris_tcp_listener,
@@ -90,5 +94,5 @@ init([]) ->
             modules => [iris_edge_listener]
         }
     ],
-    
+
     {ok, {SupFlags, Children}}.

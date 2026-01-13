@@ -67,34 +67,37 @@ clean:
 # Auto-tune: Calculate optimal flags
 ERL_FLAGS := $(shell ./scripts/auto_tune.sh)
 
+# Config file (without .config extension)
+CONFIG ?= config/test
+
 start_core: all
-	$(ERL) -noshell -noinput $(ERL_FLAGS) -pa ebin -sname iris_core$(NODE_SUFFIX) -eval "application:ensure_all_started(iris_core)" >core.log 2>&1 &
+	$(ERL) -noshell -noinput $(ERL_FLAGS) -pa ebin -sname iris_core$(NODE_SUFFIX) -setcookie iris_secret -config $(CONFIG) -eval "application:ensure_all_started(iris_core)" >core.log 2>&1 &
 
 start_edge1: all
-	$(ERL) -noshell -noinput $(ERL_FLAGS) -pa ebin -sname iris_edge1$(NODE_SUFFIX) -iris_edge port 8085 -eval "application:ensure_all_started(iris_edge)" >edge1.log 2>&1 &
+	$(ERL) -noshell -noinput $(ERL_FLAGS) -pa ebin -sname iris_edge1$(NODE_SUFFIX) -setcookie iris_secret -config $(CONFIG) -iris_edge port 8085 -eval "application:ensure_all_started(iris_edge)" >edge1.log 2>&1 &
 
 start_edge2: all
-	$(ERL) -noshell -noinput $(ERL_FLAGS) -pa ebin -sname iris_edge2$(NODE_SUFFIX) -iris_edge port 8086 -eval "application:ensure_all_started(iris_edge)" >edge2.log 2>&1 &
+	$(ERL) -noshell -noinput $(ERL_FLAGS) -pa ebin -sname iris_edge2$(NODE_SUFFIX) -setcookie iris_secret -config $(CONFIG) -iris_edge port 8086 -eval "application:ensure_all_started(iris_edge)" >edge2.log 2>&1 &
 
 start_edge3: all
-	$(ERL) -noshell -noinput $(ERL_FLAGS) -pa ebin -sname iris_edge3$(NODE_SUFFIX) -iris_edge port 8087 -eval "application:ensure_all_started(iris_edge)" >edge3.log 2>&1 &
+	$(ERL) -noshell -noinput $(ERL_FLAGS) -pa ebin -sname iris_edge3$(NODE_SUFFIX) -setcookie iris_secret -config $(CONFIG) -iris_edge port 8087 -eval "application:ensure_all_started(iris_edge)" >edge3.log 2>&1 &
 
 start_edge4: all
-	$(ERL) -noshell -noinput $(ERL_FLAGS) -pa ebin -sname iris_edge4$(NODE_SUFFIX) -iris_edge port 8088 -eval "application:ensure_all_started(iris_edge)" >edge4.log 2>&1 &
+	$(ERL) -noshell -noinput $(ERL_FLAGS) -pa ebin -sname iris_edge4$(NODE_SUFFIX) -setcookie iris_secret -config $(CONFIG) -iris_edge port 8088 -eval "application:ensure_all_started(iris_edge)" >edge4.log 2>&1 &
 
 start_edge5: all
-	$(ERL) -noshell -noinput $(ERL_FLAGS) -pa ebin -sname iris_edge5$(NODE_SUFFIX) -iris_edge port 8089 -eval "application:ensure_all_started(iris_edge)" >edge5.log 2>&1 &
+	$(ERL) -noshell -noinput $(ERL_FLAGS) -pa ebin -sname iris_edge5$(NODE_SUFFIX) -setcookie iris_secret -config $(CONFIG) -iris_edge port 8089 -eval "application:ensure_all_started(iris_edge)" >edge5.log 2>&1 &
 
 # ... (Previous targets)
 
 # Distributed Cluster Targets (Public Cloud / Hybrid)
-# Usage: make start_core_dist NAME=iris_core1@laptop-a COOKIE=secret
+# Usage: make start_core_dist NAME=iris_core1@laptop-a COOKIE=secret CONFIG=config/prod
 start_core_dist: all
-	$(ERL) -noshell -noinput $(ERL_FLAGS) -pa ebin -name $(NAME) -setcookie $(COOKIE) -eval "application:ensure_all_started(iris_core)" >core.log 2>&1 &
+	$(ERL) -noshell -noinput $(ERL_FLAGS) -pa ebin -name $(NAME) -setcookie $(COOKIE) -config $(CONFIG) -eval "application:ensure_all_started(iris_core)" >core.log 2>&1 &
 
-# Usage: make start_edge_dist NAME=iris_edge1@cloud-vm COOKIE=secret CORE=iris_core1@laptop-a
+# Usage: make start_edge_dist NAME=iris_edge1@cloud-vm COOKIE=secret CONFIG=config/prod
 start_edge_dist: all
-	$(ERL) -noshell -noinput $(ERL_FLAGS) -pa ebin -name $(NAME) -setcookie $(COOKIE) -eval "application:ensure_all_started(iris_edge)" -iris_core_nodes "['$(CORE)']" >edge.log 2>&1 &
+	$(ERL) -noshell -noinput $(ERL_FLAGS) -pa ebin -name $(NAME) -setcookie $(COOKIE) -config $(CONFIG) -eval "application:ensure_all_started(iris_edge)" >edge.log 2>&1 &
 
 stop:
 # ...

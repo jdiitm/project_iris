@@ -24,9 +24,30 @@ start(_StartType, _StartArgs) ->
 
     %% Rationale: DB initialization is moved to a dedicated manager or
     %% handled via a boot script to prevent accidental schema wipes.
+    %% Smart DB Init: Only initialize schema if we are the First Node or Standalone.
+    %% If we find other seeds, we skip schema creation and let Mnesia sync from them.
     case application:get_env(iris_core, auto_init_db, false) of
-        true -> init_db();
+        true -> 
+            Seeds = application:get_env(iris_core, join_seeds, []),
+            LiveSeeds = [S || S <- Seeds, S =/= node(), net_adm:ping(S) =:= pong],
+            case LiveSeeds of
+                [] -> 
+                    logger:info("No live seeds found. Initializing new schema as Primary."),
+                    init_db();
+                [Seed|_] -> 
+                    logger:info("Found live seed ~p. Joining existing cluster.", [Seed]),
+                    %% Ensure Mnesia is started but do NOT create schema (will sync)
+                    mnesia:start()
+            end;
         false -> ok
+    end,
+
+    %% Ensure PG (Default Scope) is started safely
+    %% In tests it might be already started; in prod it needs starting.
+    try pg:start_link() 
+    catch 
+        error:undef -> ok; %% Old OTP?
+        _:_ -> ok 
     end,
 
     supervisor:start_link({local, ?SERVER}, ?MODULE, []).
@@ -62,9 +83,21 @@ init([]) ->
     ],
 
     %% Register this Core node with pg for Edge discovery
+    %% AND attempt to auto-rejoin cluster if peers are found
     spawn(fun() -> 
         timer:sleep(1000), % Wait for registry to start
-        iris_core_registry:join() 
+        iris_core_registry:join(),
+        
+        %% Auto-rejoin cluster: ping known peers and join first responder
+        KnownPeers = application:get_env(iris_core, join_seeds, []),
+        OtherPeers = [P || P <- KnownPeers, P =/= node()],
+        case lists:search(fun(P) -> net_adm:ping(P) == pong end, OtherPeers) of
+            {value, LivePeer} ->
+                logger:info("Auto-joining cluster via ~p", [LivePeer]),
+                iris_core:join_cluster(LivePeer);
+            false ->
+                logger:info("No cluster peers found, standalone mode")
+        end
     end),
 
     {ok, {SupFlags, Children}}.
@@ -75,8 +108,11 @@ init([]) ->
 
 register_user(User, Node, Pid) ->
     %% Rationale: Transactional safety for global presence consistency.
+    %% io:format("register_user called: ~p from ~p pid ~p~n", [User, Node, Pid]),
     F = fun() -> mnesia:write({presence, User, Node, Pid}) end,
-    case mnesia:transaction(F) of
+    Result = mnesia:transaction(F),
+    %% io:format("register_user result: ~p~n", [Result]),
+    case Result of
         {atomic, ok} -> ok;
         {aborted, Reason} ->
             logger:error("Failed to register user ~p: ~p", [User, Reason]),
@@ -134,15 +170,39 @@ get_status(User) ->
 %%%===================================================================
 
 init_db() ->
-    init_db([node()]).
-
-init_db(Nodes) ->
-    %% Ensure Mnesia is stopped before schema creation
-    mnesia:stop(),
-    mnesia:create_schema(Nodes),
-    mnesia:start(),
+    %% ROBUST INITIALIZATION: Config-driven.
+    %% No hardcoded defaults. If config is empty, we are Standalone.
+    Peers = application:get_env(iris_core, join_seeds, []),
+    OtherPeers = [P || P <- Peers, P =/= node()],
     
-    %% Create Tables (Disc Copies for Persistence)
+    %% Ensure mnesia is stopped before configuration
+    application:stop(mnesia),
+    
+    case lists:search(fun(P) -> net_adm:ping(P) == pong end, OtherPeers) of
+        {value, LivePeer} ->
+            %% CLUSTER EXISTS: Join it, do NOT create new schema
+            logger:info("Found active cluster node ~p. Joining...", [LivePeer]),
+            mnesia:delete_schema([node()]), %% Clean slate to accept remote schema
+            mnesia:start(),
+            mnesia:change_config(extra_db_nodes, [LivePeer]),
+            %% Schema merge happens here. Now persist it locally.
+            mnesia:change_table_copy_type(schema, node(), disc_copies),
+            
+            %% Sync tables
+            Tables = mnesia:system_info(tables) -- [schema],
+            [mnesia:add_table_copy(T, node(), disc_copies) || T <- Tables],
+            logger:info("Joined cluster successfully.");
+            
+        false ->
+            %% NO PEERS: We are the seed node.
+            logger:info("No peers found. initializing as SEED node."),
+            mnesia:create_schema([node()]),
+            mnesia:start(),
+            create_tables([node()])
+    end.
+
+%% Internal: Create tables (only called when seeding)
+create_tables(Nodes) ->
     mnesia:create_table(presence, [
         {ram_copies, Nodes},
         {attributes, [user, node, pid]}
@@ -160,19 +220,27 @@ init_db(Nodes) ->
         {disc_copies, Nodes},
         {attributes, [user, last_seen]}
     ]),
-    
-    %% Wait for tables
     mnesia:wait_for_tables([presence, offline_msg, user_meta, user_status], 5000),
-    logger:info("Database initialized on nodes: ~p", [Nodes]).
+    logger:info("Tables created.").
+
+%% Legacy wrapper for specific node lists (unused now but kept for API compat)
+init_db(Nodes) ->
+   init_db(). %% Ignore args, use robust logic
 
 join_cluster(Node) ->
-    case net_adm:ping(Node) of
-        pong ->
-            mnesia:change_config({extra_db_nodes, [Node]}),
-            mnesia:change_table_copy_type(schema, node(), disc_copies),
-            Tables = mnesia:system_info(tables) -- [schema],
-            [mnesia:add_table_copy(T, node(), disc_copies) || T <- Tables],
-            logger:info("Joined cluster with ~p", [Node]);
-        pang ->
-            {error, undefined_node}
+    try
+        case net_adm:ping(Node) of
+            pong ->
+                mnesia:change_config(extra_db_nodes, [Node]),
+                mnesia:change_table_copy_type(schema, node(), disc_copies),
+                Tables = mnesia:system_info(tables) -- [schema],
+                [mnesia:add_table_copy(T, node(), disc_copies) || T <- Tables],
+                logger:info("Joined cluster with ~p", [Node]);
+            pang ->
+                {error, undefined_node}
+        end
+    catch
+        Class:Reason:Stack ->
+             logger:error("Exception in join_cluster: ~p:~p at ~p", [Class, Reason, Stack]),
+             {error, {Class, Reason}}
     end.

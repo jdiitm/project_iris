@@ -53,7 +53,7 @@ def run_cmd(cmd, bg=False, ignore_fail=False):
         return ""
 
 def get_process_count(node):
-    cmd = f"erl -sname probe_{int(time.time()*1000)} -hidden -noshell -pa ebin -eval \"io:format('~p', [rpc:call('{node}', erlang, system_info, [process_count])]), init:stop().\""
+    cmd = f"erl -setcookie iris_secret -sname probe_{int(time.time()*1000)} -hidden -noshell -pa ebin -eval \"io:format('~p', [rpc:call('{node}', erlang, system_info, [process_count])]), init:stop().\""
     try:
         res = run_cmd(cmd, ignore_fail=True)
         return int(res.strip())
@@ -83,8 +83,9 @@ def main():
         try:
             # 1. Establish Base Load
             log(f"[*] Establishing base load ({args.base} users)...")
+            log(f"[*] Establishing base load ({args.base} users)...")
             # Use range start offset 0
-            cmd_base = f"erl +P 2000000 -sname gen_base -hidden -noshell -pa ebin -eval \"iris_extreme_gen:start({args.base}, 3600, normal), timer:sleep(infinity).\""
+            cmd_base = f"erl +P 2000000 -setcookie iris_secret -sname gen_base -hidden -noshell -pa ebin -eval \"iris_extreme_gen:start({args.base}, 3600, normal), timer:sleep(infinity).\""
             p_base = run_cmd(cmd_base, bg=True)
             procs.append(p_base)
             
@@ -101,7 +102,7 @@ def main():
                 log(f"[*] Connect Storm (+{args.churn} users)...")
                 # Use separate sname and offset logic if needed, but extreme_gen uses random 127.0.0.X alias
                 # We rely on unique PIDs from new generator instance
-                cmd_churn = f"erl +P 2000000 -sname gen_churn_{i} -hidden -noshell -pa ebin -eval \"iris_extreme_gen:start({args.churn}, 3600, normal), timer:sleep(infinity).\""
+                cmd_churn = f"erl +P 2000000 -setcookie iris_secret -sname gen_churn_{i} -hidden -noshell -pa ebin -eval \"iris_extreme_gen:start({args.churn}, 3600, normal), timer:sleep(infinity).\""
                 p_churn = run_cmd(cmd_churn, bg=True)
                 procs.append(p_churn)
                 

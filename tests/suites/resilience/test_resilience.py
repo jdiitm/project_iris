@@ -96,18 +96,18 @@ def run_split_brain(args):
         
         # Start load
         log("[*] Starting load (50k connections)...")
-        p_load = run_cmd(f"erl -sname gen_load -hidden -noshell -pa ebin -eval \"iris_extreme_gen:start(50000, 300, normal), timer:sleep(infinity).\"", bg=True)
+        p_load = run_cmd(f"erl -setcookie iris_secret -sname gen_load -hidden -noshell -pa ebin -eval \"iris_extreme_gen:start(50000, 300, normal), timer:sleep(infinity).\"", bg=True)
         procs.append(p_load)
         
         # Start distribution chaos
         log("[*] Starting distribution chaos (disconnect random node every 5s)...")
-        run_cmd(f"erl -sname chaos_dist -hidden -noshell -pa ebin -eval \"rpc:call('{node}', chaos_dist, start, [5000]), init:stop().\"")
+        run_cmd(f"erl -setcookie iris_secret -sname chaos_dist -hidden -noshell -pa ebin -eval \"rpc:call('{node}', chaos_dist, start, [5000]), init:stop().\"")
         
         # Monitor
         start_time = time.time()
         while time.time() - start_time < args.duration:
             time.sleep(5)
-            out = run_cmd(f"erl -sname check_{int(time.time())} -hidden -noshell -pa ebin -eval \"N = rpc:call('{node}', erlang, nodes, []), io:format('~p', [N]), init:stop().\"", ignore_fail=True, timeout=5)
+            out = run_cmd(f"erl -setcookie iris_secret -sname check_{int(time.time())} -hidden -noshell -pa ebin -eval \"N = rpc:call('{node}', erlang, nodes, []), io:format('~p', [N]), init:stop().\"", ignore_fail=True, timeout=5)
             log(f"Connected nodes: {out.strip()}")
         
         for p in procs:
@@ -125,7 +125,7 @@ def run_oom(args):
     
     with ClusterManager() as cluster:
         log(f"[*] Starting slow consumers ({args.users} connections)...")
-        p_load = run_cmd(f"erl -sname gen_oom -hidden -noshell -pa ebin -eval \"iris_extreme_gen:start({args.users}, 300, slow_consumer), timer:sleep(infinity).\"", bg=True)
+        p_load = run_cmd(f"erl -setcookie iris_secret -sname gen_oom -hidden -noshell -pa ebin -eval \"iris_extreme_gen:start({args.users}, 300, slow_consumer), timer:sleep(infinity).\"", bg=True)
         
         baseline_kb = 0
         max_kb = 0
@@ -179,7 +179,7 @@ def run_disk(args):
     
     with ClusterManager() as cluster:
         log(f"[*] Starting offline flood ({args.users} connections)...")
-        p_load = run_cmd(f"erl -sname gen_disk -hidden -noshell -pa ebin -eval \"iris_extreme_gen:start({args.users}, 300, offline_flood), timer:sleep(infinity).\"", bg=True)
+        p_load = run_cmd(f"erl -setcookie iris_secret -sname gen_disk -hidden -noshell -pa ebin -eval \"iris_extreme_gen:start({args.users}, 300, offline_flood), timer:sleep(infinity).\"", bg=True)
         
         start_time = time.time()
         try:
@@ -208,11 +208,11 @@ def run_backpressure(args):
         
         # Start chaos monkey (extreme mode)
         log("[*] Releasing extreme chaos monkey...")
-        run_cmd(f"erl -sname chaos_starter -hidden -noshell -pa ebin -eval \"rpc:call('{node}', chaos_monkey, start, [50, 10]), init:stop().\"")
+        run_cmd(f"erl -setcookie iris_secret -sname chaos_starter -hidden -noshell -pa ebin -eval \"rpc:call('{node}', chaos_monkey, start, [50, 10]), init:stop().\"")
         
         # Start load generator
         log(f"[*] Starting extreme load ({args.users} connections)...")
-        p_load = run_cmd(f"erl -sname gen_node -hidden -noshell -pa ebin -eval \"iris_extreme_gen:start({args.users}, 600), timer:sleep(infinity).\"", bg=True)
+        p_load = run_cmd(f"erl -setcookie iris_secret -sname gen_node -hidden -noshell -pa ebin -eval \"iris_extreme_gen:start({args.users}, 600), timer:sleep(infinity).\"", bg=True)
         
         log("[*] Monitoring router queue...")
         max_queue = 0
@@ -223,7 +223,7 @@ def run_backpressure(args):
             while time.time() - start_time < args.duration:
                 time.sleep(2)
                 mon_name = f"mon_{int(time.time() * 1000)}"
-                q_cmd = f"erl -sname {mon_name} -hidden -noshell -pa ebin -eval \"Q = rpc:call('{node}', erlang, process_info, [whereis(iris_router_1), message_queue_len]), io:format('~p', [Q]), init:stop().\""
+                q_cmd = f"erl -setcookie iris_secret -sname {mon_name} -hidden -noshell -pa ebin -eval \"Q = rpc:call('{node}', erlang, process_info, [whereis(iris_router_1), message_queue_len]), io:format('~p', [Q]), init:stop().\""
                 
                 try:
                     out = run_cmd(q_cmd, ignore_fail=True, timeout=5)
@@ -261,7 +261,7 @@ def run_offline_verify(args):
         
         # Fill storage
         log(f"[*] Filling storage for {args.users} users...")
-        p_fill = run_cmd(f"erl +P 2000000 -sname filler -hidden -noshell -pa ebin -eval \"iris_extreme_gen:start({args.users}, 60, offline_flood), timer:sleep(infinity).\"", bg=True)
+        p_fill = run_cmd(f"erl +P 2000000 -setcookie iris_secret -sname filler -hidden -noshell -pa ebin -eval \"iris_extreme_gen:start({args.users}, 60, offline_flood), timer:sleep(infinity).\"", bg=True)
         
         # Wait for fill - polling logic would be better but simple sleep ok for initial fill if generous
         time.sleep(60) 
@@ -270,11 +270,11 @@ def run_offline_verify(args):
         
         # Start chaos
         log("[*] Unleashing chaos monkey...")
-        run_cmd(f"erl -sname chaos -hidden -noshell -pa ebin -eval \"rpc:call('{node}', chaos_monkey, start, [1000, 5]), init:stop().\"")
+        run_cmd(f"erl -setcookie iris_secret -sname chaos -hidden -noshell -pa ebin -eval \"rpc:call('{node}', chaos_monkey, start, [1000, 5]), init:stop().\"")
         
         # Verify
         log(f"[*] Starting verification ({args.users} users)...")
-        p_verif = run_cmd(f"erl +P 2000000 -sname verifier -hidden -noshell -pa ebin -eval \"iris_verification_gen:start({args.users}, 600, verify), timer:sleep(300000).\" > verif.log 2>&1", bg=True)
+        p_verif = run_cmd(f"erl +P 2000000 -setcookie iris_secret -sname verifier -hidden -noshell -pa ebin -eval \"iris_verification_gen:start({args.users}, 600, verify), timer:sleep(300000).\" > verif.log 2>&1", bg=True)
         
         start_v = time.time()
         last_pos = 0

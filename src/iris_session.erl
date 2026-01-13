@@ -11,37 +11,63 @@ get_core_node() ->
     end.
 
 legacy_core_node() ->
-    [NameStr, Host] = string:tokens(atom_to_list(node()), "@"),
-    %% Replace iris_edgeX with iris_core, preserving any suffix like _1234567890
-    CoreName = case string:str(NameStr, "iris_edge") of
-        1 -> %% Starts with iris_edge
-             re:replace(NameStr, "iris_edge[0-9]*", "iris_core", [{return, list}]);
-        _ -> "iris_core" %% Fallback
-    end,
-    list_to_atom(CoreName ++ "@" ++ Host).
+    %% FIXED: Scan connected nodes for actual Core IP
+    Connected = nodes(connected),
+    case [N || N <- Connected, string:str(atom_to_list(N), "iris_core") > 0] of
+         [Core|_] -> Core;
+         [] -> 
+             %% Configured Nodes from sys.config
+             Candidates = application:get_env(iris_edge, core_nodes, []),
+             case lists:search(fun(N) -> net_adm:ping(N) == pong end, Candidates) of
+                 {value, LiveCore} -> LiveCore;
+                 false -> 
+                     error(no_core_available)
+             end
+    end.
 
 %% handle_packet(Packet, User, TransportPid, TransportMod) -> {ok, NewUser, Actions}
 %% Actions = [ {send, Bin} | {send_batch, [Bin]} | close ]
 handle_packet({login, User}, _Current, TransportPid, _Mod) ->
-    io:format("User logged in: ~p~n", [User]),
-    %% Register with Core
-    rpc:call(get_core_node(), iris_core, register_user, [User, node(), TransportPid]),
-
-    %% Optimization: Register Locally for switching
-    ets:insert(local_presence, {User, TransportPid}),
-
-    %% Retrieve Offline Messages
-    OfflineMsgs = case rpc:call(get_core_node(), iris_core, retrieve_offline, [User]) of
-         Msgs when is_list(Msgs) -> Msgs;
-         Error -> 
-             io:format("Error retrieving offline msgs: ~p~n", [Error]),
-             []
+    %% io:format("User logged in: ~p~n", [User]),
+    
+    %% PHASE 1: LOCAL registration FIRST (sub-millisecond, never blocks)
+    %% This ensures local routing works immediately
+    ets:insert(local_presence_v2, {User, TransportPid}),
+    
+    %% Also register with new async router if available
+    case whereis(iris_async_router) of
+        undefined -> ok;
+        _ -> iris_async_router:register_local(User, TransportPid)
     end,
     
-    %% Actions: Ack Login first
-    %% Then schedule offline messages to be delivered via reliable transport
-    %% We use deliver_msg actions to ensure they go through the reliable path
-    Actions = [{send, <<3, "LOGIN_OK">>}] ++ [{deliver_msg, Msg} || Msg <- OfflineMsgs],
+    %% PHASE 2: Background sync to Core (async, non-blocking)
+    %% This happens in a separate process to not delay login response
+    spawn(fun() ->
+        CoreNode = get_core_node(),
+        case rpc:call(CoreNode, iris_core, register_user, [User, node(), TransportPid], 5000) of
+            ok -> ok;
+            {error, Reason} -> 
+                %% io:format("register_user failed for ~p: ~p~n", [User, Reason]);
+                ok;
+            {badrpc, Reason} ->
+                %% io:format("register_user RPC failed to ~p for ~p: ~p~n", [CoreNode, User, Reason])
+                ok
+        end
+    end),
+
+    %% PHASE 3: Retrieve offline messages (async in background)
+    %% Don't block login - deliver offline msgs as they arrive
+    spawn(fun() ->
+        case rpc:call(get_core_node(), iris_core, retrieve_offline, [User], 5000) of
+            Msgs when is_list(Msgs), length(Msgs) > 0 ->
+                %% Deliver offline messages to user's socket
+                [TransportPid ! {deliver_msg, Msg} || Msg <- Msgs];
+            _ -> ok
+        end
+    end),
+    
+    %% Immediate response - user can start messaging NOW
+    Actions = [{send, <<3, "LOGIN_OK">>}],
     {ok, User, Actions};
 
 handle_packet({send_message, Target, Msg}, User, _Pid, _Mod) ->
@@ -80,7 +106,7 @@ handle_packet({ack, MsgId}, User, _Pid, _Mod) ->
     {ok, User, [{ack_received, MsgId}]};
 
 handle_packet({error, _}, User, _Pid, _Mod) ->
-     io:format("Protocol Error~n"),
+     %% io:format("Protocol Error~n"),
      {ok, User, []}. %% Or close?
 
 fetch_and_cache(TargetUser, Now) ->
@@ -98,6 +124,6 @@ terminate(User) ->
     case User of
         undefined -> ok;
         _ -> 
-            ets:delete(local_presence, User),
+            ets:delete(local_presence_v2, User),
             rpc:cast(get_core_node(), iris_core, update_status, [User, offline])
     end.

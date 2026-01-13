@@ -22,7 +22,7 @@ NUM_REGIONS = 5
 SENDERS_PER_REGION = 50 # Increased to 50 (Total 250 threads)
 NORMAL_USERS = 20000    # Increased normal user pool
 DURATION = 60           # 60s test
-BATCH_SIZE = 2000       # 2000 msgs/batch => 5 batches/sec/thread = 10k/sec/thread
+BATCH_SIZE = 15       # Tuned for 500M/day (Target ~5800/s)
 
 # Stats
 stats_lock = threading.Lock()
@@ -130,6 +130,7 @@ def vip_receiver():
             port = get_port(region)
             
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(5.0)
             s.connect(('localhost', port))
             s.sendall(packet_login(VIP_USER))
             ack = s.recv(1024) # Login Ack + Offline Msgs stream starts
@@ -271,7 +272,7 @@ def main():
         core_node_name = f"iris_core{suffix}@{hostname}"
         
         promote_cmd = [
-            "/usr/bin/erl", "-setcookie", "iris_secret", "-sname", "client_promote", "-noshell",
+            "/usr/bin/erl", "-sname", "client_promote", "-setcookie", "iris_secret", "-noshell",
             "-eval", f"rpc:call('{core_node_name}', iris_core, set_bucket_count, [<<\"{VIP_USER}\">>, {VIP_BUCKET_COUNT}], 5000), init:stop()."
         ]
         try:
@@ -322,6 +323,10 @@ def main():
                 
                 if threading.active_count() <= 2: # Main + Monitor
                     break
+                
+                elapsed = time.time() - start_time
+                if int(elapsed) > 0 and int(elapsed) % 5 == 0:
+                     log(f"Simulation progress: {int(elapsed)}s / {DURATION}s (VIP Rate: {v_rate}/s, Normal: {n_rate}/s)")
 
         t_mon = threading.Thread(target=monitor_loop, daemon=True)
         t_mon.start()

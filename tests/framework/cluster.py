@@ -152,8 +152,35 @@ class ClusterManager:
                 return False
             time.sleep(1)
         
+        if not self._mesh_nodes(count):
+            print("[Cluster] Warning: Mesh might be incomplete")
+
         print("[Cluster] Cluster started successfully")
         return True
+
+    def _mesh_nodes(self, edge_count: int) -> bool:
+        """Force mesh the cluster nodes via RPC ping."""
+        print("[Cluster] Meshing nodes...")
+        try:
+            suffix = os.environ.get("IRIS_NODE_SUFFIX", "")
+            hostname = self._hostname
+            core = f"iris_core{suffix}@{hostname}"
+            
+            for i in range(1, edge_count + 1):
+                edge = f"iris_edge{i}{suffix}@{hostname}"
+                cmd = [
+                    "erl", "-noshell", "-sname", f"mesher_{i}",
+                    "-setcookie", "iris_secret",
+                    "-eval", f"io:format('~p', [rpc:call('{edge}', net_adm, ping, ['{core}'])]), init:stop()."
+                ]
+                # Try pinging
+                res = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+                if "pong" not in res.stdout:
+                    print(f"[Cluster] Failed to mesh {edge} -> {core}: {res.stdout}")
+            return True
+        except Exception as e:
+            print(f"[Cluster] Meshing failed: {e}")
+            return False
     
     def stop(self) -> bool:
         """Gracefully stop the cluster."""
