@@ -37,3 +37,6 @@ timestamp,scenario,duration_sec,status
 1768286876.1673856,split_brain,60.00,PASS
 1768286950.0341902,disk_pressure,60.00,PASS
 1768287024.9045997,oom_survival,60.00,PASS
+1768400820.000837,split_brain,60.00,PASS
+1768400893.7335534,disk_pressure,60.00,PASS
+1768400968.1568868,oom_survival,60.00,PASS

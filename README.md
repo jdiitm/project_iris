@@ -78,7 +78,7 @@ python3 verify_all.py
 *   **[Proof of Readiness](docs/PROOF_OF_READINESS.md)**: The irrefutable data backing these claims.
 *   **[Standards](docs/STANDARDS.md)**: The defined SLAs for this service.
 *   **[Comprehensive Report](docs/COMPREHENSIVE_REPORT.md)**: Detailed engineering analysis.
-*   **[Tokyo Region Verification](TOKYO_GLOBAL_REPORT.md)**: Final validation of resilience and scalability for a Geo-Distributed deployment (Edge in Tokyo, Cores in Bangalore).
+*   **[Tokyo Region Verification](tests/suites/tokyo_assurance/proof_outputs/TOKYO_PROOF_REPORT.md)**: Final validation of resilience and scalability for a Geo-Distributed deployment (Edge in Tokyo on **AWS Free Tier [2vCPU/8GB RAM/Ubuntu]**, Cores in Bangalore).
 
 ---
 **License**: MIT

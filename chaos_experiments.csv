@@ -17,3 +17,5 @@ timestamp,experiment,duration_sec,result
 1768277925.8490553,process_killer,90,PASS
 1768287102.6021206,cpu_burn,90,PASS
 1768287103.8510833,process_killer,90,PASS
+1768401046.262556,cpu_burn,90,PASS
+1768401047.7436857,process_killer,90,PASS

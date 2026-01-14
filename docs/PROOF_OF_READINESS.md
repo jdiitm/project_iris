@@ -37,7 +37,12 @@ This document serves as the authoritative, data-backed certification of Project 
 *   **RAM Usage**: ~1.2GB for ~100k active processes (Linear scaling to 15GB for 1M users projected and verified).
 *   **CPU**: Efficient handling of message bursts with <25% CPU load under normal stress.
 
-## 3. Risk Register
+## 3. Geo-Distributed Verification (Tokyo/Bangalore)
+*   **Context**: Edge Node in Tokyo (**AWS Free Tier: 2vCPU, 8GB RAM, Ubuntu**), Core Nodes in Bangalore.
+*   **Result**: STABLE (10k Users, 98.4% Failover Reliability).
+*   **Evidence**: See [Tokyo Proof Report](../tests/suites/tokyo_assurance/proof_outputs/TOKYO_PROOF_REPORT.md).
+
+## 4. Risk Register
 
 > [!TIP]
 > **Production Recommendation**: Deploy with minimum 32GB RAM nodes for full 1M user capacity to allow for OS overhead and Mnesia growth.
