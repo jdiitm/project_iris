@@ -7,9 +7,9 @@
 
 setup() ->
     %% Create required ETS tables if they don't exist
-    case ets:info(local_presence) of
-        undefined -> ets:new(local_presence, [named_table, public, set]);
-        _ -> ets:delete_all_objects(local_presence)
+    case ets:info(local_presence_v2) of
+        undefined -> ets:new(local_presence_v2, [named_table, public, set]);
+        _ -> ets:delete_all_objects(local_presence_v2)
     end,
     case ets:info(presence_cache) of
         undefined -> ets:new(presence_cache, [named_table, public, set]);
@@ -18,7 +18,7 @@ setup() ->
     ok.
 
 cleanup(_) ->
-    catch ets:delete_all_objects(local_presence),
+    catch ets:delete_all_objects(local_presence_v2),
     catch ets:delete_all_objects(presence_cache),
     ok.
 
@@ -95,8 +95,8 @@ test_login_registers_locally() ->
     %% Attempt login (RPC may fail, but local registration should work)
     catch iris_session:handle_packet({login, User}, undefined, Pid, tcp),
     
-    %% Verify local_presence was updated
-    Result = ets:lookup(local_presence, User),
+    %% Verify local_presence_v2 was updated
+    Result = ets:lookup(local_presence_v2, User),
     ?assertMatch([{User, Pid}], Result),
     
     exit(Pid, kill).
@@ -293,15 +293,15 @@ test_terminate_valid_user() ->
     User = <<"terminating_user">>,
     Pid = self(),
     
-    %% Pre-register user in local_presence
-    ets:insert(local_presence, {User, Pid}),
-    ?assertEqual([{User, Pid}], ets:lookup(local_presence, User)),
+    %% Pre-register user in local_presence_v2
+    ets:insert(local_presence_v2, {User, Pid}),
+    ?assertEqual([{User, Pid}], ets:lookup(local_presence_v2, User)),
     
     %% Terminate (RPC cast may fail, but local cleanup should work)
     catch iris_session:terminate(User),
     
-    %% Verify user removed from local_presence
-    ?assertEqual([], ets:lookup(local_presence, User)).
+    %% Verify user removed from local_presence_v2
+    ?assertEqual([], ets:lookup(local_presence_v2, User)).
 
 test_terminate_nonexistent() ->
     %% Terminating a user not in ETS should not crash
@@ -394,7 +394,7 @@ test_full_lifecycle() ->
     catch iris_session:terminate(User),
     
     %% Verify cleanup
-    ?assertEqual([], ets:lookup(local_presence, User)).
+    ?assertEqual([], ets:lookup(local_presence_v2, User)).
 
 test_concurrent_status() ->
     User = <<"concurrent_user">>,
