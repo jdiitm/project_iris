@@ -192,18 +192,24 @@ init_db() ->
     
     case lists:search(fun(P) -> net_adm:ping(P) == pong end, OtherPeers) of
         {value, LivePeer} ->
-            %% CLUSTER EXISTS: Join it, do NOT create new schema
-            logger:info("Found active cluster node ~p. Joining...", [LivePeer]),
-            mnesia:delete_schema([node()]), %% Clean slate to accept remote schema
-            mnesia:start(),
-            mnesia:change_config(extra_db_nodes, [LivePeer]),
-            %% Schema merge happens here. Now persist it locally.
-            mnesia:change_table_copy_type(schema, node(), disc_copies),
-            
-            %% Sync tables
-            Tables = mnesia:system_info(tables) -- [schema],
-            [mnesia:add_table_copy(T, node(), disc_copies) || T <- Tables],
-            logger:info("Joined cluster successfully.");
+            %% CLUSTER EXISTS: Join it
+            %% SAFETY GUARD: Only delete schema if explicitly allowed AND peer has tables
+            case safe_to_delete_schema(LivePeer) of
+                {ok, proceed} ->
+                    logger:info("Found active cluster node ~p with data. Joining...", [LivePeer]),
+                    mnesia:delete_schema([node()]),
+                    mnesia:start(),
+                    mnesia:change_config(extra_db_nodes, [LivePeer]),
+                    mnesia:change_table_copy_type(schema, node(), disc_copies),
+                    Tables = mnesia:system_info(tables) -- [schema],
+                    [mnesia:add_table_copy(T, node(), disc_copies) || T <- Tables],
+                    logger:info("Joined cluster successfully.");
+                {error, Reason} ->
+                    logger:error("REFUSING to delete schema: ~p. Starting standalone.", [Reason]),
+                    mnesia:create_schema([node()]),
+                    mnesia:start(),
+                    create_tables([node()])
+            end;
             
         false ->
             %% NO PEERS: We are the seed node.
@@ -211,6 +217,26 @@ init_db() ->
             mnesia:create_schema([node()]),
             mnesia:start(),
             create_tables([node()])
+    end.
+
+%% Safety check before schema deletion to prevent data wipe
+safe_to_delete_schema(LivePeer) ->
+    %% Check 1: Env flag must allow schema deletion
+    AllowDelete = application:get_env(iris_core, allow_schema_delete, false),
+    case AllowDelete of
+        false ->
+            {error, schema_delete_not_allowed};
+        true ->
+            %% Check 2: Peer must have real tables (not empty cluster)
+            case rpc:call(LivePeer, mnesia, system_info, [tables], 5000) of
+                {badrpc, _} ->
+                    {error, peer_unreachable};
+                Tables when is_list(Tables), length(Tables) > 1 ->
+                    %% Has tables beyond just 'schema'
+                    {ok, proceed};
+                _ ->
+                    {error, peer_has_no_data}
+            end
     end.
 
 %% Internal: Create tables (only called when seeding)

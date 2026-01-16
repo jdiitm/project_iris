@@ -248,9 +248,10 @@ save_pending_acks(User, Pending) ->
             %% Use durable batcher if available, else direct Mnesia
             case whereis(iris_durable_batcher_1) of
                 undefined ->
-                    %% Fallback to direct store
+                    %% AUDIT2 FIX: Use rpc:cast (fire-and-forget) to prevent RPC storm
+                    %% Blocking rpc:call in terminate causes core meltdown on mass disconnect
                     lists:foreach(fun(Msg) ->
-                        rpc:call(get_core_node(), iris_core, store_offline, [User, Msg])
+                        rpc:cast(get_core_node(), iris_core, store_offline, [User, Msg])
                     end, Msgs);
                 _ ->
                     %% Use batched durable store
@@ -269,8 +270,9 @@ flush_pending_msgs(User) ->
             logger:info("Flushing ~p queued msgs for ~p to offline storage", [length(Msgs), User]),
             case whereis(iris_durable_batcher_1) of
                 undefined ->
+                    %% AUDIT2 FIX: Use rpc:cast to avoid blocking in terminate path
                     lists:foreach(fun(Msg) ->
-                        rpc:call(get_core_node(), iris_core, store_offline, [User, Msg])
+                        rpc:cast(get_core_node(), iris_core, store_offline, [User, Msg])
                     end, Msgs);
                 _ ->
                     iris_durable_batcher:store_batch(User, Msgs, 16, #{})

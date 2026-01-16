@@ -28,6 +28,9 @@
 -define(MAX_RESET_TIMEOUT_MS, 300000). %% Max 5 minutes
 -define(CALL_TIMEOUT_MS, 5000).
 
+%% AUDIT2 FIX: ETS table for lockfree circuit checks
+-define(BREAKER_ETS, iris_circuit_breaker_ets).
+
 -record(breaker, {
     status = closed :: closed | open | half_open,
     failures = 0 :: integer(),
@@ -124,8 +127,26 @@ try_fallbacks([Node | Rest], Mod, Fun, Args, _LastError) ->
             Result
     end.
 
+%% AUDIT2 FIX: Lockfree ETS-based circuit check
+%% Reads directly from ETS, no gen_server:call bottleneck
 check_circuit(Node) ->
-    gen_server:call(?SERVER, {check, Node}).
+    case ets:lookup(?BREAKER_ETS, Node) of
+        [] -> allow;  %% Unknown node = allow
+        [{Node, closed}] -> allow;
+        [{Node, half_open}] -> allow;  %% Allow to test recovery
+        [{Node, open, LastFail, Timeout}] ->
+            Now = os:system_time(millisecond),
+            case LastFail of
+                undefined -> 
+                    %% Transition to half-open (async notify gen_server)
+                    gen_server:cast(?SERVER, {transition_half_open, Node}),
+                    allow;
+                _ when Now - LastFail > Timeout ->
+                    gen_server:cast(?SERVER, {transition_half_open, Node}),
+                    allow;
+                _ -> deny
+            end
+    end.
 
 record_success_with_latency(Node, Latency) ->
     gen_server:cast(?SERVER, {success_latency, Node, os:system_time(millisecond), Latency}).
@@ -145,12 +166,18 @@ notify_flow_controller(Node, Result) ->
 %% =============================================================================
 
 init([]) ->
+    %% AUDIT2 FIX: Create ETS table for lockfree circuit checks
+    %% This removes the gen_server:call bottleneck (20K/sec ceiling)
+    ets:new(?BREAKER_ETS, [named_table, public, {read_concurrency, true}]),
     {ok, #state{}}.
 
 handle_call({check, Node}, _From, State = #state{breakers = Breakers}) ->
+    %% Legacy sync path (still useful for diagnostics)
     Breaker = maps:get(Node, Breakers, #breaker{}),
     {Result, NewBreaker} = check_breaker(Breaker),
     NewBreakers = maps:put(Node, NewBreaker, Breakers),
+    %% Update ETS for lockfree reads
+    update_ets_status(Node, NewBreaker),
     {reply, Result, State#state{breakers = NewBreakers}};
 
 handle_call({get_status, Node}, _From, State = #state{breakers = Breakers}) ->
@@ -169,18 +196,29 @@ handle_cast({success, Node, Timestamp}, State = #state{breakers = Breakers}) ->
     Breaker = maps:get(Node, Breakers, #breaker{}),
     NewBreaker = handle_success(Breaker, Timestamp, undefined),
     NewBreakers = maps:put(Node, NewBreaker, Breakers),
+    update_ets_status(Node, NewBreaker),
     {noreply, State#state{breakers = NewBreakers}};
 
 handle_cast({success_latency, Node, Timestamp, Latency}, State = #state{breakers = Breakers}) ->
     Breaker = maps:get(Node, Breakers, #breaker{}),
     NewBreaker = handle_success(Breaker, Timestamp, Latency),
     NewBreakers = maps:put(Node, NewBreaker, Breakers),
+    update_ets_status(Node, NewBreaker),
     {noreply, State#state{breakers = NewBreakers}};
 
 handle_cast({failure, Node, Timestamp}, State = #state{breakers = Breakers}) ->
     Breaker = maps:get(Node, Breakers, #breaker{}),
     NewBreaker = handle_failure(Breaker, Timestamp),
     NewBreakers = maps:put(Node, NewBreaker, Breakers),
+    update_ets_status(Node, NewBreaker),
+    {noreply, State#state{breakers = NewBreakers}};
+
+%% AUDIT2: Handle half-open transition request from lockfree check
+handle_cast({transition_half_open, Node}, State = #state{breakers = Breakers}) ->
+    Breaker = maps:get(Node, Breakers, #breaker{}),
+    NewBreaker = Breaker#breaker{status = half_open, successes = 0},
+    NewBreakers = maps:put(Node, NewBreaker, Breakers),
+    update_ets_status(Node, NewBreaker),
     {noreply, State#state{breakers = NewBreakers}};
 
 handle_cast(_Msg, State) ->
@@ -309,3 +347,10 @@ format_breaker_status(#breaker{status = Status, failures = F, successes = S,
         reset_timeout_ms => Timeout
     }.
 
+%% AUDIT2 FIX: Update ETS for lockfree reads
+update_ets_status(Node, #breaker{status = closed}) ->
+    ets:insert(?BREAKER_ETS, {Node, closed});
+update_ets_status(Node, #breaker{status = half_open}) ->
+    ets:insert(?BREAKER_ETS, {Node, half_open});
+update_ets_status(Node, #breaker{status = open, last_failure = LF, reset_timeout = T}) ->
+    ets:insert(?BREAKER_ETS, {Node, open, LF, T}).
