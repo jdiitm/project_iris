@@ -218,18 +218,71 @@ process_buffer(Bin, Data = #data{socket = Socket, user = CurrentUser}) ->
     end.
 
 
-terminate(_Reason, _State, #data{user = User}) ->
+terminate(Reason, _State, #data{user = User, pending_acks = Pending}) ->
+    %% Save all pending_acks to offline storage
+    save_pending_acks(User, Pending),
+    %% Also flush any queued messages
     flush_pending_msgs(User),
+    %% Notify session of termination
     iris_session:terminate(User),
+    case Reason of
+        normal -> ok;
+        shutdown -> ok;
+        {shutdown, _} -> ok;
+        _ ->
+            logger:warning("Connection for ~p terminated abnormally: ~p", [User, Reason])
+    end,
     ok.
 
+save_pending_acks(undefined, _Pending) ->
+    ok;
+save_pending_acks(_User, Pending) when map_size(Pending) == 0 ->
+    ok;
+save_pending_acks(User, Pending) ->
+    %% Store all pending (unacked) messages to offline storage
+    Msgs = [Msg || {_MsgId, {Msg, _Ts, _Retries}} <- maps:to_list(Pending)],
+    case length(Msgs) of
+        0 -> ok;
+        Len ->
+            logger:info("Saving ~p pending acks for ~p to offline storage", [Len, User]),
+            %% Use durable batcher if available, else direct Mnesia
+            case whereis(iris_durable_batcher_1) of
+                undefined ->
+                    %% Fallback to direct store
+                    lists:foreach(fun(Msg) ->
+                        rpc:call(get_core_node(), iris_core, store_offline, [User, Msg])
+                    end, Msgs);
+                _ ->
+                    %% Use batched durable store
+                    iris_durable_batcher:store_batch(User, Msgs, 16, #{})
+            end
+    end.
+
+flush_pending_msgs(undefined) ->
+    ok;
 flush_pending_msgs(User) ->
+    %% Collect all queued messages
+    Msgs = collect_queued_msgs([]),
+    case Msgs of
+        [] -> ok;
+        _ ->
+            logger:info("Flushing ~p queued msgs for ~p to offline storage", [length(Msgs), User]),
+            case whereis(iris_durable_batcher_1) of
+                undefined ->
+                    lists:foreach(fun(Msg) ->
+                        rpc:call(get_core_node(), iris_core, store_offline, [User, Msg])
+                    end, Msgs);
+                _ ->
+                    iris_durable_batcher:store_batch(User, Msgs, 16, #{})
+            end
+    end.
+
+collect_queued_msgs(Acc) ->
     receive
         {deliver_msg, Msg} ->
-            %% io:format("Terminating: Saving pending msg for ~p~n", [User]),
-            rpc:call(get_core_node(), iris_core, store_offline, [User, Msg]),
-            flush_pending_msgs(User)
-    after 0 -> ok
+            collect_queued_msgs([Msg | Acc])
+    after 0 ->
+        lists:reverse(Acc)
     end.
 
 code_change(_OldVsn, StateName, Data, _Extra) ->
