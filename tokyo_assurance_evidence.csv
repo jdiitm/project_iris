@@ -1,9 +1,0 @@
-Timestamp,Scenario,Metric,Value,Outcome
-2026-01-10T13:50:17.546425,WAN_Reliability,LossRate,0.0%,PASS
-2026-01-10T13:50:17.546642,WAN_Reliability,Duration,0.01s,INFO
-2026-01-10T13:50:20.700749,Split_Brain,WriteAvailability,Success,PASS
-2026-01-10T13:50:33.836421,Resource_Exhaustion,Liveness,Alive,PASS
-2026-01-10T13:59:31.544203,WAN_Reliability,LossRate,0.0%,PASS
-2026-01-10T13:59:31.544382,WAN_Reliability,Duration,0.27s,INFO
-2026-01-10T13:59:37.014832,Split_Brain,WriteAvailability,Success,PASS
-2026-01-10T13:59:42.338933,Resource_Exhaustion,Liveness,Alive,PASS

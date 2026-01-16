@@ -9,12 +9,15 @@ Tests:
 """
 
 import sys
+import os
 import time
 import random
 import string
 
-sys.path.insert(0, 'tests/utilities')
-from iris_client import IrisClient
+sys.path.insert(0, str(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))))
+
+from tests.framework import TestLogger, ClusterManager
+from tests.utilities import IrisClient
 
 
 def random_user():
@@ -25,7 +28,7 @@ def test_rate_limit_enforcement():
     """Test that rate limiting kicks in after threshold"""
     print("\n=== Test: Rate Limit Enforcement ===")
     
-    client = IrisClient("edge1")
+    client = IrisClient()
     user = f"ratelimit_{random_user()}"
     target = f"target_{random_user()}"
     
@@ -62,7 +65,7 @@ def test_burst_allowance():
     """Test that burst quota is allowed before limiting"""
     print("\n=== Test: Burst Allowance ===")
     
-    client = IrisClient("edge1")
+    client = IrisClient()
     user = f"burst_{random_user()}"
     target = f"target_{random_user()}"
     
@@ -98,7 +101,7 @@ def test_rate_recovery():
     """Test that rate limit recovers after window"""
     print("\n=== Test: Rate Recovery ===")
     
-    client = IrisClient("edge1")
+    client = IrisClient()
     user = f"recovery_{random_user()}"
     target = f"target_{random_user()}"
     

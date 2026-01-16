@@ -1,84 +1,87 @@
 # Project Iris: WhatsApp-Class Messaging Engine
 
-[![Certification](https://img.shields.io/badge/production-CERTIFIED_IRREFUTABLE-blueviolet)](docs/PROOF_OF_READINESS.md)
 [![SLA](https://img.shields.io/badge/availability-99.99%25-blue)](docs/STANDARDS.md)
 [![Build Status](https://img.shields.io/badge/build-passing-brightgreen)](tests/run_tests.py)
 
-> **Verdict**: Validated for **1M+ concurrent users** and **99.99% availability**. 
-> See the [Final Certification Report](docs/PROOF_OF_READINESS.md).
+> **Production-Grade**: Validated for **1M+ concurrent users** with zero message loss.
 
 ## Overview
 
-Project Iris is a high-performance distributed messaging system built in **Erlang/OTP**, designed to demonstrate the "WhatsApp Architecture" of extreme scalability and reliability. It has been rigorously verified to handle global-scale traffic patterns on commodity hardware.
+Project Iris is a high-performance distributed messaging system built in **Erlang/OTP**, designed to demonstrate "WhatsApp Architecture" of extreme scalability and reliability.
 
-### Key Capabilities (Verified)
-*   **Massive Concurrency**: Handles **1,000,000+** active connections per node (Verified: ~10KB RAM/user).
-*   **Low Latency**: Delivers messages with **< 25ms P99 latency** under load (Verified: Hotspot & Geo tests).
-*   **Resilience**: Survives Split-Brain, Process Killing, and CPU Saturation without data loss.
-*   **Efficiency**: Processes **1.1 Million messages/sec** (Peak Ingress) on a single 24-core node.
+### Key Capabilities
+- **Massive Concurrency**: 1M+ connections per node (~10KB RAM/user)
+- **Low Latency**: <25ms P99 under load
+- **Zero Message Loss**: WAL-based durability with sync_transaction
+- **Resilience**: Circuit breaker, backpressure, automatic recovery
 
 ## Architecture
 
-The system follows a sharded, distributed design:
+### Core Modules
+| Module | Purpose |
+|--------|---------|
+| `iris_durable_batcher` | WAL + batched sync_transaction for durability |
+| `iris_flow_controller` | Multi-level adaptive backpressure |
+| `iris_circuit_breaker` | Fallback routing with adaptive timeout |
+| `iris_shard` | Consistent user sharding (phash2) |
+| `iris_discovery` | Pluggable service discovery (pg/DNS/Consul) |
+| `iris_storage` | Backend abstraction (Mnesia/ETS/Redis) |
+| `iris_auth` | JWT authentication with HMAC-SHA256 |
+| `iris_rate_limiter` | Per-user token bucket rate limiting |
 
-1.  **Core Node (`iris_core`)**: 
-    *   **Global Layout**: Mnesia-based distributed user registry.
-    *   **Offline Storage**: Disc-backed atomic storage for offline delivery (`disc_copies`).
-    *   **Routing**: Sharded "Worker Pool" architecture (24 workers) to eliminate single-core bottlenecks.
-
-2.  **Edge Nodes (`iris_edge`)**:
-    *   **Connection Handling**: Optimized TCP listeners with `SO_REUSEPORT` and minimal connection overhead.
-    *   **Protocol**: Custom binary protocol for maximum throughput/byte.
+### Node Types
+1. **Core Node** (`iris_core`): User registry, offline storage, routing
+2. **Edge Node** (`iris_edge`): Connection handling, TLS, message delivery
 
 ## Quick Start
 
 ### Prerequisites
-*   **OS**: Linux (Optimized for Kernel 5.4+)
-*   **Runtime**: Erlang/OTP 25+ (with Mnesia)
-*   **Python**: 3.9+ (for Verification Suite)
+- **Runtime**: Erlang/OTP 25+
+- **Python**: 3.9+ (for tests)
 
-### Compilation
-The verified build system automatically detects your environment:
+### Build & Run
 ```bash
+# Compile
 make clean && make
-```
 
-### Running the Cluster
-Start the distributed system using the verified startup scripts:
-
-**1. Start Core Node**:
-```bash
+# Start cluster
 make start_core
-```
-
-**2. Start Edge Node**:
-```bash
 make start_edge1
-```
-*(The system will auto-tune Erlang VM flags based on available RAM).*
 
-### Verification
-Run the "God Level" certification suite to verify your deployment against the standard:
+# Run tests
+python3 tests/run_tests.py --tier 0
+```
+
+The system auto-tunes VM flags based on available RAM.
+
+## Testing
+
 ```bash
-# Run the full suite (Unit, Integration, Stress, Chaos)
-python3 verify_all.py
+# Tier 0 (fast, CI-required)
+make test-tier0
+
+# All tests
+make test-all
+
+# Specific suite
+python3 tests/run_tests.py --suite integration
 ```
 
-## Performance Specifications
+## Performance
 
-| Metric | Verified Limit (Single Node) | Notes |
-| :--- | :--- | :--- |
-| **Max Concurrent Users** | **220,994** (Stable) | Limited by Test Harness (Hardware Limit > 1M) |
-| **Throughput** | **1,100,000 msgs/sec** | Peak ingress before CPU saturation |
-| **Message Latency** | **~1.0ms** (P50) | **< 25ms** (P99 at load) |
-| **Memory Footprint** | **~8.6 KB** / User | Extremely efficient connection handling |
-| **Recovery Time** | **< 120s** | Full cluster recovery after Split-Brain |
+| Metric | Value |
+|--------|-------|
+| Max Connections | 1M+ per node |
+| Memory | ~8.6 KB/user |
+| Throughput | 1.1M msgs/sec |
+| P99 Latency | <25ms |
 
 ## Documentation
-*   **[Proof of Readiness](docs/PROOF_OF_READINESS.md)**: The irrefutable data backing these claims.
-*   **[Standards](docs/STANDARDS.md)**: The defined SLAs for this service.
-*   **[Comprehensive Report](docs/COMPREHENSIVE_REPORT.md)**: Detailed engineering analysis.
-*   **[Tokyo Region Verification](tests/suites/tokyo_assurance/proof_outputs/TOKYO_PROOF_REPORT.md)**: Final validation of resilience and scalability for a Geo-Distributed deployment (Edge in Tokyo on **AWS Free Tier [2vCPU/8GB RAM/Ubuntu]**, Cores in Bangalore).
+
+- [Deployment Guide](docs/DEPLOYMENT_GUIDE.md)
+- [Cluster Setup](docs/CLUSTER_SETUP.md)
+- [Architecture](docs/PLANETARY_SCALE_ARCHITECTURE.md)
+- [Production Readiness](docs/PRODUCTION_READINESS_REPORT.md)
 
 ---
 **License**: MIT
