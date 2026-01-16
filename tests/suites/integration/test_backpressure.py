@@ -9,14 +9,17 @@ Tests:
 """
 
 import sys
+import os
 import time
 import random
 import string
 import threading
 import concurrent.futures
 
-sys.path.insert(0, 'tests/utilities')
-from iris_client import IrisClient
+sys.path.insert(0, str(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))))
+
+from tests.framework import TestLogger, ClusterManager
+from tests.utilities import IrisClient
 
 
 def random_user():
@@ -34,7 +37,7 @@ def test_connection_acceptance():
     # Try to establish multiple connections
     for i in range(20):
         try:
-            client = IrisClient("edge1")
+            client = IrisClient()
             client.login(f"bp_user_{random_user()}")
             clients.append(client)
             success += 1
@@ -62,8 +65,8 @@ def test_message_throughput():
     """Test message throughput under load"""
     print("\n=== Test: Message Throughput ===")
     
-    sender = IrisClient("edge1")
-    receiver = IrisClient("edge1")
+    sender = IrisClient()
+    receiver = IrisClient()
     
     sender_user = f"sender_{random_user()}"
     receiver_user = f"receiver_{random_user()}"
@@ -103,7 +106,7 @@ def test_concurrent_load():
     
     def connect_and_send():
         try:
-            client = IrisClient("edge1")
+            client = IrisClient()
             user = f"concurrent_{random_user()}"
             client.login(user)
             
@@ -144,7 +147,7 @@ def test_recovery_after_load():
     clients = []
     for i in range(15):
         try:
-            c = IrisClient("edge1")
+            c = IrisClient()
             c.login(f"load_{random_user()}")
             clients.append(c)
         except:
@@ -161,7 +164,7 @@ def test_recovery_after_load():
     time.sleep(1)
     
     # System should accept new connections normally
-    new_client = IrisClient("edge1")
+    new_client = IrisClient()
     try:
         new_client.login(f"recovery_{random_user()}")
         new_client.send_msg(f"target_{random_user()}", "recovery_test")
