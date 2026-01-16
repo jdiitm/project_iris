@@ -14,7 +14,8 @@
 
 -export([start_link/0]).
 -export([validate_token/1, validate_token/2]).
--export([create_token/2, create_token/3]).
+-export([create_token/1, create_token/2, create_token/3]).
+-export([revoke_token/1]).
 -export([get_user_from_token/1]).
 -export([is_auth_enabled/0]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
@@ -50,7 +51,12 @@ validate_token(Token) ->
 validate_token(Token, Opts) ->
     gen_server:call(?SERVER, {validate, Token, Opts}).
 
-%% @doc Create a JWT token for a user.
+%% @doc Create a JWT token for a user with default claims.
+-spec create_token(binary()) -> {ok, binary()} | {error, term()}.
+create_token(UserId) ->
+    create_token(UserId, #{}).
+
+%% @doc Create a JWT token for a user with custom claims.
 -spec create_token(binary(), map()) -> {ok, binary()} | {error, term()}.
 create_token(UserId, Claims) ->
     create_token(UserId, Claims, ?DEFAULT_TTL).
@@ -58,6 +64,24 @@ create_token(UserId, Claims) ->
 -spec create_token(binary(), map(), integer()) -> {ok, binary()} | {error, term()}.
 create_token(UserId, Claims, TTL) ->
     gen_server:call(?SERVER, {create, UserId, Claims, TTL}).
+
+%% @doc Revoke a token by its JTI (extracted from token).
+-spec revoke_token(binary()) -> ok | {error, term()}.
+revoke_token(Token) ->
+    case get_jti_from_token(Token) of
+        {ok, Jti} -> gen_server:call(?SERVER, {revoke, Jti});
+        Error -> Error
+    end.
+
+get_jti_from_token(Token) ->
+    case decode_payload(Token) of
+        {ok, Claims} ->
+            case maps:get(<<"jti">>, Claims, undefined) of
+                undefined -> {error, no_jti};
+                Jti -> {ok, Jti}
+            end;
+        Error -> Error
+    end.
 
 %% @doc Extract user ID from a validated token (without full validation).
 -spec get_user_from_token(binary()) -> {ok, binary()} | {error, term()}.
