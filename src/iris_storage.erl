@@ -16,7 +16,8 @@
 -export([get/2, get/3]).
 -export([delete/2]).
 -export([get_backend/0, set_backend/1]).
--export([get_stats/0]).\n-export([apply_replication/2]).  %% Called via RPC for ets_cluster backend
+-export([get_stats/0]).
+-export([apply_replication/2]).  %% Called via RPC for ets_cluster backend
 
 -behaviour(gen_server).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).

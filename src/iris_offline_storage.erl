@@ -99,7 +99,7 @@ retrieve(User, Count) ->
         Records when is_list(Records) ->
             sort_and_extract(Records);
         Error ->
-            io:format("Error retrieving offline msgs: ~p~n", [Error]),
+            logger:error("Error retrieving offline msgs: ~p", [Error]),
             []
     end.
 

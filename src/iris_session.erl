@@ -131,13 +131,32 @@ rate_limit_check(User) ->
         _ -> iris_rate_limiter:check(User)
     end.
 
-authenticate(_User, _Token) ->
+authenticate(_User, undefined) ->
+    %% No token provided - check if auth is required
     case whereis(iris_auth) of
         undefined -> ok;
         _ ->
             case iris_auth:is_auth_enabled() of
                 false -> ok;
-                true -> ok  %% TODO: Implement full token validation
+                true -> {error, token_required}
+            end
+    end;
+authenticate(User, Token) ->
+    case whereis(iris_auth) of
+        undefined -> ok;
+        _ ->
+            case iris_auth:is_auth_enabled() of
+                false -> ok;
+                true ->
+                    case iris_auth:validate_token(Token) of
+                        {ok, Claims} ->
+                            %% Verify token subject matches claimed user
+                            case maps:get(<<"sub">>, Claims, undefined) of
+                                User -> ok;
+                                _ -> {error, user_mismatch}
+                            end;
+                        {error, Reason} -> {error, Reason}
+                    end
             end
     end.
 
