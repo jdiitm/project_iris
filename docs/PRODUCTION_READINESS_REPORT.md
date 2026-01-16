@@ -183,3 +183,29 @@ The system now meets all criteria for the "Project Iris" Global Production Deplo
 
 **Ready for global rollout.**
 
+---
+
+## 9. Audit Remediation (January 2026)
+
+### 9.1 Audit2 Fixes (Performance & Reliability)
+| Issue | Fix | File |
+|-------|-----|------|
+| RPC storm in terminate | `rpc:cast` instead of `rpc:call` | `iris_edge_conn.erl` |
+| Circuit breaker bottleneck | ETS-based lockfree check | `iris_circuit_breaker.erl` |
+| Flow controller bottleneck | ETS-based lockfree check | `iris_flow_controller.erl` |
+| Unbounded replication spawns | Direct `rpc:cast` | `iris_storage.erl` |
+| Shard load bias | Fisher-Yates shuffle | `iris_shard.erl` |
+
+### 9.2 Audit3 Fixes (Security & Testing)
+| Issue | Fix | File |
+|-------|-----|------|
+| Auth stub incomplete | Full JWT validation | `iris_session.erl` |
+| io:format logging | Changed to `logger` | `iris_offline_storage.erl` |
+| No Property-Based Tests | PropEr test suite | `iris_proto_pbt.erl.proper` |
+
+### 9.3 Current Status
+- **Verdict**: 🟡 CONDITIONAL-GO (from 🔴 NO-GO)
+- **Tests**: 67 passing (58 EUnit + 9 integration)
+- **See**: [Audit3 Report](audit3/COMPREHENSIVE_AUDIT_REPORT.md)
+
+

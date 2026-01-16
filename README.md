@@ -83,5 +83,19 @@ python3 tests/run_tests.py --suite integration
 - [Architecture](docs/PLANETARY_SCALE_ARCHITECTURE.md)
 - [Production Readiness](docs/PRODUCTION_READINESS_REPORT.md)
 
+### Security & Audits
+- [Audit3 Report](docs/audit3/COMPREHENSIVE_AUDIT_REPORT.md) - Latest audit with remediation status
+- [Test Reliability Spec](docs/audit3/FAANG_PLUS_TEST_RELIABILITY_SPEC.md)
+
+## Security Features
+
+| Feature | Status |
+|---------|--------|
+| TLS 1.2/1.3 | ✅ Supported (config: `tls_enabled`) |
+| JWT Authentication | ✅ HMAC-SHA256 with expiry |
+| Rate Limiting | ✅ Per-user token bucket |
+| DoS Protection | ✅ Protocol length limits |
+| Bounded Queues | ✅ Prevents OOM |
+
 ---
 **License**: MIT
