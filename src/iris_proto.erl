@@ -6,42 +6,65 @@
                 | {ack, binary()}
                 | {error, term()}.
 
+%% =============================================================================
+%% Protocol Length Validation (DoS Protection)
+%% =============================================================================
+-define(MAX_USERNAME_LEN, 256).      %% Max username length
+-define(MAX_TARGET_LEN, 256).        %% Max recipient name length
+-define(MAX_MSG_LEN, 65536).         %% Max single message (64KB)
+-define(MAX_BATCH_LEN, 1048576).     %% Max batch size (1MB)
+-define(MAX_MSGID_LEN, 64).          %% Max message ID length
+
 %% Protocol Specification:
-%% 0x01 | User (binary) -> {login, User}  (Assumes single login per connection start, ignores rest?)
-%% Actually, login shouldn't have rest usually, but let's be robust.
+%% 0x01 | User (binary) -> {login, User}
 %% 0x02 | TargetLen(16) | Target(binary) | MsgLen(16) | Msg(binary) | Rest
 %% 0x03 | MsgId (binary) -> {ack, MsgId}
 
--spec decode(binary()) -> {packet(), binary()} | {more, binary()}.
+-spec decode(binary()) -> {packet(), binary()} | {more, binary()} | {error, term()}.
 
-decode(<<1, Rest/binary>>) ->
-    %% Login is simpler, let's assume it consumes the rest for User? No, that's bad for robust protocol.
-    %% But existing client sends <<1, User>>. No length.
-    %% To keeping backward compat strictly for Login (which happens once), we can stick to "User is Rest"
-    %% BUT if we want proper framing, we strictly need length for everything or delimiter.
-    %% Let's impose that Login is the only packet in the first chunk, or assume User is everything.
-    %% Let's impose that Login is the only packet in the first chunk, or assume User is everything.
+decode(<<1, Rest/binary>>) when byte_size(Rest) =< ?MAX_USERNAME_LEN ->
+    %% Login: Username is the rest of the packet
     { {login, Rest}, <<>> };
+
+decode(<<1, Rest/binary>>) when byte_size(Rest) > ?MAX_USERNAME_LEN ->
+    %% Username too long - reject to prevent DoS
+    { {error, username_too_long}, <<>> };
 
 decode(<<2, _/binary>> = Bin) when byte_size(Bin) < 3 ->
     {more, Bin};  %% Partial header
 
+decode(<<2, TargetLen:16, _/binary>>) when TargetLen > ?MAX_TARGET_LEN ->
+    %% Target name too long - reject early
+    { {error, target_too_long}, <<>> };
+
 decode(<<2, TargetLen:16, Rest/binary>>) ->
     case Rest of
+        <<Target:TargetLen/binary, MsgLen:16, _/binary>> when MsgLen > ?MAX_MSG_LEN ->
+            %% Message too long - reject
+            { {error, message_too_long}, <<>> };
         <<Target:TargetLen/binary, MsgLen:16, Msg:MsgLen/binary, Rem/binary>> ->
             { {send_message, Target, Msg}, Rem };
         _ ->
             {more, <<2, TargetLen:16, Rest/binary>>}
     end;
     
-decode(<<3, MsgId/binary>>) ->
+decode(<<3, MsgId/binary>>) when byte_size(MsgId) =< ?MAX_MSGID_LEN ->
     { {ack, MsgId}, <<>> };
+
+decode(<<3, MsgId/binary>>) when byte_size(MsgId) > ?MAX_MSGID_LEN ->
+    { {error, msgid_too_long}, <<>> };
 
 decode(<<4, _/binary>> = Bin) when byte_size(Bin) < 7 ->
      {more, Bin}; %% Need TLen(2)+BLen(4) min
 
+decode(<<4, TargetLen:16, _/binary>>) when TargetLen > ?MAX_TARGET_LEN ->
+    { {error, target_too_long}, <<>> };
+
 decode(<<4, TargetLen:16, Rest/binary>>) ->
     case Rest of
+        <<_Target:TargetLen/binary, BatchLen:32, _/binary>> when BatchLen > ?MAX_BATCH_LEN ->
+            %% Batch too large - reject
+            { {error, batch_too_large}, <<>> };
         <<Target:TargetLen/binary, BatchLen:32, BatchBlob:BatchLen/binary, Rem/binary>> ->
              { {batch_send, Target, BatchBlob}, Rem };
         _ ->

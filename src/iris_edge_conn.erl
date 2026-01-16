@@ -11,10 +11,16 @@
     buffer = <<>> :: binary(),
     timeouts = 0 :: integer(),
     pending_acks = #{} :: map(), %% MsgId => {Msg, Timestamp, RetryCount}
-    retry_timer :: reference() | undefined
+    retry_timer :: reference() | undefined,
+    last_activity :: integer(),   %% For hibernation
+    hibernated = false :: boolean()
 }).
 
+%% Limits
 -define(RETRY_INTERVAL, 5000). %% 5 Seconds
+-define(MAX_PENDING_ACKS, 1000). %% Bounded pending acks
+-define(HIBERNATE_AFTER_MS, 30000). %% Hibernate after 30s idle
+-define(MAX_BUFFER_SIZE, 65536). %% 64KB max buffer (DoS protection)
 
 %% Dynamic Core node discovery with failover
 get_core_node() ->
@@ -42,15 +48,23 @@ generate_msg_id() ->
 
 %% API
 start_link(Socket) ->
-    gen_statem:start_link(?MODULE, Socket, []).
+    %% Optimized spawn options for memory efficiency
+    gen_statem:start_link(?MODULE, Socket, [
+        {spawn_opt, [
+            {min_heap_size, 233},      %% ~2KB initial heap
+            {fullsweep_after, 10},     %% Aggressive GC
+            {message_queue_data, off_heap}  %% Large msgs don't block GC
+        ]}
+    ]).
 
 set_socket(Pid, Socket) ->
     gen_statem:cast(Pid, {socket_ready, Socket}).
 
 %% Callbacks
 init(_Args) ->
+    Now = os:system_time(millisecond),
     Timer = erlang:send_after(?RETRY_INTERVAL, self(), check_acks),
-    {ok, wait_for_socket, #data{retry_timer = Timer}}.
+    {ok, wait_for_socket, #data{retry_timer = Timer, last_activity = Now}}.
 
 callback_mode() -> [state_functions, state_enter].
 
@@ -66,40 +80,58 @@ wait_for_socket(cast, {socket_ready, Socket}, Data) ->
 connected(enter, _OldState, _Data) ->
     keep_state_and_data;
 
-connected(info, {tcp, _Socket, Bin}, Data = #data{buffer = Buff}) ->
+connected(info, {tcp, _Socket, Bin}, Data = #data{buffer = Buff, socket = Socket}) ->
+    Now = os:system_time(millisecond),
     NewBuff = <<Buff/binary, Bin/binary>>,
-    process_buffer(NewBuff, Data);
-
-connected(info, {tcp_closed, _Socket}, Data) ->
-    %% io:format("Client disconnected~n"),
-    {stop, normal, Data};
-connected(info, {tcp_error, _Socket, _Reason}, Data) ->
-    {stop, normal, Data};
-connected(info, {deliver_msg, Msg}, Data = #data{socket = Socket, user = User, pending_acks = Pending}) ->
-    %% Wrap in Reliable Packet
-    %% Generate unique MsgId without crypto module
-    MsgId = generate_msg_id(),
-    Packet = iris_proto:encode_reliable_msg(MsgId, Msg),
     
-    %% Store in Pending Acks
-    NewPending = maps:put(MsgId, {Msg, os:system_time(seconds), 0}, Pending),
-    
-    case gen_tcp:send(Socket, Packet) of
-        ok -> 
-            {keep_state, Data#data{pending_acks = NewPending, timeouts = 0}};
-        {error, _} ->
-            %% If send fails immediately, fallback to offline (let retry timer or simple fallback handle it?)
-            %% Actually, if socket error, we usually die. 
-            %% But if timeout, we might want to just queue it?
-            %% Let's stick to simple "Store Offline if Send Fails" for now.
-            logger:warning("Send failed for ~p. Storing offline.", [User]),
-            iris_circuit_breaker:call(get_core_node(), iris_core, store_offline, [User, Msg]),
-            {keep_state, Data}
+    %% DoS Protection: Reject oversized buffers
+    case byte_size(NewBuff) > ?MAX_BUFFER_SIZE of
+        true ->
+            logger:warning("Buffer overflow from client. Dropping connection."),
+            {stop, buffer_overflow, Data};
+        false ->
+            process_buffer(NewBuff, Data#data{last_activity = Now, hibernated = false})
     end;
 
-connected(info, check_acks, Data = #data{pending_acks = Pending, user = User, retry_timer = OldTimer}) ->
+connected(info, {tcp_closed, _Socket}, Data) ->
+    {stop, normal, Data};
+
+connected(info, {tcp_error, _Socket, _Reason}, Data) ->
+    {stop, normal, Data};
+
+connected(info, {deliver_msg, Msg}, Data = #data{socket = Socket, user = User, pending_acks = Pending}) ->
+    Now = os:system_time(millisecond),
+    
+    %% Bounded pending_acks: Drop oldest if at capacity
+    BoundedPending = enforce_pending_limit(Pending, User),
+    PendingCount = maps:size(BoundedPending),
+    
+    case PendingCount >= ?MAX_PENDING_ACKS of
+        true ->
+            %% At capacity even after enforcement - store offline immediately
+            logger:warning("Pending ACKs at capacity for ~p. Storing offline.", [User]),
+            iris_circuit_breaker:call(get_core_node(), iris_core, store_offline, [User, Msg]),
+            {keep_state, Data#data{last_activity = Now}};
+        false ->
+            %% Generate unique MsgId and send
+            MsgId = generate_msg_id(),
+            Packet = iris_proto:encode_reliable_msg(MsgId, Msg),
+            NewPending = maps:put(MsgId, {Msg, os:system_time(seconds), 0}, BoundedPending),
+            
+            case gen_tcp:send(Socket, Packet) of
+                ok -> 
+                    {keep_state, Data#data{pending_acks = NewPending, timeouts = 0, last_activity = Now}};
+                {error, _} ->
+                    logger:warning("Send failed for ~p. Storing offline.", [User]),
+                    iris_circuit_breaker:call(get_core_node(), iris_core, store_offline, [User, Msg]),
+                    {keep_state, Data#data{last_activity = Now}}
+            end
+    end;
+
+connected(info, check_acks, Data = #data{pending_acks = Pending, user = User, retry_timer = OldTimer, last_activity = LastActivity}) ->
     erlang:cancel_timer(OldTimer),
     Now = os:system_time(seconds),
+    NowMs = os:system_time(millisecond),
     
     %% Scan for expired ACKs ( > 10 seconds)
     NewPending = maps:filter(fun(MsgId, {Msg, Ts, _Retries}) ->
@@ -113,7 +145,41 @@ connected(info, check_acks, Data = #data{pending_acks = Pending, user = User, re
     end, Pending),
     
     NewTimer = erlang:send_after(?RETRY_INTERVAL, self(), check_acks),
-    {keep_state, Data#data{pending_acks = NewPending, retry_timer = NewTimer}}.
+    NewData = Data#data{pending_acks = NewPending, retry_timer = NewTimer},
+    
+    %% Hibernation: If idle for too long and no pending, hibernate to save memory
+    IdleTime = NowMs - LastActivity,
+    ShouldHibernate = (IdleTime > ?HIBERNATE_AFTER_MS) andalso 
+                      (maps:size(NewPending) == 0) andalso
+                      (not Data#data.hibernated),
+    
+    case ShouldHibernate of
+        true ->
+            %% Hibernate this process to reclaim memory
+            {keep_state, NewData#data{hibernated = true}, [hibernate]};
+        false ->
+            {keep_state, NewData}
+    end.
+
+%% Enforce bounded pending_acks by moving oldest to offline storage
+enforce_pending_limit(Pending, User) when map_size(Pending) < ?MAX_PENDING_ACKS ->
+    Pending;
+enforce_pending_limit(Pending, User) ->
+    %% Find and remove oldest entries until under limit
+    Entries = maps:to_list(Pending),
+    Sorted = lists:sort(fun({_, {_, Ts1, _}}, {_, {_, Ts2, _}}) -> Ts1 =< Ts2 end, Entries),
+    
+    %% Remove oldest 10% to avoid frequent evictions
+    ToRemove = max(1, length(Sorted) div 10),
+    {RemoveEntries, KeepEntries} = lists:split(min(ToRemove, length(Sorted)), Sorted),
+    
+    %% Store removed messages offline
+    lists:foreach(fun({MsgId, {Msg, _Ts, _Retries}}) ->
+        logger:warning("Pending ACK overflow: moving msg ~p to offline for ~p", [MsgId, User]),
+        iris_circuit_breaker:call(get_core_node(), iris_core, store_offline, [User, Msg])
+    end, RemoveEntries),
+    
+    maps:from_list(KeepEntries).
 
 process_buffer(Bin, Data = #data{socket = Socket, user = CurrentUser}) ->
     case iris_proto:decode(Bin) of

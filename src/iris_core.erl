@@ -62,13 +62,25 @@ stop(_State) ->
 
 init([]) ->
     %% Rationale: strategy 'one_for_one' is replaced with a logic-based hierarchy.
-    %% We use a secondary supervisor for the batchers to isolate their crashes.
+    %% We use secondary supervisors for batchers to isolate their crashes.
     
     SupFlags = #{strategy => one_for_one,
                  intensity => 10,
                  period => 60},
 
     Children = [
+        %% Flow Controller: Global backpressure and cascade failure detection
+        #{id => iris_flow_controller,
+          start => {iris_flow_controller, start_link, []},
+          type => worker,
+          restart => permanent},
+          
+        %% Durable Batcher Supervisor: WAL + batched sync_transaction for durability
+        #{id => iris_durable_batcher_sup,
+          start => {iris_durable_batcher_sup, start_link, []},
+          type => supervisor,
+          restart => permanent},
+          
         %% Core Registry: Registers this Core with pg for Edge discovery
         #{id => iris_core_registry,
           start => {iris_core_registry, start_link, []},
