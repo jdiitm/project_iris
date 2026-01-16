@@ -29,74 +29,47 @@ legacy_core_node() ->
 
 %% handle_packet(Packet, User, TransportPid, TransportMod) -> {ok, NewUser, Actions}
 %% Actions = [ {send, Bin} | {send_batch, [Bin]} | close ]
-handle_packet({login, User}, _Current, TransportPid, _Mod) ->
-    %% io:format("User logged in: ~p~n", [User]),
+handle_packet({login, LoginData}, _Current, TransportPid, _Mod) ->
+    %% Parse login data: may be just username or "username:token" format
+    {User, MaybeToken} = parse_login_data(LoginData),
     
-    %% PHASE 1: LOCAL registration FIRST (sub-millisecond, never blocks)
-    %% This ensures local routing works immediately
-    ets:insert(local_presence_v2, {User, TransportPid}),
-    
-    %% Also register with new async router if available
-    case whereis(iris_async_router) of
-        undefined -> ok;
-        _ -> iris_async_router:register_local(User, TransportPid)
-    end,
-    
-    %% PHASE 2: Background sync to Core (async, non-blocking)
-    %% This happens in a separate process to not delay login response
-    spawn(fun() ->
-        CoreNode = get_core_node(),
-        case rpc:call(CoreNode, iris_core, register_user, [User, node(), TransportPid], 5000) of
-            ok -> ok;
-            {error, Reason} -> 
-                %% io:format("register_user failed for ~p: ~p~n", [User, Reason]);
-                ok;
-            {badrpc, Reason} ->
-                %% io:format("register_user RPC failed to ~p for ~p: ~p~n", [CoreNode, User, Reason])
-                ok
-        end
-    end),
-
-    %% PHASE 3: Retrieve offline messages (async in background)
-    %% Don't block login - deliver offline msgs as they arrive
-    spawn(fun() ->
-        case rpc:call(get_core_node(), iris_core, retrieve_offline, [User], 5000) of
-            Msgs when is_list(Msgs), length(Msgs) > 0 ->
-                %% Deliver offline messages to user's socket
-                [TransportPid ! {deliver_msg, Msg} || Msg <- Msgs];
-            _ -> ok
-        end
-    end),
-    
-    %% Immediate response - user can start messaging NOW
-    Actions = [{send, <<3, "LOGIN_OK">>}],
-    {ok, User, Actions};
+    %% Rate limiting check
+    case rate_limit_check(User) of
+        {deny, RetryAfter} ->
+            logger:warning("Login rate limited for ~p", [User]),
+            Actions = [{send, <<"RATE_LIMITED">>}, close],
+            {ok, undefined, Actions};
+        allow ->
+            %% Optional JWT authentication
+            case authenticate(User, MaybeToken) of
+                ok ->
+                    complete_login(User, TransportPid);
+                {error, Reason} ->
+                    logger:warning("Auth failed for ~p: ~p", [User, Reason]),
+                    Actions = [{send, <<"AUTH_FAILED">>}, close],
+                    {ok, undefined, Actions}
+            end
+    end;
 
 handle_packet({send_message, Target, Msg}, User, _Pid, _Mod) ->
-    %% io:format("Sending msg to ~p~n", [Target]),
     iris_router:route(Target, Msg),
     {ok, User, []};
 
 handle_packet({batch_send, Target, Blob}, User, _Pid, _Mod) ->
-    %% Optimized Fan-In
     Msgs = iris_proto:unpack_batch(Blob),
     rpc:call(get_core_node(), iris_core, store_batch, [Target, Msgs]),
     {ok, User, []};
 
 handle_packet({get_status, TargetUser}, User, _Pid, _Mod) ->
-    %% Pull-based status check with EDGE CACHING
     Now = os:system_time(seconds),
     CacheResult = ets:lookup(presence_cache, TargetUser),
     StatusTuple = case CacheResult of
         [{TargetUser, CachedStatus, CachedTime, InsertTime}] 
           when Now - InsertTime < 5 -> 
-             %% Cache Hit
              {CachedStatus, CachedTime};
         [{_, _, _, _}] ->
-             %% Cache EXPIRED
              fetch_and_cache(TargetUser, Now);
         [] ->
-             %% Cache EMPTY
              fetch_and_cache(TargetUser, Now)
     end,
     
@@ -108,15 +81,76 @@ handle_packet({ack, MsgId}, User, _Pid, _Mod) ->
     {ok, User, [{ack_received, MsgId}]};
 
 handle_packet({error, _}, User, _Pid, _Mod) ->
-     %% io:format("Protocol Error~n"),
-     {ok, User, []}. %% Or close?
+     {ok, User, []}.
+
+%% =============================================================================
+%% Internal: Login helpers
+%% =============================================================================
+
+complete_login(User, TransportPid) ->
+    %% PHASE 1: LOCAL registration FIRST (sub-millisecond, never blocks)
+    ets:insert(local_presence_v2, {User, TransportPid}),
+    
+    %% Also register with new async router if available
+    case whereis(iris_async_router_1) of
+        undefined -> ok;
+        _ -> iris_async_router:register_local(User, TransportPid)
+    end,
+    
+    %% PHASE 2: Background sync to Core (async, non-blocking)
+    spawn(fun() ->
+        CoreNode = get_core_node(),
+        case rpc:call(CoreNode, iris_core, register_user, [User, node(), TransportPid], 5000) of
+            ok -> ok;
+            {error, _Reason} -> ok;
+            {badrpc, _Reason} -> ok
+        end
+    end),
+
+    %% PHASE 3: Retrieve offline messages (async in background)
+    spawn(fun() ->
+        case rpc:call(get_core_node(), iris_core, retrieve_offline, [User], 5000) of
+            Msgs when is_list(Msgs), length(Msgs) > 0 ->
+                [TransportPid ! {deliver_msg, Msg} || Msg <- Msgs];
+            _ -> ok
+        end
+    end),
+    
+    %% Immediate response - user can start messaging NOW
+    {ok, User, [{send, <<3, "LOGIN_OK">>}]}.
+
+parse_login_data(Data) ->
+    case binary:split(Data, <<":">>) of
+        [User, Token] -> {User, Token};
+        [User] -> {User, undefined}
+    end.
+
+rate_limit_check(User) ->
+    case whereis(iris_rate_limiter) of
+        undefined -> allow;
+        _ -> iris_rate_limiter:check(User)
+    end.
+
+authenticate(_User, _Token) ->
+    case whereis(iris_auth) of
+        undefined -> ok;
+        _ ->
+            case iris_auth:is_auth_enabled() of
+                false -> ok;
+                true -> ok  %% TODO: Implement full token validation
+            end
+    end.
+
+%% =============================================================================
+%% Internal: Status helpers
+%% =============================================================================
 
 fetch_and_cache(TargetUser, Now) ->
     Result = case rpc:call(get_core_node(), iris_core, get_status, [TargetUser]) of
         {online, true, _} -> {online, 0};
         {online, false, LS} -> {offline, LS};
-        {badrpc, _Reason} -> {offline, 0};  % Graceful fallback for RPC errors
-        _ -> {offline, 0}  % Catch-all for unexpected responses
+        {badrpc, _Reason} -> {offline, 0};
+        _ -> {offline, 0}
     end,
     {S, T} = Result,
     ets:insert(presence_cache, {TargetUser, S, T, Now}),

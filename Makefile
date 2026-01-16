@@ -108,6 +108,7 @@ stop:
 	@echo "Stopping nodes..."
 	@$(ERL) -noshell -sname stopper_$(shell date +%s) -eval "lists:foreach(fun(N) -> rpc:call(N, init, stop, []) end, \
 	            [ 'iris_edge5$(NODE_SUFFIX)@$(HOSTNAME)', \
+
 	              'iris_edge4$(NODE_SUFFIX)@$(HOSTNAME)', \
 	              'iris_edge3$(NODE_SUFFIX)@$(HOSTNAME)', \
 	              'iris_edge2$(NODE_SUFFIX)@$(HOSTNAME)', \

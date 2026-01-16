@@ -1,21 +1,62 @@
 -module(iris_offline_storage).
 -export([store/3, store_batch/3, retrieve/2]).
+-export([store_sync/3]).  %% Direct sync_transaction mode (for critical paths)
 
 %% Mnesia table definition (created in iris_core:init_db/0):
 %% {offline_msg, User, Timestamp, Msg}
 
+%% =============================================================================
+%% Store with Write-Ahead Log + Batched Sync Transaction
+%% =============================================================================
+%% This provides:
+%% 1. Immediate durability via disk_log WAL (~1ms)
+%% 2. Batched Mnesia sync_transaction (amortizes the ~3ms cost)
+%% 3. Crash recovery via WAL replay
+%% =============================================================================
+
 store(User, Msg, Count) ->
+    %% Use durable batcher if available, fallback to direct sync
+    case whereis(iris_durable_batcher_1) of
+        undefined ->
+            %% Batcher not started - use direct sync_transaction
+            store_sync(User, Msg, Count);
+        _Pid ->
+            %% Use WAL-backed batcher for optimal latency
+            iris_durable_batcher:store(User, Msg, Count)
+    end.
+
+%% Direct sync_transaction mode - guaranteed durable but slower
+store_sync(User, Msg, Count) ->
     Timestamp = os:system_time(millisecond),
-    %% Determine Partition
     BucketID = erlang:phash2(Msg, Count),
     Key = {User, BucketID},
     
     F = fun() ->
         mnesia:write({offline_msg, Key, Timestamp, Msg})
     end,
-    mnesia:activity(async_dirty, F).
+    
+    %% CRITICAL: sync_transaction waits for replication to ALL disc_copies nodes
+    case mnesia:activity(sync_transaction, F) of
+        ok -> ok;
+        {atomic, _} -> ok;
+        {aborted, Reason} ->
+            logger:error("Offline store failed for ~p: ~p", [User, Reason]),
+            {error, Reason}
+    end.
 
 store_batch(User, Msgs, Count) ->
+    %% Use durable batcher if available, fallback to direct sync
+    case whereis(iris_durable_batcher_1) of
+        undefined ->
+            %% Batcher not started - use direct sync_transaction
+            store_batch_sync(User, Msgs, Count);
+        _Pid ->
+            %% Use WAL-backed batcher for optimal latency
+            iris_durable_batcher:store_batch(User, Msgs, Count, #{})
+    end.
+
+%% Direct sync_transaction mode for batch - guaranteed durable but slower
+store_batch_sync(User, Msgs, Count) ->
     Timestamp = os:system_time(millisecond),
     %% Group messages by Bucket
     BucketedMsgs = lists:foldl(fun(Msg, Acc) ->
@@ -29,7 +70,15 @@ store_batch(User, Msgs, Count) ->
              mnesia:write({offline_msg, Key, Timestamp, Batch})
         end, orddict:to_list(BucketedMsgs))
     end,
-    mnesia:activity(async_dirty, F).
+    
+    %% CRITICAL: sync_transaction for durability
+    case mnesia:activity(sync_transaction, F) of
+        ok -> ok;
+        {atomic, _} -> ok;
+        {aborted, Reason} ->
+            logger:error("Offline batch store failed for ~p: ~p", [User, Reason]),
+            {error, Reason}
+    end.
 
 retrieve(User, Count) ->
     %% Read messages from all buckets
