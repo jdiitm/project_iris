@@ -141,14 +141,86 @@ terminate(_Reason, _State) ->
 %% =============================================================================
 
 route_to_remote(User, Msg, State) ->
-    %% Remote Routing Logic (PG or RPC) - Unchanged
-    %% We assume shards are started on Core nodes too? No, this is Edge Router.
-    %% Edge Router -> Remote Core. 
-    %% Using pg:get_members(iris_shards)
+    %% SHARD-AWARE ROUTING
+    %% 1. Get shard for user
+    %% 2. Get nodes serving that shard
+    %% 3. Use circuit breaker with fallback
+    
+    case get_shard_nodes(User) of
+        [] ->
+            %% No shard nodes - try legacy routing
+            route_legacy(User, Msg, State);
+        [Primary | Fallbacks] ->
+            %% Use circuit breaker with fallback nodes
+            case route_to_node(Primary, User, Msg, Fallbacks) of
+                ok ->
+                    {noreply, State#state{routed_remote = State#state.routed_remote + 1}};
+                {error, _Reason} ->
+                    %% All nodes failed - store offline
+                    store_offline_async(Primary, User, Msg),
+                    {noreply, State#state{routed_remote = State#state.routed_remote + 1}}
+            end
+    end.
+
+%% Get nodes for user's shard
+get_shard_nodes(User) ->
+    case whereis(iris_shard) of
+        undefined ->
+            %% Shard module not running - use discovery
+            get_discovery_nodes();
+        _ ->
+            ShardId = iris_shard:get_shard(User),
+            case iris_shard:get_shard_nodes(ShardId) of
+                [] -> get_discovery_nodes();
+                Nodes -> Nodes
+            end
+    end.
+
+%% Fallback to discovery service
+get_discovery_nodes() ->
+    case whereis(iris_discovery) of
+        undefined ->
+            %% No discovery - use pg or connected nodes
+            case pg:get_members(iris_shards) of
+                [] -> [node() | nodes()];
+                Pids -> [node(P) || P <- Pids]
+            end;
+        _ ->
+            iris_discovery:get_nodes(iris_core)
+    end.
+
+%% Route using circuit breaker with fallback
+route_to_node(Node, User, Msg, Fallbacks) ->
+    case whereis(iris_circuit_breaker) of
+        undefined ->
+            %% No circuit breaker - direct RPC
+            case rpc:call(Node, iris_core, store_offline, [User, Msg], 5000) of
+                {badrpc, _} -> try_fallbacks(Fallbacks, User, Msg);
+                _ -> ok
+            end;
+        _ ->
+            %% Use circuit breaker with fallback
+            case iris_circuit_breaker:call_with_fallback(
+                    Node, iris_core, store_offline, [User, Msg], Fallbacks) of
+                {error, circuit_open} -> try_fallbacks(Fallbacks, User, Msg);
+                {badrpc, _} -> try_fallbacks(Fallbacks, User, Msg);
+                _ -> ok
+            end
+    end.
+
+try_fallbacks([], _User, _Msg) ->
+    {error, no_available_nodes};
+try_fallbacks([Node | Rest], User, Msg) ->
+    case rpc:call(Node, iris_core, store_offline, [User, Msg], 5000) of
+        {badrpc, _} -> try_fallbacks(Rest, User, Msg);
+        _ -> ok
+    end.
+
+%% Legacy routing for backwards compatibility
+route_legacy(User, Msg, State) ->
     Members = pg:get_members(iris_shards),
     case Members of
         [] ->
-            %% Fallback: Try connected nodes (Tests) or Legacy (Prod Config)
             Node = case nodes() of
                 [Peer | _] -> Peer;
                 [] -> iris_session:get_core_node(User)
@@ -156,7 +228,6 @@ route_to_remote(User, Msg, State) ->
             store_offline_async(Node, User, Msg),
             {noreply, State#state{routed_remote = State#state.routed_remote + 1}};
         [TargetPid | _] -> 
-             %% Just pick head for now (or random) to avoid load balancer complexity here
              TargetPid ! {route_remote, User, Msg},
              {noreply, State#state{routed_remote = State#state.routed_remote + 1}}
     end.
