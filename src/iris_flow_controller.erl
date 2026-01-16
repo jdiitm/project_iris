@@ -36,6 +36,9 @@
 -define(CHECK_INTERVAL_MS, 1000).
 -define(DECAY_INTERVAL_MS, 5000).
 
+%% AUDIT2 FIX: ETS table for lockfree admission checks
+-define(FLOW_ETS, iris_flow_controller_ets).
+
 -record(state, {
     level = ?LEVEL_NORMAL :: integer(),
     
@@ -82,7 +85,17 @@ check_admission(User) ->
 
 -spec check_admission(binary(), map()) -> {allow, integer()} | {deny, atom(), integer()}.
 check_admission(User, Opts) ->
-    gen_server:call(?SERVER, {check_admission, User, Opts}).
+    %% AUDIT2 FIX: Lockfree fast path for NORMAL level
+    %% Read level from ETS to avoid gen_server:call bottleneck
+    case ets:lookup(?FLOW_ETS, level) of
+        [{level, ?LEVEL_NORMAL}] ->
+            %% Fast path: just allow (update stats async)
+            gen_server:cast(?SERVER, {admit, 1}),
+            {allow, ?LEVEL_NORMAL};
+        _ ->
+            %% Complex path: delegate to gen_server
+            gen_server:call(?SERVER, {check_admission, User, Opts})
+    end.
 
 %% Record downstream call result (for cascade detection)
 record_success(Node) ->
@@ -113,6 +126,11 @@ get_stats() ->
 
 init([]) ->
     process_flag(trap_exit, true),
+    
+    %% AUDIT2 FIX: Create ETS table for lockfree reads
+    %% This removes the gen_server:call bottleneck for admission checks
+    ets:new(?FLOW_ETS, [named_table, public, {read_concurrency, true}]),
+    ets:insert(?FLOW_ETS, {level, ?LEVEL_NORMAL}),
     
     %% Start periodic check
     erlang:send_after(?CHECK_INTERVAL_MS, self(), check_resources),
@@ -180,12 +198,22 @@ handle_cast({track_dest, User, QueueDepth}, State) ->
     NewQueues = maps:put(User, NewStats, State#state.dest_queues),
     {noreply, State#state{dest_queues = NewQueues}};
 
+%% AUDIT2 FIX: Handle async admit counter increment
+handle_cast({admit, Count}, State) ->
+    {noreply, State#state{
+        admitted = State#state.admitted + Count,
+        requests_this_window = State#state.requests_this_window + Count
+    }};
+
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
 handle_info(check_resources, State) ->
     NewState = update_resource_metrics(State),
     NewLevel = calculate_level(NewState),
+    
+    %% AUDIT2 FIX: Update ETS for lockfree reads
+    ets:insert(?FLOW_ETS, {level, NewLevel}),
     
     %% Log level changes
     case NewLevel =/= State#state.level of

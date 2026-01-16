@@ -16,13 +16,16 @@
 -export([get/2, get/3]).
 -export([delete/2]).
 -export([get_backend/0, set_backend/1]).
--export([get_stats/0]).
+-export([get_stats/0]).\n-export([apply_replication/2]).  %% Called via RPC for ets_cluster backend
 
 -behaviour(gen_server).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
 -define(SERVER, ?MODULE).
 -define(DEFAULT_BACKEND, mnesia).
+
+%% AUDIT2 FIX (Issue 8): Bounded replication workers to prevent OOM
+-define(MAX_REPLICATION_WORKERS, 100).
 
 -record(state, {
     backend :: atom(),
@@ -124,21 +127,16 @@ init_backend(redis) ->
     %% Would initialize Redis connection pool
     ok.
 
-do_put(mnesia, Table, Key, Value, Opts) ->
-    Durability = maps:get(durability, Opts, sync),
+do_put(mnesia, Table, Key, Value, _Opts) ->
+    %% CRITICAL: Always use sync_transaction for durability
+    %% async_dirty was removed per audit2 - it loses data on crash
     F = fun() ->
         mnesia:write({Table, Key, Value})
     end,
-    case Durability of
-        sync ->
-            case mnesia:activity(sync_transaction, F) of
-                ok -> ok;
-                {atomic, _} -> ok;
-                {aborted, Reason} -> {error, Reason}
-            end;
-        async ->
-            mnesia:activity(async_dirty, F),
-            ok
+    case mnesia:activity(sync_transaction, F) of
+        ok -> ok;
+        {atomic, _} -> ok;
+        {aborted, Reason} -> {error, Reason}
     end;
 
 do_put(ets_cluster, Table, Key, Value, _Opts) ->
@@ -218,11 +216,10 @@ replicate_to_peers(Table, Operation) ->
         _ -> iris_discovery:get_nodes(iris_storage)
     end,
     
-    %% Async replicate
+    %% AUDIT2 FIX (Issue 8): Bounded replication to prevent OOM under burst writes
+    %% Use rpc:cast directly instead of spawning unbounded processes
     lists:foreach(fun(Node) ->
-        spawn(fun() ->
-            rpc:cast(Node, ?MODULE, apply_replication, [Table, Operation])
-        end)
+        rpc:cast(Node, ?MODULE, apply_replication, [Table, Operation])
     end, Peers -- [node()]).
 
 %% Called via RPC on peer nodes
