@@ -191,9 +191,10 @@ def main():
     print(f" RESULTS: {passed} passed, {failed} failed")
     print("=" * 60)
     
-    # Pass if core durability tests pass (offline delivery + multi-message)
-    # Pending acks is a stretch goal
-    return 0 if passed >= 2 else 1
+    # P0-2 FIX: Make test deterministic - all core tests must pass
+    # Pending acks is optional (server-side detection of abrupt disconnect)
+    # But offline delivery and multi-message are required
+    return 0 if passed >= 2 and failed == 0 else 1
 
 
 if __name__ == "__main__":

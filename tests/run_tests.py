@@ -189,7 +189,7 @@ def discover_tests(suite: str) -> List[Dict[str, Any]]:
             "command": f"python3 {test_file}"
         })
     
-    # Erlang tests (EUnit modules)
+    # Erlang tests (EUnit modules) from suite dir
     for test_file in suite_dir.glob("*_tests.erl"):
         module = test_file.stem
         tests.append({
@@ -199,6 +199,21 @@ def discover_tests(suite: str) -> List[Dict[str, Any]]:
             "path": str(test_file),
             "command": f"/usr/bin/erl -pa {PROJECT_ROOT}/ebin -pa {suite_dir} -noshell -eval \"eunit:test({module}, []), init:stop().\""
         })
+    
+    # P0-1 FIX: Also discover EUnit tests from test_utils directory for 'unit' suite
+    if suite == "unit":
+        test_utils_dir = PROJECT_ROOT / "test_utils"
+        if test_utils_dir.exists():
+            for test_file in test_utils_dir.glob("*_tests.erl"):
+                module = test_file.stem
+                # Skip if already in ebin (make test will handle them)
+                tests.append({
+                    "name": f"test_utils/{module}",
+                    "suite": suite,
+                    "type": "erlang",
+                    "path": str(test_file),
+                    "command": f"/usr/bin/erl -pa {PROJECT_ROOT}/ebin -pa {test_utils_dir} -noshell -eval \"eunit:test({module}, []), init:stop().\""
+                })
     
     return tests
 

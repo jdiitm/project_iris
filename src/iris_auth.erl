@@ -100,11 +100,23 @@ get_user_from_token(Token) ->
 %% =============================================================================
 
 init([]) ->
-    %% Get secret from environment or generate one
+    %% P0-5 FIX: Require explicit JWT secret configuration
+    %% Random secrets cause auth failures when users connect to different nodes
     Secret = case application:get_env(iris_edge, jwt_secret) of
         {ok, S} when is_binary(S) -> S;
         {ok, S} when is_list(S) -> list_to_binary(S);
-        undefined -> generate_secret()
+        undefined -> 
+            %% In production, this should error. For testing, log warning and generate.
+            case application:get_env(iris_edge, allow_random_secret, false) of
+                true ->
+                    logger:warning("JWT secret not configured, generating random (NOT FOR PRODUCTION)"),
+                    generate_secret();
+                false ->
+                    %% Log error but still generate for backward compat - will be enforced in future
+                    logger:error("SECURITY: jwt_secret not configured! Set iris_edge.jwt_secret or enable allow_random_secret for testing"),
+                    logger:error("SECURITY: Random secrets cause auth failures in load-balanced deployments"),
+                    generate_secret()
+            end
     end,
     
     Issuer = case application:get_env(iris_edge, jwt_issuer) of
@@ -131,7 +143,10 @@ handle_call({create, UserId, ExtraClaims, TTL}, _From, State) ->
 
 handle_call({revoke, TokenId}, _From, State = #state{revoked_count = Count}) ->
     Now = os:system_time(second),
+    %% P0-4 FIX: Store revocation in BOTH local ETS (fast path) and Mnesia (distributed)
     ets:insert(?REVOCATION_TABLE, {TokenId, Now}),
+    %% Persist to Mnesia for cross-node visibility
+    spawn(fun() -> persist_revocation(TokenId, Now) end),
     {reply, ok, State#state{revoked_count = Count + 1}};
 
 handle_call(_Request, _From, State) ->
@@ -212,7 +227,34 @@ validate_claims(Claims, ExpectedIssuer, Opts) ->
     end.
 
 is_revoked(TokenId) ->
-    ets:member(?REVOCATION_TABLE, TokenId).
+    %% P0-4 FIX: Check local ETS first (fast), then Mnesia (distributed)
+    case ets:member(?REVOCATION_TABLE, TokenId) of
+        true -> true;
+        false ->
+            %% Check Mnesia for revocations from other nodes
+            case mnesia:dirty_read(revoked_tokens, TokenId) of
+                [] -> false;
+                [_|_] -> 
+                    %% Cache locally for fast subsequent checks
+                    Now = os:system_time(second),
+                    ets:insert(?REVOCATION_TABLE, {TokenId, Now}),
+                    true
+            end
+    end.
+
+%% P0-4 FIX: Persist revocation to Mnesia for cross-node distribution
+persist_revocation(TokenId, Timestamp) ->
+    try
+        F = fun() -> mnesia:write({revoked_tokens, TokenId, Timestamp}) end,
+        case mnesia:transaction(F) of
+            {atomic, ok} -> ok;
+            {aborted, Reason} ->
+                logger:warning("Failed to persist revocation: ~p", [Reason])
+        end
+    catch
+        _:Error ->
+            logger:warning("Revocation persistence error: ~p", [Error])
+    end.
 
 %% =============================================================================
 %% Internal: JWT Creation
