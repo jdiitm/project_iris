@@ -104,15 +104,6 @@ start_edge_dist: all
 	$(ERL) -noshell -noinput $(ERL_FLAGS) -pa ebin -name $(NAME) -setcookie $(COOKIE) -config $(CONFIG) -eval "application:ensure_all_started(iris_edge)" >edge.log 2>&1 &
 
 stop:
-# ...
 	@echo "Stopping nodes..."
-	@$(ERL) -noshell -sname stopper_$(shell date +%s) -eval "lists:foreach(fun(N) -> rpc:call(N, init, stop, []) end, \
-	            [ 'iris_edge5$(NODE_SUFFIX)@$(HOSTNAME)', \
-
-	              'iris_edge4$(NODE_SUFFIX)@$(HOSTNAME)', \
-	              'iris_edge3$(NODE_SUFFIX)@$(HOSTNAME)', \
-	              'iris_edge2$(NODE_SUFFIX)@$(HOSTNAME)', \
-	              'iris_edge1$(NODE_SUFFIX)@$(HOSTNAME)', \
-	              'iris_core$(NODE_SUFFIX)@$(HOSTNAME)' ]), \
-	     init:stop()."
+	@-pkill -f "beam.smp.*iris_" 2>/dev/null; true
 	@echo "Nodes stopped."
