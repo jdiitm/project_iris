@@ -1,0 +1,121 @@
+name: CI
+
+on:
+  push:
+    branches: [ master, main, 'fix/*', 'feat/*' ]
+  pull_request:
+    branches: [ master, main ]
+
+env:
+  ERLANG_VERSION: '26'
+
+jobs:
+  build:
+    name: Build & Test
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Erlang
+      uses: erlef/setup-beam@v1
+      with:
+        otp-version: ${{ env.ERLANG_VERSION }}
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+    
+    - name: Install Python dependencies
+      run: |
+        pip install pyyaml
+    
+    - name: Build
+      run: make all
+    
+    - name: Run EUnit Tests
+      run: make test
+    
+    - name: Start Cluster
+      run: |
+        make start
+        sleep 10
+    
+    - name: Run Integration Tests
+      run: python3 tests/run_tests.py --suite integration --ci
+      timeout-minutes: 10
+    
+    - name: Run Security Tests
+      run: python3 tests/run_tests.py --suite security --ci
+      timeout-minutes: 5
+    
+    - name: Stop Cluster
+      if: always()
+      run: make stop
+
+  lint:
+    name: Code Quality
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Erlang
+      uses: erlef/setup-beam@v1
+      with:
+        otp-version: ${{ env.ERLANG_VERSION }}
+    
+    - name: Check Erlang Compilation Warnings
+      run: |
+        make all 2>&1 | tee build.log
+        if grep -i "warning:" build.log | grep -v "AUTO-TUNE"; then
+          echo "::warning::Compilation warnings found"
+        fi
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+    
+    - name: Python Lint (basic)
+      run: |
+        python3 -m py_compile tests/run_tests.py
+        python3 -m py_compile tests/framework/__init__.py
+
+  tier1:
+    name: Resilience Tests (Nightly)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule' || contains(github.event.head_commit.message, '[tier1]')
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Erlang
+      uses: erlef/setup-beam@v1
+      with:
+        otp-version: ${{ env.ERLANG_VERSION }}
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      run: pip install pyyaml
+    
+    - name: Build
+      run: make all
+    
+    - name: Start Cluster
+      run: |
+        make start
+        sleep 10
+    
+    - name: Run Tier 1 Tests
+      run: python3 tests/run_tests.py --tier 1 --ci
+      timeout-minutes: 30
+    
+    - name: Stop Cluster
+      if: always()
+      run: make stop

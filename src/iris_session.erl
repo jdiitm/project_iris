@@ -57,7 +57,9 @@ handle_packet({send_message, Target, Msg}, User, _Pid, _Mod) ->
 
 handle_packet({batch_send, Target, Blob}, User, _Pid, _Mod) ->
     Msgs = iris_proto:unpack_batch(Blob),
-    rpc:call(get_core_node(), iris_core, store_batch, [Target, Msgs]),
+    %% P2-1 FIX: Use rpc:cast for fire-and-forget batch storage
+    %% No need to block on batch send - offline storage is best-effort
+    rpc:cast(get_core_node(), iris_core, store_batch, [Target, Msgs]),
     {ok, User, []};
 
 handle_packet({get_status, TargetUser}, User, _Pid, _Mod) ->
@@ -165,11 +167,17 @@ authenticate(User, Token) ->
 %% =============================================================================
 
 fetch_and_cache(TargetUser, Now) ->
-    Result = case rpc:call(get_core_node(), iris_core, get_status, [TargetUser]) of
-        {online, true, _} -> {online, 0};
-        {online, false, LS} -> {offline, LS};
-        {badrpc, _Reason} -> {offline, 0};
-        _ -> {offline, 0}
+    %% P2-1 FIX: Use async fetch with fallback for status
+    %% Status queries are non-critical - return cached/default on timeout
+    Result = try
+        case rpc:call(get_core_node(), iris_core, get_status, [TargetUser], 1000) of
+            {online, true, _} -> {online, 0};
+            {online, false, LS} -> {offline, LS};
+            {badrpc, _Reason} -> {offline, 0};
+            _ -> {offline, 0}
+        end
+    catch
+        _:_ -> {offline, 0}  %% Timeout or error - return safe default
     end,
     {S, T} = Result,
     ets:insert(presence_cache, {TargetUser, S, T, Now}),
