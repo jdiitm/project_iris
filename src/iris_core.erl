@@ -258,7 +258,12 @@ create_tables(Nodes) ->
         {disc_copies, Nodes},
         {attributes, [user, last_seen]}
     ]),
-    mnesia:wait_for_tables([presence, offline_msg, user_meta, user_status], 5000),
+    %% P0-4 FIX: Add revoked_tokens table for distributed auth revocation
+    mnesia:create_table(revoked_tokens, [
+        {disc_copies, Nodes},
+        {attributes, [jti, timestamp]}
+    ]),
+    mnesia:wait_for_tables([presence, offline_msg, user_meta, user_status, revoked_tokens], 5000),
     logger:info("Tables created.").
 
 %% Legacy wrapper for specific node lists (unused now but kept for API compat)
