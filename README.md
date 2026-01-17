@@ -82,9 +82,11 @@ python3 tests/run_tests.py --suite integration
 - [Cluster Setup](docs/CLUSTER_SETUP.md)
 - [Architecture](docs/PLANETARY_SCALE_ARCHITECTURE.md)
 - [Production Readiness](docs/PRODUCTION_READINESS_REPORT.md)
+- [Operational Runbooks](docs/runbooks/) - Incident response, failover, recovery
 
 ### Security & Audits
-- [Audit3 Report](docs/audit3/COMPREHENSIVE_AUDIT_REPORT.md) - Latest audit with remediation status
+- [Audit4 Remediation](docs/audit4/REMEDIATION_STATUS.md) - **Current** - Production readiness fixes
+- [Audit3 Report](docs/audit3/COMPREHENSIVE_AUDIT_REPORT.md) - Architecture review
 - [Test Reliability Spec](docs/audit3/FAANG_PLUS_TEST_RELIABILITY_SPEC.md)
 
 ## Security Features
