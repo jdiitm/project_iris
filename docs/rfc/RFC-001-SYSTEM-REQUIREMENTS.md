@@ -1,16 +1,18 @@
 # RFC-001: Project Iris — Global-Scale Messaging Platform
 
-**Status**: Draft  
+**Status**: Draft v2  
 **Authors**: System Architecture Team  
 **Created**: 2026-01-18  
 **Last Updated**: 2026-01-18  
-**Supersedes**: docs/audit1/, docs/audit4/, docs/audit5/
+**Revision**: 2.0 (Post-Critique Resolution)
 
 ---
 
 ## Abstract
 
-This RFC defines the requirements, guarantees, and constraints for Project Iris, a global-scale, WhatsApp-class messaging platform. It synthesizes findings from multiple architecture audits into a single authoritative reference.
+This RFC defines normative requirements for Project Iris, a global-scale messaging platform. All guarantees are defined in measurable terms with explicit testability criteria.
+
+> **Scope**: This document contains requirements only. Implementation status is tracked separately.
 
 ---
 
@@ -18,24 +20,24 @@ This RFC defines the requirements, guarantees, and constraints for Project Iris,
 
 ### 1.1 North Star
 
-**Deliver a truly global-scale, FAANG-quality, WhatsApp-class communication platform** capable of:
-
-- **5 Billion DAU** (Daily Active Users)
-- **500 Million concurrent connections**
-- **10 Million messages per second**
-- **Sub-100ms P99 delivery latency** (same region)
-- **99.999% message durability**
-- **99.99% availability**
+| Metric | Target | Measurement Definition |
+|--------|--------|------------------------|
+| Daily Active Users | 5 Billion | Unique users sending ≥1 message/day |
+| Concurrent Connections | 500 Million | Active TCP connections at peak |
+| Message Throughput | 10M msg/sec | Messages processed by Core layer |
+| Delivery Latency (in-region) | ≤100ms P99 | Sender submit → Receiver client ACK |
+| Delivery Latency (cross-region) | ≤500ms P99 | Including network transit time |
+| Message Durability | 99.999% | No acknowledged message lost after server ACK |
+| Availability | 99.99% | Measured as successful message deliveries / attempts |
 
 ### 1.2 Design Principles
 
-| Principle | Description |
-|-----------|-------------|
-| **Scale via Infrastructure** | Adding capacity = infrastructure change, NOT code change |
-| **Hardware Efficiency** | Target 70-85% CPU, 80-90% RAM utilization |
-| **Fault Tolerance** | Survive any single component failure |
-| **Graceful Degradation** | Reduced functionality > total outage |
-| **Mobile-First** | Optimize for unreliable networks, battery life |
+| Principle | Definition | Testability |
+|-----------|------------|-------------|
+| Scale via Config | 10× capacity increase requires config-only changes | Add 10 nodes via config, measure throughput |
+| Fault Tolerance | Survive any single component failure | Kill any node, verify zero message loss |
+| Graceful Degradation | Under overload: reduce features, maintain durability | Inject 2× load, verify durability maintained |
+| Resource Efficiency | 50% CPU nominal, 80% RAM, 70% storage | Measure under steady-state traffic |
 
 ---
 
@@ -43,39 +45,40 @@ This RFC defines the requirements, guarantees, and constraints for Project Iris,
 
 ### 2.1 Core Messaging [MUST]
 
-| Requirement | Description | Guarantee |
-|-------------|-------------|-----------|
-| **FR-1** | 1:1 real-time messaging | Sub-second delivery when both online |
-| **FR-2** | Offline message storage | 30-day retention, delivered on reconnect |
-| **FR-3** | Delivery acknowledgment | Sender knows message was delivered |
-| **FR-4** | Read receipts | Optional, user-controlled |
-| **FR-5** | Message ordering | FIFO per conversation pair |
+| ID | Requirement | Definition | Test Criteria |
+|----|-------------|------------|---------------|
+| FR-1 | 1:1 messaging | Sender→Recipient text delivery | Send 1000 messages, verify 1000 received |
+| FR-2 | Offline storage | Messages stored until recipient connects | Send to offline user, verify delivery on connect |
+| FR-3 | Delivery ACK | Server ACKs to sender on durable write | Verify ACK only after persistence |
+| FR-4 | Read receipts | Optional recipient→sender notification | Toggle setting, verify behavior |
+| FR-5 | Message ordering | Sender-assigned sequence per conversation, FIFO delivery | Send M1,M2,M3; verify received in order |
 
 ### 2.2 Presence [MUST]
 
-| Requirement | Description | Guarantee |
-|-------------|-------------|-----------|
-| **FR-6** | Online/offline status | Visible to contacts within 30s |
-| **FR-7** | Last seen timestamp | Updated on disconnect |
-| **FR-8** | Typing indicators | Real-time, best-effort |
+| ID | Requirement | Definition | Propagation SLA |
+|----|-------------|------------|-----------------|
+| FR-6 | Online status | User visible as online after connect | ≤30 seconds |
+| FR-7 | Last seen | Timestamp updated on disconnect | ≤30 seconds |
+| FR-8 | Typing indicator | Real-time, best-effort | ≤2 seconds |
+
+> **Note**: Presence is **pull-on-demand** or **interest-based subscription** to avoid O(N²) fan-out at scale.
 
 ### 2.3 Authentication [MUST]
 
-| Requirement | Description | Guarantee |
-|-------------|-------------|-----------|
-| **FR-9** | JWT-based auth | Stateless token validation |
-| **FR-10** | Token expiry | Max 24h lifetime |
-| **FR-11** | Token revocation | Immediate effect, cluster-wide |
+| ID | Requirement | Definition | SLA |
+|----|-------------|------------|-----|
+| FR-9 | Token-based auth | JWT with HMAC-SHA256 signature | Validate on every request |
+| FR-10 | Token expiry | Maximum 24-hour lifetime | Reject expired tokens |
+| FR-11 | Token revocation | Propagate to all nodes | ≤60 seconds globally |
 
-### 2.4 Future Extensions [SHOULD]
+### 2.4 Future Scope (Deferred to RFC-002)
 
-| Requirement | Description | Status |
-|-------------|-------------|--------|
-| **FR-12** | Group messaging (1024 members) | NOT IMPLEMENTED |
-| **FR-13** | Multi-device sync (4 devices) | NOT IMPLEMENTED |
-| **FR-14** | Media messages | NOT IMPLEMENTED |
-| **FR-15** | Voice/video calls | NOT IMPLEMENTED |
-| **FR-16** | End-to-end encryption | NOT IMPLEMENTED |
+The following are explicitly **OUT OF SCOPE** for RFC-001:
+- Group messaging
+- Multi-device sync
+- Media messages
+- Voice/video calls
+- End-to-end encryption
 
 ---
 
@@ -83,93 +86,78 @@ This RFC defines the requirements, guarantees, and constraints for Project Iris,
 
 ### 3.1 Performance [MUST]
 
-| Metric | Target | Current Status |
-|--------|--------|----------------|
-| **NFR-1** Connection latency | <100ms to edge | ✅ MET |
-| **NFR-2** Message delivery (same region) | <100ms P99 | ⚠️ DEGRADED (sync RPC) |
-| **NFR-3** Message delivery (cross-region) | <500ms P99 | ⚠️ DEGRADED |
-| **NFR-4** Reconnect storm handling | 100K/sec | ⚠️ PARTIAL |
-| **NFR-5** Throughput per node | 100K msg/sec | ✅ MET |
+| ID | Metric | Target | Measurement |
+|----|--------|--------|-------------|
+| NFR-1 | Connection latency | ≤100ms | TCP handshake + TLS + login |
+| NFR-2 | Delivery latency (in-region) | ≤100ms P99 | End-to-end timer |
+| NFR-3 | Delivery latency (cross-region) | ≤500ms P99 | End-to-end timer |
+| NFR-4 | Reconnect storm handling | 100K/sec | Inject reconnects, measure success rate |
+| NFR-5 | Throughput per node | 100K msg/sec | Sustained for 10 minutes |
 
 ### 3.2 Reliability [MUST]
 
-| Metric | Target | Current Status |
-|--------|--------|----------------|
-| **NFR-6** Message durability | 99.999% | ❌ NOT MET (async writes) |
-| **NFR-7** Availability | 99.99% | ⚠️ UNTESTED |
-| **NFR-8** Data loss on crash | ZERO | ❌ NOT MET |
-| **NFR-9** Failover time | <10s | ⚠️ MANUAL |
+| ID | Metric | Target | Measurement |
+|----|--------|--------|-------------|
+| NFR-6 | Message durability | 99.999% | Acknowledged messages never lost |
+| NFR-7 | Availability | 99.99% | Monthly error budget: 4.32 minutes |
+| NFR-8 | Data loss on crash | Zero acknowledged messages lost (RPO=0) | Kill -9 any node, verify all ACKed messages recovered |
+| NFR-9 | Failover time | ≤30 seconds | Kill primary, measure recovery |
 
 ### 3.3 Scalability [MUST]
 
-| Metric | Target | Current Status |
-|--------|--------|----------------|
-| **NFR-10** Connections per edge | 2M | ⚠️ 200K verified |
-| **NFR-11** Horizontal scaling | Config-only | ✅ DESIGNED |
-| **NFR-12** Regional expansion | Zero code changes | ✅ DESIGNED |
-| **NFR-13** Shard count | 50,000 | CONFIG-DRIVEN |
+| ID | Metric | Target |
+|----|--------|--------|
+| NFR-10 | Connections per edge node | ≥100K (target 200K) |
+| NFR-11 | Horizontal scaling | Config-only (no code changes) |
+| NFR-12 | Regional expansion | Config-only (no code changes) |
+| NFR-13 | User sharding | hash(user_id) % num_shards |
 
 ### 3.4 Security [MUST]
 
-| Metric | Target | Current Status |
-|--------|--------|----------------|
-| **NFR-14** TLS encryption | Mandatory | ⚠️ OPTIONAL |
-| **NFR-15** JWT validation | Strict | ✅ IMPLEMENTED |
-| **NFR-16** Rate limiting | Per-user | ✅ IMPLEMENTED |
-| **NFR-17** Input validation | All inputs | ⚠️ PARTIAL |
+| ID | Metric | Requirement |
+|----|--------|-------------|
+| NFR-14 | TLS encryption | **MANDATORY** TLS 1.3 for all client connections |
+| NFR-15 | Inter-node encryption | **MANDATORY** mTLS for all internal traffic |
+| NFR-16 | JWT validation | Signature + expiry + revocation check on every request |
+| NFR-17 | Rate limiting | Per-user limits enforced at Edge |
+| NFR-18 | Input validation | All protocol fields validated before processing |
 
 ### 3.5 Efficiency [SHOULD]
 
-| Metric | Target | Current Status |
-|--------|--------|----------------|
-| **NFR-18** Memory per connection | <10KB | ✅ MET |
-| **NFR-19** Cost per connection | <$0.0001/month | ✅ MET |
-| **NFR-20** Cost per message | <$0.000001 | ✅ MET |
+| ID | Metric | Target |
+|----|--------|--------|
+| NFR-19 | Memory per connection | ≤10KB |
+| NFR-20 | CPU utilization nominal | 50% (allows 2× headroom for bursts) |
+| NFR-21 | Cost per connection | ≤$0.0001/month |
 
 ---
 
-## 4. Architecture Overview
+## 4. Architecture Constraints
 
-### 4.1 Component Hierarchy
+### 4.1 Topology
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                     GLOBAL-SCALE ARCHITECTURE                    │
-└─────────────────────────────────────────────────────────────────┘
+| Constraint | Requirement | Rationale |
+|------------|-------------|-----------|
+| **AC-1** | Hub-and-Spoke topology | Erlang full mesh fails at >100 nodes |
+| **AC-2** | Edge → Core via internal LB | No direct Edge-to-Edge routing |
+| **AC-3** | No Distributed Erlang for data plane | Use explicit RPC/messaging |
 
-Layer 1: GEO-ROUTING        DNS/Anycast → Nearest Region
-                                   │
-Layer 2: EDGE CLUSTER       Stateless connection handlers
-         (Regional)         [100K connections per node]
-                                   │
-Layer 3: CORE SHARDS        User-partitioned state
-         (Regional)         [hash(user_id) % num_shards]
-                                   │
-Layer 4: STORAGE            Mnesia (current) → Cassandra (future)
-         (Replicated)       [disc_copies for durability]
-```
+### 4.2 Layer Requirements
 
-### 4.2 Data Flow
+| Layer | Statefulness | Horizontal Scaling |
+|-------|--------------|-------------------|
+| Edge | Stateless (session only) | Add nodes freely |
+| Core | Stateful (sharded) | Reshard to scale |
+| Storage | Durable, replicated | Per storage tier |
 
-```
-SEND MESSAGE:
-  Client → Edge → Router → Core (recipient shard) → Storage/Delivery
+### 4.3 Storage Requirements (Technology-Agnostic)
 
-RECEIVE MESSAGE:
-  Core → Edge (cached presence) → Client
-
-OFFLINE FLOW:
-  Store in Mnesia → Deliver on reconnect → Delete after ack
-```
-
-### 4.3 Current Node Configuration
-
-| Node Type | Role | Capacity | Count |
-|-----------|------|----------|-------|
-| **Core Primary** | State + routing | 100K users | 1 |
-| **Core Replica** | Hot standby | 100K users | 1 |
-| **Edge Local** | Connections | 200K each | 2-3 |
-| **Edge Remote** | Regional PoP | 10K each | 2 |
+| Requirement | Value |
+|-------------|-------|
+| Write durability | Acknowledged writes MUST survive node failure |
+| Read latency | ≤10ms P99 for presence lookups |
+| Write latency | ≤50ms P99 for message storage |
+| Consistency | Eventual (30s max for presence), Strong (for messages) |
 
 ---
 
@@ -177,220 +165,236 @@ OFFLINE FLOW:
 
 ### 5.1 Message Semantics
 
-| Guarantee | Definition | Implementation |
-|-----------|------------|----------------|
-| **At-Least-Once** | Every message delivered ≥1 time | Retry until ACK |
-| **Exactly-Once Display** | User sees message once | Client-side dedup |
-| **Ordering** | FIFO per conversation | Sequence numbers |
+| Guarantee | Definition | Implementation Requirement |
+|-----------|------------|---------------------------|
+| At-Least-Once | Every ACKed message delivered ≥1 time | Retry until client ACK |
+| Idempotency | Duplicate detection for retries | Server-side message ID dedup |
+| Ordering | FIFO per (sender, recipient) pair | Sender-assigned sequence numbers |
 
-### 5.2 Durability Model
+### 5.2 Message IDs
 
-| Scenario | Current Behavior | Required Behavior |
-|----------|------------------|-------------------|
-| Clean shutdown | ✅ Messages preserved | ✅ Messages preserved |
-| Kill -9 | ⚠️ May lose recent writes | ❌ ZERO loss |
-| Power failure | ❌ Data loss likely | ❌ ZERO loss |
-| Network partition | ⚠️ Undefined | Queued + delivered |
+- **Format**: Globally unique, sortable (UUIDv7 or Snowflake)
+- **Scope**: Unique across all time, all users
+- **Dedup Window**: 7 days
 
-> **CRITICAL GAP**: Current `async_dirty` writes do NOT guarantee durability.
-> **REQUIRED**: Switch to `sync_transaction` for offline message storage.
+### 5.3 Durability Contract
+
+| Event | Required Behavior |
+|-------|-------------------|
+| Server ACKs message | Message MUST be durable (survives any single failure) |
+| Node crash before ACK | Message MAY be lost (client retries) |
+| Node crash after ACK | Message MUST NOT be lost |
 
 ---
 
 ## 6. Security Model
 
-### 6.1 Trust Boundaries
+### 6.1 Threat Model
+
+| Threat | Control |
+|--------|---------|
+| Eavesdropping | TLS 1.3 mandatory |
+| MITM | Certificate validation |
+| Replay attacks | Nonce + timestamp validation |
+| Token theft | Short expiry (24h) + revocation |
+| Internal lateral movement | mTLS between all nodes |
+
+### 6.2 Trust Boundaries
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │ UNTRUSTED: Internet, Client devices, User input            │
 └─────────────────────────────────────────────────────────────┘
                               │
-                         TLS Boundary
+                       TLS 1.3 (MANDATORY)
                               │
 ┌─────────────────────────────────────────────────────────────┐
 │ EDGE: Connection handling, Protocol parsing, JWT validation │
 └─────────────────────────────────────────────────────────────┘
                               │
-                      Erlang Distribution
+                       mTLS (MANDATORY)
                               │
 ┌─────────────────────────────────────────────────────────────┐
 │ CORE: State management, Routing decisions, Storage          │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-### 6.2 Authentication Requirements
+### 6.3 Authentication Flow
 
-| Requirement | Status | Notes |
-|-------------|--------|-------|
-| JWT HMAC-SHA256 signature | ✅ Enforced | |
-| Expiry validation | ✅ Implemented | |
-| Revocation (cluster-wide) | ✅ Mnesia-backed | |
-| Constant-time comparison | ✅ Implemented | |
-| Algorithm "none" attack | ✅ Blocked | |
-
-### 6.3 Known Security Gaps
-
-1. **TLS Optional** - Must be mandatory in production
-2. **Shared Erlang Cookie** - Single secret across cluster
-3. **No E2E Encryption** - Messages readable by server
+1. Client opens TLS connection to Edge
+2. Client sends JWT token
+3. Edge validates: signature, expiry, revocation status
+4. On failure: connection rejected with error code
+5. On success: session established
 
 ---
 
-## 7. Operational Requirements
+## 7. Failure Semantics
 
-### 7.1 Observability
+### 7.1 Failure Modes and Behaviors
 
-| Metric Category | Examples | Status |
-|-----------------|----------|--------|
-| Connection metrics | count, rate, errors | ✅ iris_metrics |
-| Message metrics | sent, delivered, latency | ✅ iris_metrics |
-| System metrics | CPU, memory, scheduler | ✅ BEAM telemetry |
-| Alerting thresholds | configurable | ⚠️ NOT DEFINED |
+| Failure | Detection | Recovery | Data Impact |
+|---------|-----------|----------|-------------|
+| Edge node crash | Health check (5s) | LB removes; clients reconnect | Zero (stateless) |
+| Core node crash | Health check (5s) | Replica promoted | Zero (replicated) |
+| Storage node crash | Replication timeout | Read from replica | Zero (replicated) |
+| Network partition | Timeout (30s) | Route to alternate path | Queued, delivered later |
+| Full region outage | Monitoring alert | DNS failover | Queued in other regions |
 
-### 7.2 Deployment
+### 7.2 Graceful Degradation Hierarchy
 
-| Requirement | Status |
-|-------------|--------|
-| Zero-downtime deploys | ⚠️ UNTESTED |
-| Rollback capability | ⚠️ MANUAL |
-| Blue-green deployment | ⚠️ NOT IMPLEMENTED |
-| Canary releases | ⚠️ NOT IMPLEMENTED |
-
-### 7.3 Incident Response
-
-| Playbook | Status |
-|----------|--------|
-| Node failure recovery | ✅ docs/runbooks/FAILOVER.md |
-| Data corruption recovery | ✅ docs/runbooks/DATA_RECOVERY.md |
-| Incident response | ✅ docs/runbooks/INCIDENT_RESPONSE.md |
+Under overload, disable in order:
+1. Typing indicators (FR-8)
+2. Presence updates (FR-6, FR-7)
+3. Read receipts (FR-4)
+4. **NEVER disable**: Message delivery (FR-1, FR-2, FR-3)
 
 ---
 
-## 8. Current Implementation Gaps
+## 8. Abuse Prevention
 
-### 8.1 Critical (P0) — Blocks Production
+### 8.1 Rate Limits
 
-| Gap | Risk | Remediation |
-|-----|------|-------------|
-| Async writes | Data loss on crash | Use `sync_transaction` |
-| TLS optional | MITM attacks | Enforce TLS |
-| Single-device only | UX limitation | Add device registry |
+| Resource | Limit | Window |
+|----------|-------|--------|
+| Messages sent | 100/minute | Per user |
+| Connections | 5/minute | Per IP |
+| Failed logins | 10/hour | Per account |
 
-### 8.2 High (P1) — Blocks Scale
+### 8.2 Spam Controls
 
-| Gap | Risk | Remediation |
-|-----|------|-------------|
-| Sync RPC on hot path | Latency ceiling | Async message queue |
-| Mnesia as global store | Partition intolerance | Migrate to Cassandra |
-| No group messaging | Missing feature | Fan-out architecture |
-
-### 8.3 Medium (P2) — Technical Debt
-
-| Gap | Risk | Remediation |
-|-----|------|-------------|
-| Unbounded queues | Memory exhaustion | Add limits |
-| No protocol versioning | Evolution blocked | Add version negotiation |
-| Clock skew untested | JWT edge cases | Add skew tolerance |
+| Control | Implementation |
+|---------|----------------|
+| Message rate limiting | Token bucket per user |
+| Connection rate limiting | Per-IP throttling at Edge |
+| Reputation system | Deferred to RFC-003 |
 
 ---
 
-## 9. Capacity Model
+## 9. Client Protocol
 
-### 9.1 Scaling Formula
+### 9.1 Version Negotiation
+
+1. Client sends: `{version: [1, 2], capabilities: [...]}`
+2. Server responds: `{version: 1, capabilities: [...]}`
+3. Both use negotiated version for session
+
+### 9.2 Sync Protocol
+
+1. On connect: Client sends last-seen **message ID** (time-sortable UUIDv7/Snowflake)
+2. Server sends all messages since that ID (using ID's embedded timestamp)
+3. Client ACKs received messages
+4. Server transitions to push mode
+
+> **Note**: Sync uses time-sortable IDs (Section 5.2), not global sequence numbers, to avoid cross-region coordination bottlenecks.
+
+### 9.3 Wire Format (v1)
+
+| Field | Size | Description |
+|-------|------|-------------|
+| Opcode | 1 byte | Message type |
+| Length | 2 bytes | Payload length |
+| Payload | Variable | Opcode-specific |
+
+---
+
+## 10. Capacity Model
+
+### 10.1 Inputs (Configurable)
+
+| Parameter | Default | Range |
+|-----------|---------|-------|
+| Concurrent ratio | 10% of DAU | 5-15% |
+| Connections per Edge | 100K | 50K-200K |
+| Users per Core shard | 100K | 50K-200K |
+| Safety multiplier | 1.5× | 1.2-2.0× |
+
+### 10.2 Formula
 
 ```
-Concurrent Users = DAU × 0.10 (10% online at peak)
-
-Edge Nodes = Concurrent Users ÷ 100,000 connections/node
-Core Shards = DAU ÷ 100,000 users/shard
-Core Nodes = Shards × 2 (primary + replica)
-Regions = Edge Nodes ÷ 50 nodes/region
+Edge Nodes = (DAU × concurrent_ratio) / conn_per_edge × safety_multiplier
+Core Shards = DAU / users_per_shard × safety_multiplier
+Core Nodes = Core Shards × 2 (primary + replica)
 ```
-
-### 9.2 Growth Projections
-
-| Phase | DAU | Concurrent | Edges | Shards | Regions |
-|-------|-----|------------|-------|--------|---------|
-| Proof | 1M | 100K | 2 | 10 | 1 |
-| Growth | 100M | 10M | 100 | 1,000 | 2 |
-| Scale | 1B | 100M | 1,000 | 10,000 | 20 |
-| Planet | 5B | 500M | 5,000 | 50,000 | 100 |
-
-**Code changes required**: NONE (config-driven)
-
----
-
-## 10. Testing Requirements
-
-### 10.1 Required Test Categories
-
-| Category | Purpose | Status |
-|----------|---------|--------|
-| Unit tests | Logic correctness | ✅ 58 tests |
-| Integration tests | Component interaction | ✅ 10 tests |
-| E2E tests | User flows | ✅ 2 tests |
-| Security tests | Attack resistance | ✅ 3 tests |
-| Resilience tests | Failure recovery | ✅ 2 tests |
-| Chaos tests | System stability | ✅ 2 tests |
-| Performance tests | Throughput/latency | ⚠️ Threshold issues |
-| Durability tests | Data survival | ⚠️ Needs hardening |
-
-### 10.2 Test Quality Requirements
-
-1. **Strict Assertions**: Tests MUST fail on data loss
-2. **Determinism**: No `time.sleep()` for synchronization
-3. **CI-Compatible**: All tests runnable headlessly
-4. **Realistic Conditions**: Test with latency/jitter injection
 
 ---
 
 ## 11. Compatibility
 
-### 11.1 Protocol Versioning
+### 11.1 Version Support Matrix
 
-| Version | Features | Status |
-|---------|----------|--------|
-| v1 (current) | Basic messaging, presence | ACTIVE |
-| v2 (planned) | Batching, compression | NOT IMPLEMENTED |
+| Server Version | Client v1 | Client v2 |
+|----------------|-----------|-----------|
+| Server v1 | ✅ | ✅ (fallback) |
+| Server v2 | ✅ (compat) | ✅ |
 
-### 11.2 Backward Compatibility Rules
+### 11.2 Rules
 
 1. New fields MUST be optional
-2. Old clients MUST work with new servers
-3. Deprecation requires 2 version lead time
+2. Old clients MUST work with new servers for 2 versions
+3. Breaking changes require version bump and migration period
 
 ---
 
-## 12. Non-Requirements
+## 12. Testing Requirements
 
-The following are explicitly **NOT** requirements for the initial system:
+### 12.1 Coverage Matrix
 
-1. **End-to-end encryption** — Server-side access acceptable initially
-2. **Regulatory compliance** (GDPR/SOC2) — Future consideration
-3. **Federation** — Single organization deployment only
-4. **Rich media processing** — Store-and-forward only
-5. **Full-text search** — Not a messaging primitive
+| Requirement | Test Type | Determinism |
+|-------------|-----------|-------------|
+| Every FR-* | Integration test | MUST be deterministic |
+| Every NFR-* | Performance test | MUST have pass/fail threshold |
+| Failure modes | Chaos test | MUST inject real failures |
+
+### 12.2 Test Quality Rules
+
+1. Tests MUST NOT use `time.sleep()` for synchronization
+2. Tests MUST fail on any data loss
+3. Tests MUST be runnable in CI without human intervention
 
 ---
 
-## 13. Appendices
+## 13. Non-Requirements (Explicit Scope Exclusions)
 
-### A. Glossary
+| Item | Rationale | Future Consideration |
+|------|-----------|---------------------|
+| End-to-end encryption | Requires client changes | RFC-002 |
+| GDPR compliance | Regional requirement | Post-launch |
+| Federation | Single org only | Never for v1 |
+| Rich media processing | Store-and-forward only | RFC-002 |
+
+> **Note**: "Global-scale" refers to capacity, not security posture. E2E encryption is planned for v2.
+
+---
+
+## Appendix A: Glossary
 
 | Term | Definition |
 |------|------------|
-| **Edge** | Connection-handling node, stateless |
-| **Core** | State-managing node, sharded |
-| **Shard** | Partition of user data |
-| **Presence** | Online/offline status |
-| **DAU** | Daily Active Users |
+| Edge | Connection-handling node, stateless |
+| Core | State-managing node, sharded |
+| Shard | Partition of user data |
+| ACK | Acknowledgment from receiver |
+| DAU | Daily Active Users |
 
-### B. Revision History
+## Appendix B: SLO/SLI Definitions
+
+| SLI | Good Event | Total Events | Target SLO |
+|-----|------------|--------------|------------|
+| Availability | Successful message delivery | All delivery attempts | 99.99% |
+| Latency | Delivery ≤100ms | In-region deliveries | 99% |
+| Durability | Message not lost after ACK | All ACKed messages | 99.999% |
+
+**Error Budget** (monthly):
+- Availability: 4.32 minutes downtime
+- Durability: 10 messages lost per 1M sent
+
+## Appendix C: Revision History
 
 | Date | Version | Changes |
 |------|---------|---------|
-| 2026-01-18 | 1.0 | Initial RFC synthesized from audit documents |
+| 2026-01-18 | 1.0 | Initial RFC |
+| 2026-01-18 | 2.0 | Post-critique revision: removed status, added sections |
 
 ---
 
@@ -399,3 +403,7 @@ The following are explicitly **NOT** requirements for the initial system:
 - [ ] Engineering Lead
 - [ ] Security Review
 - [ ] Operations Review
+
+---
+
+*This RFC supersedes all previous audit documents as the authoritative requirements reference.*
