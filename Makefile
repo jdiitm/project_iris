@@ -1,6 +1,6 @@
 # Makefile for Project Iris
-ERL ?= /usr/bin/erl
-ERLC = erlc
+ERL ?= $(shell which erl 2>/dev/null || echo erl)
+ERLC ?= $(shell which erlc 2>/dev/null || echo erlc)
 HOSTNAME := $(shell hostname -s)
 
 SRC_FILES = $(filter-out %_tests.erl, $(wildcard src/*.erl))
@@ -74,6 +74,9 @@ ERL_FLAGS := $(shell ./scripts/auto_tune.sh)
 # Config file (without .config extension)
 CONFIG ?= config/test
 
+# Start both core and edge nodes
+start: start_core start_edge1
+
 start_core: all
 	$(ERL) -noshell -noinput $(ERL_FLAGS) -pa ebin -sname iris_core$(NODE_SUFFIX) -setcookie iris_secret -config $(CONFIG) -eval "application:ensure_all_started(iris_core)" >core.log 2>&1 &
 
@@ -104,15 +107,6 @@ start_edge_dist: all
 	$(ERL) -noshell -noinput $(ERL_FLAGS) -pa ebin -name $(NAME) -setcookie $(COOKIE) -config $(CONFIG) -eval "application:ensure_all_started(iris_edge)" >edge.log 2>&1 &
 
 stop:
-# ...
 	@echo "Stopping nodes..."
-	@$(ERL) -noshell -sname stopper_$(shell date +%s) -eval "lists:foreach(fun(N) -> rpc:call(N, init, stop, []) end, \
-	            [ 'iris_edge5$(NODE_SUFFIX)@$(HOSTNAME)', \
-
-	              'iris_edge4$(NODE_SUFFIX)@$(HOSTNAME)', \
-	              'iris_edge3$(NODE_SUFFIX)@$(HOSTNAME)', \
-	              'iris_edge2$(NODE_SUFFIX)@$(HOSTNAME)', \
-	              'iris_edge1$(NODE_SUFFIX)@$(HOSTNAME)', \
-	              'iris_core$(NODE_SUFFIX)@$(HOSTNAME)' ]), \
-	     init:stop()."
+	@-pkill -f "beam.smp.*iris_" 2>/dev/null; true
 	@echo "Nodes stopped."
