@@ -1,6 +1,0 @@
-metric,value,unit,pass_fail,threshold,notes
-max_stable_load,10000,users,PASS,100,Minimum viable load
-p99_latency_at_stable,0,ms,PASS,500,At 10000 users
-reliability_core1_failover,98.1,%,PASS,90.0,"Sent=990, Recv=971"
-memory_peak_mb,0,MB,PASS,N/A,Peak observed
-cpu_avg_percent,0,%,PASS,90,Average during test
