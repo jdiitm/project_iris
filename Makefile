@@ -1,6 +1,6 @@
 # Makefile for Project Iris
-ERL ?= /usr/bin/erl
-ERLC = erlc
+ERL ?= $(shell which erl 2>/dev/null || echo erl)
+ERLC ?= $(shell which erlc 2>/dev/null || echo erlc)
 HOSTNAME := $(shell hostname -s)
 
 SRC_FILES = $(filter-out %_tests.erl, $(wildcard src/*.erl))
