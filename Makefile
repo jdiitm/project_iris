@@ -74,6 +74,9 @@ ERL_FLAGS := $(shell ./scripts/auto_tune.sh)
 # Config file (without .config extension)
 CONFIG ?= config/test
 
+# Start both core and edge nodes
+start: start_core start_edge1
+
 start_core: all
 	$(ERL) -noshell -noinput $(ERL_FLAGS) -pa ebin -sname iris_core$(NODE_SUFFIX) -setcookie iris_secret -config $(CONFIG) -eval "application:ensure_all_started(iris_core)" >core.log 2>&1 &
 
