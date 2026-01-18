@@ -23,6 +23,12 @@ This directory contains formal requirements and design documents for Project Iri
 | 9. Client Protocol | Wire format, sync protocol |
 | 10-12 | Capacity, Compatibility, Testing |
 
+## Related Documents
+
+| Document | Purpose |
+|----------|---------|
+| [RFC-001-TEST-DEVIATIONS.md](RFC-001-TEST-DEVIATIONS.md) | Known test failures and accepted deviations |
+
 ## RFC Process
 
 1. **Draft** — Open for feedback
