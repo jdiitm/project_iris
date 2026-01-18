@@ -61,6 +61,8 @@ This RFC defines normative requirements for Project Iris, a global-scale messagi
 | FR-7 | Last seen | Timestamp updated on disconnect | ≤30 seconds |
 | FR-8 | Typing indicator | Real-time, best-effort | ≤2 seconds |
 
+> **Note**: Presence is **pull-on-demand** or **interest-based subscription** to avoid O(N²) fan-out at scale.
+
 ### 2.3 Authentication [MUST]
 
 | ID | Requirement | Definition | SLA |
@@ -98,7 +100,7 @@ The following are explicitly **OUT OF SCOPE** for RFC-001:
 |----|--------|--------|-------------|
 | NFR-6 | Message durability | 99.999% | Acknowledged messages never lost |
 | NFR-7 | Availability | 99.99% | Monthly error budget: 4.32 minutes |
-| NFR-8 | Data loss on crash | ZERO | Kill -9 any node, verify all ACKed messages recovered |
+| NFR-8 | Data loss on crash | Zero acknowledged messages lost (RPO=0) | Kill -9 any node, verify all ACKed messages recovered |
 | NFR-9 | Failover time | ≤30 seconds | Kill primary, measure recovery |
 
 ### 3.3 Scalability [MUST]
@@ -279,10 +281,12 @@ Under overload, disable in order:
 
 ### 9.2 Sync Protocol
 
-1. On connect: Client sends last-seen sequence number
-2. Server sends all messages since that sequence
+1. On connect: Client sends last-seen **message ID** (time-sortable UUIDv7/Snowflake)
+2. Server sends all messages since that ID (using ID's embedded timestamp)
 3. Client ACKs received messages
 4. Server transitions to push mode
+
+> **Note**: Sync uses time-sortable IDs (Section 5.2), not global sequence numbers, to avoid cross-region coordination bottlenecks.
 
 ### 9.3 Wire Format (v1)
 
