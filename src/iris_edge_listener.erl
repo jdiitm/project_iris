@@ -30,7 +30,30 @@ start_link(Port, HandlerMod) ->
 init([Port, HandlerMod]) ->
     TlsEnabled = application:get_env(iris_edge, tls_enabled, false),
     
-    %% Common socket options
+    %% RFC NFR-14: TLS MUST be mandatory for all client connections
+    case check_tls_policy(TlsEnabled) of
+        ok ->
+            start_listener(Port, HandlerMod, TlsEnabled);
+        {error, Reason} ->
+            {stop, Reason}
+    end.
+
+%% Check TLS policy compliance
+check_tls_policy(true) -> ok;
+check_tls_policy(false) ->
+    logger:warning("=== RFC VIOLATION: TLS DISABLED (NFR-14) ==="),
+    logger:warning("TLS is MANDATORY per RFC-001. Set {tls_enabled, true}"),
+    case application:get_env(iris_edge, allow_insecure, false) of
+        true ->
+            logger:warning("Running in INSECURE mode (allow_insecure=true)"),
+            ok;
+        false ->
+            logger:error("Refusing to start without TLS. Set {allow_insecure, true} to override."),
+            {error, tls_required}
+    end.
+
+%% Start the actual listener
+start_listener(Port, HandlerMod, TlsEnabled) ->
     BaseOpts = [
         binary,
         {packet, 0},
@@ -41,20 +64,17 @@ init([Port, HandlerMod]) ->
     
     {ok, LSock} = case TlsEnabled of
         true ->
-            %% TLS mode
             TlsOpts = get_tls_options(),
             AllOpts = BaseOpts ++ TlsOpts,
             logger:info("Starting TLS listener on port ~p", [Port]),
             ssl:listen(Port, AllOpts);
         false ->
-            %% Plain TCP mode
             logger:info("Starting TCP listener on port ~p (TLS disabled)", [Port]),
             gen_tcp:listen(Port, BaseOpts)
     end,
     
     io:format("Listener started on port ~p (Handler: ~p, TLS: ~p)~n", [Port, HandlerMod, TlsEnabled]),
     
-    %% Spawn parallel acceptors
     NumAcceptors = application:get_env(iris_edge, num_acceptors, 500),
     [spawn_acceptor(LSock, HandlerMod, TlsEnabled) || _ <- lists:seq(1, NumAcceptors)],
     
