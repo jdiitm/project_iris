@@ -1,0 +1,416 @@
+version: '3.8'
+
+# =============================================================================
+# Project Iris: Global Cluster Simulation (24-Core / 32GB)
+# =============================================================================
+# Simulates a 5-region global deployment with:
+# - 3 Core regions: US-East (primary), US-West, EU-Frankfurt
+# - 2 High-latency edge regions: Sydney, São Paulo
+# - Network latency injection via Pumba
+# =============================================================================
+
+x-core-defaults: &core-defaults
+  image: erlang:25-alpine
+  deploy:
+    resources:
+      limits: {memory: 2G, cpus: '2'}
+  volumes:
+    - ../../:/app:ro
+  working_dir: /app
+  environment:
+    - IRIS_COOKIE=${IRIS_COOKIE:-iris_secret}
+
+x-edge-defaults: &edge-defaults
+  image: erlang:25-alpine
+  deploy:
+    resources:
+      limits: {memory: 512M, cpus: '0.5'}
+  volumes:
+    - ../../:/app:ro
+  working_dir: /app
+  environment:
+    - IRIS_COOKIE=${IRIS_COOKIE:-iris_secret}
+
+x-loadgen-defaults: &loadgen-defaults
+  image: python:3.11-slim
+  deploy:
+    resources:
+      limits: {memory: 1G, cpus: '2'}
+  volumes:
+    - ../../:/app:ro
+  working_dir: /app
+
+services:
+  # ==========================================================================
+  # REGION: US-EAST (Primary)
+  # ==========================================================================
+  core-east-1:
+    <<: *core-defaults
+    container_name: core-east-1
+    hostname: core-east-1
+    command: >
+      sh -c "cd /app && erl -name core_east_1@core-east-1
+          -setcookie $$IRIS_COOKIE
+          -pa ebin
+          -eval 'application:ensure_all_started(mnesia), 
+                 iris_core:init_db(), 
+                 application:ensure_all_started(iris_core).'"
+    volumes:
+      - ../../:/app:ro
+      - mnesia-east-1:/tmp/Mnesia
+    networks:
+      iris_east: {ipv4_address: 172.30.0.10}
+      iris_backbone: {ipv4_address: 172.29.0.10}
+    healthcheck:
+      test: ["CMD-SHELL", "epmd -names 2>/dev/null | grep -q core_east_1"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+  core-east-2:
+    <<: *core-defaults
+    container_name: core-east-2
+    hostname: core-east-2
+    command: >
+      sh -c "cd /app && erl -name core_east_2@core-east-2
+          -setcookie $$IRIS_COOKIE
+          -pa ebin
+          -eval 'application:ensure_all_started(mnesia), 
+                 application:ensure_all_started(iris_core),
+                 timer:sleep(5000),
+                 iris_core:join_cluster(core_east_1@\"core-east-1\").'"
+    volumes:
+      - ../../:/app:ro
+      - mnesia-east-2:/tmp/Mnesia
+    networks:
+      iris_east: {ipv4_address: 172.30.0.11}
+      iris_backbone: {ipv4_address: 172.29.0.11}
+    depends_on:
+      core-east-1: {condition: service_healthy}
+
+  edge-east-1:
+    <<: *edge-defaults
+    container_name: edge-east-1
+    hostname: edge-east-1
+    command: >
+      sh -c "cd /app && erl -name edge_east_1@edge-east-1 -hidden
+          -setcookie $$IRIS_COOKIE
+          -pa ebin
+          -iris_edge port 8085
+          -eval 'application:ensure_all_started(iris_edge),
+                 net_adm:ping(core_east_1@\"core-east-1\").'"
+    ports: ["8085:8085"]
+    networks:
+      iris_east: {ipv4_address: 172.30.0.20}
+      iris_backbone: {ipv4_address: 172.29.0.20}
+    depends_on:
+      core-east-1: {condition: service_healthy}
+
+  edge-east-2:
+    <<: *edge-defaults
+    container_name: edge-east-2
+    hostname: edge-east-2
+    command: >
+      sh -c "cd /app && erl -name edge_east_2@edge-east-2 -hidden
+          -setcookie $$IRIS_COOKIE
+          -pa ebin
+          -iris_edge port 8086
+          -eval 'application:ensure_all_started(iris_edge),
+                 net_adm:ping(core_east_2@\"core-east-2\").'"
+    ports: ["8086:8086"]
+    networks:
+      iris_east: {ipv4_address: 172.30.0.21}
+      iris_backbone: {ipv4_address: 172.29.0.21}
+    depends_on:
+      core-east-2: {condition: service_started}
+
+  # ==========================================================================
+  # REGION: US-WEST
+  # ==========================================================================
+  core-west-1:
+    <<: *core-defaults
+    container_name: core-west-1
+    hostname: core-west-1
+    command: >
+      sh -c "cd /app && erl -name core_west_1@core-west-1
+          -setcookie $$IRIS_COOKIE
+          -pa ebin
+          -eval 'application:ensure_all_started(mnesia), 
+                 application:ensure_all_started(iris_core),
+                 timer:sleep(5000),
+                 iris_core:join_cluster(core_east_1@\"core-east-1\").'"
+    volumes:
+      - ../../:/app:ro
+      - mnesia-west-1:/tmp/Mnesia
+    networks:
+      iris_west: {ipv4_address: 172.31.0.10}
+      iris_backbone: {ipv4_address: 172.29.0.30}
+    depends_on:
+      core-east-1: {condition: service_healthy}
+
+  core-west-2:
+    <<: *core-defaults
+    container_name: core-west-2
+    hostname: core-west-2
+    command: >
+      sh -c "cd /app && erl -name core_west_2@core-west-2
+          -setcookie $$IRIS_COOKIE
+          -pa ebin
+          -eval 'application:ensure_all_started(mnesia), 
+                 application:ensure_all_started(iris_core),
+                 timer:sleep(7000),
+                 iris_core:join_cluster(core_west_1@\"core-west-1\").'"
+    volumes:
+      - ../../:/app:ro
+      - mnesia-west-2:/tmp/Mnesia
+    networks:
+      iris_west: {ipv4_address: 172.31.0.11}
+      iris_backbone: {ipv4_address: 172.29.0.31}
+    depends_on:
+      core-west-1: {condition: service_started}
+
+  edge-west-1:
+    <<: *edge-defaults
+    container_name: edge-west-1
+    hostname: edge-west-1
+    command: >
+      sh -c "cd /app && erl -name edge_west_1@edge-west-1 -hidden
+          -setcookie $$IRIS_COOKIE
+          -pa ebin
+          -iris_edge port 8087
+          -eval 'application:ensure_all_started(iris_edge),
+                 net_adm:ping(core_west_1@\"core-west-1\").'"
+    ports: ["8087:8087"]
+    networks:
+      iris_west: {ipv4_address: 172.31.0.20}
+      iris_backbone: {ipv4_address: 172.29.0.40}
+    depends_on:
+      core-west-1: {condition: service_started}
+
+  edge-west-2:
+    <<: *edge-defaults
+    container_name: edge-west-2
+    hostname: edge-west-2
+    command: >
+      sh -c "cd /app && erl -name edge_west_2@edge-west-2 -hidden
+          -setcookie $$IRIS_COOKIE
+          -pa ebin
+          -iris_edge port 8088
+          -eval 'application:ensure_all_started(iris_edge),
+                 net_adm:ping(core_west_2@\"core-west-2\").'"
+    ports: ["8088:8088"]
+    networks:
+      iris_west: {ipv4_address: 172.31.0.21}
+      iris_backbone: {ipv4_address: 172.29.0.41}
+    depends_on:
+      core-west-2: {condition: service_started}
+
+  # ==========================================================================
+  # REGION: EU-FRANKFURT
+  # ==========================================================================
+  core-eu-1:
+    <<: *core-defaults
+    container_name: core-eu-1
+    hostname: core-eu-1
+    command: >
+      sh -c "cd /app && erl -name core_eu_1@core-eu-1
+          -setcookie $$IRIS_COOKIE
+          -pa ebin
+          -eval 'application:ensure_all_started(mnesia), 
+                 application:ensure_all_started(iris_core),
+                 timer:sleep(6000),
+                 iris_core:join_cluster(core_east_1@\"core-east-1\").'"
+    volumes:
+      - ../../:/app:ro
+      - mnesia-eu-1:/tmp/Mnesia
+    networks:
+      iris_eu: {ipv4_address: 172.33.0.10}
+      iris_backbone: {ipv4_address: 172.29.0.50}
+    depends_on:
+      core-east-1: {condition: service_healthy}
+
+  core-eu-2:
+    <<: *core-defaults
+    container_name: core-eu-2
+    hostname: core-eu-2
+    command: >
+      sh -c "cd /app && erl -name core_eu_2@core-eu-2
+          -setcookie $$IRIS_COOKIE
+          -pa ebin
+          -eval 'application:ensure_all_started(mnesia), 
+                 application:ensure_all_started(iris_core),
+                 timer:sleep(8000),
+                 iris_core:join_cluster(core_eu_1@\"core-eu-1\").'"
+    volumes:
+      - ../../:/app:ro
+      - mnesia-eu-2:/tmp/Mnesia
+    networks:
+      iris_eu: {ipv4_address: 172.33.0.11}
+      iris_backbone: {ipv4_address: 172.29.0.51}
+    depends_on:
+      core-eu-1: {condition: service_started}
+
+  edge-eu-1:
+    <<: *edge-defaults
+    container_name: edge-eu-1
+    hostname: edge-eu-1
+    command: >
+      sh -c "cd /app && erl -name edge_eu_1@edge-eu-1 -hidden
+          -setcookie $$IRIS_COOKIE
+          -pa ebin
+          -iris_edge port 8089
+          -eval 'application:ensure_all_started(iris_edge),
+                 net_adm:ping(core_eu_1@\"core-eu-1\").'"
+    ports: ["8089:8089"]
+    networks:
+      iris_eu: {ipv4_address: 172.33.0.20}
+      iris_backbone: {ipv4_address: 172.29.0.60}
+    depends_on:
+      core-eu-1: {condition: service_started}
+
+  edge-eu-2:
+    <<: *edge-defaults
+    container_name: edge-eu-2
+    hostname: edge-eu-2
+    command: >
+      sh -c "cd /app && erl -name edge_eu_2@edge-eu-2 -hidden
+          -setcookie $$IRIS_COOKIE
+          -pa ebin
+          -iris_edge port 8094
+          -eval 'application:ensure_all_started(iris_edge),
+                 net_adm:ping(core_eu_2@\"core-eu-2\").'"
+    ports: ["8094:8094"]
+    networks:
+      iris_eu: {ipv4_address: 172.33.0.21}
+      iris_backbone: {ipv4_address: 172.29.0.61}
+    depends_on:
+      core-eu-2: {condition: service_started}
+
+  # ==========================================================================
+  # REGION: SYDNEY (High-Latency Edge - 100ms to US-East)
+  # ==========================================================================
+  edge-sydney-1:
+    <<: *edge-defaults
+    container_name: edge-sydney-1
+    hostname: edge-sydney-1
+    command: >
+      sh -c "cd /app && erl -name edge_sydney_1@edge-sydney-1 -hidden
+          -setcookie $$IRIS_COOKIE
+          -pa ebin
+          -iris_edge port 8090
+          -eval 'application:ensure_all_started(iris_edge),
+                 net_adm:ping(core_east_1@\"core-east-1\").'"
+    ports: ["8090:8090"]
+    networks:
+      iris_sydney: {ipv4_address: 172.32.0.20}
+      iris_backbone: {ipv4_address: 172.29.0.70}
+    depends_on:
+      core-east-1: {condition: service_healthy}
+
+  edge-sydney-2:
+    <<: *edge-defaults
+    container_name: edge-sydney-2
+    hostname: edge-sydney-2
+    command: >
+      sh -c "cd /app && erl -name edge_sydney_2@edge-sydney-2 -hidden
+          -setcookie $$IRIS_COOKIE
+          -pa ebin
+          -iris_edge port 8091
+          -eval 'application:ensure_all_started(iris_edge),
+                 net_adm:ping(core_east_2@\"core-east-2\").'"
+    ports: ["8091:8091"]
+    networks:
+      iris_sydney: {ipv4_address: 172.32.0.21}
+      iris_backbone: {ipv4_address: 172.29.0.71}
+    depends_on:
+      core-east-2: {condition: service_started}
+
+  # ==========================================================================
+  # REGION: SÃO PAULO (High-Latency Edge - 100ms to US-West)
+  # ==========================================================================
+  edge-saopaulo:
+    <<: *edge-defaults
+    container_name: edge-saopaulo
+    hostname: edge-saopaulo
+    command: >
+      sh -c "cd /app && erl -name edge_saopaulo@edge-saopaulo -hidden
+          -setcookie $$IRIS_COOKIE
+          -pa ebin
+          -iris_edge port 8092
+          -eval 'application:ensure_all_started(iris_edge),
+                 net_adm:ping(core_west_1@\"core-west-1\").'"
+    ports: ["8092:8092"]
+    networks:
+      iris_saopaulo: {ipv4_address: 172.34.0.20}
+      iris_backbone: {ipv4_address: 172.29.0.80}
+    depends_on:
+      core-west-1: {condition: service_started}
+
+  # ==========================================================================
+  # LOAD GENERATORS
+  # ==========================================================================
+  loadgen-east:
+    <<: *loadgen-defaults
+    container_name: loadgen-east
+    hostname: loadgen-east
+    command: ["python3", "-c", "import time; time.sleep(86400)"]
+    networks:
+      iris_east: {ipv4_address: 172.30.0.100}
+      iris_backbone: {ipv4_address: 172.29.0.100}
+
+  loadgen-west:
+    <<: *loadgen-defaults
+    container_name: loadgen-west
+    hostname: loadgen-west
+    command: ["python3", "-c", "import time; time.sleep(86400)"]
+    networks:
+      iris_west: {ipv4_address: 172.31.0.100}
+      iris_backbone: {ipv4_address: 172.29.0.101}
+
+  # ==========================================================================
+  # CHAOS INJECTION (Pumba)
+  # ==========================================================================
+  pumba-sydney:
+    image: gaiaadm/pumba
+    container_name: pumba-sydney
+    profiles: ["chaos"]
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    command: netem --duration 8h --delay 100ms:10ms edge-sydney-1 edge-sydney-2
+
+  pumba-saopaulo:
+    image: gaiaadm/pumba
+    container_name: pumba-saopaulo
+    profiles: ["chaos"]
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    command: netem --duration 8h --delay 100ms:10ms edge-saopaulo
+
+networks:
+  iris_east:
+    driver: bridge
+    ipam: {config: [{subnet: 172.30.0.0/16}]}
+  iris_west:
+    driver: bridge
+    ipam: {config: [{subnet: 172.31.0.0/16}]}
+  iris_sydney:
+    driver: bridge
+    ipam: {config: [{subnet: 172.32.0.0/16}]}
+  iris_eu:
+    driver: bridge
+    ipam: {config: [{subnet: 172.33.0.0/16}]}
+  iris_saopaulo:
+    driver: bridge
+    ipam: {config: [{subnet: 172.34.0.0/16}]}
+  iris_backbone:
+    driver: bridge
+    ipam: {config: [{subnet: 172.29.0.0/16}]}
+
+volumes:
+  mnesia-east-1:
+  mnesia-east-2:
+  mnesia-west-1:
+  mnesia-west-2:
+  mnesia-eu-1:
+  mnesia-eu-2:

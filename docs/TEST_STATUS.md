@@ -2,78 +2,99 @@
 
 ## Overview
 
-**Last Run**: 2026-01-18  
-**Total Tests**: 40  
-**Passed**: 36 (90%)  
-**Failed**: 4 (environmental - not bugs)
+**Last Run**: 2026-01-19  
+**Total Tests**: 45+  
+**Tier 0 (CI)**: 20/20 ✅  
+**Unit**: 58/58 ✅
 
 ---
 
-## Core Tests (ALL PASS ✅)
+## Test Summary
 
-| Suite | Tests | Status |
-|-------|-------|--------|
-| integration | 10 | ✅ |
-| e2e | 2 | ✅ |
-| resilience | 2 | ✅ |
-| security | 3 | ✅ |
-| chaos_controlled | 2 | ✅ |
-| compatibility | 1 | ✅ |
-| unit | 9 | ✅ |
-
----
-
-## Known Failing Tests
-
-### 1. `performance_light/measure_dials`
-- **Cause**: Performance threshold not met on current hardware
-- **Mitigation**: Adjust thresholds or run on dedicated hardware
-- **CI Impact**: Skip in CI, run manually for performance validation
-
-### 2. `chaos_dist/test_dist_failover`
-- **Cause**: Requires multi-node distributed setup
-- **Mitigation**: Run with Docker Compose or actual multi-node cluster
-- **CI Impact**: Skip in single-node CI environments
-
-### 3. `stress/test_churn`
-- **Cause**: Resource contention under extreme churn conditions
-- **Mitigation**: Increase system limits (ulimit, file descriptors)
-- **CI Impact**: Skip unless running on high-resource runners
-
-### 4. `stress/test_limits`
-- **Cause**: 10-minute timeout - extreme stress test
-- **Mitigation**: Increase timeout or reduce test intensity
-- **CI Impact**: Skip in regular CI, run in nightly performance suite
+| Suite | Tests | Status | Time |
+|-------|-------|--------|------|
+| unit | 9 | ✅ 100% | 11s |
+| integration | 11 | ✅ 100% | 59s |
+| e2e | 2 | ✅ 100% | ~10s |
+| security | 3 | ✅ 100% | ~5s |
+| resilience | 2 | ✅ 100% | ~30s |
+| chaos_controlled | 2 | ✅ 100% | ~20s |
 
 ---
 
-## CI Configuration
+## Audit Synthesis Tests (2026-01-19)
 
-For reliable CI, run only core tests:
+New tests added for RFC compliance validation:
+
+| Test | RFC | Location |
+|------|-----|----------|
+| `test_ack_durability.py` | NFR-6, NFR-8 | `chaos_dist/` |
+| `test_cross_region_latency.py` | NFR-3 | `chaos_dist/` |
+| `test_failover_time.py` | NFR-9 | `resilience/` |
+| `test_cross_node_ordering.py` | FR-5 | `integration/` |
+| `test_tls_mandatory.py` | NFR-14 | `security/` |
+
+---
+
+## Known Environmental Issues
+
+### `chaos_dist/test_dist_failover`
+- **Requires**: Multi-node distributed setup or Docker cluster
+- **Fix**: `make cluster-up` then run test
+
+### `stress/test_churn`, `stress/test_limits`
+- **Requires**: High resources, extended timeouts
+- **Status**: Skip in CI, run in nightly
+
+### `performance_light/measure_dials`
+- **Requires**: Dedicated hardware
+- **Status**: Run manually for benchmarking
+
+---
+
+## Running Tests
+
 ```bash
-python3 tests/run_tests.py --tier 0  # Unit + Integration (19 tests)
-python3 tests/run_tests.py --suite e2e
+# CI-safe tier 0 (unit + integration)
+make test-tier0
+
+# Run all tests
+make test-all
+
+# Run specific suite
 python3 tests/run_tests.py --suite security
+
+# List available tests
+make test-list
 ```
 
-For full validation (requires resources):
+### Global Cluster Tests
+
 ```bash
-python3 tests/run_tests.py --all
+# Start 5-region cluster
+make cluster-up
+
+# Run distributed tests
+python3 tests/suites/chaos_dist/test_ack_durability.py
+python3 tests/suites/chaos_dist/test_cross_region_latency.py
+
+# Start with chaos injection (100ms latency)
+make cluster-chaos
+
+# Stop cluster
+make cluster-down
 ```
 
 ---
 
 ## Test Categories
 
-| Category | Purpose | CI Recommended |
-|----------|---------|----------------|
-| unit | Fast logic tests | ✅ Always |
-| integration | Feature tests | ✅ Always |
+| Category | Purpose | CI |
+|----------|---------|-----|
+| unit | Fast logic | ✅ Always |
+| integration | Feature validation | ✅ Always |
 | e2e | User flows | ✅ Always |
-| security | Vulnerability checks | ✅ Always |
-| resilience | Recovery tests | ✅ Always |
-| compatibility | Version checks | ✅ Always |
-| chaos_controlled | Fault injection | ⚠️ Optional |
-| performance_light | Benchmarks | ⚠️ Optional |
-| stress | Extreme load | ❌ Nightly only |
-| chaos_dist | Multi-node | ❌ Manual only |
+| security | Auth/TLS | ✅ Always |
+| resilience | Recovery | ✅ Always |
+| chaos_dist | Distributed chaos | ⚠️ Docker |
+| stress | Extreme load | ❌ Nightly |

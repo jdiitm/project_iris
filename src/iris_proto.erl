@@ -1,5 +1,6 @@
 -module(iris_proto).
 -export([decode/1, unpack_batch/1, encode_status/3, encode_reliable_msg/2]).
+-export([encode_seq_msg/3]).  %% AUDIT FIX: Sequence-numbered message encoder (RFC FR-5)
 
 -type packet() :: {login, binary()}
                 | {send_message, binary(), binary()}
@@ -19,6 +20,10 @@
 %% 0x01 | User (binary) -> {login, User}
 %% 0x02 | TargetLen(16) | Target(binary) | MsgLen(16) | Msg(binary) | Rest
 %% 0x03 | MsgId (binary) -> {ack, MsgId}
+%% 0x04 | TargetLen(16) | Target | BatchLen(32) | BatchBlob -> {batch_send, Target, Blob}
+%% 0x05 | TargetLen(16) | Target -> {get_status, Target}
+%% 0x07 | TargetLen(16) | Target | SeqNo(64) | MsgLen(16) | Msg -> {send_seq, Target, SeqNo, Msg}
+%%       AUDIT FIX: Sequence-numbered message for FIFO ordering (RFC FR-5)
 
 -spec decode(binary()) -> {packet(), binary()} | {more, binary()} | {error, term()}.
 
@@ -79,6 +84,24 @@ decode(<<5, TargetLen:16, Rest/binary>>) ->
              {more, <<5, TargetLen:16, Rest/binary>>}
     end;
 
+%% AUDIT FIX: Sequence-numbered message for FIFO ordering (RFC FR-5)
+%% Format: 0x07 | TargetLen(16) | Target | SeqNo(64) | MsgLen(16) | Msg
+decode(<<7, _/binary>> = Bin) when byte_size(Bin) < 3 ->
+    {more, Bin};
+    
+decode(<<7, TargetLen:16, _/binary>>) when TargetLen > ?MAX_TARGET_LEN ->
+    { {error, target_too_long}, <<>> };
+    
+decode(<<7, TargetLen:16, Rest/binary>>) ->
+    case Rest of
+        <<Target:TargetLen/binary, SeqNo:64, MsgLen:16, _/binary>> when MsgLen > ?MAX_MSG_LEN ->
+            { {error, message_too_long}, <<>> };
+        <<Target:TargetLen/binary, SeqNo:64, MsgLen:16, Msg:MsgLen/binary, Rem/binary>> ->
+            { {send_seq, Target, SeqNo, Msg}, Rem };
+        _ ->
+            {more, <<7, TargetLen:16, Rest/binary>>}
+    end;
+
 decode(<<>>) -> {more, <<>>};
 decode(_Bin) -> { {error, unknown_packet}, <<>> }.
 
@@ -111,3 +134,10 @@ decode_reliable_msg(<<16, IdLen:16, Rest/binary>>) when byte_size(Rest) >= IdLen
     end;
 decode_reliable_msg(Bin) ->
     {more, Bin}.
+
+%% AUDIT FIX: Encode sequence-numbered message (RFC FR-5)
+%% Format: 0x07 | TargetLen(16) | Target | SeqNo(64) | MsgLen(16) | Msg
+encode_seq_msg(Target, SeqNo, Msg) ->
+    TLen = byte_size(Target),
+    MLen = byte_size(Msg),
+    <<7, TLen:16, Target/binary, SeqNo:64, MLen:16, Msg/binary>>.

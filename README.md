@@ -25,7 +25,8 @@ Project Iris is a high-performance distributed messaging system built in **Erlan
 | `iris_circuit_breaker` | Fallback routing with adaptive timeout |
 | `iris_shard` | Consistent user sharding (phash2) |
 | `iris_discovery` | Pluggable service discovery (pg/DNS/Consul) |
-| `iris_storage` | Backend abstraction (Mnesia/ETS/Redis) |
+| `iris_partition_guard` | Split-brain detection, safe mode on quorum loss |
+| `iris_msg_sequence` | FIFO ordering with sender-assigned sequences |
 | `iris_auth` | JWT authentication with HMAC-SHA256 |
 | `iris_rate_limiter` | Per-user token bucket rate limiting |
 

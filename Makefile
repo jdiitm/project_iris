@@ -110,3 +110,25 @@ stop:
 	@echo "Stopping nodes..."
 	@-pkill -f "beam.smp.*iris_" 2>/dev/null; true
 	@echo "Nodes stopped."
+
+# =============================================================================
+# Global Cluster Simulation (Docker)
+# =============================================================================
+cluster-up: all
+	@echo "Starting 5-region global cluster..."
+	@docker/global-cluster/cluster.sh up
+
+cluster-chaos: all
+	@echo "Starting global cluster with chaos injection..."
+	@docker/global-cluster/cluster.sh up-chaos
+
+cluster-down:
+	@echo "Stopping global cluster..."
+	@docker/global-cluster/cluster.sh down
+
+cluster-status:
+	@docker/global-cluster/cluster.sh status
+
+cluster-clean:
+	@docker/global-cluster/cluster.sh clean
+
