@@ -39,6 +39,9 @@ SUITES_DIR = TESTS_ROOT / "suites"
 TIER_0_SUITES = ["unit", "integration"]  # Required on every merge
 TIER_1_SUITES = ["resilience", "performance_light", "chaos_controlled"]  # Nightly/manual
 
+# Tests that require TLS-enabled cluster (use config/test_tls.config)
+TLS_REQUIRED_TESTS = ["test_tls_mandatory"]
+
 # ============================================================================
 # Data Classes
 # ============================================================================
@@ -256,14 +259,18 @@ def mesh_cluster(suffix: str):
     except Exception as e:
         log_warn(f"Mesh error: {e}")
 
-def ensure_cluster_running() -> bool:
-    """Ensure the Iris cluster is running."""
-    log_info("Ensuring cluster is running...")
+def ensure_cluster_running(config: str = "config/test") -> bool:
+    """Ensure the Iris cluster is running with specified config.
+    
+    Args:
+        config: Config file path without .config extension (default: config/test)
+    """
+    log_info(f"Ensuring cluster is running (config={config})...")
     
     try:
         # Get suffix for this run
         suffix = os.environ.get("IRIS_NODE_SUFFIX", "")
-        make_args = [f"NODE_SUFFIX={suffix}"] if suffix else []
+        make_args = [f"NODE_SUFFIX={suffix}", f"CONFIG={config}"] if suffix else [f"CONFIG={config}"]
         
         # Force stop any existing cluster
         stop_cluster()
@@ -314,6 +321,26 @@ def ensure_cluster_running() -> bool:
     except Exception as e:
         log_warn(f"Could not start cluster: {e}")
         return False
+
+
+# Track what config the cluster is currently running with
+_current_cluster_config = None
+
+def ensure_cluster_with_config(config: str = "config/test") -> bool:
+    """Ensure cluster is running with the specified config, restarting if needed."""
+    global _current_cluster_config
+    
+    if _current_cluster_config == config:
+        log_info(f"Cluster already running with {config}")
+        return True
+    
+    if _current_cluster_config is not None:
+        log_info(f"Switching cluster config from {_current_cluster_config} to {config}")
+    
+    result = ensure_cluster_running(config=config)
+    if result:
+        _current_cluster_config = config
+    return result
 
 def wait_for_port(port: int, timeout: int = 30) -> bool:
     """Wait for a TCP port to open."""
@@ -417,6 +444,8 @@ def run_test(test: Dict, run_dir: Path, timeout: int = 120) -> TestResult:
 
 def run_suite(suite_name: str, run_dir: Path, require_cluster: bool = True) -> SuiteResult:
     """Run all tests in a suite."""
+    global _current_cluster_config
+    
     log_header(f"Suite: {suite_name}")
     
     start_time = time.time()
@@ -434,10 +463,6 @@ def run_suite(suite_name: str, run_dir: Path, require_cluster: bool = True) -> S
     
     log_info(f"Found {len(tests)} tests")
     
-    # Start cluster for integration/stress tests
-    if require_cluster and suite_name not in ["unit"]:
-        ensure_cluster_running()
-    
     # Suite-specific timeouts (seconds)
     suite_timeouts = {
         "integration": 120,
@@ -446,14 +471,40 @@ def run_suite(suite_name: str, run_dir: Path, require_cluster: bool = True) -> S
         "stress": 600,           # 10 min for stress
         "performance_light": 300,# 5 min for performance
         "unit": 60,
+        "security": 120,
     }
     timeout = suite_timeouts.get(suite_name, 300)  # Default 5 min
 
+    # Separate tests by config requirement
+    normal_tests = []
+    tls_tests = []
+    for test in tests:
+        if test["name"] in TLS_REQUIRED_TESTS:
+            tls_tests.append(test)
+        else:
+            normal_tests.append(test)
     
     results = []
-    for test in tests:
+    
+    # Run normal tests first (with default config)
+    if normal_tests and require_cluster and suite_name not in ["unit"]:
+        ensure_cluster_with_config("config/test")
+    
+    for test in normal_tests:
         result = run_test(test, run_dir, timeout=timeout)
         results.append(result)
+    
+    # Run TLS-required tests with TLS config
+    if tls_tests and require_cluster:
+        log_info("Switching to TLS-enforcing config for TLS tests...")
+        ensure_cluster_with_config("config/test_tls")
+        
+        for test in tls_tests:
+            result = run_test(test, run_dir, timeout=timeout)
+            results.append(result)
+        
+        # Switch back to normal config for subsequent suites
+        _current_cluster_config = None  # Force restart on next suite
     
     duration = time.time() - start_time
     passed = sum(1 for r in results if r.passed)
@@ -467,6 +518,7 @@ def run_suite(suite_name: str, run_dir: Path, require_cluster: bool = True) -> S
         duration_seconds=duration,
         results=results
     )
+
 
 # ============================================================================
 # Artifact Management
