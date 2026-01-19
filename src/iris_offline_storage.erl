@@ -1,6 +1,7 @@
 -module(iris_offline_storage).
 -export([store/3, store_batch/3, retrieve/2]).
 -export([store_sync/3]).  %% Direct sync_transaction mode (for critical paths)
+-export([store_durable/3]).  %% AUDIT FIX: Guaranteed durable - ACK only after persistence
 
 %% Mnesia table definition (created in iris_core:init_db/0):
 %% {offline_msg, User, Timestamp, Msg}
@@ -41,6 +42,34 @@ store_sync(User, Msg, Count) ->
         {atomic, _} -> ok;
         {aborted, Reason} ->
             logger:error("Offline store failed for ~p: ~p", [User, Reason]),
+            {error, Reason}
+    end.
+
+%% =============================================================================
+%% AUDIT FIX: Guaranteed Durable Store (RFC NFR-6, NFR-8)
+%% =============================================================================
+%% This function MUST be used when the caller needs to ACK to the client.
+%% It guarantees:
+%% 1. Message is written to Mnesia with sync_transaction
+%% 2. Function returns ONLY after write is confirmed durable
+%% 3. If this function returns 'ok', the message WILL survive any single node failure
+%%
+%% Use cases:
+%% - Offline message storage before sending ACK to sender
+%% - Any path where RPO=0 is required
+%% =============================================================================
+store_durable(User, Msg, Count) ->
+    %% ALWAYS use sync_transaction path (bypass batcher)
+    %% The batcher provides better latency but may ACK before Mnesia commit
+    Result = store_sync(User, Msg, Count),
+    case Result of
+        ok ->
+            %% Log at debug level for durability auditing
+            logger:debug("Durable store confirmed for user ~p", [User]),
+            ok;
+        {error, Reason} ->
+            %% CRITICAL: Do not ACK to client if this fails
+            logger:error("DURABILITY FAILURE for ~p: ~p - DO NOT ACK", [User, Reason]),
             {error, Reason}
     end.
 

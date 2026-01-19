@@ -8,7 +8,7 @@
 
 %% High-Scale Messaging APIs
 -export([register_user/3, lookup_user/1]).
--export([store_offline/2, store_batch/2, retrieve_offline/1]).
+-export([store_offline/2, store_offline_durable/2, store_batch/2, retrieve_offline/1]).
 -export([get_bucket_count/1, set_bucket_count/2]).
 -export([update_status/2, get_status/1]).
 
@@ -72,6 +72,13 @@ init([]) ->
         %% Flow Controller: Global backpressure and cascade failure detection
         #{id => iris_flow_controller,
           start => {iris_flow_controller, start_link, []},
+          type => worker,
+          restart => permanent},
+          
+        %% Partition Guard: Split-brain detection and safe mode
+        %% AUDIT FIX: Detects cluster partitions and rejects writes to prevent divergence
+        #{id => iris_partition_guard,
+          start => {iris_partition_guard, start_link, []},
           type => worker,
           restart => permanent},
           
@@ -141,6 +148,13 @@ lookup_user(User) ->
 store_offline(User, Msg) ->
     Count = get_bucket_count(User),
     iris_offline_storage:store(User, Msg, Count).
+
+%% AUDIT FIX: Guaranteed durable store - use when ACK is sent to client
+%% This function blocks until Mnesia sync_transaction completes
+%% Returns 'ok' ONLY if message is confirmed durable (survives any single node failure)
+store_offline_durable(User, Msg) ->
+    Count = get_bucket_count(User),
+    iris_offline_storage:store_durable(User, Msg, Count).
 
 store_batch(User, Msgs) ->
     Count = get_bucket_count(User),
