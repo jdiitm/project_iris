@@ -1,74 +1,77 @@
-# Hybrid Cloud Cluster Setup Guide (Project Iris)
+# Cluster Setup Guide
 
-This guide details how to deploy a **Hybrid Cloud Cluster** for Project Iris, using the **Live Environment** configuration verified on 2026-01-10.
+## Quick Start (Docker)
 
-| Role | Node Name | IP | Function |
-| :--- | :--- | :--- | :--- |
-| **Core 1** | `iris_core1@100.95.21.52` | 100.95.21.52 | Bootstrap Master |
-| **Core 2** | `iris_core2@100.68.74.48` | 100.68.74.48 | Replica |
-| **Edge 1** | `iris_edge1@100.82.212.50` | 100.82.212.50 | Edge Gateway |
-
-## 1. Prerequisites (All Nodes)
-Ensure Tailscale is up and machines can ping each other.
-
-## 2. Start the Cluster
-
-### 2.1 Start Core Tier (Local Laptops)
-
-**Laptop A (Core 1 - Bootstrap Node):**
 ```bash
-# Start master node with Mnesia initialization
-erl -name iris_core1@100.95.21.52 -setcookie iris_secret -pa ebin \
+# Start 5-region cluster (6 cores, 11 edges)
+make cluster-up
+
+# Run distributed tests
+make cluster-test
+
+# Stop cluster
+make cluster-down
+
+# Full cleanup (removes volumes)
+make cluster-clean
+```
+
+## Docker Cluster Architecture
+
+| Region | Cores | Edges | Ports |
+|--------|-------|-------|-------|
+| East | core-east-1, core-east-2 | edge-east-1, edge-east-2 | 8085, 8086 |
+| West | core-west-1, core-west-2 | edge-west-1, edge-west-2 | 8087, 8088 |
+| EU | core-eu-1, core-eu-2 | edge-eu-1, edge-eu-2 | 8089, 8094 |
+| Sydney | - | edge-sydney-1, edge-sydney-2 | 8090, 8091 |
+| Sao Paulo | - | edge-saopaulo | 8092 |
+
+## Manual Setup (Bare Metal)
+
+### Prerequisites
+
+- Erlang OTP 25+
+- Same cookie: `echo "iris_secret" > ~/.erlang.cookie && chmod 400 ~/.erlang.cookie`
+
+### Start Primary Core
+
+```bash
+erl -sname iris_core -setcookie iris_secret -pa ebin \
+    -mnesia dir '"/data/mnesia"' \
     -eval "application:ensure_all_started(mnesia), iris_core:init_db(), application:ensure_all_started(iris_core)."
 ```
 
-**Laptop B (Core 2 - Replica):**
+### Join Secondary Cores
+
 ```bash
-# Start replica node and join cluster
-erl -name iris_core2@100.68.74.48 -setcookie iris_secret -pa ebin \
-    -eval "application:ensure_all_started(mnesia), iris_core:init_db(), application:ensure_all_started(iris_core)."
+erl -sname iris_core -setcookie iris_secret -pa ebin \
+    -mnesia dir '"/data/mnesia"' \
+    -eval "application:ensure_all_started(mnesia), iris_core:init_db(), application:ensure_all_started(iris_core), timer:sleep(5000), iris_core:join_cluster('iris_core@primary')."
 ```
 
-*(On Core 2, join the cluster)*:
-```erlang
-(iris_core2@100.68.74.48)1> iris_core:join_cluster('iris_core1@100.95.21.52').
-% Expected log: "Joined cluster with iris_core1@100.95.21.52"
-```
+### Start Edge Nodes
 
-### 2.2 Start Edge Tier (Cloud VMs)
-
-**Cloud VM (Edge 1):**
 ```bash
-# IMPORTANT: Increase file descriptor limit for high concurrency
-ulimit -n 65536
-
-# Start Edge in HIDDEN NODE MODE (prevents global disconnects during partition)
-erl -name iris_edge1@100.82.212.50 -setcookie iris_secret -hidden -pa ebin \
-    -eval "application:ensure_all_started(iris_edge), net_adm:ping('iris_core1@100.95.21.52'), net_adm:ping('iris_core2@100.68.74.48')."
+erl -sname iris_edge -setcookie iris_secret -hidden -pa ebin \
+    -iris_edge port 8085 \
+    -eval "application:ensure_all_started(iris_edge), net_adm:ping('iris_core@core')."
 ```
 
-## 3. Verification
+## Verification
 
-### 3.1 Check Cluster Status (Any Node)
 ```erlang
+%% Check cluster
+mnesia:system_info(running_db_nodes).
 nodes(connected).
-% Expected: ['iris_core1@...', 'iris_core2@...', ...] (varies by perspective)
+
+%% Check routing
+iris_router:get_stats().
 ```
 
-## 4. Running Assurance Tests
+## Troubleshooting
 
-### 4.1 Failover Proof Test (Recommended)
-Validates resilience with verifiable assertions:
-```bash
-python3 tests/suites/tokyo_assurance/test_failover_proof.py \
-    --edge-node iris_edge1@100.82.212.50 \
-    --core1 iris_core1@100.95.21.52 \
-    --core2 iris_core2@100.68.74.48 \
-    --users 1000 --duration 300 --no-recovery
-```
+**Edge can't reach Core**: Hidden nodes don't auto-reconnect. Run `net_adm:ping('core_node').`
 
-### 4.2 Legacy 10-Minute Proof Run
-```bash
-python3 tests/suites/tokyo_assurance/ten_minute_proof.py --edge-node iris_edge1@100.82.212.50
-```
+**Data lost after restart**: Ensure `-mnesia dir` points to persistent storage.
 
+**Tables missing**: Check `mnesia:system_info(directory)` matches your config.

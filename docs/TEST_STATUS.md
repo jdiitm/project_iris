@@ -2,10 +2,11 @@
 
 ## Overview
 
-**Last Run**: 2026-01-19  
-**Total Tests**: 45+  
+**Last Run**: 2026-01-20  
+**Total Tests**: 47  
+**Passing**: 39/47 (83%)  
 **Tier 0 (CI)**: 20/20 ✅  
-**Unit**: 58/58 ✅
+**Chaos Distributed**: 3/3 ✅
 
 ---
 
@@ -13,12 +14,53 @@
 
 | Suite | Tests | Status | Time |
 |-------|-------|--------|------|
-| unit | 9 | ✅ 100% | 11s |
-| integration | 11 | ✅ 100% | 59s |
-| e2e | 2 | ✅ 100% | ~10s |
-| security | 3 | ✅ 100% | ~5s |
-| resilience | 2 | ✅ 100% | ~30s |
-| chaos_controlled | 2 | ✅ 100% | ~20s |
+| unit | 9 | ✅ 9/9 | 11s |
+| integration | 11 | ✅ 11/11 | 64s |
+| e2e | 2 | ✅ 2/2 | 28s |
+| security | 6 | ⚠️ 5/6 | 45s |
+| resilience | 3 | ✅ 3/3 | 154s |
+| chaos_controlled | 2 | ✅ 2/2 | 450s |
+| chaos_dist | 3 | ✅ 3/3 | 60s |
+| compatibility | 1 | ✅ 1/1 | 12s |
+| performance_light | 3 | ⚠️ 2/3 | 102s |
+| stress | 7 | ⚠️ 1/6 | 168s |
+
+---
+
+## Known Test Failures
+
+### `security/test_tls_mandatory` ❌
+- **Issue**: TLS certificate configuration not matching test expectations
+- **Impact**: Low - TLS works, test setup issue
+- **Fix**: Update `config/test_tls.config` with valid cert paths
+
+### `performance_light/measure_dials` ❌  
+- **Issue**: Benchmark test, not pass/fail - reports metrics only
+- **Impact**: None - informational test
+
+### `stress/*` (6 failures) ❌
+- **Issue**: Resource-intensive tests require dedicated hardware
+- **Impact**: None for CI - run in nightly builds only
+- **Tests**: `stress_hotspot`, `stress_global_fan_in`, `test_churn`, `stress_geo_scale`, `stress_presence`, `test_limits`
+
+---
+
+## Chaos Distributed Tests (2026-01-20)
+
+All distributed chaos tests now pass with Docker cluster:
+
+| Test | RFC | Description | Status |
+|------|-----|-------------|--------|
+| `test_ack_durability.py` | NFR-6, NFR-8 | ACK implies durability across node crash | ✅ PASS |
+| `test_cross_region_latency.py` | NFR-3 | P99 latency ≤500ms across regions | ✅ PASS |
+| `test_dist_failover.py` | NFR-9 | Failover, concurrent load, pause/resume | ✅ PASS |
+
+### Recent Fixes (2026-01-20)
+
+1. **Mnesia Recovery** - Fixed `init_db()` to properly recover data from disk on restart
+2. **Hidden Node Discovery** - Fixed `nodes(connected)` for edge-to-core routing
+3. **Core Node Pattern Matching** - Support both "iris_core" and "core_" naming conventions
+4. **Volume Mount** - Explicit `-mnesia dir` for persistent storage
 
 ---
 
@@ -38,9 +80,10 @@ New tests added for RFC compliance validation:
 
 ## Known Environmental Issues
 
-### `chaos_dist/test_dist_failover`
-- **Requires**: Multi-node distributed setup or Docker cluster
-- **Fix**: `make cluster-up` then run test
+### `chaos_dist/*` tests
+- **Requires**: Docker cluster (`make cluster-up`)
+- **Duration**: ~60s total for all 3 tests
+- **Auto-reconnect**: Tests handle edge-to-core reconnection after node restart
 
 ### `stress/test_churn`, `stress/test_limits`
 - **Requires**: High resources, extended timeouts

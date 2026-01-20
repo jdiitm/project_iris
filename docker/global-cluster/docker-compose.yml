@@ -1,5 +1,3 @@
-version: '3.8'
-
 # =============================================================================
 # Project Iris: Global Cluster Simulation (24-Core / 32GB)
 # =============================================================================
@@ -47,17 +45,11 @@ services:
   core-east-1:
     <<: *core-defaults
     container_name: core-east-1
-    hostname: core-east-1
-    command: >
-      sh -c "cd /app && erl -name core_east_1@core-east-1
-          -setcookie $$IRIS_COOKIE
-          -pa ebin
-          -eval 'application:ensure_all_started(mnesia), 
-                 iris_core:init_db(), 
-                 application:ensure_all_started(iris_core).'"
+    hostname: coreeast1
+    command: ["sh", "-c", "cd /app && erl -noinput -sname core_east_1@coreeast1 -setcookie $$IRIS_COOKIE -pa ebin -config config/test -mnesia dir '\"/data/mnesia\"' -eval 'application:ensure_all_started(mnesia), iris_core:init_db(), application:ensure_all_started(iris_core).'"]
     volumes:
       - ../../:/app:ro
-      - mnesia-east-1:/tmp/Mnesia
+      - mnesia-east-1:/data/mnesia
     networks:
       iris_east: {ipv4_address: 172.30.0.10}
       iris_backbone: {ipv4_address: 172.29.0.10}
@@ -71,18 +63,11 @@ services:
   core-east-2:
     <<: *core-defaults
     container_name: core-east-2
-    hostname: core-east-2
-    command: >
-      sh -c "cd /app && erl -name core_east_2@core-east-2
-          -setcookie $$IRIS_COOKIE
-          -pa ebin
-          -eval 'application:ensure_all_started(mnesia), 
-                 application:ensure_all_started(iris_core),
-                 timer:sleep(5000),
-                 iris_core:join_cluster(core_east_1@\"core-east-1\").'"
+    hostname: coreeast2
+    command: ["sh", "-c", "cd /app && erl -noinput -sname core_east_2@coreeast2 -setcookie $$IRIS_COOKIE -pa ebin -config config/test -mnesia dir '\"/data/mnesia\"' -eval 'application:ensure_all_started(mnesia), application:ensure_all_started(iris_core), timer:sleep(5000), iris_core:join_cluster(core_east_1@coreeast1).'"]
     volumes:
       - ../../:/app:ro
-      - mnesia-east-2:/tmp/Mnesia
+      - mnesia-east-2:/data/mnesia
     networks:
       iris_east: {ipv4_address: 172.30.0.11}
       iris_backbone: {ipv4_address: 172.29.0.11}
@@ -92,14 +77,8 @@ services:
   edge-east-1:
     <<: *edge-defaults
     container_name: edge-east-1
-    hostname: edge-east-1
-    command: >
-      sh -c "cd /app && erl -name edge_east_1@edge-east-1 -hidden
-          -setcookie $$IRIS_COOKIE
-          -pa ebin
-          -iris_edge port 8085
-          -eval 'application:ensure_all_started(iris_edge),
-                 net_adm:ping(core_east_1@\"core-east-1\").'"
+    hostname: edgeeast1
+    command: ["sh", "-c", "cd /app && erl -noinput -sname edge_east_1@edgeeast1 -hidden -setcookie $$IRIS_COOKIE -pa ebin -config config/test -iris_edge port 8085 -eval 'application:ensure_all_started(iris_edge), net_adm:ping(core_east_1@coreeast1).'"]
     ports: ["8085:8085"]
     networks:
       iris_east: {ipv4_address: 172.30.0.20}
@@ -110,14 +89,8 @@ services:
   edge-east-2:
     <<: *edge-defaults
     container_name: edge-east-2
-    hostname: edge-east-2
-    command: >
-      sh -c "cd /app && erl -name edge_east_2@edge-east-2 -hidden
-          -setcookie $$IRIS_COOKIE
-          -pa ebin
-          -iris_edge port 8086
-          -eval 'application:ensure_all_started(iris_edge),
-                 net_adm:ping(core_east_2@\"core-east-2\").'"
+    hostname: edgeeast2
+    command: ["sh", "-c", "cd /app && erl -noinput -sname edge_east_2@edgeeast2 -hidden -setcookie $$IRIS_COOKIE -pa ebin -config config/test -iris_edge port 8086 -eval 'application:ensure_all_started(iris_edge), net_adm:ping(core_east_2@coreeast2).'"]
     ports: ["8086:8086"]
     networks:
       iris_east: {ipv4_address: 172.30.0.21}
@@ -131,18 +104,11 @@ services:
   core-west-1:
     <<: *core-defaults
     container_name: core-west-1
-    hostname: core-west-1
-    command: >
-      sh -c "cd /app && erl -name core_west_1@core-west-1
-          -setcookie $$IRIS_COOKIE
-          -pa ebin
-          -eval 'application:ensure_all_started(mnesia), 
-                 application:ensure_all_started(iris_core),
-                 timer:sleep(5000),
-                 iris_core:join_cluster(core_east_1@\"core-east-1\").'"
+    hostname: corewest1
+    command: ["sh", "-c", "cd /app && erl -noinput -sname core_west_1@corewest1 -setcookie $$IRIS_COOKIE -pa ebin -config config/test -mnesia dir '\"/data/mnesia\"' -eval 'application:ensure_all_started(mnesia), application:ensure_all_started(iris_core), timer:sleep(5000), iris_core:join_cluster(core_east_1@coreeast1).'"]
     volumes:
       - ../../:/app:ro
-      - mnesia-west-1:/tmp/Mnesia
+      - mnesia-west-1:/data/mnesia
     networks:
       iris_west: {ipv4_address: 172.31.0.10}
       iris_backbone: {ipv4_address: 172.29.0.30}
@@ -152,18 +118,11 @@ services:
   core-west-2:
     <<: *core-defaults
     container_name: core-west-2
-    hostname: core-west-2
-    command: >
-      sh -c "cd /app && erl -name core_west_2@core-west-2
-          -setcookie $$IRIS_COOKIE
-          -pa ebin
-          -eval 'application:ensure_all_started(mnesia), 
-                 application:ensure_all_started(iris_core),
-                 timer:sleep(7000),
-                 iris_core:join_cluster(core_west_1@\"core-west-1\").'"
+    hostname: corewest2
+    command: ["sh", "-c", "cd /app && erl -noinput -sname core_west_2@corewest2 -setcookie $$IRIS_COOKIE -pa ebin -config config/test -mnesia dir '\"/data/mnesia\"' -eval 'application:ensure_all_started(mnesia), application:ensure_all_started(iris_core), timer:sleep(7000), iris_core:join_cluster(core_west_1@corewest1).'"]
     volumes:
       - ../../:/app:ro
-      - mnesia-west-2:/tmp/Mnesia
+      - mnesia-west-2:/data/mnesia
     networks:
       iris_west: {ipv4_address: 172.31.0.11}
       iris_backbone: {ipv4_address: 172.29.0.31}
@@ -173,14 +132,8 @@ services:
   edge-west-1:
     <<: *edge-defaults
     container_name: edge-west-1
-    hostname: edge-west-1
-    command: >
-      sh -c "cd /app && erl -name edge_west_1@edge-west-1 -hidden
-          -setcookie $$IRIS_COOKIE
-          -pa ebin
-          -iris_edge port 8087
-          -eval 'application:ensure_all_started(iris_edge),
-                 net_adm:ping(core_west_1@\"core-west-1\").'"
+    hostname: edgewest1
+    command: ["sh", "-c", "cd /app && erl -noinput -sname edge_west_1@edgewest1 -hidden -setcookie $$IRIS_COOKIE -pa ebin -config config/test -iris_edge port 8087 -eval 'application:ensure_all_started(iris_edge), net_adm:ping(core_west_1@corewest1).'"]
     ports: ["8087:8087"]
     networks:
       iris_west: {ipv4_address: 172.31.0.20}
@@ -191,14 +144,8 @@ services:
   edge-west-2:
     <<: *edge-defaults
     container_name: edge-west-2
-    hostname: edge-west-2
-    command: >
-      sh -c "cd /app && erl -name edge_west_2@edge-west-2 -hidden
-          -setcookie $$IRIS_COOKIE
-          -pa ebin
-          -iris_edge port 8088
-          -eval 'application:ensure_all_started(iris_edge),
-                 net_adm:ping(core_west_2@\"core-west-2\").'"
+    hostname: edgewest2
+    command: ["sh", "-c", "cd /app && erl -noinput -sname edge_west_2@edgewest2 -hidden -setcookie $$IRIS_COOKIE -pa ebin -config config/test -iris_edge port 8088 -eval 'application:ensure_all_started(iris_edge), net_adm:ping(core_west_2@corewest2).'"]
     ports: ["8088:8088"]
     networks:
       iris_west: {ipv4_address: 172.31.0.21}
@@ -212,18 +159,11 @@ services:
   core-eu-1:
     <<: *core-defaults
     container_name: core-eu-1
-    hostname: core-eu-1
-    command: >
-      sh -c "cd /app && erl -name core_eu_1@core-eu-1
-          -setcookie $$IRIS_COOKIE
-          -pa ebin
-          -eval 'application:ensure_all_started(mnesia), 
-                 application:ensure_all_started(iris_core),
-                 timer:sleep(6000),
-                 iris_core:join_cluster(core_east_1@\"core-east-1\").'"
+    hostname: coreeu1
+    command: ["sh", "-c", "cd /app && erl -noinput -sname core_eu_1@coreeu1 -setcookie $$IRIS_COOKIE -pa ebin -config config/test -mnesia dir '\"/data/mnesia\"' -eval 'application:ensure_all_started(mnesia), application:ensure_all_started(iris_core), timer:sleep(6000), iris_core:join_cluster(core_east_1@coreeast1).'"]
     volumes:
       - ../../:/app:ro
-      - mnesia-eu-1:/tmp/Mnesia
+      - mnesia-eu-1:/data/mnesia
     networks:
       iris_eu: {ipv4_address: 172.33.0.10}
       iris_backbone: {ipv4_address: 172.29.0.50}
@@ -233,18 +173,11 @@ services:
   core-eu-2:
     <<: *core-defaults
     container_name: core-eu-2
-    hostname: core-eu-2
-    command: >
-      sh -c "cd /app && erl -name core_eu_2@core-eu-2
-          -setcookie $$IRIS_COOKIE
-          -pa ebin
-          -eval 'application:ensure_all_started(mnesia), 
-                 application:ensure_all_started(iris_core),
-                 timer:sleep(8000),
-                 iris_core:join_cluster(core_eu_1@\"core-eu-1\").'"
+    hostname: coreeu2
+    command: ["sh", "-c", "cd /app && erl -noinput -sname core_eu_2@coreeu2 -setcookie $$IRIS_COOKIE -pa ebin -config config/test -mnesia dir '\"/data/mnesia\"' -eval 'application:ensure_all_started(mnesia), application:ensure_all_started(iris_core), timer:sleep(8000), iris_core:join_cluster(core_eu_1@coreeu1).'"]
     volumes:
       - ../../:/app:ro
-      - mnesia-eu-2:/tmp/Mnesia
+      - mnesia-eu-2:/data/mnesia
     networks:
       iris_eu: {ipv4_address: 172.33.0.11}
       iris_backbone: {ipv4_address: 172.29.0.51}
@@ -254,14 +187,8 @@ services:
   edge-eu-1:
     <<: *edge-defaults
     container_name: edge-eu-1
-    hostname: edge-eu-1
-    command: >
-      sh -c "cd /app && erl -name edge_eu_1@edge-eu-1 -hidden
-          -setcookie $$IRIS_COOKIE
-          -pa ebin
-          -iris_edge port 8089
-          -eval 'application:ensure_all_started(iris_edge),
-                 net_adm:ping(core_eu_1@\"core-eu-1\").'"
+    hostname: edgeeu1
+    command: ["sh", "-c", "cd /app && erl -noinput -sname edge_eu_1@edgeeu1 -hidden -setcookie $$IRIS_COOKIE -pa ebin -config config/test -iris_edge port 8089 -eval 'application:ensure_all_started(iris_edge), net_adm:ping(core_eu_1@coreeu1).'"]
     ports: ["8089:8089"]
     networks:
       iris_eu: {ipv4_address: 172.33.0.20}
@@ -272,14 +199,8 @@ services:
   edge-eu-2:
     <<: *edge-defaults
     container_name: edge-eu-2
-    hostname: edge-eu-2
-    command: >
-      sh -c "cd /app && erl -name edge_eu_2@edge-eu-2 -hidden
-          -setcookie $$IRIS_COOKIE
-          -pa ebin
-          -iris_edge port 8094
-          -eval 'application:ensure_all_started(iris_edge),
-                 net_adm:ping(core_eu_2@\"core-eu-2\").'"
+    hostname: edgeeu2
+    command: ["sh", "-c", "cd /app && erl -noinput -sname edge_eu_2@edgeeu2 -hidden -setcookie $$IRIS_COOKIE -pa ebin -config config/test -iris_edge port 8094 -eval 'application:ensure_all_started(iris_edge), net_adm:ping(core_eu_2@coreeu2).'"]
     ports: ["8094:8094"]
     networks:
       iris_eu: {ipv4_address: 172.33.0.21}
@@ -293,14 +214,8 @@ services:
   edge-sydney-1:
     <<: *edge-defaults
     container_name: edge-sydney-1
-    hostname: edge-sydney-1
-    command: >
-      sh -c "cd /app && erl -name edge_sydney_1@edge-sydney-1 -hidden
-          -setcookie $$IRIS_COOKIE
-          -pa ebin
-          -iris_edge port 8090
-          -eval 'application:ensure_all_started(iris_edge),
-                 net_adm:ping(core_east_1@\"core-east-1\").'"
+    hostname: edgesydney1
+    command: ["sh", "-c", "cd /app && erl -noinput -sname edge_sydney_1@edgesydney1 -hidden -setcookie $$IRIS_COOKIE -pa ebin -config config/test -iris_edge port 8090 -eval 'application:ensure_all_started(iris_edge), net_adm:ping(core_east_1@coreeast1).'"]
     ports: ["8090:8090"]
     networks:
       iris_sydney: {ipv4_address: 172.32.0.20}
@@ -311,14 +226,8 @@ services:
   edge-sydney-2:
     <<: *edge-defaults
     container_name: edge-sydney-2
-    hostname: edge-sydney-2
-    command: >
-      sh -c "cd /app && erl -name edge_sydney_2@edge-sydney-2 -hidden
-          -setcookie $$IRIS_COOKIE
-          -pa ebin
-          -iris_edge port 8091
-          -eval 'application:ensure_all_started(iris_edge),
-                 net_adm:ping(core_east_2@\"core-east-2\").'"
+    hostname: edgesydney2
+    command: ["sh", "-c", "cd /app && erl -noinput -sname edge_sydney_2@edgesydney2 -hidden -setcookie $$IRIS_COOKIE -pa ebin -config config/test -iris_edge port 8091 -eval 'application:ensure_all_started(iris_edge), net_adm:ping(core_east_2@coreeast2).'"]
     ports: ["8091:8091"]
     networks:
       iris_sydney: {ipv4_address: 172.32.0.21}
@@ -332,14 +241,8 @@ services:
   edge-saopaulo:
     <<: *edge-defaults
     container_name: edge-saopaulo
-    hostname: edge-saopaulo
-    command: >
-      sh -c "cd /app && erl -name edge_saopaulo@edge-saopaulo -hidden
-          -setcookie $$IRIS_COOKIE
-          -pa ebin
-          -iris_edge port 8092
-          -eval 'application:ensure_all_started(iris_edge),
-                 net_adm:ping(core_west_1@\"core-west-1\").'"
+    hostname: edgesaopaulo
+    command: ["sh", "-c", "cd /app && erl -noinput -sname edge_saopaulo@edgesaopaulo -hidden -setcookie $$IRIS_COOKIE -pa ebin -config config/test -iris_edge port 8092 -eval 'application:ensure_all_started(iris_edge), net_adm:ping(core_west_1@corewest1).'"]
     ports: ["8092:8092"]
     networks:
       iris_saopaulo: {ipv4_address: 172.34.0.20}

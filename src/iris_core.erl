@@ -196,41 +196,70 @@ get_status(User) ->
 %%%===================================================================
 
 init_db() ->
-    %% ROBUST INITIALIZATION: Config-driven.
-    %% No hardcoded defaults. If config is empty, we are Standalone.
+    %% ROBUST INITIALIZATION: Config-driven with recovery support.
+    %% Key insight: Check if Mnesia schema already exists before recreating.
     Peers = application:get_env(iris_core, join_seeds, []),
     OtherPeers = [P || P <- Peers, P =/= node()],
     
     %% Ensure mnesia is stopped before configuration
     application:stop(mnesia),
     
-    case lists:search(fun(P) -> net_adm:ping(P) == pong end, OtherPeers) of
-        {value, LivePeer} ->
-            %% CLUSTER EXISTS: Join it
-            %% SAFETY GUARD: Only delete schema if explicitly allowed AND peer has tables
-            case safe_to_delete_schema(LivePeer) of
-                {ok, proceed} ->
-                    logger:info("Found active cluster node ~p with data. Joining...", [LivePeer]),
-                    mnesia:delete_schema([node()]),
-                    mnesia:start(),
-                    mnesia:change_config(extra_db_nodes, [LivePeer]),
-                    mnesia:change_table_copy_type(schema, node(), disc_copies),
-                    Tables = mnesia:system_info(tables) -- [schema],
-                    [mnesia:add_table_copy(T, node(), disc_copies) || T <- Tables],
-                    logger:info("Joined cluster successfully.");
-                {error, Reason} ->
-                    logger:error("REFUSING to delete schema: ~p. Starting standalone.", [Reason]),
+    %% Check if we have existing Mnesia data (restart recovery)
+    MnesiaDir = mnesia:system_info(directory),
+    SchemaFile = filename:join(MnesiaDir, "schema.DAT"),
+    HasExistingData = filelib:is_file(SchemaFile),
+    
+    case HasExistingData of
+        true ->
+            %% RECOVERY: Existing data found - just start Mnesia
+            logger:info("Found existing Mnesia data at ~s. Starting recovery...", [MnesiaDir]),
+            mnesia:start(),
+            %% Wait for tables to load from disk
+            Tables = [offline_msg, user_meta, user_status, revoked_tokens, presence],
+            mnesia:wait_for_tables(Tables, 30000),
+            %% Ensure presence table exists (RAM only)
+            ensure_table_exists(presence, [
+                {ram_copies, [node()]},
+                {attributes, [user, node, pid]}
+            ]),
+            logger:info("Mnesia recovery complete. Tables: ~p", [mnesia:system_info(tables)]);
+            
+        false ->
+            %% FRESH START: No existing data
+            case lists:search(fun(P) -> net_adm:ping(P) == pong end, OtherPeers) of
+                {value, LivePeer} ->
+                    %% CLUSTER EXISTS: Join it
+                    case safe_to_delete_schema(LivePeer) of
+                        {ok, proceed} ->
+                            logger:info("Found active cluster node ~p. Joining...", [LivePeer]),
+                            mnesia:delete_schema([node()]),
+                            mnesia:start(),
+                            mnesia:change_config(extra_db_nodes, [LivePeer]),
+                            mnesia:change_table_copy_type(schema, node(), disc_copies),
+                            Tables = mnesia:system_info(tables) -- [schema],
+                            [mnesia:add_table_copy(T, node(), disc_copies) || T <- Tables],
+                            logger:info("Joined cluster successfully.");
+                        {error, Reason} ->
+                            logger:error("REFUSING to delete schema: ~p. Starting standalone.", [Reason]),
+                            mnesia:create_schema([node()]),
+                            mnesia:start(),
+                            create_tables([node()])
+                    end;
+                    
+                false ->
+                    %% NO PEERS: We are the seed node.
+                    logger:info("No peers found. Initializing as SEED node."),
                     mnesia:create_schema([node()]),
                     mnesia:start(),
                     create_tables([node()])
-            end;
-            
-        false ->
-            %% NO PEERS: We are the seed node.
-            logger:info("No peers found. initializing as SEED node."),
-            mnesia:create_schema([node()]),
-            mnesia:start(),
-            create_tables([node()])
+            end
+    end.
+
+%% Helper: Create table only if it doesn't exist
+ensure_table_exists(Table, Opts) ->
+    case lists:member(Table, mnesia:system_info(tables)) of
+        true -> ok;
+        false -> mnesia:create_table(Table, Opts)
     end.
 
 %% Safety check before schema deletion to prevent data wipe

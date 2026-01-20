@@ -13,7 +13,13 @@ get_core_node() ->
 legacy_core_node() ->
     %% FIXED: Scan connected nodes for actual Core IP
     Connected = nodes(connected),
-    case [N || N <- Connected, string:str(atom_to_list(N), "iris_core") > 0] of
+    %% Match both "iris_core" (Makefile) and "core_" (Docker) patterns
+    IsCoreNode = fun(N) ->
+        Name = atom_to_list(N),
+        string:str(Name, "iris_core") > 0 orelse 
+        string:prefix(Name, "core_") =/= nomatch
+    end,
+    case [N || N <- Connected, IsCoreNode(N)] of
          [Core|_] -> Core;
          [] -> 
              %% Configured Nodes from sys.config

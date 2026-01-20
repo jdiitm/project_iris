@@ -182,7 +182,10 @@ get_discovery_nodes() ->
         undefined ->
             %% No discovery - use pg or connected nodes
             case pg:get_members(iris_shards) of
-                [] -> [node() | nodes()];
+                [] -> 
+                    %% Include hidden nodes (edge nodes run with -hidden flag)
+                    AllNodes = nodes(connected),
+                    [node() | AllNodes];
                 Pids -> [node(P) || P <- Pids]
             end;
         _ ->
