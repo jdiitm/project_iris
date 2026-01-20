@@ -64,6 +64,8 @@ start_listener(Port, HandlerMod, TlsEnabled) ->
     
     {ok, LSock} = case TlsEnabled of
         true ->
+            %% Ensure SSL application is started before using ssl:listen
+            ok = ensure_ssl_started(),
             TlsOpts = get_tls_options(),
             AllOpts = BaseOpts ++ TlsOpts,
             logger:info("Starting TLS listener on port ~p", [Port]),
@@ -79,6 +81,32 @@ start_listener(Port, HandlerMod, TlsEnabled) ->
     [spawn_acceptor(LSock, HandlerMod, TlsEnabled) || _ <- lists:seq(1, NumAcceptors)],
     
     {ok, #state{lsock = LSock, handler = HandlerMod, tls_enabled = TlsEnabled}}.
+
+%% =============================================================================
+%% SSL Application Management
+%% =============================================================================
+
+ensure_ssl_started() ->
+    %% Check if ssl application exists before trying to start it
+    case code:ensure_loaded(ssl) of
+        {module, ssl} ->
+            %% SSL module available, try to start application
+            case application:ensure_all_started(ssl) of
+                {ok, _Apps} ->
+                    logger:info("SSL application started successfully"),
+                    ok;
+                {error, {already_started, ssl}} ->
+                    ok;
+                {error, Reason} ->
+                    logger:error("Failed to start SSL application: ~p", [Reason]),
+                    {error, {ssl_start_failed, Reason}}
+            end;
+        {error, _} ->
+            %% SSL not available in this Erlang installation
+            logger:error("SSL module not available - TLS cannot be enabled"),
+            logger:error("Install Erlang with SSL support or run with {tls_enabled, false}"),
+            {error, ssl_not_available}
+    end.
 
 %% =============================================================================
 %% TLS Configuration
