@@ -105,15 +105,9 @@ complete_login(User, TransportPid) ->
         _ -> iris_async_router:register_local(User, TransportPid)
     end,
     
-    %% PHASE 2: Background sync to Core (async, non-blocking)
-    spawn(fun() ->
-        CoreNode = get_core_node(),
-        case rpc:call(CoreNode, iris_core, register_user, [User, node(), TransportPid], 5000) of
-            ok -> ok;
-            {error, _Reason} -> ok;
-            {badrpc, _Reason} -> ok
-        end
-    end),
+    %% PHASE 2: Sync to Core - SYNCHRONOUS for reliability
+    CoreNode = get_core_node(),
+    rpc:call(CoreNode, iris_core, register_user, [User, node(), TransportPid], 5000),
 
     %% PHASE 3: Retrieve offline messages (async in background)
     spawn(fun() ->

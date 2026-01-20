@@ -127,11 +127,8 @@ init([]) ->
 
 register_user(User, Node, Pid) ->
     %% Rationale: Transactional safety for global presence consistency.
-    %% io:format("register_user called: ~p from ~p pid ~p~n", [User, Node, Pid]),
     F = fun() -> mnesia:write({presence, User, Node, Pid}) end,
-    Result = mnesia:transaction(F),
-    %% io:format("register_user result: ~p~n", [Result]),
-    case Result of
+    case mnesia:transaction(F) of
         {atomic, ok} -> ok;
         {aborted, Reason} ->
             logger:error("Failed to register user ~p: ~p", [User, Reason]),

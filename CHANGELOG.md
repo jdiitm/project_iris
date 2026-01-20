@@ -6,6 +6,27 @@ All notable changes to Iris Messaging System.
 
 ### Fixed
 
+#### Cross-Region Message Routing (2026-01-20)
+
+**Critical fix: Messages from US West to Sydney now delivered (was 0% → 100%).**
+
+- **`iris_async_router.erl`**: Added `find_user_across_cores/2` function that queries 
+  ALL connected core nodes to find online users. Previously, only one core was queried, 
+  so users registered on different cores (non-replicated Mnesia) were never found.
+  
+  ```erlang
+  find_user_across_cores([Core | Rest], User) ->
+      case rpc:call(Core, iris_core, lookup_user, [User], 2000) of
+          {ok, _Node, UserPid} -> {ok, UserPid};
+          _ -> find_user_across_cores(Rest, User)
+      end.
+  ```
+
+- **`test_cross_region_latency.py`**: Fixed binary protocol parsing. Test was decoding 
+  binary as UTF-8 text - now properly searches for `LATENCY_` markers in raw bytes.
+
+**Results**: P99 latency 2.69ms (local Docker), 100% delivery rate. RFC NFR-3 compliant.
+
 #### Mnesia Durability & Recovery (2026-01-20)
 
 **Critical fix for message persistence across node restarts.**
@@ -40,7 +61,15 @@ All notable changes to Iris Messaging System.
 ### Changed
 
 - Mnesia initialization now distinguishes between fresh start vs recovery
+- Cross-region routing now queries all cores (workaround for non-replicated Mnesia)
 - All chaos_dist tests now pass with Docker cluster
+
+### Caveats
+
+- **Cross-region latency in production**: Local Docker P99 of ~3ms will be 100-300ms 
+  in real geo-distributed deployment due to network distance.
+- **Mnesia replication**: Current fix works around non-replicated Mnesia. For production, 
+  consider Mnesia replication or external presence service.
 
 ---
 

@@ -193,30 +193,63 @@ get_discovery_nodes() ->
     end.
 
 %% Route using circuit breaker with fallback
+%% FIXED: Query ALL cores to find user (Mnesia not replicated across regions)
 route_to_node(Node, User, Msg, Fallbacks) ->
+    AllCores = [Node | Fallbacks],
+    case find_user_across_cores(AllCores, User) of
+        {ok, UserPid} when is_pid(UserPid) ->
+            %% User found ONLINE - deliver directly
+            UserPid ! {deliver_msg, Msg},
+            ok;
+        not_found ->
+            %% User not online on any core - store offline
+            store_offline_via_node(Node, User, Msg, Fallbacks)
+    end.
+
+%% Query all cores to find user (needed when Mnesia not replicated)
+find_user_across_cores([], _User) ->
+    not_found;
+find_user_across_cores([Core | Rest], User) ->
+    case rpc:call(Core, iris_core, lookup_user, [User], 2000) of
+        {ok, _Node, UserPid} when is_pid(UserPid) ->
+            {ok, UserPid};
+        {error, not_found} ->
+            find_user_across_cores(Rest, User);
+        {badrpc, _} ->
+            find_user_across_cores(Rest, User)
+    end.
+
+store_offline_via_node(Node, User, Msg, Fallbacks) ->
     case whereis(iris_circuit_breaker) of
         undefined ->
-            %% No circuit breaker - direct RPC
             case rpc:call(Node, iris_core, store_offline, [User, Msg], 5000) of
-                {badrpc, _} -> try_fallbacks(Fallbacks, User, Msg);
+                {badrpc, _} -> try_route_fallbacks(Fallbacks, User, Msg);
                 _ -> ok
             end;
         _ ->
-            %% Use circuit breaker with fallback
             case iris_circuit_breaker:call_with_fallback(
                     Node, iris_core, store_offline, [User, Msg], Fallbacks) of
-                {error, circuit_open} -> try_fallbacks(Fallbacks, User, Msg);
-                {badrpc, _} -> try_fallbacks(Fallbacks, User, Msg);
+                {error, circuit_open} -> try_route_fallbacks(Fallbacks, User, Msg);
+                {badrpc, _} -> try_route_fallbacks(Fallbacks, User, Msg);
                 _ -> ok
             end
     end.
 
-try_fallbacks([], _User, _Msg) ->
+try_route_fallbacks([], _User, _Msg) ->
     {error, no_available_nodes};
-try_fallbacks([Node | Rest], User, Msg) ->
-    case rpc:call(Node, iris_core, store_offline, [User, Msg], 5000) of
-        {badrpc, _} -> try_fallbacks(Rest, User, Msg);
-        _ -> ok
+try_route_fallbacks([Node | Rest], User, Msg) ->
+    %% Try to lookup and deliver, or store offline
+    case rpc:call(Node, iris_core, lookup_user, [User], 5000) of
+        {ok, _UserNode, UserPid} when is_pid(UserPid) ->
+            UserPid ! {deliver_msg, Msg},
+            ok;
+        {error, not_found} ->
+            case rpc:call(Node, iris_core, store_offline, [User, Msg], 5000) of
+                {badrpc, _} -> try_route_fallbacks(Rest, User, Msg);
+                _ -> ok
+            end;
+        {badrpc, _} -> 
+            try_route_fallbacks(Rest, User, Msg)
     end.
 
 %% Legacy routing for backwards compatibility
