@@ -121,6 +121,15 @@ def wait_for_container_healthy(container_name, timeout=60):
     return False
 
 
+def reconnect_edge_to_core(edge_container="edge-east-1", core_node="core_east_1@coreeast1"):
+    """Reconnect edge to core after core restart (hidden nodes don't auto-reconnect)."""
+    print(f"  Reconnecting edge to core...")
+    cmd = f"docker exec {edge_container} erl -noshell -hidden -sname tmp_reconn -setcookie iris_secret -eval 'rpc:call(edge_east_1@edgeeast1, net_adm, ping, [{core_node}]), init:stop().'"
+    result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+    time.sleep(1)  # Give time for connection to establish
+    return result.returncode == 0
+
+
 def check_docker_available():
     """Check if Docker is available."""
     result = subprocess.run(["docker", "ps"], capture_output=True)
@@ -202,6 +211,11 @@ def test_ack_implies_durability():
     # Extra wait for Mnesia to fully recover
     print("  Waiting additional 10s for Mnesia recovery...")
     time.sleep(10)
+    
+    # Reconnect edge to core (hidden nodes don't auto-reconnect)
+    print("  Reconnecting edge to core after restart...")
+    reconnect_edge_to_core()
+    time.sleep(2)
     
     print(f"\n7. Connecting as receiver: {receiver}")
     try:

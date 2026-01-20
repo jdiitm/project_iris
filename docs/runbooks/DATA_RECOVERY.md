@@ -66,6 +66,58 @@ iris_offline_storage:store(User, Msg, 1).
 
 ---
 
+## Automatic Recovery on Restart
+
+Iris Core automatically recovers Mnesia data when a node restarts. The `init_db()` 
+function detects existing data in the Mnesia directory and recovers it instead of 
+creating a fresh schema.
+
+### How It Works
+
+1. On startup, checks for `schema.DAT` in Mnesia directory
+2. If found: starts Mnesia and waits for tables to load from disk
+3. If not found: creates fresh schema (seed node) or joins cluster
+
+### Verifying Recovery
+
+```erlang
+%% Check tables loaded
+mnesia:system_info(tables).
+%% Expected: [presence, offline_msg, user_meta, user_status, revoked_tokens, schema]
+
+%% Check message count
+mnesia:table_info(offline_msg, size).
+
+%% Verify a specific user's messages
+iris_core:retrieve_offline(<<"user_id">>).
+```
+
+### Docker Volume Persistence
+
+For Docker deployments, ensure Mnesia data is persisted:
+
+```yaml
+# docker-compose.yml
+volumes:
+  - mnesia-data:/data/mnesia
+
+# In command, specify directory:
+erl ... -mnesia dir '"/data/mnesia"' ...
+```
+
+### Edge Reconnection After Core Restart
+
+When a core node restarts, hidden edge nodes don't auto-reconnect. Either:
+
+1. **Wait for traffic** - Edge will reconnect on next routing attempt
+2. **Force reconnect**:
+   ```erlang
+   %% On edge node
+   net_adm:ping('core_east_1@coreeast1').
+   ```
+
+---
+
 ## Corruption Recovery
 
 ### Symptoms
