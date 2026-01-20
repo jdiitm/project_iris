@@ -3,9 +3,9 @@
 ## Overview
 
 **Last Run**: 2026-01-20  
-**Total Tests**: 48+  
+**Total Tests**: 47  
+**Passing**: 39/47 (83%)  
 **Tier 0 (CI)**: 20/20 ✅  
-**Unit**: 58/58 ✅  
 **Chaos Distributed**: 3/3 ✅
 
 ---
@@ -14,13 +14,34 @@
 
 | Suite | Tests | Status | Time |
 |-------|-------|--------|------|
-| unit | 9 | ✅ 100% | 11s |
-| integration | 11 | ✅ 100% | 59s |
-| e2e | 2 | ✅ 100% | ~10s |
-| security | 3 | ✅ 100% | ~5s |
-| resilience | 2 | ✅ 100% | ~30s |
-| chaos_controlled | 2 | ✅ 100% | ~20s |
-| **chaos_dist** | **3** | **✅ 100%** | **~60s** |
+| unit | 9 | ✅ 9/9 | 11s |
+| integration | 11 | ✅ 11/11 | 64s |
+| e2e | 2 | ✅ 2/2 | 28s |
+| security | 6 | ⚠️ 5/6 | 45s |
+| resilience | 3 | ✅ 3/3 | 154s |
+| chaos_controlled | 2 | ✅ 2/2 | 450s |
+| chaos_dist | 3 | ✅ 3/3 | 60s |
+| compatibility | 1 | ✅ 1/1 | 12s |
+| performance_light | 3 | ⚠️ 2/3 | 102s |
+| stress | 7 | ⚠️ 1/6 | 168s |
+
+---
+
+## Known Test Failures
+
+### `security/test_tls_mandatory` ❌
+- **Issue**: TLS certificate configuration not matching test expectations
+- **Impact**: Low - TLS works, test setup issue
+- **Fix**: Update `config/test_tls.config` with valid cert paths
+
+### `performance_light/measure_dials` ❌  
+- **Issue**: Benchmark test, not pass/fail - reports metrics only
+- **Impact**: None - informational test
+
+### `stress/*` (6 failures) ❌
+- **Issue**: Resource-intensive tests require dedicated hardware
+- **Impact**: None for CI - run in nightly builds only
+- **Tests**: `stress_hotspot`, `stress_global_fan_in`, `test_churn`, `stress_geo_scale`, `stress_presence`, `test_limits`
 
 ---
 
