@@ -193,6 +193,9 @@ def discover_tests(suite: str) -> List[Dict[str, Any]]:
         })
     
     # Erlang tests (EUnit modules) from suite dir
+    # Find erl binary - don't hardcode path
+    erl_binary = shutil.which("erl") or "erl"
+    
     for test_file in suite_dir.glob("*_tests.erl"):
         module = test_file.stem
         tests.append({
@@ -200,7 +203,7 @@ def discover_tests(suite: str) -> List[Dict[str, Any]]:
             "suite": suite,
             "type": "erlang",
             "path": str(test_file),
-            "command": f"/usr/bin/erl -pa {PROJECT_ROOT}/ebin -pa {suite_dir} -noshell -eval \"eunit:test({module}, []), init:stop().\""
+            "command": f"{erl_binary} -pa {PROJECT_ROOT}/ebin -pa {suite_dir} -noshell -eval \"eunit:test({module}, []), init:stop().\""
         })
     
     # P0-1 FIX: Also discover EUnit tests from test_utils directory for 'unit' suite
@@ -209,13 +212,15 @@ def discover_tests(suite: str) -> List[Dict[str, Any]]:
         if test_utils_dir.exists():
             for test_file in test_utils_dir.glob("*_tests.erl"):
                 module = test_file.stem
-                # Skip if already in ebin (make test will handle them)
+                # Skip if already added from suite_dir
+                if any(t["name"] == module for t in tests):
+                    continue
                 tests.append({
                     "name": f"test_utils/{module}",
                     "suite": suite,
                     "type": "erlang",
                     "path": str(test_file),
-                    "command": f"/usr/bin/erl -pa {PROJECT_ROOT}/ebin -pa {test_utils_dir} -noshell -eval \"eunit:test({module}, []), init:stop().\""
+                    "command": f"{erl_binary} -pa {PROJECT_ROOT}/ebin -pa {test_utils_dir} -noshell -eval \"eunit:test({module}, []), init:stop().\""
                 })
     
     return tests
