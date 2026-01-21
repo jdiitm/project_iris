@@ -336,10 +336,14 @@ get_max_memory() ->
     case application:get_env(iris_core, max_memory_bytes) of
         {ok, Max} -> Max;
         undefined ->
-            %% Try to detect system memory
-            case memsup:get_system_memory_data() of
-                [{total_memory, Total} | _] -> Total;
-                _ -> 8 * 1024 * 1024 * 1024  %% 8GB default
+            %% Try to detect system memory (memsup may not be started)
+            try
+                case memsup:get_system_memory_data() of
+                    [{total_memory, Total} | _] -> Total;
+                    _ -> 8 * 1024 * 1024 * 1024  %% 8GB default
+                end
+            catch
+                _:_ -> 8 * 1024 * 1024 * 1024  %% 8GB default if memsup not available
             end
     end.
 

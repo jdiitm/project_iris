@@ -1,0 +1,272 @@
+# =============================================================================
+# Project Iris: mTLS Overlay for Global Cluster
+# =============================================================================
+# Usage: docker compose -f docker-compose.yml -f docker-compose.mtls.yml up
+# =============================================================================
+
+x-mtls-volumes: &mtls-volumes
+  - ../../:/app:ro
+  - ../../certs:/app/certs:ro
+
+x-mtls-environment: &mtls-environment
+  IRIS_COOKIE: ${IRIS_COOKIE:-iris_secret}
+  IRIS_MTLS_ENABLED: "true"
+  IRIS_MTLS_CA: /app/certs/ca.pem
+
+services:
+  # ==========================================================================
+  # CORE NODES with mTLS
+  # ==========================================================================
+  core-east-1:
+    volumes: *mtls-volumes
+    environment:
+      <<: *mtls-environment
+      IRIS_MTLS_CERT: /app/certs/core-east-1.pem
+      IRIS_MTLS_KEY: /app/certs/core-east-1.key
+    command: >
+      sh -c "cd /app && erl -noinput -sname core_east_1@coreeast1 
+        -setcookie $$IRIS_COOKIE -pa ebin 
+        -config config/test_mtls 
+        -mnesia dir '\"/data/mnesia\"'
+        -ssl_dist_optfile /app/config/ssl_dist.config
+        -eval 'application:ensure_all_started(ssl),
+               application:ensure_all_started(mnesia), 
+               iris_core:init_db(), 
+               application:ensure_all_started(iris_core).'"
+
+  core-east-2:
+    volumes: *mtls-volumes
+    environment:
+      <<: *mtls-environment
+      IRIS_MTLS_CERT: /app/certs/core-east-2.pem
+      IRIS_MTLS_KEY: /app/certs/core-east-2.key
+    command: >
+      sh -c "cd /app && erl -noinput -sname core_east_2@coreeast2 
+        -setcookie $$IRIS_COOKIE -pa ebin 
+        -config config/test_mtls 
+        -mnesia dir '\"/data/mnesia\"'
+        -ssl_dist_optfile /app/config/ssl_dist.config
+        -eval 'application:ensure_all_started(ssl),
+               application:ensure_all_started(mnesia), 
+               application:ensure_all_started(iris_core), 
+               timer:sleep(5000), 
+               iris_core:join_cluster(core_east_1@coreeast1).'"
+
+  core-west-1:
+    volumes: *mtls-volumes
+    environment:
+      <<: *mtls-environment
+      IRIS_MTLS_CERT: /app/certs/core-west-1.pem
+      IRIS_MTLS_KEY: /app/certs/core-west-1.key
+    command: >
+      sh -c "cd /app && erl -noinput -sname core_west_1@corewest1 
+        -setcookie $$IRIS_COOKIE -pa ebin 
+        -config config/test_mtls 
+        -mnesia dir '\"/data/mnesia\"'
+        -ssl_dist_optfile /app/config/ssl_dist.config
+        -eval 'application:ensure_all_started(ssl),
+               application:ensure_all_started(mnesia), 
+               application:ensure_all_started(iris_core), 
+               timer:sleep(5000), 
+               iris_core:join_cluster(core_east_1@coreeast1).'"
+
+  core-west-2:
+    volumes: *mtls-volumes
+    environment:
+      <<: *mtls-environment
+      IRIS_MTLS_CERT: /app/certs/core-west-2.pem
+      IRIS_MTLS_KEY: /app/certs/core-west-2.key
+    command: >
+      sh -c "cd /app && erl -noinput -sname core_west_2@corewest2 
+        -setcookie $$IRIS_COOKIE -pa ebin 
+        -config config/test_mtls 
+        -mnesia dir '\"/data/mnesia\"'
+        -ssl_dist_optfile /app/config/ssl_dist.config
+        -eval 'application:ensure_all_started(ssl),
+               application:ensure_all_started(mnesia), 
+               application:ensure_all_started(iris_core), 
+               timer:sleep(7000), 
+               iris_core:join_cluster(core_west_1@corewest1).'"
+
+  core-eu-1:
+    volumes: *mtls-volumes
+    environment:
+      <<: *mtls-environment
+      IRIS_MTLS_CERT: /app/certs/core-eu-1.pem
+      IRIS_MTLS_KEY: /app/certs/core-eu-1.key
+    command: >
+      sh -c "cd /app && erl -noinput -sname core_eu_1@coreeu1 
+        -setcookie $$IRIS_COOKIE -pa ebin 
+        -config config/test_mtls 
+        -mnesia dir '\"/data/mnesia\"'
+        -ssl_dist_optfile /app/config/ssl_dist.config
+        -eval 'application:ensure_all_started(ssl),
+               application:ensure_all_started(mnesia), 
+               application:ensure_all_started(iris_core), 
+               timer:sleep(6000), 
+               iris_core:join_cluster(core_east_1@coreeast1).'"
+
+  core-eu-2:
+    volumes: *mtls-volumes
+    environment:
+      <<: *mtls-environment
+      IRIS_MTLS_CERT: /app/certs/core-eu-2.pem
+      IRIS_MTLS_KEY: /app/certs/core-eu-2.key
+    command: >
+      sh -c "cd /app && erl -noinput -sname core_eu_2@coreeu2 
+        -setcookie $$IRIS_COOKIE -pa ebin 
+        -config config/test_mtls 
+        -mnesia dir '\"/data/mnesia\"'
+        -ssl_dist_optfile /app/config/ssl_dist.config
+        -eval 'application:ensure_all_started(ssl),
+               application:ensure_all_started(mnesia), 
+               application:ensure_all_started(iris_core), 
+               timer:sleep(8000), 
+               iris_core:join_cluster(core_eu_1@coreeu1).'"
+
+  # ==========================================================================
+  # EDGE NODES with mTLS
+  # ==========================================================================
+  edge-east-1:
+    volumes: *mtls-volumes
+    environment:
+      <<: *mtls-environment
+      IRIS_MTLS_CERT: /app/certs/edge-east-1.pem
+      IRIS_MTLS_KEY: /app/certs/edge-east-1.key
+    command: >
+      sh -c "cd /app && erl -noinput -sname edge_east_1@edgeeast1 -hidden 
+        -setcookie $$IRIS_COOKIE -pa ebin 
+        -config config/test_mtls 
+        -iris_edge port 8085
+        -ssl_dist_optfile /app/config/ssl_dist.config
+        -eval 'application:ensure_all_started(ssl),
+               application:ensure_all_started(iris_edge), 
+               net_adm:ping(core_east_1@coreeast1).'"
+
+  edge-east-2:
+    volumes: *mtls-volumes
+    environment:
+      <<: *mtls-environment
+      IRIS_MTLS_CERT: /app/certs/edge-east-2.pem
+      IRIS_MTLS_KEY: /app/certs/edge-east-2.key
+    command: >
+      sh -c "cd /app && erl -noinput -sname edge_east_2@edgeeast2 -hidden 
+        -setcookie $$IRIS_COOKIE -pa ebin 
+        -config config/test_mtls 
+        -iris_edge port 8086
+        -ssl_dist_optfile /app/config/ssl_dist.config
+        -eval 'application:ensure_all_started(ssl),
+               application:ensure_all_started(iris_edge), 
+               net_adm:ping(core_east_2@coreeast2).'"
+
+  edge-west-1:
+    volumes: *mtls-volumes
+    environment:
+      <<: *mtls-environment
+      IRIS_MTLS_CERT: /app/certs/edge-west-1.pem
+      IRIS_MTLS_KEY: /app/certs/edge-west-1.key
+    command: >
+      sh -c "cd /app && erl -noinput -sname edge_west_1@edgewest1 -hidden 
+        -setcookie $$IRIS_COOKIE -pa ebin 
+        -config config/test_mtls 
+        -iris_edge port 8087
+        -ssl_dist_optfile /app/config/ssl_dist.config
+        -eval 'application:ensure_all_started(ssl),
+               application:ensure_all_started(iris_edge), 
+               net_adm:ping(core_west_1@corewest1).'"
+
+  edge-west-2:
+    volumes: *mtls-volumes
+    environment:
+      <<: *mtls-environment
+      IRIS_MTLS_CERT: /app/certs/edge-west-2.pem
+      IRIS_MTLS_KEY: /app/certs/edge-west-2.key
+    command: >
+      sh -c "cd /app && erl -noinput -sname edge_west_2@edgewest2 -hidden 
+        -setcookie $$IRIS_COOKIE -pa ebin 
+        -config config/test_mtls 
+        -iris_edge port 8088
+        -ssl_dist_optfile /app/config/ssl_dist.config
+        -eval 'application:ensure_all_started(ssl),
+               application:ensure_all_started(iris_edge), 
+               net_adm:ping(core_west_2@corewest2).'"
+
+  edge-eu-1:
+    volumes: *mtls-volumes
+    environment:
+      <<: *mtls-environment
+      IRIS_MTLS_CERT: /app/certs/edge-eu-1.pem
+      IRIS_MTLS_KEY: /app/certs/edge-eu-1.key
+    command: >
+      sh -c "cd /app && erl -noinput -sname edge_eu_1@edgeeu1 -hidden 
+        -setcookie $$IRIS_COOKIE -pa ebin 
+        -config config/test_mtls 
+        -iris_edge port 8089
+        -ssl_dist_optfile /app/config/ssl_dist.config
+        -eval 'application:ensure_all_started(ssl),
+               application:ensure_all_started(iris_edge), 
+               net_adm:ping(core_eu_1@coreeu1).'"
+
+  edge-eu-2:
+    volumes: *mtls-volumes
+    environment:
+      <<: *mtls-environment
+      IRIS_MTLS_CERT: /app/certs/edge-eu-2.pem
+      IRIS_MTLS_KEY: /app/certs/edge-eu-2.key
+    command: >
+      sh -c "cd /app && erl -noinput -sname edge_eu_2@edgeeu2 -hidden 
+        -setcookie $$IRIS_COOKIE -pa ebin 
+        -config config/test_mtls 
+        -iris_edge port 8094
+        -ssl_dist_optfile /app/config/ssl_dist.config
+        -eval 'application:ensure_all_started(ssl),
+               application:ensure_all_started(iris_edge), 
+               net_adm:ping(core_eu_2@coreeu2).'"
+
+  edge-sydney-1:
+    volumes: *mtls-volumes
+    environment:
+      <<: *mtls-environment
+      IRIS_MTLS_CERT: /app/certs/edge-sydney-1.pem
+      IRIS_MTLS_KEY: /app/certs/edge-sydney-1.key
+    command: >
+      sh -c "cd /app && erl -noinput -sname edge_sydney_1@edgesydney1 -hidden 
+        -setcookie $$IRIS_COOKIE -pa ebin 
+        -config config/test_mtls 
+        -iris_edge port 8090
+        -ssl_dist_optfile /app/config/ssl_dist.config
+        -eval 'application:ensure_all_started(ssl),
+               application:ensure_all_started(iris_edge), 
+               net_adm:ping(core_east_1@coreeast1).'"
+
+  edge-sydney-2:
+    volumes: *mtls-volumes
+    environment:
+      <<: *mtls-environment
+      IRIS_MTLS_CERT: /app/certs/edge-sydney-2.pem
+      IRIS_MTLS_KEY: /app/certs/edge-sydney-2.key
+    command: >
+      sh -c "cd /app && erl -noinput -sname edge_sydney_2@edgesydney2 -hidden 
+        -setcookie $$IRIS_COOKIE -pa ebin 
+        -config config/test_mtls 
+        -iris_edge port 8091
+        -ssl_dist_optfile /app/config/ssl_dist.config
+        -eval 'application:ensure_all_started(ssl),
+               application:ensure_all_started(iris_edge), 
+               net_adm:ping(core_east_2@coreeast2).'"
+
+  edge-saopaulo:
+    volumes: *mtls-volumes
+    environment:
+      <<: *mtls-environment
+      IRIS_MTLS_CERT: /app/certs/edge-saopaulo.pem
+      IRIS_MTLS_KEY: /app/certs/edge-saopaulo.key
+    command: >
+      sh -c "cd /app && erl -noinput -sname edge_saopaulo@edgesaopaulo -hidden 
+        -setcookie $$IRIS_COOKIE -pa ebin 
+        -config config/test_mtls 
+        -iris_edge port 8092
+        -ssl_dist_optfile /app/config/ssl_dist.config
+        -eval 'application:ensure_all_started(ssl),
+               application:ensure_all_started(iris_edge), 
+               net_adm:ping(core_west_1@corewest1).'"

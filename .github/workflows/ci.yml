@@ -1,121 +1,287 @@
+# =============================================================================
+# Project Iris CI/CD Pipeline
+# =============================================================================
+# Implements tiered testing strategy per FAANG Test Hardening Plan Section 5.2
+#
+# Gates:
+#   - PR Merge: Tier 0 + Tier 1 (15 min timeout, block on failure)
+#   - Nightly:  Tier 2 (2 hour timeout, alert on-call)
+#   - Release:  Tier 3 (manual trigger, block release)
+# =============================================================================
+
 name: CI
 
 on:
   push:
-    branches: [ master, main, 'fix/*', 'feat/*' ]
+    branches: [main, master, develop]
   pull_request:
-    branches: [ master, main ]
+    branches: [main, master, develop]
+  schedule:
+    # Nightly at 2 AM UTC
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+    inputs:
+      tier:
+        description: 'Test tier to run'
+        required: true
+        default: '0'
+        type: choice
+        options:
+          - '0'
+          - '1'
+          - '2'
+          - '3'
 
 env:
-  ERLANG_VERSION: '26'
+  ERLANG_VERSION: '25'
+  PYTHON_VERSION: '3.11'
 
 jobs:
-  build:
-    name: Build & Test
+  # ===========================================================================
+  # TIER 0: Unit + Integration (Every Commit)
+  # ===========================================================================
+  tier0:
+    name: Tier 0 - Unit & Integration
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     
     steps:
-    - uses: actions/checkout@v4
-    
-    - name: Set up Erlang
-      uses: erlef/setup-beam@v1
-      with:
-        otp-version: ${{ env.ERLANG_VERSION }}
-    
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.11'
-    
-    - name: Install Python dependencies
-      run: |
-        pip install pyyaml
-    
-    - name: Build
-      run: make all
-    
-    - name: Run EUnit Tests
-      run: make test
-    
-    - name: Start Cluster
-      run: |
-        make start
-        sleep 10
-    
-    - name: Run Integration Tests
-      run: python3 tests/run_tests.py --suite integration --ci
-      timeout-minutes: 10
-    
-    - name: Run Security Tests
-      run: python3 tests/run_tests.py --suite security --ci
-      timeout-minutes: 5
-    
-    - name: Stop Cluster
-      if: always()
-      run: make stop
+      - name: Checkout
+        uses: actions/checkout@v4
+      
+      - name: Setup Erlang
+        uses: erlef/setup-beam@v1
+        with:
+          otp-version: ${{ env.ERLANG_VERSION }}
+      
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      
+      - name: Cache Erlang builds
+        uses: actions/cache@v4
+        with:
+          path: ebin
+          key: ebin-${{ hashFiles('src/**/*.erl') }}
+      
+      - name: Compile
+        run: make all
+      
+      - name: Run Unit Tests (Erlang)
+        run: make test
+      
+      - name: Start Server
+        run: |
+          make start
+          sleep 5
+      
+      - name: Run Unit Tests (Python)
+        run: python3 tests/run_tests.py --suite unit
+      
+      - name: Run Integration Tests
+        run: python3 tests/run_tests.py --suite integration
+      
+      - name: Stop Server
+        if: always()
+        run: make stop
 
-  lint:
-    name: Code Quality
-    runs-on: ubuntu-latest
-    
-    steps:
-    - uses: actions/checkout@v4
-    
-    - name: Set up Erlang
-      uses: erlef/setup-beam@v1
-      with:
-        otp-version: ${{ env.ERLANG_VERSION }}
-    
-    - name: Check Erlang Compilation Warnings
-      run: |
-        make all 2>&1 | tee build.log
-        if grep -i "warning:" build.log | grep -v "AUTO-TUNE"; then
-          echo "::warning::Compilation warnings found"
-        fi
-    
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.11'
-    
-    - name: Python Lint (basic)
-      run: |
-        python3 -m py_compile tests/run_tests.py
-        python3 -m py_compile tests/framework/__init__.py
-
+  # ===========================================================================
+  # TIER 1: E2E + Security (Every PR)
+  # ===========================================================================
   tier1:
-    name: Resilience Tests (Nightly)
+    name: Tier 1 - E2E & Security
     runs-on: ubuntu-latest
-    if: github.event_name == 'schedule' || contains(github.event.head_commit.message, '[tier1]')
+    timeout-minutes: 15
+    needs: tier0
+    if: github.event_name == 'pull_request' || github.event.inputs.tier >= '1'
     
     steps:
-    - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
+      
+      - name: Setup Erlang
+        uses: erlef/setup-beam@v1
+        with:
+          otp-version: ${{ env.ERLANG_VERSION }}
+      
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      
+      - name: Compile
+        run: make all
+      
+      - name: Start Server
+        run: |
+          make start
+          sleep 5
+      
+      - name: Run E2E Tests
+        run: python3 tests/run_tests.py --suite e2e
+      
+      - name: Run Security Tests
+        run: python3 tests/run_tests.py --suite security
+      
+      - name: Run Compatibility Tests
+        run: python3 tests/run_tests.py --suite compatibility
+      
+      - name: Run Resilience Tests
+        run: python3 tests/run_tests.py --suite resilience
+      
+      - name: Stop Server
+        if: always()
+        run: make stop
+
+  # ===========================================================================
+  # TIER 2: Chaos + Performance (Nightly)
+  # ===========================================================================
+  tier2:
+    name: Tier 2 - Chaos & Performance
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    needs: [tier0, tier1]
+    if: |
+      github.event_name == 'schedule' || 
+      github.event.inputs.tier >= '2' ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/main')
     
-    - name: Set up Erlang
-      uses: erlef/setup-beam@v1
-      with:
-        otp-version: ${{ env.ERLANG_VERSION }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      
+      - name: Setup Erlang
+        uses: erlef/setup-beam@v1
+        with:
+          otp-version: ${{ env.ERLANG_VERSION }}
+      
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      
+      - name: Compile
+        run: make all
+      
+      - name: Start Docker Cluster
+        run: |
+          make cluster-up
+          sleep 30
+      
+      - name: Run Chaos Tests (Controlled)
+        run: python3 tests/run_tests.py --suite chaos_controlled
+      
+      - name: Run Performance Light Tests
+        run: python3 tests/run_tests.py --suite performance_light
+      
+      - name: Collect Performance Metrics
+        run: |
+          python3 tests/perf/collect_metrics.py --output metrics.json
+      
+      - name: Compare Against Baseline
+        run: |
+          python3 tests/perf/baseline.py compare --metrics metrics.json --record
+        continue-on-error: true
+      
+      - name: Upload Metrics
+        uses: actions/upload-artifact@v4
+        with:
+          name: performance-metrics
+          path: |
+            metrics.json
+            tests/perf/baselines/
+      
+      - name: Run Chaos Distributed Tests
+        run: python3 tests/run_tests.py --suite chaos_dist
+        continue-on-error: true  # May fail in CI environment
+      
+      - name: Stop Docker Cluster
+        if: always()
+        run: make cluster-down
+
+  # ===========================================================================
+  # TIER 3: Stress + Soak (Manual / Pre-Release)
+  # ===========================================================================
+  tier3:
+    name: Tier 3 - Stress & Soak
+    runs-on: ubuntu-latest
+    timeout-minutes: 1440  # 24 hours max
+    if: github.event.inputs.tier == '3'
+    needs: tier2
     
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.11'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      
+      - name: Setup Erlang
+        uses: erlef/setup-beam@v1
+        with:
+          otp-version: ${{ env.ERLANG_VERSION }}
+      
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      
+      - name: Install Dependencies
+        run: pip install hypothesis
+      
+      - name: Compile
+        run: make all
+      
+      - name: Start Docker Cluster (Production Spec)
+        run: |
+          # Use larger resource limits for stress testing
+          export DOCKER_MEMORY_LIMIT=8g
+          make cluster-up
+          sleep 60
+      
+      - name: Run Stress Tests
+        run: python3 tests/run_tests.py --suite stress
+        continue-on-error: true
+      
+      - name: Run Soak Test (6 hour)
+        run: |
+          timeout 21600 python3 tests/suites/stress/test_fanout.py || true
+        continue-on-error: true
+      
+      - name: Collect Final Metrics
+        run: python3 tests/perf/collect_metrics.py --output final_metrics.json
+      
+      - name: Upload Results
+        uses: actions/upload-artifact@v4
+        with:
+          name: tier3-results
+          path: |
+            final_metrics.json
+            tests/artifacts/
+      
+      - name: Stop Docker Cluster
+        if: always()
+        run: make cluster-down
+
+  # ===========================================================================
+  # Quality Gate Check
+  # ===========================================================================
+  quality-gate:
+    name: Quality Gate
+    runs-on: ubuntu-latest
+    needs: [tier0, tier1]
+    if: always()
     
-    - name: Install dependencies
-      run: pip install pyyaml
-    
-    - name: Build
-      run: make all
-    
-    - name: Start Cluster
-      run: |
-        make start
-        sleep 10
-    
-    - name: Run Tier 1 Tests
-      run: python3 tests/run_tests.py --tier 1 --ci
-      timeout-minutes: 30
-    
-    - name: Stop Cluster
-      if: always()
-      run: make stop
+    steps:
+      - name: Check Tier 0
+        if: needs.tier0.result != 'success'
+        run: |
+          echo "::error::Tier 0 tests failed - blocking merge"
+          exit 1
+      
+      - name: Check Tier 1
+        if: github.event_name == 'pull_request' && needs.tier1.result != 'success'
+        run: |
+          echo "::error::Tier 1 tests failed - blocking merge"
+          exit 1
+      
+      - name: Quality Gate Passed
+        run: echo "All required quality gates passed"

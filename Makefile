@@ -118,13 +118,28 @@ cluster-up: all
 	@echo "Starting 5-region global cluster..."
 	@docker/global-cluster/cluster.sh up
 
+cluster-mtls: all certs
+	@echo "Starting 5-region global cluster with mTLS..."
+	@docker/global-cluster/cluster.sh up-mtls
+
 cluster-chaos: all
 	@echo "Starting global cluster with chaos injection..."
 	@docker/global-cluster/cluster.sh up-chaos
 
+cluster-chaos-mtls: all certs
+	@echo "Starting global cluster with chaos + mTLS..."
+	@docker/global-cluster/cluster.sh up-chaos-mtls
+
 cluster-down:
 	@echo "Stopping global cluster..."
 	@docker/global-cluster/cluster.sh down
+
+cluster-down-mtls:
+	@echo "Stopping mTLS cluster..."
+	@docker/global-cluster/cluster.sh down-mtls
+
+cluster-verify-mtls:
+	@docker/global-cluster/cluster.sh verify-mtls
 
 cluster-status:
 	@docker/global-cluster/cluster.sh status
@@ -132,3 +147,36 @@ cluster-status:
 cluster-clean:
 	@docker/global-cluster/cluster.sh clean
 
+# Generate mTLS certificates
+certs:
+	@if [ ! -f certs/ca.pem ]; then \
+		echo "Generating mTLS certificates..."; \
+		cd certs && bash generate_certs.sh; \
+	else \
+		echo "Certificates already exist. Use 'make certs-clean' to regenerate."; \
+	fi
+
+certs-clean:
+	@echo "Removing certificates..."
+	@rm -f certs/*.pem certs/*.key certs/*.srl 2>/dev/null || true
+# =============================================================================
+# Comprehensive Test Runner
+# =============================================================================
+
+# Run all 88 tests with Docker cluster
+test-all-docker:
+	@echo "Running comprehensive test suite (88 tests)..."
+	@./scripts/run_all_tests.sh
+
+# Quick test run (skip slow tests)
+test-quick:
+	@echo "Running quick test suite..."
+	@./scripts/run_all_tests.sh --quick
+
+# Verify test setup
+test-verify:
+	@echo "Verifying test infrastructure..."
+	@docker ps | grep -q "edge-east-1" || (echo "Docker cluster not running. Run: make cluster-up" && exit 1)
+	@python3 -c "import socket; s=socket.socket(); s.settimeout(2); s.connect(('localhost', 8085)); s.close()" || (echo "Cannot connect to edge node" && exit 1)
+	@[ -f certs/ca.pem ] || (echo "Certificates missing. Run: make certs" && exit 1)
+	@echo "✓ All prerequisites met"
