@@ -63,10 +63,14 @@ def measure_system_resources(pid, duration, container):
 def main():
     print("--- UNIT COST BENCHMARK ---")
     
-    # 1. restart
-    os.system("make stop >/dev/null 2>&1")
-    os.system("make start_core >/dev/null; sleep 1")
-    os.system("make start_edge1 >/dev/null; sleep 1")
+    # Check if server is already running, if not start it
+    test_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server_running = test_sock.connect_ex((HOST, PORT)) == 0
+    test_sock.close()
+    
+    if not server_running:
+        print("Starting server...")
+        os.system("make start >/dev/null 2>&1; sleep 3")
     
     # Find beam pid
     erl_pid = None
@@ -122,7 +126,14 @@ def main():
     else:
         print("Est. Max RPS (1 Core): Infinite (CPU < Measurement Threshold)")
     
-    os.system("make stop >/dev/null")
+    # Success if we achieved >10k msg/s (basic sanity check)
+    if msgs_per_sec > 10000:
+        print("\n✅ BENCHMARK PASSED: Throughput meets minimum threshold")
+    else:
+        print("\n❌ BENCHMARK FAILED: Throughput below 10k msg/s threshold")
+    
+    # NOTE: Don't stop the server - other tests may need it
+    # os.system("make stop >/dev/null")
 
 if __name__ == "__main__":
     main()

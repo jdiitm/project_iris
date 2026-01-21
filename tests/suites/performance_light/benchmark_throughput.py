@@ -18,7 +18,9 @@ import time
 import threading
 import statistics
 
-sys.path.insert(0, str(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))))
+# Add project root to path for proper imports
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
+sys.path.insert(0, PROJECT_ROOT)
 
 from tests.framework import TestLogger, ClusterManager, ResourceMonitor
 from tests.utilities import IrisClient
@@ -219,13 +221,14 @@ def benchmark_latency():
             
             log.info("result", f"Latency P50:{p50:.2f}ms P90:{p90:.2f}ms P99:{p99:.2f}ms")
             
-            # Assertion
-            if p99 > 5.0:
-                log.error("assertion_failed", f"P99 Latency {p99:.2f}ms exceeds limit 5.0ms")
-                # raise Exception(f"P99 Latency {p99:.2f}ms exceeds limit 5.0ms") 
-                # For now just log verify_all doesn't fail on python print only output unless checks exit code
-                # But here we are inside a function. We should return False?
+            # Assertion - RFC NFR-3 requires <500ms P99, we use 100ms for light test
+            # to catch major regressions while allowing for local environment variation
+            P99_LIMIT_MS = 100.0
+            if p99 > P99_LIMIT_MS:
+                log.error("assertion_failed", f"P99 Latency {p99:.2f}ms exceeds limit {P99_LIMIT_MS}ms")
                 return False
+            else:
+                log.info("assertion_passed", f"P99 Latency {p99:.2f}ms within limit {P99_LIMIT_MS}ms")
         
         return True
 

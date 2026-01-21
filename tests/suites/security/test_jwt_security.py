@@ -21,7 +21,9 @@ import json
 import hmac
 import hashlib
 
-sys.path.insert(0, str(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))))
+# Add project root to path for proper imports
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
+sys.path.insert(0, PROJECT_ROOT)
 
 
 def base64url_encode(data):
