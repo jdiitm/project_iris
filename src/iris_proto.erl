@@ -1,6 +1,7 @@
 -module(iris_proto).
 -export([decode/1, unpack_batch/1, encode_status/3, encode_reliable_msg/2]).
 -export([encode_seq_msg/3]).  %% AUDIT FIX: Sequence-numbered message encoder (RFC FR-5)
+-export([generate_msg_id/0]). %% Unique message ID generator
 
 -type packet() :: {login, binary()}
                 | {send_message, binary(), binary()}
@@ -141,3 +142,11 @@ encode_seq_msg(Target, SeqNo, Msg) ->
     TLen = byte_size(Target),
     MLen = byte_size(Msg),
     <<7, TLen:16, Target/binary, SeqNo:64, MLen:16, Msg/binary>>.
+
+%% Generate unique message ID (RFC §5.2 - globally unique, sortable)
+generate_msg_id() ->
+    %% Combine monotonic time, unique integer, and node hash for uniqueness
+    Time = erlang:monotonic_time(),
+    Unique = erlang:unique_integer([positive]),
+    Node = erlang:phash2(node(), 16#FFFF),
+    iolist_to_binary(io_lib:format("~.16b~.16b~.4b", [Time band 16#FFFFFFFFFFFF, Unique band 16#FFFFFFFF, Node])).
