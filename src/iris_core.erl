@@ -212,8 +212,18 @@ init_db() ->
             logger:info("Found existing Mnesia data at ~s. Starting recovery...", [MnesiaDir]),
             mnesia:start(),
             %% Wait for tables to load from disk
-            Tables = [offline_msg, user_meta, user_status, revoked_tokens, presence],
-            mnesia:wait_for_tables(Tables, 30000),
+            Tables = [offline_msg, user_meta, user_status, revoked_tokens],
+            case mnesia:wait_for_tables(Tables, 30000) of
+                ok ->
+                    logger:info("All tables loaded successfully");
+                {timeout, BadTables} ->
+                    %% CRITICAL: Some tables failed to load - repair them
+                    logger:warning("Tables failed to load: ~p. Attempting repair...", [BadTables]),
+                    repair_failed_tables(BadTables);
+                {error, Reason} ->
+                    logger:error("Table load error: ~p. Recreating tables...", [Reason]),
+                    create_tables([node()])
+            end,
             %% Ensure presence table exists (RAM only)
             ensure_table_exists(presence, [
                 {ram_copies, [node()]},
@@ -278,6 +288,70 @@ safe_to_delete_schema(LivePeer) ->
                     {error, peer_has_no_data}
             end
     end.
+
+%% Repair tables that failed to load after crash recovery
+repair_failed_tables([]) -> ok;
+repair_failed_tables([Table | Rest]) ->
+    logger:info("Repairing table: ~p", [Table]),
+    %% Try to force load from local disc
+    case mnesia:force_load_table(Table) of
+        yes ->
+            logger:info("Table ~p force loaded", [Table]),
+            %% Verify table is usable
+            case mnesia:wait_for_tables([Table], 5000) of
+                ok -> ok;
+                _ -> 
+                    logger:warning("Table ~p force loaded but not usable. Recreating...", [Table]),
+                    nuke_and_recreate_table(Table)
+            end;
+        ErrorOrNo ->
+            logger:warning("Force load failed for ~p: ~p. Recreating table...", [Table, ErrorOrNo]),
+            nuke_and_recreate_table(Table)
+    end,
+    repair_failed_tables(Rest).
+
+%% Completely destroy and recreate a corrupted table
+nuke_and_recreate_table(Table) ->
+    logger:warning("NUKING corrupted table: ~p", [Table]),
+    %% Step 1: Delete from Mnesia (may fail if table is in bad state)
+    catch mnesia:delete_table(Table),
+    timer:sleep(500),
+    %% Step 2: Delete disc files directly (the nuclear option)
+    MnesiaDir = mnesia:system_info(directory),
+    TableFiles = filelib:wildcard(filename:join(MnesiaDir, atom_to_list(Table) ++ ".*")),
+    lists:foreach(fun(File) ->
+        logger:info("Deleting corrupted file: ~s", [File]),
+        file:delete(File)
+    end, TableFiles),
+    %% Step 3: Recreate fresh
+    recreate_table(Table),
+    mnesia:wait_for_tables([Table], 10000),
+    logger:info("Table ~p recreated successfully", [Table]).
+
+%% Recreate a single table with its original definition
+recreate_table(offline_msg) ->
+    mnesia:create_table(offline_msg, [
+        {disc_copies, [node()]},
+        {attributes, [key, timestamp, msg]},
+        {type, bag}
+    ]);
+recreate_table(user_meta) ->
+    mnesia:create_table(user_meta, [
+        {disc_copies, [node()]},
+        {attributes, [user, bucket_count]}
+    ]);
+recreate_table(user_status) ->
+    mnesia:create_table(user_status, [
+        {disc_copies, [node()]},
+        {attributes, [user, last_seen]}
+    ]);
+recreate_table(revoked_tokens) ->
+    mnesia:create_table(revoked_tokens, [
+        {disc_copies, [node()]},
+        {attributes, [jti, timestamp]}
+    ]);
+recreate_table(Table) ->
+    logger:error("Unknown table to recreate: ~p", [Table]).
 
 %% Internal: Create tables (only called when seeding)
 create_tables(Nodes) ->

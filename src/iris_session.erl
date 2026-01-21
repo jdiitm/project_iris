@@ -109,17 +109,20 @@ complete_login(User, TransportPid) ->
     CoreNode = get_core_node(),
     rpc:call(CoreNode, iris_core, register_user, [User, node(), TransportPid], 5000),
 
-    %% PHASE 3: Retrieve offline messages (async in background)
-    spawn(fun() ->
-        case rpc:call(get_core_node(), iris_core, retrieve_offline, [User], 5000) of
-            Msgs when is_list(Msgs), length(Msgs) > 0 ->
-                [TransportPid ! {deliver_msg, Msg} || Msg <- Msgs];
-            _ -> ok
-        end
-    end),
+    %% PHASE 3: Retrieve offline messages SYNCHRONOUSLY (RFC FR-2 compliance)
+    %% Messages MUST be delivered when recipient connects
+    OfflineActions = case rpc:call(get_core_node(), iris_core, retrieve_offline, [User], 5000) of
+        Msgs when is_list(Msgs), length(Msgs) > 0 ->
+            %% Encode each offline message as reliable message and include in response
+            lists:map(fun(Msg) ->
+                MsgId = iris_proto:generate_msg_id(),
+                {send, iris_proto:encode_reliable_msg(MsgId, Msg)}
+            end, Msgs);
+        _ -> []
+    end,
     
-    %% Immediate response - user can start messaging NOW
-    {ok, User, [{send, <<3, "LOGIN_OK">>}]}.
+    %% Response: LOGIN_OK followed by any offline messages
+    {ok, User, [{send, <<3, "LOGIN_OK">>} | OfflineActions]}.
 
 parse_login_data(Data) ->
     case binary:split(Data, <<":">>) of

@@ -73,8 +73,7 @@ class IrisClient:
             
             # Check opcode
             if len(self.buffer) > 0 and self.buffer[0] != 0x10:
-                # Not a reliable message, might be old format or ACK
-                # Skip one byte and try again
+                # Not a reliable message, skip byte
                 self.buffer = self.buffer[1:]
                 continue
             
