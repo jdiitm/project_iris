@@ -266,6 +266,13 @@ def generate_protocol_data(contract: Contract, **kwargs) -> bytes:
     schema = contract.schema
     data = b''
     
+    # First pass: convert all string values to bytes and cache lengths
+    processed_kwargs = {}
+    for key, value in kwargs.items():
+        if isinstance(value, str):
+            value = value.encode('utf-8')
+        processed_kwargs[key] = value
+    
     for field in schema["format"]:
         field_name = field["name"]
         field_type = field["type"]
@@ -276,29 +283,35 @@ def generate_protocol_data(contract: Contract, **kwargs) -> bytes:
         
         elif field_type == "uint16_be":
             # Get length of corresponding field
+            # Handle both "target_len" -> "target" and "msg_len" -> "message"
             related_field = field_name.replace("_len", "")
-            related_value = kwargs.get(related_field, b'')
-            if isinstance(related_value, str):
-                related_value = related_value.encode('utf-8')
+            if related_field not in processed_kwargs:
+                # Try common alternatives
+                if related_field == "msg":
+                    related_field = "message"
+                elif related_field == "content":
+                    related_field = "content"
+                elif related_field == "id":
+                    related_field = "msg_id"
+            related_value = processed_kwargs.get(related_field, b'')
             data += struct.pack('>H', len(related_value))
         
         elif field_type == "uint32_be":
             related_field = field_name.replace("_len", "")
-            related_value = kwargs.get(related_field, b'')
-            if isinstance(related_value, str):
-                related_value = related_value.encode('utf-8')
+            if related_field not in processed_kwargs:
+                if related_field == "content":
+                    related_field = "content"
+            related_value = processed_kwargs.get(related_field, b'')
             data += struct.pack('>I', len(related_value))
         
         elif field_type == "string":
-            value = kwargs.get(field_name, field.get("value", ""))
+            value = processed_kwargs.get(field_name, field.get("value", b""))
             if isinstance(value, str):
                 value = value.encode('utf-8')
             data += value
         
         elif field_type == "bytes":
-            value = kwargs.get(field_name, b'')
-            if isinstance(value, str):
-                value = value.encode('utf-8')
+            value = processed_kwargs.get(field_name, b'')
             data += value
     
     return data
