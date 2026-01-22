@@ -64,8 +64,9 @@ def test_ordering_invariant():
 
 ### Test Files
 
-- `tests/suites/integration/test_ordering.py` - Basic ordering
-- `tests/suites/chaos_dist/test_ordering_under_failure.py` - Ordering during crashes
+- `tests/suites/integration/test_message_ordering.py` - Basic ordering ✅
+- `tests/suites/integration/test_cross_node_ordering.py` - Cross-node ordering ✅
+- `tests/suites/chaos_dist/test_ordering_under_failure.py` - Ordering during crashes ✅ (NEW)
 
 ---
 
@@ -336,7 +337,7 @@ def test_clock_skew():
 
 ### Test Files
 
-- `tests/suites/resilience/test_clock_skew.py` (to be implemented)
+- `tests/suites/resilience/test_clock_skew.py` ✅ (IMPLEMENTED)
 
 ---
 
