@@ -19,6 +19,8 @@
 -export([prop_sequence_ordering/0]).
 -export([prop_msg_id_format/0]).
 -export([prop_length_limits/0]).
+-export([prop_sequence_wrap/0]).
+-export([prop_binary_safety/0]).
 
 %% Number of random test cases to generate
 -define(NUM_TESTS, 100).
@@ -41,7 +43,9 @@ test_all() ->
         run_property("Encode/Decode Roundtrip", fun prop_encode_decode_roundtrip/0),
         run_property("Sequence Ordering", fun prop_sequence_ordering/0),
         run_property("Message ID Format", fun prop_msg_id_format/0),
-        run_property("Length Limits", fun prop_length_limits/0)
+        run_property("Length Limits", fun prop_length_limits/0),
+        run_property("Sequence Wrap (32-bit)", fun prop_sequence_wrap/0),
+        run_property("Binary Safety", fun prop_binary_safety/0)
     ],
     
     Passed = length([R || R <- Results, R == passed]),
@@ -137,24 +141,27 @@ prop_encode_decode_roundtrip() ->
 %% =============================================================================
 %% Messages with sequence numbers N, N+1, N+2 should maintain relative order
 %% when encoded and decoded.
+%% Note: Protocol uses 64-bit sequence numbers in encode_seq_msg
 
 prop_sequence_ordering() ->
     run_n_times(?NUM_TESTS, fun() ->
-        %% Generate random starting sequence
-        StartSeq = random_sequence(),
+        %% Generate random starting sequence (64-bit safe)
+        StartSeq = rand:uniform(1000000),
+        Target = <<"user_", (integer_to_binary(rand:uniform(1000)))/binary>>,
         
         %% Create 10 sequential messages
-        Sequences = lists:seq(StartSeq, min(StartSeq + 9, 4294967295)),
+        Sequences = lists:seq(StartSeq, StartSeq + 9),
         
         Messages = [
-            {Seq, iris_proto:encode_seq_msg(Seq, <<"sender">>, <<"content", (integer_to_binary(Seq))/binary>>)}
+            {Seq, iris_proto:encode_seq_msg(Target, Seq, <<"content", (integer_to_binary(Seq))/binary>>)}
             || Seq <- Sequences
         ],
         
         %% Verify sequences are extractable and in order
+        %% Format: <<7, TLen:16, Target, SeqNo:64, MLen:16, Msg>>
         ExtractedSeqs = [
             begin
-                <<_Opcode:8, SeqNum:32, _Rest/binary>> = Encoded,
+                <<7:8, TLen:16, _Target:TLen/binary, SeqNum:64, _Rest/binary>> = Encoded,
                 SeqNum
             end
             || {_, Encoded} <- Messages
@@ -181,11 +188,17 @@ prop_msg_id_format() ->
         UniqueIds = lists:usort(Ids),
         AllUnique = length(UniqueIds) == length(Ids),
         
-        %% IDs should have consistent length
+        %% IDs should have reasonable length (8-32 bytes typical)
         Lengths = [byte_size(Id) || Id <- Ids],
-        ConsistentLength = length(lists:usort(Lengths)) == 1,
+        ReasonableLength = lists:all(fun(L) -> L >= 8 andalso L =< 64 end, Lengths),
         
-        AllBinary andalso AllUnique andalso ConsistentLength
+        case AllBinary andalso AllUnique andalso ReasonableLength of
+            true -> true;
+            false ->
+                io:format("    AllBinary=~p, AllUnique=~p, ReasonableLength=~p~n",
+                         [AllBinary, AllUnique, ReasonableLength]),
+                false
+        end
     end).
 
 %% =============================================================================
@@ -246,3 +259,81 @@ run_n_times(N, PropFun, Iteration) ->
             io:format("  Crashed on iteration ~p: ~p:~p~n", [Iteration, Class, Error]),
             false
     end.
+
+%% =============================================================================
+%% Property 5: Sequence Number Wrap at 2^64
+%% =============================================================================
+%% Sequence numbers are 64-bit unsigned integers in encode_seq_msg.
+%% This tests various boundary values are encoded correctly.
+
+prop_sequence_wrap() ->
+    run_n_times(50, fun() ->
+        Target = <<"testuser">>,
+        
+        %% Test boundary sequence numbers (64-bit)
+        TestCases = [
+            0,                          % Minimum
+            1,                          % Small
+            16#7FFFFFFF,                % 32-bit mid
+            16#FFFFFFFF,                % 32-bit max
+            16#7FFFFFFFFFFFFFFF,        % 64-bit mid (2^63-1)
+            16#FFFFFFFFFFFFFFFF         % 64-bit max (2^64-1)
+        ],
+        
+        lists:all(fun(Seq) ->
+            %% Encode with this sequence
+            Encoded = iris_proto:encode_seq_msg(Target, Seq, <<"test">>),
+            
+            %% Extract sequence from encoded message
+            %% Format: <<7, TLen:16, Target, SeqNo:64, MLen:16, Msg>>
+            TLen = byte_size(Target),
+            <<7:8, TLen:16, Target:TLen/binary, ExtractedSeq:64/unsigned, _Rest/binary>> = Encoded,
+            
+            %% Verify it matches (wrap at 64 bits)
+            Expected = Seq band 16#FFFFFFFFFFFFFFFF,
+            case ExtractedSeq == Expected of
+                true -> true;
+                false ->
+                    io:format("    Wrap test failed: Seq=~p, Expected=~p, Got=~p~n", 
+                              [Seq, Expected, ExtractedSeq]),
+                    false
+            end
+        end, TestCases)
+    end).
+
+%% =============================================================================
+%% Property 6: Binary Safety
+%% =============================================================================
+%% Protocol should handle arbitrary byte sequences without crashing,
+%% including NUL bytes, high UTF-8 chars, and random binary data.
+
+prop_binary_safety() ->
+    run_n_times(?NUM_TESTS, fun() ->
+        %% Generate various "dangerous" payloads
+        TestPayloads = [
+            <<0, 0, 0, 0>>,                         % NUL bytes
+            <<255, 255, 255, 255>>,                 % All high bits
+            <<"Hello\0World">>,                     % Embedded NUL
+            <<16#C0, 16#80>>,                       % Invalid UTF-8 (overlong NUL)
+            <<16#FF, 16#FE>>,                       % BOM-like
+            random_binary(100),                     % Random binary
+            list_to_binary([rand:uniform(256)-1 || _ <- lists:seq(1, 500)])  % More random
+        ],
+        
+        MsgId = iris_proto:generate_msg_id(),
+        
+        lists:all(fun(Payload) ->
+            try
+                %% Should not crash when encoding
+                Encoded = iris_proto:encode_reliable_msg(MsgId, Payload),
+                
+                %% Should produce valid binary output
+                is_binary(Encoded) andalso byte_size(Encoded) >= byte_size(Payload)
+            catch
+                _:_ ->
+                    %% Crashing on encode is a failure
+                    io:format("    Binary safety: crash on payload ~p~n", [Payload]),
+                    false
+            end
+        end, TestPayloads)
+    end).

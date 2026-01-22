@@ -41,28 +41,34 @@ test-verbose: $(BEAM_FILES)
 	@$(ERL) -pa ebin -noshell -eval "case eunit:test([iris_session_tests, iris_proto_tests], [verbose]) of ok -> init:stop(0); error -> init:stop(1) end."
 
 # Run all tests via unified test runner
+# Uses stdbuf -oL to force line-buffered output for real-time visibility
 test-all: $(BEAM_FILES)
 	@echo "Running all tests..."
-	@python3 tests/run_tests.py --all
+	@stdbuf -oL python3 -u tests/run_tests.py --all
 
 # Run CI Tier 0 tests (required on every merge)
 test-tier0: $(BEAM_FILES)
 	@echo "Running Tier 0 tests..."
-	@python3 tests/run_tests.py --tier 0
+	@stdbuf -oL python3 -u tests/run_tests.py --tier 0
 
 # Run CI Tier 1 tests (nightly/manual)
 test-tier1: $(BEAM_FILES)
 	@echo "Running Tier 1 tests..."
-	@python3 tests/run_tests.py --tier 1
+	@stdbuf -oL python3 -u tests/run_tests.py --tier 1
 
 # Run integration tests only
 test-integration: $(BEAM_FILES)
 	@echo "Running integration tests..."
-	@python3 tests/run_tests.py --suite integration
+	@stdbuf -oL python3 -u tests/run_tests.py --suite integration
 
 # List available tests
 test-list:
 	@python3 tests/run_tests.py --list
+
+# Run property-based tests (PropEr-style)
+test-proper: $(BEAM_FILES)
+	@echo "Running property-based tests..."
+	@$(ERL) -pa ebin -noshell -eval "case iris_proto_props:test_all() of ok -> init:stop(0); error -> init:stop(1) end."
 
 clean:
 	rm -f ebin/*.beam
@@ -180,3 +186,46 @@ test-verify:
 	@python3 -c "import socket; s=socket.socket(); s.settimeout(2); s.connect(('localhost', 8085)); s.close()" || (echo "Cannot connect to edge node" && exit 1)
 	@[ -f certs/ca.pem ] || (echo "Certificates missing. Run: make certs" && exit 1)
 	@echo "✓ All prerequisites met"
+
+# =============================================================================
+# Deterministic Docker Test Environment
+# =============================================================================
+
+# Run all tests in Docker (fully deterministic)
+test-docker:
+	@echo "Running tests in Docker (seed=$(TEST_SEED:-42))..."
+	docker build -t iris-test -f docker/test/Dockerfile .
+	docker run --rm \
+		-e TEST_SEED=$${TEST_SEED:-42} \
+		-e CI=true \
+		iris-test
+
+# Run tests with custom seed for reproduction
+test-docker-seed:
+	@echo "Running tests with seed=$(SEED)..."
+	docker run --rm \
+		-e TEST_SEED=$(SEED) \
+		-e CI=true \
+		iris-test
+
+# Run specific suite in Docker
+test-docker-suite:
+	@echo "Running suite $(SUITE) in Docker..."
+	docker run --rm \
+		-e TEST_SEED=$${TEST_SEED:-42} \
+		-e CI=true \
+		iris-test \
+		python3 tests/run_tests.py --suite $(SUITE)
+
+# Run full cluster tests in Docker
+test-docker-cluster:
+	@echo "Running full cluster tests..."
+	docker-compose -f docker/test/docker-compose.test.yml up --build --abort-on-container-exit
+	docker-compose -f docker/test/docker-compose.test.yml down -v
+
+# Clean Docker test artifacts
+test-docker-clean:
+	@echo "Cleaning Docker test artifacts..."
+	-docker rmi iris-test 2>/dev/null
+	-docker-compose -f docker/test/docker-compose.test.yml down -v 2>/dev/null
+	@echo "Docker test artifacts cleaned"

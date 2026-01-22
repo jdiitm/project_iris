@@ -150,6 +150,90 @@ case "${1:-help}" in
         docker network connect global-cluster_iris_backbone "$CONTAINER" || true
         ;;
     
+    setup-replication)
+        echo "=== Setting up Cross-Region Mnesia Replication ==="
+        echo "This will repair/rebuild the Mnesia cluster and replicate tables."
+        echo ""
+        
+        # First, form a proper Mnesia cluster by having secondaries join the primary
+        echo "Step 1: Rebuilding Mnesia cluster..."
+        echo "This requires stopping secondary cores and clearing their Mnesia data."
+        echo ""
+        
+        SECONDARY_CORES="core-east-2 core-west-1 core-west-2 core-eu-1 core-eu-2"
+        
+        for core in $SECONDARY_CORES; do
+            echo "  Stopping $core..."
+            docker stop "$core" 2>/dev/null || true
+        done
+        
+        echo ""
+        echo "  Clearing Mnesia data on secondaries..."
+        for core in $SECONDARY_CORES; do
+            docker exec "$core" rm -rf /data/mnesia/* 2>/dev/null || true
+        done
+        
+        echo ""
+        echo "  Starting secondary cores (they will join primary)..."
+        for core in $SECONDARY_CORES; do
+            docker start "$core" 2>/dev/null || true
+            sleep 3
+        done
+        
+        echo ""
+        echo "  Waiting for cluster to stabilize..."
+        sleep 15
+        
+        # Now run replication setup
+        echo ""
+        echo "Step 2: Configuring table replication..."
+        docker exec core-east-1 erl -noshell -sname replication_setup -setcookie iris_secret -pa /app/ebin -eval '
+            MainNode = core_east_1@coreeast1,
+            pong = net_adm:ping(MainNode),
+            timer:sleep(500),
+            
+            %% Hot reload iris_core on main node
+            rpc:call(MainNode, code, purge, [iris_core]),
+            rpc:call(MainNode, code, load_file, [iris_core]),
+            
+            %% Connect all nodes
+            OtherNodes = [core_east_2@coreeast2, core_west_1@corewest1, core_west_2@corewest2, core_eu_1@coreeu1, core_eu_2@coreeu2],
+            lists:foreach(fun(N) -> net_adm:ping(N) end, OtherNodes),
+            timer:sleep(2000),
+            
+            io:format("Connected nodes: ~p~n", [nodes()]),
+            
+            %% Call replication setup
+            Result = rpc:call(MainNode, iris_core, init_cross_region_replication, []),
+            io:format("Replication result: ~p~n", [Result]),
+            init:stop().
+        ' 2>&1
+        
+        echo ""
+        echo "Step 3: Verifying replication..."
+        docker exec core-east-1 erl -noshell -sname verify_replication -setcookie iris_secret -pa /app/ebin -eval '
+            MainNode = core_east_1@coreeast1,
+            pong = net_adm:ping(MainNode),
+            
+            DbNodes = rpc:call(MainNode, mnesia, system_info, [db_nodes]),
+            RunningNodes = rpc:call(MainNode, mnesia, system_info, [running_db_nodes]),
+            io:format("Mnesia db_nodes: ~p~n", [DbNodes]),
+            io:format("Mnesia running_db_nodes: ~p~n", [RunningNodes]),
+            
+            io:format("~nTable Distribution:~n"),
+            Tables = [presence, offline_msg, user_status, user_meta],
+            lists:foreach(fun(T) ->
+                Ram = rpc:call(MainNode, mnesia, table_info, [T, ram_copies]),
+                Disc = rpc:call(MainNode, mnesia, table_info, [T, disc_copies]),
+                io:format("  ~p: ram=~p disc=~p~n", [T, Ram, Disc])
+            end, Tables),
+            init:stop().
+        ' 2>&1
+        
+        echo ""
+        echo "=== Cross-Region Replication Setup Complete ==="
+        ;;
+    
     kill-core)
         CONTAINER="${2:-core-west-1}"
         echo "=== Killing core node: $CONTAINER ==="
@@ -182,6 +266,7 @@ case "${1:-help}" in
         echo "  erl [container] [node]  Connect Erlang remote shell"
         echo "  partition [container]   Disconnect container from backbone"
         echo "  reconnect [container]   Reconnect container to backbone"
+        echo "  setup-replication       Enable cross-region Mnesia table replication"
         echo "  kill-core [container]   Kill a core node for failover test"
         echo "  clean           Remove all containers and volumes"
         ;;
