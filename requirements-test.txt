@@ -1,0 +1,30 @@
+# Project Iris - Test Dependencies
+# Pinned versions for deterministic test execution
+# Last updated: 2026-01-22
+
+# Core test dependencies
+hypothesis==6.92.1          # Property-based testing
+pytest==7.4.3               # Test framework (optional, for future migration)
+
+# No other dependencies required - tests use Python stdlib only
+# This keeps the test environment lightweight and reproducible
+
+# Note: The test suite primarily uses:
+# - unittest (stdlib)
+# - socket (stdlib)
+# - subprocess (stdlib)
+# - threading (stdlib)
+# - json (stdlib)
+# - struct (stdlib)
+# - random (stdlib) - MUST be seeded via tests/conftest.py
+# - time (stdlib)
+# - os (stdlib)
+# - sys (stdlib)
+# - pathlib (stdlib)
+# - dataclasses (stdlib)
+# - statistics (stdlib)
+
+# Optional analysis tools (not required for test execution)
+# Uncomment if needed for debugging:
+# py-spy==0.3.14            # Profiling
+# memory-profiler==0.61.0   # Memory analysis

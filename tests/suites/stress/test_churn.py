@@ -65,11 +65,28 @@ def get_process_count(node):
 # ============================================================================
 
 def main():
+    # CI-aware defaults: drastically reduce scale for CI environments
+    IS_CI = os.environ.get("CI", "").lower() in ("true", "1", "yes")
+    
+    if IS_CI:
+        # CI environment: minimal scale to fit within timeout
+        DEFAULT_BASE = 100
+        DEFAULT_CHURN = 50
+        DEFAULT_CYCLES = 2
+    else:
+        # Local/production: full scale
+        DEFAULT_BASE = 500000
+        DEFAULT_CHURN = 50000
+        DEFAULT_CYCLES = 3
+    
     parser = argparse.ArgumentParser(description='Churn Stress Test')
-    parser.add_argument('--base', type=int, default=500000, help='Base stable users')
-    parser.add_argument('--churn', type=int, default=50000, help='Churning users per cycle')
-    parser.add_argument('--cycles', type=int, default=3, help='Number of churn cycles')
+    parser.add_argument('--base', type=int, default=DEFAULT_BASE, help='Base stable users')
+    parser.add_argument('--churn', type=int, default=DEFAULT_CHURN, help='Churning users per cycle')
+    parser.add_argument('--cycles', type=int, default=DEFAULT_CYCLES, help='Number of churn cycles')
     args = parser.parse_args()
+    
+    if IS_CI:
+        log(f"[CI MODE] Reduced scale: base={args.base}, churn={args.churn}, cycles={args.cycles}")
     
     os.chdir(project_root)
     

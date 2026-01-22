@@ -24,11 +24,14 @@ services:
       IRIS_MTLS_CERT: /app/certs/core-east-1.pem
       IRIS_MTLS_KEY: /app/certs/core-east-1.key
     command: >
-      sh -c "cd /app && erl -noinput -sname core_east_1@coreeast1 
+      sh -c "ln -sf /app/certs/core-east-1.pem /app/certs/node.pem &&
+             ln -sf /app/certs/core-east-1.key /app/certs/node-key.pem &&
+             cd /app && erl -noinput -sname core_east_1@coreeast1 
         -setcookie $$IRIS_COOKIE -pa ebin 
         -config config/test_mtls 
         -mnesia dir '\"/data/mnesia\"'
-        -ssl_dist_optfile /app/config/ssl_dist.config
+        -proto_dist inet_tls
+        -ssl_dist_optfile /app/config/ssl_dist.conf
         -eval 'application:ensure_all_started(ssl),
                application:ensure_all_started(mnesia), 
                iris_core:init_db(), 
@@ -45,7 +48,7 @@ services:
         -setcookie $$IRIS_COOKIE -pa ebin 
         -config config/test_mtls 
         -mnesia dir '\"/data/mnesia\"'
-        -ssl_dist_optfile /app/config/ssl_dist.config
+        -ssl_dist_optfile /app/config/ssl_dist.conf
         -eval 'application:ensure_all_started(ssl),
                application:ensure_all_started(mnesia), 
                application:ensure_all_started(iris_core), 
@@ -63,7 +66,7 @@ services:
         -setcookie $$IRIS_COOKIE -pa ebin 
         -config config/test_mtls 
         -mnesia dir '\"/data/mnesia\"'
-        -ssl_dist_optfile /app/config/ssl_dist.config
+        -ssl_dist_optfile /app/config/ssl_dist.conf
         -eval 'application:ensure_all_started(ssl),
                application:ensure_all_started(mnesia), 
                application:ensure_all_started(iris_core), 
@@ -81,7 +84,7 @@ services:
         -setcookie $$IRIS_COOKIE -pa ebin 
         -config config/test_mtls 
         -mnesia dir '\"/data/mnesia\"'
-        -ssl_dist_optfile /app/config/ssl_dist.config
+        -ssl_dist_optfile /app/config/ssl_dist.conf
         -eval 'application:ensure_all_started(ssl),
                application:ensure_all_started(mnesia), 
                application:ensure_all_started(iris_core), 
@@ -99,7 +102,7 @@ services:
         -setcookie $$IRIS_COOKIE -pa ebin 
         -config config/test_mtls 
         -mnesia dir '\"/data/mnesia\"'
-        -ssl_dist_optfile /app/config/ssl_dist.config
+        -ssl_dist_optfile /app/config/ssl_dist.conf
         -eval 'application:ensure_all_started(ssl),
                application:ensure_all_started(mnesia), 
                application:ensure_all_started(iris_core), 
@@ -117,7 +120,7 @@ services:
         -setcookie $$IRIS_COOKIE -pa ebin 
         -config config/test_mtls 
         -mnesia dir '\"/data/mnesia\"'
-        -ssl_dist_optfile /app/config/ssl_dist.config
+        -ssl_dist_optfile /app/config/ssl_dist.conf
         -eval 'application:ensure_all_started(ssl),
                application:ensure_all_started(mnesia), 
                application:ensure_all_started(iris_core), 
@@ -138,7 +141,7 @@ services:
         -setcookie $$IRIS_COOKIE -pa ebin 
         -config config/test_mtls 
         -iris_edge port 8085
-        -ssl_dist_optfile /app/config/ssl_dist.config
+        -ssl_dist_optfile /app/config/ssl_dist.conf
         -eval 'application:ensure_all_started(ssl),
                application:ensure_all_started(iris_edge), 
                net_adm:ping(core_east_1@coreeast1).'"
@@ -154,7 +157,7 @@ services:
         -setcookie $$IRIS_COOKIE -pa ebin 
         -config config/test_mtls 
         -iris_edge port 8086
-        -ssl_dist_optfile /app/config/ssl_dist.config
+        -ssl_dist_optfile /app/config/ssl_dist.conf
         -eval 'application:ensure_all_started(ssl),
                application:ensure_all_started(iris_edge), 
                net_adm:ping(core_east_2@coreeast2).'"
@@ -170,7 +173,7 @@ services:
         -setcookie $$IRIS_COOKIE -pa ebin 
         -config config/test_mtls 
         -iris_edge port 8087
-        -ssl_dist_optfile /app/config/ssl_dist.config
+        -ssl_dist_optfile /app/config/ssl_dist.conf
         -eval 'application:ensure_all_started(ssl),
                application:ensure_all_started(iris_edge), 
                net_adm:ping(core_west_1@corewest1).'"
@@ -186,7 +189,7 @@ services:
         -setcookie $$IRIS_COOKIE -pa ebin 
         -config config/test_mtls 
         -iris_edge port 8088
-        -ssl_dist_optfile /app/config/ssl_dist.config
+        -ssl_dist_optfile /app/config/ssl_dist.conf
         -eval 'application:ensure_all_started(ssl),
                application:ensure_all_started(iris_edge), 
                net_adm:ping(core_west_2@corewest2).'"
@@ -202,7 +205,7 @@ services:
         -setcookie $$IRIS_COOKIE -pa ebin 
         -config config/test_mtls 
         -iris_edge port 8089
-        -ssl_dist_optfile /app/config/ssl_dist.config
+        -ssl_dist_optfile /app/config/ssl_dist.conf
         -eval 'application:ensure_all_started(ssl),
                application:ensure_all_started(iris_edge), 
                net_adm:ping(core_eu_1@coreeu1).'"
@@ -218,7 +221,7 @@ services:
         -setcookie $$IRIS_COOKIE -pa ebin 
         -config config/test_mtls 
         -iris_edge port 8094
-        -ssl_dist_optfile /app/config/ssl_dist.config
+        -ssl_dist_optfile /app/config/ssl_dist.conf
         -eval 'application:ensure_all_started(ssl),
                application:ensure_all_started(iris_edge), 
                net_adm:ping(core_eu_2@coreeu2).'"
@@ -234,7 +237,7 @@ services:
         -setcookie $$IRIS_COOKIE -pa ebin 
         -config config/test_mtls 
         -iris_edge port 8090
-        -ssl_dist_optfile /app/config/ssl_dist.config
+        -ssl_dist_optfile /app/config/ssl_dist.conf
         -eval 'application:ensure_all_started(ssl),
                application:ensure_all_started(iris_edge), 
                net_adm:ping(core_east_1@coreeast1).'"
@@ -250,7 +253,7 @@ services:
         -setcookie $$IRIS_COOKIE -pa ebin 
         -config config/test_mtls 
         -iris_edge port 8091
-        -ssl_dist_optfile /app/config/ssl_dist.config
+        -ssl_dist_optfile /app/config/ssl_dist.conf
         -eval 'application:ensure_all_started(ssl),
                application:ensure_all_started(iris_edge), 
                net_adm:ping(core_east_2@coreeast2).'"
@@ -266,7 +269,7 @@ services:
         -setcookie $$IRIS_COOKIE -pa ebin 
         -config config/test_mtls 
         -iris_edge port 8092
-        -ssl_dist_optfile /app/config/ssl_dist.config
+        -ssl_dist_optfile /app/config/ssl_dist.conf
         -eval 'application:ensure_all_started(ssl),
                application:ensure_all_started(iris_edge), 
                net_adm:ping(core_west_1@corewest1).'"

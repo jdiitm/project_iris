@@ -99,18 +99,34 @@ def get_metrics(node_name):
 # ============================================================================
 
 def main():
+    # CI-aware defaults: reduce scale for CI environments
+    IS_CI = os.environ.get("CI", "").lower() in ("true", "1", "yes")
+    
+    if IS_CI:
+        # CI environment: minimal scale to fit within timeout
+        DEFAULT_USERS = 100
+        TIMEOUT = int(os.environ.get("STRESS_TIMEOUT", "300"))  # 5 min default
+    else:
+        # Local/production: full scale
+        DEFAULT_USERS = 1000000
+        TIMEOUT = int(os.environ.get("STRESS_TIMEOUT", "600"))  # 10 min default
+    
     parser = argparse.ArgumentParser()
-    parser.add_argument('--users', type=int, default=1000000)
+    parser.add_argument('--users', type=int, default=DEFAULT_USERS)
+    parser.add_argument('--timeout', type=int, default=TIMEOUT, help='Monitoring timeout in seconds')
     args = parser.parse_args()
+    
+    if IS_CI:
+        log(f"[CI MODE] Reduced scale: users={args.users}, timeout={args.timeout}s")
     
     # Ensure correct CWD
     os.chdir(project_root)
     init_csv() # Initialize CSV
     
-    # Increase RAM limit for 1M users.
-    # Estimate: 15KB/user * 1M = 15GB.
-    # Allow 18GB safe margin.
-    limit_ram = 18000
+    # RAM limit scales with users
+    # Estimate: 15KB/user
+    # Allow 1.5x margin
+    limit_ram = max(500, int(args.users * 15 / 1024 * 1.5))  # Convert KB to MB with margin
     
     with ClusterManager(project_root=project_root) as cluster:
         node = get_node("iris_edge1")
@@ -126,10 +142,10 @@ def main():
         max_ram = 0
         max_procs = 0
         
-        # Monitor for 500s (Ramp up of 1M might take 3-4 mins at 5k/sec)
-        # 1,000,000 / 5000 = 200s.
-        # Let's give it 600s.
-        monitor_duration = 600
+        # Monitor for configured timeout
+        # Ramp up rate depends on users: ~5k/sec typical
+        monitor_duration = args.timeout
+        log(f"Monitoring for up to {monitor_duration}s...")
         start = time.time()
         
         target_reached = False

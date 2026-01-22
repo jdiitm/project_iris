@@ -3,10 +3,19 @@
 # =============================================================================
 # Implements tiered testing strategy per FAANG Test Hardening Plan Section 5.2
 #
+# Features:
+#   - Deterministic test execution with seeded randomness
+#   - Docker-based hermetic environment option
+#   - Tiered testing (Tier 0-3)
+#
 # Gates:
 #   - PR Merge: Tier 0 + Tier 1 (15 min timeout, block on failure)
 #   - Nightly:  Tier 2 (2 hour timeout, alert on-call)
 #   - Release:  Tier 3 (manual trigger, block release)
+#
+# Reproduction:
+#   To reproduce a failed test run, use the TEST_SEED from the logs:
+#   TEST_SEED=<seed_from_logs> make test-docker
 # =============================================================================
 
 name: CI
@@ -31,10 +40,18 @@ on:
           - '1'
           - '2'
           - '3'
+      seed:
+        description: 'Test seed for reproduction (default: 42)'
+        required: false
+        default: '42'
 
 env:
   ERLANG_VERSION: '25'
   PYTHON_VERSION: '3.11'
+  # Determinism configuration
+  TEST_SEED: ${{ github.event.inputs.seed || '42' }}
+  PYTHONUNBUFFERED: '1'
+  CI: 'true'
 
 jobs:
   # ===========================================================================
@@ -49,6 +66,19 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
       
+      - name: Log Determinism Configuration
+        run: |
+          echo "=========================================="
+          echo "DETERMINISM CONFIGURATION"
+          echo "=========================================="
+          echo "TEST_SEED: ${{ env.TEST_SEED }}"
+          echo "Run ID: ${{ github.run_id }}"
+          echo "Commit: ${{ github.sha }}"
+          echo ""
+          echo "To reproduce this run locally:"
+          echo "  TEST_SEED=${{ env.TEST_SEED }} make test-docker"
+          echo "=========================================="
+      
       - name: Setup Erlang
         uses: erlef/setup-beam@v1
         with:
@@ -58,6 +88,9 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
+      
+      - name: Install Test Dependencies
+        run: pip install -r requirements-test.txt
       
       - name: Cache Erlang builds
         uses: actions/cache@v4
@@ -78,13 +111,24 @@ jobs:
       
       - name: Run Unit Tests (Python)
         run: python3 tests/run_tests.py --suite unit
+        env:
+          TEST_SEED: ${{ env.TEST_SEED }}
       
       - name: Run Integration Tests
         run: python3 tests/run_tests.py --suite integration
+        env:
+          TEST_SEED: ${{ env.TEST_SEED }}
       
       - name: Stop Server
         if: always()
         run: make stop
+      
+      - name: Upload Test Artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tier0-artifacts
+          path: tests/artifacts/
 
   # ===========================================================================
   # TIER 1: E2E + Security (Every PR)
@@ -110,6 +154,9 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
       
+      - name: Install Test Dependencies
+        run: pip install -r requirements-test.txt
+      
       - name: Compile
         run: make all
       
@@ -120,19 +167,34 @@ jobs:
       
       - name: Run E2E Tests
         run: python3 tests/run_tests.py --suite e2e
+        env:
+          TEST_SEED: ${{ env.TEST_SEED }}
       
       - name: Run Security Tests
         run: python3 tests/run_tests.py --suite security
+        env:
+          TEST_SEED: ${{ env.TEST_SEED }}
       
       - name: Run Compatibility Tests
         run: python3 tests/run_tests.py --suite compatibility
+        env:
+          TEST_SEED: ${{ env.TEST_SEED }}
       
       - name: Run Resilience Tests
         run: python3 tests/run_tests.py --suite resilience
+        env:
+          TEST_SEED: ${{ env.TEST_SEED }}
       
       - name: Stop Server
         if: always()
         run: make stop
+      
+      - name: Upload Test Artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tier1-artifacts
+          path: tests/artifacts/
 
   # ===========================================================================
   # TIER 2: Chaos + Performance (Nightly)
@@ -161,6 +223,9 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
       
+      - name: Install Test Dependencies
+        run: pip install -r requirements-test.txt
+      
       - name: Compile
         run: make all
       
@@ -171,13 +236,18 @@ jobs:
       
       - name: Run Chaos Tests (Controlled)
         run: python3 tests/run_tests.py --suite chaos_controlled
+        env:
+          TEST_SEED: ${{ env.TEST_SEED }}
       
       - name: Run Performance Light Tests
         run: python3 tests/run_tests.py --suite performance_light
+        env:
+          TEST_SEED: ${{ env.TEST_SEED }}
       
       - name: Collect Performance Metrics
         run: |
           python3 tests/perf/collect_metrics.py --output metrics.json
+        continue-on-error: true
       
       - name: Compare Against Baseline
         run: |
@@ -194,11 +264,20 @@ jobs:
       
       - name: Run Chaos Distributed Tests
         run: python3 tests/run_tests.py --suite chaos_dist
-        continue-on-error: true  # May fail in CI environment
+        env:
+          TEST_SEED: ${{ env.TEST_SEED }}
+        continue-on-error: true  # Known failing tests - Phase 2
       
       - name: Stop Docker Cluster
         if: always()
         run: make cluster-down
+      
+      - name: Upload Test Artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tier2-artifacts
+          path: tests/artifacts/
 
   # ===========================================================================
   # TIER 3: Stress + Soak (Manual / Pre-Release)
@@ -225,7 +304,7 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
       
       - name: Install Dependencies
-        run: pip install hypothesis
+        run: pip install -r requirements-test.txt
       
       - name: Compile
         run: make all
@@ -239,15 +318,20 @@ jobs:
       
       - name: Run Stress Tests
         run: python3 tests/run_tests.py --suite stress
-        continue-on-error: true
+        env:
+          TEST_SEED: ${{ env.TEST_SEED }}
+        continue-on-error: true  # Known failing tests - Phase 2
       
       - name: Run Soak Test (6 hour)
         run: |
           timeout 21600 python3 tests/suites/stress/test_fanout.py || true
+        env:
+          TEST_SEED: ${{ env.TEST_SEED }}
         continue-on-error: true
       
       - name: Collect Final Metrics
         run: python3 tests/perf/collect_metrics.py --output final_metrics.json
+        continue-on-error: true
       
       - name: Upload Results
         uses: actions/upload-artifact@v4

@@ -64,7 +64,8 @@ services:
     <<: *core-defaults
     container_name: core-east-2
     hostname: coreeast2
-    command: ["sh", "-c", "cd /app && erl -noinput -sname core_east_2@coreeast2 -setcookie $$IRIS_COOKIE -pa ebin -config config/test -mnesia dir '\"/data/mnesia\"' -eval 'application:ensure_all_started(mnesia), application:ensure_all_started(iris_core), timer:sleep(5000), iris_core:join_cluster(core_east_1@coreeast1).'"]
+    # Secondary core: Join primary's Mnesia cluster (don't create own schema)
+    command: ["sh", "-c", "cd /app && rm -rf /data/mnesia/* && erl -noinput -sname core_east_2@coreeast2 -setcookie $$IRIS_COOKIE -pa ebin -config config/test -mnesia dir '\"/data/mnesia\"' -eval 'pong = net_adm:ping(core_east_1@coreeast1), timer:sleep(2000), mnesia:start(), mnesia:change_config(extra_db_nodes, [core_east_1@coreeast1]), mnesia:change_table_copy_type(schema, node(), disc_copies), application:ensure_all_started(iris_core).'"]
     volumes:
       - ../../:/app:ro
       - mnesia-east-2:/data/mnesia
@@ -105,7 +106,8 @@ services:
     <<: *core-defaults
     container_name: core-west-1
     hostname: corewest1
-    command: ["sh", "-c", "cd /app && erl -noinput -sname core_west_1@corewest1 -setcookie $$IRIS_COOKIE -pa ebin -config config/test -mnesia dir '\"/data/mnesia\"' -eval 'application:ensure_all_started(mnesia), application:ensure_all_started(iris_core), timer:sleep(5000), iris_core:join_cluster(core_east_1@coreeast1).'"]
+    # Secondary core: Join primary's Mnesia cluster
+    command: ["sh", "-c", "cd /app && rm -rf /data/mnesia/* && erl -noinput -sname core_west_1@corewest1 -setcookie $$IRIS_COOKIE -pa ebin -config config/test -mnesia dir '\"/data/mnesia\"' -eval 'pong = net_adm:ping(core_east_1@coreeast1), timer:sleep(3000), mnesia:start(), mnesia:change_config(extra_db_nodes, [core_east_1@coreeast1]), mnesia:change_table_copy_type(schema, node(), disc_copies), application:ensure_all_started(iris_core).'"]
     volumes:
       - ../../:/app:ro
       - mnesia-west-1:/data/mnesia
@@ -119,7 +121,8 @@ services:
     <<: *core-defaults
     container_name: core-west-2
     hostname: corewest2
-    command: ["sh", "-c", "cd /app && erl -noinput -sname core_west_2@corewest2 -setcookie $$IRIS_COOKIE -pa ebin -config config/test -mnesia dir '\"/data/mnesia\"' -eval 'application:ensure_all_started(mnesia), application:ensure_all_started(iris_core), timer:sleep(7000), iris_core:join_cluster(core_west_1@corewest1).'"]
+    # Secondary core: Join via core-west-1
+    command: ["sh", "-c", "cd /app && rm -rf /data/mnesia/* && erl -noinput -sname core_west_2@corewest2 -setcookie $$IRIS_COOKIE -pa ebin -config config/test -mnesia dir '\"/data/mnesia\"' -eval 'pong = net_adm:ping(core_west_1@corewest1), timer:sleep(4000), mnesia:start(), mnesia:change_config(extra_db_nodes, [core_west_1@corewest1]), mnesia:change_table_copy_type(schema, node(), disc_copies), application:ensure_all_started(iris_core).'"]
     volumes:
       - ../../:/app:ro
       - mnesia-west-2:/data/mnesia
@@ -160,7 +163,8 @@ services:
     <<: *core-defaults
     container_name: core-eu-1
     hostname: coreeu1
-    command: ["sh", "-c", "cd /app && erl -noinput -sname core_eu_1@coreeu1 -setcookie $$IRIS_COOKIE -pa ebin -config config/test -mnesia dir '\"/data/mnesia\"' -eval 'application:ensure_all_started(mnesia), application:ensure_all_started(iris_core), timer:sleep(6000), iris_core:join_cluster(core_east_1@coreeast1).'"]
+    # Secondary core: Join primary's Mnesia cluster
+    command: ["sh", "-c", "cd /app && rm -rf /data/mnesia/* && erl -noinput -sname core_eu_1@coreeu1 -setcookie $$IRIS_COOKIE -pa ebin -config config/test -mnesia dir '\"/data/mnesia\"' -eval 'pong = net_adm:ping(core_east_1@coreeast1), timer:sleep(5000), mnesia:start(), mnesia:change_config(extra_db_nodes, [core_east_1@coreeast1]), mnesia:change_table_copy_type(schema, node(), disc_copies), application:ensure_all_started(iris_core).'"]
     volumes:
       - ../../:/app:ro
       - mnesia-eu-1:/data/mnesia
@@ -174,7 +178,8 @@ services:
     <<: *core-defaults
     container_name: core-eu-2
     hostname: coreeu2
-    command: ["sh", "-c", "cd /app && erl -noinput -sname core_eu_2@coreeu2 -setcookie $$IRIS_COOKIE -pa ebin -config config/test -mnesia dir '\"/data/mnesia\"' -eval 'application:ensure_all_started(mnesia), application:ensure_all_started(iris_core), timer:sleep(8000), iris_core:join_cluster(core_eu_1@coreeu1).'"]
+    # Secondary core: Join via core-eu-1
+    command: ["sh", "-c", "cd /app && rm -rf /data/mnesia/* && erl -noinput -sname core_eu_2@coreeu2 -setcookie $$IRIS_COOKIE -pa ebin -config config/test -mnesia dir '\"/data/mnesia\"' -eval 'pong = net_adm:ping(core_eu_1@coreeu1), timer:sleep(6000), mnesia:start(), mnesia:change_config(extra_db_nodes, [core_eu_1@coreeu1]), mnesia:change_table_copy_type(schema, node(), disc_copies), application:ensure_all_started(iris_core).'"]
     volumes:
       - ../../:/app:ro
       - mnesia-eu-2:/data/mnesia

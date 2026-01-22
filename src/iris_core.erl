@@ -4,7 +4,7 @@
 
 %% OTP Callbacks
 -export([start/2, stop/1, init/1]).
--export([init_db/0, init_db/1, join_cluster/1]).
+-export([init_db/0, init_db/1, join_cluster/1, init_cross_region_replication/0]).
 
 %% High-Scale Messaging APIs
 -export([register_user/3, lookup_user/1]).
@@ -400,4 +400,85 @@ join_cluster(Node) ->
         Class:Reason:Stack ->
              logger:error("Exception in join_cluster: ~p:~p at ~p", [Class, Reason, Stack]),
              {error, {Class, Reason}}
+    end.
+
+%%%===================================================================
+%%% Cross-Region Mnesia Replication
+%%%===================================================================
+%% 
+%% Enables cross-region table replication for:
+%% - presence: ram_copies (fast reads, eventual consistency OK)
+%% - offline_msg: disc_copies (durable, sync_transaction for RPO=0)
+%% - user_status: ram_copies (last_seen timestamps)
+%%
+%% Call this AFTER all core nodes have joined the cluster.
+%% Usage: iris_core:init_cross_region_replication().
+%%%===================================================================
+
+init_cross_region_replication() ->
+    logger:info("Initializing cross-region Mnesia replication..."),
+    
+    %% Get all connected core nodes (filter by naming convention)
+    AllNodes = [node() | nodes()],
+    CoreNodes = [N || N <- AllNodes, is_core_node(N)],
+    
+    logger:info("Core nodes for replication: ~p", [CoreNodes]),
+    
+    %% Skip if we're the only node
+    case length(CoreNodes) of
+        1 ->
+            logger:info("Single node cluster - no replication needed"),
+            ok;
+        _ ->
+            %% Replicate presence table (ram_copies for speed)
+            replicate_table(presence, ram_copies, CoreNodes),
+            
+            %% Replicate offline_msg table (disc_copies for durability/RPO=0)
+            replicate_table(offline_msg, disc_copies, CoreNodes),
+            
+            %% Replicate user_status table (ram_copies)
+            replicate_table(user_status, ram_copies, CoreNodes),
+            
+            %% Replicate user_meta table (disc_copies)
+            replicate_table(user_meta, disc_copies, CoreNodes),
+            
+            logger:info("Cross-region replication initialized successfully"),
+            ok
+    end.
+
+%% Helper: Check if a node is a core node (by naming convention)
+is_core_node(Node) ->
+    NodeStr = atom_to_list(Node),
+    %% Match patterns like: core_east_1@..., core_west_1@..., iris_core@...
+    lists:prefix("core", NodeStr) orelse lists:prefix("iris_core", NodeStr).
+
+%% Helper: Add table copies to all nodes that don't have them
+replicate_table(Table, CopyType, Nodes) ->
+    case lists:member(Table, mnesia:system_info(tables)) of
+        false ->
+            logger:warning("Table ~p does not exist, skipping replication", [Table]),
+            ok;
+        true ->
+            CurrentCopies = case CopyType of
+                ram_copies -> mnesia:table_info(Table, ram_copies);
+                disc_copies -> mnesia:table_info(Table, disc_copies);
+                disc_only_copies -> mnesia:table_info(Table, disc_only_copies)
+            end,
+            
+            %% Add copies to nodes that don't have them
+            NodesToAdd = Nodes -- CurrentCopies,
+            
+            lists:foreach(fun(Node) ->
+                logger:info("Adding ~p copy of ~p to ~p", [CopyType, Table, Node]),
+                case mnesia:add_table_copy(Table, Node, CopyType) of
+                    {atomic, ok} ->
+                        logger:info("Successfully added ~p to ~p", [Table, Node]);
+                    {aborted, {already_exists, _, _}} ->
+                        logger:debug("Table ~p already exists on ~p", [Table, Node]);
+                    {aborted, Reason} ->
+                        logger:warning("Failed to add ~p to ~p: ~p", [Table, Node, Reason])
+                end
+            end, NodesToAdd),
+            
+            ok
     end.
