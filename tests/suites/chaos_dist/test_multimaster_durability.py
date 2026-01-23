@@ -44,8 +44,7 @@ SECONDARY_CORE = os.environ.get("IRIS_SECONDARY_CORE", "core-east-2")
 TIMEOUT = 10
 RECOVERY_TIMEOUT = 60
 
-# CI mode detection - gracefully skip when infrastructure not fully configured
-IS_CI = os.environ.get("CI", "").lower() in ("true", "1", "yes")
+# Per TEST_CONTRACT.md: exit(0)=pass, exit(1)=fail, exit(2)=skip
 
 # Track test phases for debugging
 class TestPhase:
@@ -371,25 +370,16 @@ def main():
         print("RESULT: PASSED - Multi-master durability validated")
         return 0
     elif result is False:
-        if IS_CI:
-            print("RESULT: SKIPPED (CI) - Multi-master infrastructure not fully configured")
-            print("\n  This is a Tier 2 test requiring:")
-            print("    - Docker global cluster with 2+ core nodes per region")
-            print("    - Fully configured Mnesia multi-master replication")
-            print("    - Multiple edge nodes connected to different cores")
-            print("\n  To run locally:")
-            print("    1. make cluster-up")
-            print("    2. ./docker/global-cluster/cluster.sh setup-replication")
-            print("    3. python3 tests/suites/chaos_dist/test_multimaster_durability.py")
-            return 0  # Graceful skip in CI
         print("RESULT: FAILED - Durability violation detected")
         return 1
     else:
-        print("RESULT: SKIPPED - Prerequisites not met")
+        # Per TEST_CONTRACT.md: exit(2) = SKIP with documented reason
+        print("SKIP:CLUSTER - Prerequisites not met")
         print("\nTo run this test:")
         print("  1. make cluster-up")
-        print("  2. python3 tests/suites/chaos_dist/test_multimaster_durability.py")
-        return 0
+        print("  2. ./docker/global-cluster/cluster.sh (initializes replication)")
+        print("  3. python3 tests/suites/chaos_dist/test_multimaster_durability.py")
+        return 2  # SKIP, not PASS
 
 
 if __name__ == "__main__":

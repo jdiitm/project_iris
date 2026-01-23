@@ -42,8 +42,9 @@ TIMEOUT = 10
 MESSAGE_COUNT = 30
 P99_TARGET_MS = 500
 
-# CI mode detection - gracefully skip when infrastructure not fully configured
-IS_CI = os.environ.get("CI", "").lower() in ("true", "1", "yes")
+# Test profile (smoke vs full) - does NOT change pass/fail logic
+# Per TEST_CONTRACT.md: exit(0)=pass, exit(1)=fail, exit(2)=skip
+TEST_PROFILE = os.environ.get("TEST_PROFILE", "smoke")
 
 # Docker cluster paths
 DOCKER_COMPOSE_DIR = os.path.join(project_root, "docker", "global-cluster")
@@ -391,14 +392,11 @@ def run_latency_test():
         print("   1. Both edges are connected to their cores")
         print("   2. Cores are meshed together (Mnesia cluster)")
         print("   3. User registration is replicating across cores")
+        print("\n   To fix: Run 'make cluster-up' then './cluster.sh' to initialize replication")
         
-        if IS_CI:
-            print("\n[CI MODE] SKIP: Cross-region Mnesia replication not configured")
-            print("   This is a Tier 2 test requiring full multi-region cluster")
-            print("   Run 'make cluster-up && ./cluster.sh setup-replication' for full test")
-            sys.exit(0)  # Graceful skip in CI
-        else:
-            sys.exit(1)
+        # Per TEST_CONTRACT.md: exit(2) = SKIP with documented reason
+        print("\nSKIP:CLUSTER - Cross-region Mnesia replication not configured")
+        sys.exit(2)
     
     delivery_rate = len(latencies) / MESSAGE_COUNT * 100
     

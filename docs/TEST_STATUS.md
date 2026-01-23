@@ -2,41 +2,76 @@
 
 ## Overview
 
-**Last Run**: 2026-01-23 (Final CI-Hardened Run)  
+**Last Run**: 2026-01-23 (Post-Hardening - No Tricks)  
 **Total Tests**: 53  
-**Passing**: 53 (100%)  
-**Known Excluded**: 0
+**Passing**: 49 (92%)  
+**Skipped**: 2 (properly documented)  
+**Failed**: 2 (require infrastructure fixes)
 
-## Full Test Results (Final Run - Jan 23, 2026)
+## Full Test Results (Hardened Run - Jan 23, 2026)
 
-| Tier | Suite | Tests | Passed | Failed | Status |
-|------|-------|-------|--------|--------|--------|
-| 0 | unit | 8 | 8 | 0 | ✅ ALL PASS |
-| 0 | integration | 11 | 11 | 0 | ✅ ALL PASS |
-| 1 | e2e | 2 | 2 | 0 | ✅ ALL PASS |
-| 1 | security | 7 | 7 | 0 | ✅ ALL PASS |
-| 1 | resilience | 4 | 4 | 0 | ✅ ALL PASS |
-| 1 | compatibility | 1 | 1 | 0 | ✅ ALL PASS |
-| 1 | contract | 1 | 1 | 0 | ✅ ALL PASS |
-| 2 | performance_light | 3 | 3 | 0 | ✅ ALL PASS |
-| 2 | chaos_controlled | 2 | 2 | 0 | ✅ ALL PASS |
-| 2 | chaos_dist | 6 | 6 | 0 | ✅ ALL PASS |
-| 3 | stress | 8 | 8 | 0 | ✅ ALL PASS |
-| **TOTAL** | | **53** | **53** | **0** | **100% pass rate** |
+| Tier | Suite | Tests | Passed | Failed | Skipped | Status |
+|------|-------|-------|--------|--------|---------|--------|
+| 0 | unit | 8 | 8 | 0 | 0 | ✅ ALL PASS |
+| 0 | integration | 11 | 11 | 0 | 0 | ✅ ALL PASS |
+| 1 | e2e | 2 | 2 | 0 | 0 | ✅ ALL PASS |
+| 1 | security | 7 | 7 | 0 | 0 | ✅ ALL PASS |
+| 1 | resilience | 4 | 2 | 1 | 1 | ❌ 1 fail (bug), 1 skip |
+| 1 | compatibility | 1 | 1 | 0 | 0 | ✅ ALL PASS |
+| 1 | contract | 1 | 1 | 0 | 0 | ✅ ALL PASS |
+| 2 | performance_light | 3 | 3 | 0 | 0 | ✅ ALL PASS |
+| 2 | chaos_controlled | 2 | 2 | 0 | 0 | ✅ ALL PASS |
+| 2 | chaos_dist | 6 | 4 | 1 | 1 | ❌ 1 fail (infra), 1 skip |
+| 3 | stress | 8 | 8 | 0 | 0 | ✅ ALL PASS |
+| **TOTAL** | | **53** | **49** | **2** | **2** | **92% pass** |
 
-## CI Mode Graceful Handling
+## Failed Tests (Require Fixes)
 
-These tests require full Docker multi-region infrastructure. In CI mode (`CI=true`),
-they gracefully skip with exit code 0 when infrastructure isn't fully configured:
+| Test | Suite | Root Cause | Fix Required | Category |
+|------|-------|------------|--------------|----------|
+| `test_multimaster_durability` | chaos_dist | Mnesia multi-master not configured | Implement cross-region replication | Infrastructure |
+| `test_hard_kill` | resilience | **REAL BUG**: Offline messages not persisted | Fix `iris_offline_storage` durability | **Service Bug** |
 
-| Test | Suite | CI Behavior | Full Test Requires |
-|------|-------|-------------|-------------------|
-| `test_cross_region_latency` | chaos_dist | Graceful skip | Multi-region Mnesia |
-| `test_multimaster_durability` | chaos_dist | Graceful skip | 2+ cores per region |
-| `test_failover_time` | resilience | Graceful skip | Docker global cluster |
-| `test_churn` | stress | Scaled down (1K) | 10K+ connections |
-| `test_limits` | stress | Scaled down | Full soak (10+ min) |
-| `stress_global_fan_in` | stress | Scaled down | 5 regions, 250 threads |
+### Critical Finding: `test_hard_kill` Durability Failure
+
+The honest testing exposed a **real durability bug**:
+- Sent 3 messages to offline user
+- After restart, recovered 0/3 messages
+- This is a **complete data loss** - violates RPO=0
+
+**Root Cause**: Offline message storage is not properly persisting to Mnesia disk before acknowledging.
+
+**Fix Required**: 
+1. Ensure `iris_offline_storage:store_durable/3` uses `sync_transaction`
+2. Verify Mnesia disc_copies are configured
+3. Add durability verification before ACK
+
+## Skipped Tests (Exit Code 2 - Documented)
+
+Per TEST_CONTRACT.md, these tests properly skip with documented reasons:
+
+| Test | Suite | Skip Reason |
+|------|-------|-------------|
+| `test_cross_region_latency` | chaos_dist | SKIP:CLUSTER - Cross-region Mnesia replication not configured |
+| `test_failover_time` | resilience | SKIP:DOCKER - Container not available |
+
+## Test Profiles
+
+Tests now use explicit profiles instead of CI-mode tricks:
+
+| Profile | Purpose | Command |
+|---------|---------|---------|
+| `smoke` | Quick validation (default) | `TEST_PROFILE=smoke python3 tests/run_tests.py --all` |
+| `full` | Production-scale testing | `TEST_PROFILE=full python3 tests/run_tests.py --all` |
+
+## Changes Made (Jan 23, 2026 Hardening)
+
+1. **Removed all IS_CI tricks** - Tests no longer change pass/fail based on environment
+2. **Added TEST_PROFILE system** - Explicit smoke vs full profiles with fixed thresholds
+3. **Standardized exit codes** - `exit(0)`=pass, `exit(1)`=fail, `exit(2)`=skip
+4. **Added skip tracking** - Test runner now counts and reports skipped tests separately
+5. **Created TEST_CONTRACT.md** - Formal contract for test return codes
+6. **Created TEST_AUDIT.md** - Full audit of all test tricks found and fixed
 
 ## Recent Fixes (2026-01-22)
 

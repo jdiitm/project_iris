@@ -100,6 +100,8 @@ class TestResult:
     output: str = ""
     error: str = ""
     artifacts: List[str] = field(default_factory=list)
+    skipped: bool = False  # Per TEST_CONTRACT.md: exit(2) = SKIP
+    skip_reason: str = ""
 
 @dataclass
 class SuiteResult:
@@ -107,7 +109,8 @@ class SuiteResult:
     tests_run: int
     tests_passed: int
     tests_failed: int
-    duration_seconds: float
+    tests_skipped: int = 0  # Per TEST_CONTRACT.md: exit(2) = SKIP
+    duration_seconds: float = 0.0
     results: List[TestResult] = field(default_factory=list)
 
 @dataclass 
@@ -653,9 +656,9 @@ def run_test(test: Dict, run_dir: Path, timeout: int = 120, stream_output: bool 
         env["TEST_SEED"] = str(MASTER_SEED)
         env["TEST_RUN_ID"] = TEST_RUN_ID
         
-        # Ensure CI mode is propagated (default to true for test runner)
-        if "CI" not in env:
-            env["CI"] = "true"
+        # Pass TEST_PROFILE for proper scaling (no CI-based tricks)
+        if "TEST_PROFILE" not in env:
+            env["TEST_PROFILE"] = os.environ.get("TEST_PROFILE", "smoke")
         
         # Add project root to PYTHONPATH so tests can import from tests.framework
         existing_pythonpath = env.get("PYTHONPATH", "")
@@ -706,7 +709,19 @@ def run_test(test: Dict, run_dir: Path, timeout: int = 120, stream_output: bool 
             
             result.output = ''.join(output_lines)
             result.error = ""
-            result.passed = proc.returncode == 0
+            # Per TEST_CONTRACT.md: exit(0)=pass, exit(1)=fail, exit(2)=skip
+            if proc.returncode == 0:
+                result.passed = True
+            elif proc.returncode == 2:
+                result.passed = True  # Skips don't count as failures
+                result.skipped = True
+                # Extract skip reason from output (look for "SKIP:" prefix)
+                for line in output_lines:
+                    if "SKIP:" in line:
+                        result.skip_reason = line.strip()
+                        break
+            else:
+                result.passed = False
         else:
             # Original behavior: capture silently
             proc = subprocess.run(
@@ -721,7 +736,18 @@ def run_test(test: Dict, run_dir: Path, timeout: int = 120, stream_output: bool 
             
             result.output = proc.stdout
             result.error = proc.stderr
-            result.passed = proc.returncode == 0
+            # Per TEST_CONTRACT.md: exit(0)=pass, exit(1)=fail, exit(2)=skip
+            if proc.returncode == 0:
+                result.passed = True
+            elif proc.returncode == 2:
+                result.passed = True  # Skips don't count as failures
+                result.skipped = True
+                for line in proc.stdout.split('\n'):
+                    if "SKIP:" in line:
+                        result.skip_reason = line.strip()
+                        break
+            else:
+                result.passed = False
         
         # Write log
         with open(log_file, "w") as f:
@@ -743,7 +769,9 @@ def run_test(test: Dict, run_dir: Path, timeout: int = 120, stream_output: bool 
     
     result.duration_seconds = time.time() - start_time
     
-    if result.passed:
+    if result.skipped:
+        log_warn(f"SKIP: {test['name']} ({result.duration_seconds:.1f}s) - {result.skip_reason}")
+    elif result.passed:
         log_pass(f"PASS: {test['name']} ({result.duration_seconds:.1f}s)")
     else:
         log_fail(f"FAIL: {test['name']} ({result.duration_seconds:.1f}s)")
@@ -823,12 +851,14 @@ def run_suite(suite_name: str, run_dir: Path, require_cluster: bool = True) -> S
         _current_cluster_config = None  # Force restart on next suite
     
     duration = time.time() - start_time
-    passed = sum(1 for r in results if r.passed)
-    failed = len(results) - passed
+    skipped = sum(1 for r in results if r.skipped)
+    passed = sum(1 for r in results if r.passed and not r.skipped)
+    failed = sum(1 for r in results if not r.passed)
     
     return SuiteResult(
         name=suite_name,
         tests_run=len(results),
+        tests_skipped=skipped,
         tests_passed=passed,
         tests_failed=failed,
         duration_seconds=duration,
@@ -863,6 +893,7 @@ def write_summary(run_dir: Path, suite_results: List[SuiteResult],
             "tests_run": 0,
             "tests_passed": 0,
             "tests_failed": 0,
+            "tests_skipped": 0,
             "duration_seconds": 0.0
         }
     }
@@ -873,6 +904,7 @@ def write_summary(run_dir: Path, suite_results: List[SuiteResult],
             "tests_run": sr.tests_run,
             "tests_passed": sr.tests_passed,
             "tests_failed": sr.tests_failed,
+            "tests_skipped": sr.tests_skipped,
             "duration_seconds": sr.duration_seconds,
             "tests": [asdict(r) for r in sr.results]
         }
@@ -880,6 +912,7 @@ def write_summary(run_dir: Path, suite_results: List[SuiteResult],
         summary["totals"]["tests_run"] += sr.tests_run
         summary["totals"]["tests_passed"] += sr.tests_passed
         summary["totals"]["tests_failed"] += sr.tests_failed
+        summary["totals"]["tests_skipped"] += sr.tests_skipped
         summary["totals"]["duration_seconds"] += sr.duration_seconds
     
     summary_file = run_dir / "summary.json"
@@ -896,23 +929,28 @@ def print_final_summary(summary: Dict):
     totals = summary["totals"]
     passed = totals["tests_passed"]
     failed = totals["tests_failed"]
+    skipped = totals.get("tests_skipped", 0)
     total = totals["tests_run"]
     duration = totals["duration_seconds"]
     
-    print(f"\n{'Suite':<25} {'Passed':<10} {'Failed':<10} {'Duration':<10}", flush=True)
-    print("-" * 55, flush=True)
+    print(f"\n{'Suite':<25} {'Passed':<10} {'Failed':<10} {'Skipped':<10} {'Duration':<10}", flush=True)
+    print("-" * 65, flush=True)
     
     for suite in summary["suites"]:
-        print(f"{suite['name']:<25} {suite['tests_passed']:<10} {suite['tests_failed']:<10} {suite['duration_seconds']:.1f}s", flush=True)
+        skipped_count = suite.get("tests_skipped", 0)
+        print(f"{suite['name']:<25} {suite['tests_passed']:<10} {suite['tests_failed']:<10} {skipped_count:<10} {suite['duration_seconds']:.1f}s", flush=True)
     
-    print("-" * 55, flush=True)
-    print(f"{'TOTAL':<25} {passed:<10} {failed:<10} {duration:.1f}s", flush=True)
+    print("-" * 65, flush=True)
+    print(f"{'TOTAL':<25} {passed:<10} {failed:<10} {skipped:<10} {duration:.1f}s", flush=True)
     print(flush=True)
     
     if failed == 0:
-        log_pass(f"All {total} tests passed!")
+        if skipped > 0:
+            log_warn(f"All {total} tests completed: {passed} passed, {skipped} skipped")
+        else:
+            log_pass(f"All {total} tests passed!")
     else:
-        log_fail(f"{failed}/{total} tests failed")
+        log_fail(f"{failed}/{total} tests failed ({skipped} skipped)")
 
 # ============================================================================
 # Main Entry Point

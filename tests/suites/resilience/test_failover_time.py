@@ -31,8 +31,7 @@ CONTAINER_NAME = os.environ.get("IRIS_CORE_CONTAINER", "core-east-1")
 FAILOVER_TARGET_SECONDS = 30
 TRAFFIC_INTERVAL_MS = 100  # Send message every 100ms
 
-# CI mode detection - gracefully skip when Docker infrastructure not available
-IS_CI = os.environ.get("CI", "").lower() in ("true", "1", "yes")
+# Per TEST_CONTRACT.md: exit(0)=pass, exit(1)=fail, exit(2)=skip
 
 
 class TrafficMonitor:
@@ -216,11 +215,9 @@ def test_failover_time():
         print("   ❌ Failed to kill container")
         monitor.stop()
         worker_thread.join()
-        if IS_CI:
-            print("\n[CI MODE] SKIP: Docker container not available")
-            print("   This is a Tier 2 test requiring Docker global cluster")
-            return None  # Graceful skip
-        return False
+        # Per TEST_CONTRACT.md: return None = SKIP (exit code 2)
+        print("\nSKIP:DOCKER - Container not available")
+        return None
     print("   ✅ Container killed")
     
     print(f"\n3. Monitoring failover (timeout: {FAILOVER_TARGET_SECONDS + 30}s)...")
@@ -287,8 +284,9 @@ def main():
         print("RESULT: FAILED")
         sys.exit(1)
     else:
+        # Per TEST_CONTRACT.md: exit(2) = SKIP
         print("RESULT: SKIPPED")
-        sys.exit(0)
+        sys.exit(2)
 
 
 if __name__ == "__main__":
