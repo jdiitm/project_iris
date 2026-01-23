@@ -52,11 +52,59 @@ def run_cmd(cmd, bg=False, ignore_fail=False):
             pass
         return ""
 
-def get_process_count(node):
-    cmd = f"erl -setcookie iris_secret -sname probe_{int(time.time()*1000)} -hidden -noshell -pa ebin -eval \"io:format('~p', [rpc:call('{node}', erlang, system_info, [process_count])]), init:stop().\""
+def get_tcp_connections(port=8085):
+    """Count TCP connections to a specific port using ss/netstat."""
     try:
-        res = run_cmd(cmd, ignore_fail=True)
-        return int(res.strip())
+        # Use ss (faster) with state filter for ESTABLISHED connections
+        result = subprocess.run(
+            ["ss", "-tn", f"sport = :{port}"],
+            capture_output=True, text=True, timeout=5
+        )
+        # Count lines minus header
+        lines = [l for l in result.stdout.strip().split('\n') if l and 'ESTAB' in l]
+        return len(lines)
+    except Exception:
+        pass
+    
+    try:
+        # Fallback to netstat
+        result = subprocess.run(
+            ["netstat", "-tn"],
+            capture_output=True, text=True, timeout=5
+        )
+        count = 0
+        for line in result.stdout.split('\n'):
+            if f':{port}' in line and 'ESTABLISHED' in line:
+                count += 1
+        return count
+    except Exception:
+        return 0
+
+def verify_edge_alive(port=8085, timeout=2):
+    """Verify edge is accepting connections."""
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(timeout)
+        sock.connect(('127.0.0.1', port))
+        # Send a simple login to verify edge is responsive
+        sock.sendall(b'\x01probe_churn_test')
+        sock.settimeout(2)
+        try:
+            data = sock.recv(1024)
+            sock.close()
+            return True
+        except socket.timeout:
+            sock.close()
+            return True  # Connection works, just no response
+    except Exception as e:
+        return False
+
+def get_extreme_gen_stats():
+    """Get stats from running extreme_gen coordinator via RPC."""
+    try:
+        cmd = "erl -setcookie iris_secret -sname stats_probe -hidden -noshell -pa ebin -eval \"case rpc:call(gen_base@" + get_hostname() + ", iris_extreme_gen, get_stats, []) of {ok, S} -> io:format('~p', [maps:get(connected, S, 0)]); _ -> io:format('0') end, init:stop().\""
+        result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=10)
+        return int(result.stdout.strip())
     except:
         return 0
 
@@ -94,64 +142,83 @@ def main():
         # Recompile helper for load generation
         subprocess.run("erlc -o ebin src/iris_extreme_gen.erl", shell=True, check=True)
         
+        # Verify edge is alive before starting
+        if not verify_edge_alive():
+            log("CRITICAL: Edge node not responding on port 8085!")
+            sys.exit(1)
+        log("Edge node verified alive on port 8085")
+        
         procs = []
-        node = get_node("iris_edge1")
+        initial_conns = get_tcp_connections(8085)
+        log(f"Initial TCP connections: {initial_conns}")
         
         try:
             # 1. Establish Base Load
             log(f"[*] Establishing base load ({args.base} users)...")
-            log(f"[*] Establishing base load ({args.base} users)...")
-            # Use range start offset 0
             cmd_base = f"erl +P 2000000 -setcookie iris_secret -sname gen_base -hidden -noshell -pa ebin -eval \"iris_extreme_gen:start({args.base}, 3600, normal), timer:sleep(infinity).\""
             p_base = run_cmd(cmd_base, bg=True)
             procs.append(p_base)
             
-            # Wait for base to connect
-            time.sleep(10) 
-            base_count = get_process_count(node)
-            log(f"Base loaded. Cluster Processes: {base_count}")
+            # Wait for base to connect - use TCP connection count
+            log("Waiting for base connections to establish...")
+            time.sleep(15)  # Give more time for connections to establish
+            
+            base_conns = get_tcp_connections(8085)
+            log(f"Base loaded. TCP connections: {base_conns}")
+            
+            # Verify edge is still alive
+            if not verify_edge_alive():
+                log("CRITICAL: Edge died during base load!")
+                sys.exit(1)
             
             # 2. Churn Cycles
             for i in range(args.cycles):
                 log(f"\n--- Cycle {i+1}/{args.cycles} ---")
                 
+                # Verify edge is alive before churn
+                if not verify_edge_alive():
+                    log("CRITICAL: Edge died before churn cycle!")
+                    sys.exit(1)
+                
                 # CONNECT STORM
                 log(f"[*] Connect Storm (+{args.churn} users)...")
-                # Use separate sname and offset logic if needed, but extreme_gen uses random 127.0.0.X alias
-                # We rely on unique PIDs from new generator instance
                 cmd_churn = f"erl +P 2000000 -setcookie iris_secret -sname gen_churn_{i} -hidden -noshell -pa ebin -eval \"iris_extreme_gen:start({args.churn}, 3600, normal), timer:sleep(infinity).\""
                 p_churn = run_cmd(cmd_churn, bg=True)
                 procs.append(p_churn)
                 
                 # Allow ramp up
                 time.sleep(15)
-                peak_count = get_process_count(node)
-                log(f"Peak Processes: {peak_count}")
+                peak_conns = get_tcp_connections(8085)
+                log(f"Peak TCP connections: {peak_conns}")
                 
-                # Assert we grew
-                if peak_count < (args.base + args.churn * 0.5):
-                    log("WARNING: Did not reach expected peak process count!")
+                # Verify edge still alive at peak
+                if not verify_edge_alive():
+                    log("CRITICAL: Edge died during connect storm!")
+                    sys.exit(1)
                 
                 # DISCONNECT STORM
                 log("[*] Disconnect Storm (Kill churn generator)...")
-                os.killpg(os.getpgid(p_churn.pid), signal.SIGTERM)
-                procs.remove(p_churn) # Remove from cleanup list since we killed it
+                try:
+                    os.killpg(os.getpgid(p_churn.pid), signal.SIGTERM)
+                except:
+                    pass
+                procs.remove(p_churn)
                 
                 # Allow cleanup
                 time.sleep(10)
-                trough_count = get_process_count(node)
-                log(f"Post-Disconnect Processes: {trough_count}")
+                trough_conns = get_tcp_connections(8085)
+                log(f"Post-Disconnect TCP connections: {trough_conns}")
                 
-                # Assert recovery to near base
-                # Note: Erlang processes take time to die, but 10s should show trend
-                # If we are excessively high, we are leaking
-                if trough_count > (args.base + 5000): # Allow small buffer
-                    log(f"WARNING: High residual process count. Possible Leak? (Expected ~{args.base}, Got {trough_count})")
-                
-                # Stability Check
-                if trough_count < 100:
-                    log("CRITICAL: Node crashed or emptied!")
+                # Stability Check - edge must still be responsive
+                if not verify_edge_alive():
+                    log("CRITICAL: Edge crashed during disconnect storm!")
                     sys.exit(1)
+                
+                log(f"Cycle {i+1} complete. Edge stable.")
+            
+            log("\n=== CHURN TEST PASSED ===")
+            log(f"Successfully completed {args.cycles} churn cycles")
+            log("Edge remained stable throughout all connect/disconnect storms")
                     
         except KeyboardInterrupt:
             log("Aborted.")

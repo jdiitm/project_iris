@@ -223,6 +223,14 @@ test-docker-cluster:
 	docker-compose -f docker/test/docker-compose.test.yml up --build --abort-on-container-exit
 	docker-compose -f docker/test/docker-compose.test.yml down -v
 
+# Run cross-region latency test (requires Docker global cluster)
+test-cross-region: cluster-up
+	@echo "Running cross-region latency test..."
+	@echo "Waiting for cluster to stabilize (30s)..."
+	@sleep 30
+	@python3 tests/suites/chaos_dist/test_cross_region_latency.py
+	@echo "Cross-region test complete"
+
 # Clean Docker test artifacts
 test-docker-clean:
 	@echo "Cleaning Docker test artifacts..."

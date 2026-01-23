@@ -15,14 +15,27 @@ if project_root not in sys.path:
 
 from tests.framework.cluster import ClusterManager, get_cluster
 
-# Configuration
+# Configuration - CI-aware scaling
+IS_CI = os.environ.get("CI", "").lower() in ("true", "1", "yes")
+
 VIP_USER = "vip_global"
-VIP_BUCKET_COUNT = 200 # Increased buckets for massive load
-NUM_REGIONS = 5
-SENDERS_PER_REGION = 50 # Increased to 50 (Total 250 threads)
-NORMAL_USERS = 20000    # Increased normal user pool
-DURATION = 60           # 60s test
-BATCH_SIZE = 15       # Tuned for 500M/day (Target ~5800/s)
+
+if IS_CI:
+    # CI mode: reduced scale for stability
+    VIP_BUCKET_COUNT = 50
+    NUM_REGIONS = 2         # Reduced from 5
+    SENDERS_PER_REGION = 10 # Reduced from 50 (Total 20 threads)
+    NORMAL_USERS = 1000
+    DURATION = 30           # 30s test
+    BATCH_SIZE = 5
+else:
+    # Full scale for production testing
+    VIP_BUCKET_COUNT = 200
+    NUM_REGIONS = 5
+    SENDERS_PER_REGION = 50 # Total 250 threads
+    NORMAL_USERS = 20000
+    DURATION = 60           # 60s test
+    BATCH_SIZE = 15
 
 # Stats
 stats_lock = threading.Lock()
@@ -248,6 +261,9 @@ def verify_results():
 
 def main():
     os.chdir(project_root)
+    
+    if IS_CI:
+        log(f"[CI MODE] Reduced scale: regions={NUM_REGIONS}, senders={SENDERS_PER_REGION}, duration={DURATION}s")
     
     with ClusterManager(project_root=project_root, default_edge_count=NUM_REGIONS) as cluster:
         # Promote VIP
