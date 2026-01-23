@@ -132,42 +132,36 @@ check_all_cores_ready() {
 init_replication() {
     log_info "Initializing cross-region Mnesia replication..."
     
-    # Run from core-east-1 (primary)
-    docker exec core-east-1 erl -noshell -sname init_repl_$RANDOM \
-        -setcookie "$COOKIE" -pa /app/ebin -eval "
-        %% First ensure we're connected to all cores
-        Cores = [
-            'core_east_2@coreeast2',
-            'core_west_1@corewest1', 
-            'core_west_2@corewest2',
-            'core_eu_1@coreeu1',
-            'core_eu_2@coreeu2'
-        ],
+    # Run directly on core-east-1 using rpc:call from a helper node
+    # The helper node pings core_east_1 to establish connection, then uses RPC
+    # Timeout: 60 seconds for RPC (replication can take time with many nodes)
+    docker exec core-east-1 sh -c 'erl -noshell -sname init_helper -setcookie iris_secret -eval "
+        %% Connect to existing core node
+        case net_adm:ping('"'"'core_east_1@coreeast1'"'"') of
+            pong -> ok;
+            pang -> 
+                io:format(\"ERROR: Cannot connect to core_east_1@coreeast1~n\"),
+                halt(1)
+        end,
         
-        %% Ping all cores to establish connections
-        lists:foreach(fun(Core) ->
-            case net_adm:ping(Core) of
-                pong -> io:format(\"Connected to ~p~n\", [Core]);
-                pang -> io:format(\"WARNING: Could not connect to ~p~n\", [Core])
-            end
-        end, Cores),
+        %% Use rpc:call with 60 second timeout (replication adds many table copies)
+        Result = rpc:call('"'"'core_east_1@coreeast1'"'"', iris_core, init_cross_region_replication, [], 60000),
         
-        %% Wait for Mnesia to sync
-        timer:sleep(2000),
-        
-        %% Now initialize replication
-        case catch iris_core:init_cross_region_replication() of
+        case Result of
             ok -> 
                 io:format(\"Cross-region replication initialized successfully~n\"),
                 halt(0);
             {error, Reason} ->
-                io:format(\"Replication init failed: ~p~n\", [Reason]),
+                io:format(\"Replication init returned error: ~p~n\", [Reason]),
                 halt(1);
-            {'EXIT', Error} ->
-                io:format(\"Replication init crashed: ~p~n\", [Error]),
+            {badrpc, Reason} ->
+                io:format(\"RPC failed: ~p~n\", [Reason]),
+                halt(1);
+            Other ->
+                io:format(\"Unexpected result: ~p~n\", [Other]),
                 halt(1)
         end.
-    "
+    "'
     
     local result=$?
     if [ $result -eq 0 ]; then
@@ -185,19 +179,58 @@ init_replication() {
 verify_replication() {
     log_info "Verifying Mnesia replication status..."
     
-    docker exec core-east-1 erl -noshell -sname verify_$RANDOM \
-        -setcookie "$COOKIE" -eval "
+    # Use RPC to query the existing core node (not start a new node)
+    # Check ram_copies + disc_copies for total replicas
+    docker exec core-east-1 sh -c 'erl -noshell -sname verify_helper -setcookie iris_secret -eval "
+        pong = net_adm:ping('"'"'core_east_1@coreeast1'"'"'),
         Tables = [presence, offline_msg, user_status, user_meta],
         lists:foreach(fun(T) ->
-            case catch mnesia:table_info(T, where_to_read) of
-                {'EXIT', _} -> 
-                    io:format(\"  ~p: NOT FOUND~n\", [T]);
-                Nodes ->
-                    io:format(\"  ~p: ~p nodes~n\", [T, length(Nodes)])
+            Ram = rpc:call('"'"'core_east_1@coreeast1'"'"', mnesia, table_info, [T, ram_copies]),
+            Disc = rpc:call('"'"'core_east_1@coreeast1'"'"', mnesia, table_info, [T, disc_copies]),
+            case {Ram, Disc} of
+                {{badrpc, _}, _} -> 
+                    io:format(\"  ~p: RPC FAILED~n\", [T]);
+                {_, {badrpc, _}} -> 
+                    io:format(\"  ~p: RPC FAILED~n\", [T]);
+                {RamNodes, DiscNodes} when is_list(RamNodes), is_list(DiscNodes) ->
+                    Total = length(RamNodes) + length(DiscNodes),
+                    io:format(\"  ~p: ~p copies (~p ram, ~p disc)~n\", 
+                              [T, Total, length(RamNodes), length(DiscNodes)]);
+                _ ->
+                    io:format(\"  ~p: NOT FOUND~n\", [T])
             end
         end, Tables),
         halt(0).
-    "
+    "'
+}
+
+# =============================================================================
+# Reconnect Edges to Cores
+# =============================================================================
+
+reconnect_edges() {
+    log_info "Reconnecting edges to cores..."
+    
+    # Edge to core mappings
+    local edges=("edge-east-1" "edge-east-2" "edge-west-1" "edge-west-2" "edge-eu-1" "edge-eu-2" "edge-sydney-1" "edge-sydney-2" "edge-saopaulo")
+    local edge_nodes=("edge_east_1@edgeeast1" "edge_east_2@edgeeast2" "edge_west_1@edgewest1" "edge_west_2@edgewest2" "edge_eu_1@edgeeu1" "edge_eu_2@edgeeu2" "edge_sydney_1@edgesydney1" "edge_sydney_2@edgesydney2" "edge_saopaulo@edgesaopaulo")
+    local core_targets=("core_east_1@coreeast1" "core_east_2@coreeast2" "core_west_1@corewest1" "core_west_2@corewest2" "core_eu_1@coreeu1" "core_eu_2@coreeu2" "core_east_1@coreeast1" "core_east_2@coreeast2" "core_west_1@corewest1")
+    
+    for i in "${!edges[@]}"; do
+        local edge="${edges[$i]}"
+        local edge_node="${edge_nodes[$i]}"
+        local core_node="${core_targets[$i]}"
+        
+        if docker ps --format '{{.Names}}' | grep -q "^${edge}$"; then
+            # Ping core from edge to establish connection
+            docker exec "$edge" sh -c "erl -noshell -sname reconn_$RANDOM -setcookie iris_secret -eval \"
+                net_adm:ping('$core_node'),
+                halt(0).
+            \"" 2>/dev/null || true
+        fi
+    done
+    
+    log_info "Edge reconnection complete"
 }
 
 # =============================================================================
@@ -221,7 +254,10 @@ main() {
         exit 1
     fi
     
-    # Step 3: Verify
+    # Step 3: Reconnect edges to cores
+    reconnect_edges
+    
+    # Step 4: Verify
     verify_replication
     
     log_info "=========================================="

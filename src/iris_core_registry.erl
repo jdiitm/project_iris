@@ -95,8 +95,9 @@ handle_cast(_Msg, State) ->
 handle_info({route_remote, User, Msg}, State) ->
     %% Receive message from Edge Router and store offline
     %% Spawning to avoid blocking this registry process
+    %% DURABILITY FIX: Use store_offline_durable for RPO=0 guarantee
     spawn(fun() -> 
-        try iris_core:store_offline(User, Msg)
+        try iris_core:store_offline_durable(User, Msg)
         catch E:R -> logger:error("Failed to store routed msg: ~p:~p", [E, R])
         end
     end),

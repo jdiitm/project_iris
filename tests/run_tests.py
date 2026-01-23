@@ -58,11 +58,17 @@ TIER_1_SUITES = ["resilience", "performance_light", "chaos_controlled"]  # Night
 TLS_REQUIRED_TESTS = ["test_tls_mandatory"]
 
 # Known failing tests - excluded from determinism requirements (Phase 2)
-KNOWN_FAILING_TESTS = [
-    "test_cross_region_latency",  # Requires multi-region Mnesia replication
-    "test_churn",                  # Requires iris_extreme_gen.erl implementation
-    "test_limits",                 # Requires iris_extreme_gen.erl implementation
-]
+KNOWN_FAILING_TESTS = []  # All tests should pass after hardening
+
+# Suites that require Docker global cluster
+DOCKER_REQUIRED_SUITES = ["chaos_dist"]
+# Tests in other suites that require Docker
+DOCKER_REQUIRED_TESTS = ["test_failover_time", "test_multimaster_durability"]
+
+# Docker cluster paths
+DOCKER_CLUSTER_DIR = PROJECT_ROOT / "docker" / "global-cluster"
+DOCKER_COMPOSE_FILE = DOCKER_CLUSTER_DIR / "docker-compose.yml"
+DOCKER_INIT_SCRIPT = DOCKER_CLUSTER_DIR / "init_cluster.sh"
 
 # ============================================================================
 # Determinism Configuration
@@ -365,6 +371,161 @@ def cleanup_before_suite():
     time.sleep(2)
     
     log_info("Cleanup complete")
+
+
+# ============================================================================
+# Docker Cluster Management
+# ============================================================================
+
+_docker_cluster_running = False
+
+def is_docker_available() -> bool:
+    """Check if Docker is available and running."""
+    try:
+        result = subprocess.run(
+            ["docker", "info"],
+            capture_output=True,
+            timeout=10
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
+
+def start_docker_cluster() -> bool:
+    """
+    Start the Docker global cluster for cross-region tests.
+    
+    Returns True if cluster started successfully, False otherwise.
+    """
+    global _docker_cluster_running
+    
+    if not is_docker_available():
+        log_warn("Docker not available - Docker-dependent tests will skip")
+        return False
+    
+    if not DOCKER_COMPOSE_FILE.exists():
+        log_warn(f"Docker compose file not found: {DOCKER_COMPOSE_FILE}")
+        return False
+    
+    log_info("Starting Docker global cluster...")
+    
+    try:
+        # Stop any existing cluster first
+        log_info("  Phase 1: Stopping existing Docker cluster...")
+        subprocess.run(
+            ["docker", "compose", "-f", str(DOCKER_COMPOSE_FILE), "down", "--remove-orphans", "-v"],
+            cwd=str(DOCKER_CLUSTER_DIR),
+            capture_output=True,
+            timeout=120
+        )
+        
+        # Start fresh cluster
+        log_info("  Phase 2: Starting Docker cluster (this may take 1-2 minutes)...")
+        result = subprocess.run(
+            ["docker", "compose", "-f", str(DOCKER_COMPOSE_FILE), "up", "-d"],
+            cwd=str(DOCKER_CLUSTER_DIR),
+            capture_output=True,
+            text=True,
+            timeout=300
+        )
+        
+        if result.returncode != 0:
+            log_warn(f"Docker cluster start failed: {result.stderr}")
+            return False
+        
+        # Wait for services to be healthy
+        log_info("  Phase 3: Waiting for services to be healthy (45s)...")
+        time.sleep(45)  # Increased from 30s for 6-node cluster
+        
+        # Initialize Mnesia replication with retry
+        if DOCKER_INIT_SCRIPT.exists():
+            max_retries = 3
+            for attempt in range(max_retries):
+                log_info(f"  Phase 4: Initializing Mnesia replication (attempt {attempt + 1}/{max_retries})...")
+                result = subprocess.run(
+                    ["bash", str(DOCKER_INIT_SCRIPT)],
+                    cwd=str(DOCKER_CLUSTER_DIR),
+                    capture_output=True,
+                    text=True,
+                    timeout=120
+                )
+                if result.returncode != 0:
+                    log_warn(f"Mnesia replication init warning: {result.stderr}")
+                    if attempt < max_retries - 1:
+                        time.sleep(10)
+                        continue
+                
+                # Verify replication is actually configured (use random node name to avoid conflicts)
+                import random
+                verify_node = f"verify_{random.randint(10000, 99999)}"
+                log_info("  Phase 5: Verifying Mnesia replication...")
+                verify_cmd = subprocess.run(
+                    ["docker", "exec", "core-east-1", "sh", "-c",
+                     f"erl -noshell -sname {verify_node} -setcookie iris_secret -eval \""
+                     "pong = net_adm:ping('core_east_1@coreeast1'), "
+                     "case rpc:call('core_east_1@coreeast1', mnesia, table_info, [presence, ram_copies]) of "
+                     "L when is_list(L), length(L) > 1 -> io:format('Replication OK: ~p nodes~n', [length(L)]), halt(0); "
+                     "_ -> io:format('Replication NOT configured~n'), halt(1) end.\""],
+                    capture_output=True,
+                    text=True,
+                    timeout=30
+                )
+                
+                if verify_cmd.returncode == 0:
+                    log_info(f"  Replication verified: {verify_cmd.stdout.strip()}")
+                    break
+                else:
+                    log_warn(f"Replication verification failed: {verify_cmd.stdout} {verify_cmd.stderr}")
+                    if attempt < max_retries - 1:
+                        log_info("  Retrying replication init...")
+                        time.sleep(10)
+                    else:
+                        log_warn("  All replication attempts failed - tests may skip")
+                        # Don't return False - let tests run and skip properly
+        
+        # Wait for replication to settle after init
+        log_info("  Phase 6: Waiting for replication to settle (15s)...")
+        time.sleep(15)
+        
+        _docker_cluster_running = True
+        log_info("Docker cluster started successfully")
+        return True
+        
+    except subprocess.TimeoutExpired:
+        log_warn("Docker cluster startup timed out")
+        return False
+    except Exception as e:
+        log_warn(f"Docker cluster startup failed: {e}")
+        return False
+
+def stop_docker_cluster():
+    """Stop the Docker global cluster."""
+    global _docker_cluster_running
+    
+    if not _docker_cluster_running:
+        return
+    
+    log_info("Stopping Docker cluster...")
+    
+    try:
+        subprocess.run(
+            ["docker", "compose", "-f", str(DOCKER_COMPOSE_FILE), "down", "--remove-orphans"],
+            cwd=str(DOCKER_CLUSTER_DIR),
+            capture_output=True,
+            timeout=60
+        )
+        _docker_cluster_running = False
+        log_info("Docker cluster stopped")
+    except Exception as e:
+        log_warn(f"Error stopping Docker cluster: {e}")
+
+def suite_requires_docker(suite_name: str) -> bool:
+    """Check if a suite requires Docker cluster."""
+    return suite_name in DOCKER_REQUIRED_SUITES
+
+def test_requires_docker(test_name: str) -> bool:
+    """Check if a specific test requires Docker cluster."""
+    return test_name in DOCKER_REQUIRED_TESTS
 
 
 # ============================================================================
@@ -830,9 +991,23 @@ def run_suite(suite_name: str, run_dir: Path, require_cluster: bool = True) -> S
     
     results = []
     
-    # Run normal tests first (with default config)
-    if normal_tests and require_cluster and suite_name not in ["unit"]:
-        ensure_cluster_with_config("config/test")
+    # Check if this suite requires Docker cluster
+    needs_docker = suite_requires_docker(suite_name)
+    docker_started = False
+    
+    if needs_docker:
+        # Stop local cluster before starting Docker
+        log_info("Suite requires Docker cluster - stopping local cluster...")
+        stop_cluster()
+        
+        # Start Docker cluster
+        docker_started = start_docker_cluster()
+        if not docker_started:
+            log_warn(f"Docker cluster unavailable - tests in {suite_name} may skip")
+    else:
+        # Run normal tests first (with default config)
+        if normal_tests and require_cluster and suite_name not in ["unit"]:
+            ensure_cluster_with_config("config/test")
     
     for test in normal_tests:
         result = run_test(test, run_dir, timeout=timeout)
@@ -849,6 +1024,12 @@ def run_suite(suite_name: str, run_dir: Path, require_cluster: bool = True) -> S
         
         # Switch back to normal config for subsequent suites
         _current_cluster_config = None  # Force restart on next suite
+    
+    # Clean up Docker cluster if we started it
+    if docker_started:
+        stop_docker_cluster()
+        # Reset cluster config so next suite will restart local cluster
+        _current_cluster_config = None
     
     duration = time.time() - start_time
     skipped = sum(1 for r in results if r.skipped)
