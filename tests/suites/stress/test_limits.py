@@ -129,8 +129,9 @@ def get_metrics():
 
 def main():
     # Per TEST_CONTRACT.md: Use fixed profiles, not dynamic scaling
+    # Note: RAM limits account for base VM overhead (~600MB) + per-connection memory
     PROFILES = {
-        "smoke": {"users": 100, "timeout": 120, "ram_mb": 1024},    # Quick validation
+        "smoke": {"users": 100, "timeout": 120, "ram_mb": 2048},    # Quick validation (base VM + connections)
         "full":  {"users": 1000000, "timeout": 600, "ram_mb": 16384} # Production scale
     }
     
