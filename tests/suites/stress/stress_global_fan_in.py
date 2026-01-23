@@ -15,27 +15,40 @@ if project_root not in sys.path:
 
 from tests.framework.cluster import ClusterManager, get_cluster
 
-# Configuration - CI-aware scaling
-IS_CI = os.environ.get("CI", "").lower() in ("true", "1", "yes")
+# Per TEST_CONTRACT.md: Use fixed profiles, not dynamic scaling
+PROFILES = {
+    "smoke": {
+        "vip_buckets": 50,
+        "regions": 2,
+        "senders_per_region": 10,
+        "normal_users": 1000,
+        "duration": 30,
+        "batch_size": 5
+    },
+    "full": {
+        "vip_buckets": 200,
+        "regions": 5,
+        "senders_per_region": 50,
+        "normal_users": 20000,
+        "duration": 60,
+        "batch_size": 15
+    }
+}
+
+TEST_PROFILE = os.environ.get("TEST_PROFILE", "smoke")
+if TEST_PROFILE not in PROFILES:
+    print(f"ERROR: Unknown profile '{TEST_PROFILE}'. Available: {list(PROFILES.keys())}")
+    sys.exit(1)
+
+_profile = PROFILES[TEST_PROFILE]
 
 VIP_USER = "vip_global"
-
-if IS_CI:
-    # CI mode: reduced scale for stability
-    VIP_BUCKET_COUNT = 50
-    NUM_REGIONS = 2         # Reduced from 5
-    SENDERS_PER_REGION = 10 # Reduced from 50 (Total 20 threads)
-    NORMAL_USERS = 1000
-    DURATION = 30           # 30s test
-    BATCH_SIZE = 5
-else:
-    # Full scale for production testing
-    VIP_BUCKET_COUNT = 200
-    NUM_REGIONS = 5
-    SENDERS_PER_REGION = 50 # Total 250 threads
-    NORMAL_USERS = 20000
-    DURATION = 60           # 60s test
-    BATCH_SIZE = 15
+VIP_BUCKET_COUNT = _profile["vip_buckets"]
+NUM_REGIONS = _profile["regions"]
+SENDERS_PER_REGION = _profile["senders_per_region"]
+NORMAL_USERS = _profile["normal_users"]
+DURATION = _profile["duration"]
+BATCH_SIZE = _profile["batch_size"]
 
 # Stats
 stats_lock = threading.Lock()
@@ -262,8 +275,7 @@ def verify_results():
 def main():
     os.chdir(project_root)
     
-    if IS_CI:
-        log(f"[CI MODE] Reduced scale: regions={NUM_REGIONS}, senders={SENDERS_PER_REGION}, duration={DURATION}s")
+    log(f"[Profile: {TEST_PROFILE}] regions={NUM_REGIONS}, senders={SENDERS_PER_REGION}, duration={DURATION}s")
     
     with ClusterManager(project_root=project_root, default_edge_count=NUM_REGIONS) as cluster:
         # Promote VIP

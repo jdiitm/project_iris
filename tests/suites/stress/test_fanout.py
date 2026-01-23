@@ -46,27 +46,32 @@ SERVER_HOST = os.environ.get("IRIS_HOST", "localhost")
 SERVER_PORT = int(os.environ.get("IRIS_PORT", "8085"))
 TIMEOUT = 10
 
-# CI-aware scaling: Reduce test intensity in CI environments
-IS_CI = os.environ.get("CI", "").lower() in ("true", "1", "yes")
-TIMEOUT_MULTIPLIER = 3.0 if IS_CI else 1.0
+# Per TEST_CONTRACT.md: Use fixed profiles, not dynamic scaling
+TEST_PROFILE = os.environ.get("TEST_PROFILE", "smoke")
 
-# Test thresholds (from plan) - scaled for CI
-if IS_CI:
-    # CI environment: reduced scale to fit within CI timeout limits
-    THRESHOLDS = {
+PROFILE_THRESHOLDS = {
+    "smoke": {
+        "timeout_multiplier": 3.0,
         "small": {"recipients": 5, "rate": 50, "max_latency_ms": 200},
         "medium": {"recipients": 20, "rate": 200, "max_latency_ms": 400},
         "large": {"recipients": 50, "rate": 500, "max_latency_ms": 1000},
         "burst": {"recipients": 20, "rate": 1000, "max_latency_ms": 1000, "max_loss": 0.01},
-    }
-else:
-    # Local/production environment: full scale
-    THRESHOLDS = {
+    },
+    "full": {
+        "timeout_multiplier": 1.0,
         "small": {"recipients": 10, "rate": 100, "max_latency_ms": 100},
         "medium": {"recipients": 100, "rate": 1000, "max_latency_ms": 200},
         "large": {"recipients": 1000, "rate": 5000, "max_latency_ms": 500},
         "burst": {"recipients": 100, "rate": 10000, "max_latency_ms": 500, "max_loss": 0},
     }
+}
+
+if TEST_PROFILE not in PROFILE_THRESHOLDS:
+    print(f"ERROR: Unknown profile '{TEST_PROFILE}'. Available: {list(PROFILE_THRESHOLDS.keys())}")
+    sys.exit(1)
+
+TIMEOUT_MULTIPLIER = PROFILE_THRESHOLDS[TEST_PROFILE]["timeout_multiplier"]
+THRESHOLDS = {k: v for k, v in PROFILE_THRESHOLDS[TEST_PROFILE].items() if k != "timeout_multiplier"}
 
 
 @dataclass

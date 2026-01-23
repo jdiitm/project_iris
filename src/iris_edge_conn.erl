@@ -109,8 +109,9 @@ connected(info, {deliver_msg, Msg}, Data = #data{socket = Socket, user = User, p
     case PendingCount >= ?MAX_PENDING_ACKS of
         true ->
             %% At capacity even after enforcement - store offline immediately
+            %% DURABILITY FIX: Use store_offline_durable for RPO=0 guarantee
             logger:warning("Pending ACKs at capacity for ~p. Storing offline.", [User]),
-            iris_circuit_breaker:call(get_core_node(), iris_core, store_offline, [User, Msg]),
+            iris_circuit_breaker:call(get_core_node(), iris_core, store_offline_durable, [User, Msg]),
             {keep_state, Data#data{last_activity = Now}};
         false ->
             %% Generate unique MsgId and send
@@ -122,8 +123,9 @@ connected(info, {deliver_msg, Msg}, Data = #data{socket = Socket, user = User, p
                 ok -> 
                     {keep_state, Data#data{pending_acks = NewPending, timeouts = 0, last_activity = Now}};
                 {error, _} ->
+                    %% DURABILITY FIX: Use store_offline_durable for RPO=0 guarantee
                     logger:warning("Send failed for ~p. Storing offline.", [User]),
-                    iris_circuit_breaker:call(get_core_node(), iris_core, store_offline, [User, Msg]),
+                    iris_circuit_breaker:call(get_core_node(), iris_core, store_offline_durable, [User, Msg]),
                     {keep_state, Data#data{last_activity = Now}}
             end
     end;
@@ -137,7 +139,8 @@ connected(info, check_acks, Data = #data{pending_acks = Pending, user = User, re
     NewPending = maps:filter(fun(MsgId, {Msg, Ts, _Retries}) ->
         if (Now - Ts) > 10 ->
             logger:warning("Msg ~p timed out (No ACK). Moving to offline storage.", [MsgId]),
-            iris_circuit_breaker:call(get_core_node(), iris_core, store_offline, [User, Msg]),
+            %% DURABILITY FIX: Use store_offline_durable for RPO=0 guarantee
+            iris_circuit_breaker:call(get_core_node(), iris_core, store_offline_durable, [User, Msg]),
             false; %% Remove from map
         true -> 
             true
@@ -174,9 +177,10 @@ enforce_pending_limit(Pending, User) ->
     {RemoveEntries, KeepEntries} = lists:split(min(ToRemove, length(Sorted)), Sorted),
     
     %% Store removed messages offline
+    %% DURABILITY FIX: Use store_offline_durable for RPO=0 guarantee
     lists:foreach(fun({MsgId, {Msg, _Ts, _Retries}}) ->
         logger:warning("Pending ACK overflow: moving msg ~p to offline for ~p", [MsgId, User]),
-        iris_circuit_breaker:call(get_core_node(), iris_core, store_offline, [User, Msg])
+        iris_circuit_breaker:call(get_core_node(), iris_core, store_offline_durable, [User, Msg])
     end, RemoveEntries),
     
     maps:from_list(KeepEntries).
@@ -250,8 +254,9 @@ save_pending_acks(User, Pending) ->
                 undefined ->
                     %% AUDIT2 FIX: Use rpc:cast (fire-and-forget) to prevent RPC storm
                     %% Blocking rpc:call in terminate causes core meltdown on mass disconnect
+                    %% DURABILITY FIX: Use store_offline_durable for sync_transaction on server
                     lists:foreach(fun(Msg) ->
-                        rpc:cast(get_core_node(), iris_core, store_offline, [User, Msg])
+                        rpc:cast(get_core_node(), iris_core, store_offline_durable, [User, Msg])
                     end, Msgs);
                 _ ->
                     %% Use batched durable store
@@ -271,8 +276,9 @@ flush_pending_msgs(User) ->
             case whereis(iris_durable_batcher_1) of
                 undefined ->
                     %% AUDIT2 FIX: Use rpc:cast to avoid blocking in terminate path
+                    %% DURABILITY FIX: Use store_offline_durable for sync_transaction on server
                     lists:foreach(fun(Msg) ->
-                        rpc:cast(get_core_node(), iris_core, store_offline, [User, Msg])
+                        rpc:cast(get_core_node(), iris_core, store_offline_durable, [User, Msg])
                     end, Msgs);
                 _ ->
                     iris_durable_batcher:store_batch(User, Msgs, 16, #{})

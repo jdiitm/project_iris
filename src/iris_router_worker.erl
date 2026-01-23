@@ -104,7 +104,8 @@ store_offline_with_failover(_User, _Msg, []) ->
     logger:error("Router: Cannot store offline - all Cores unavailable!"),
     ok;
 store_offline_with_failover(User, Msg, [CoreNode | RestCores]) ->
-    case iris_circuit_breaker:call(CoreNode, iris_core, store_offline, [User, Msg]) of
+    %% DURABILITY FIX: Use store_offline_durable for RPO=0 guarantee
+    case iris_circuit_breaker:call(CoreNode, iris_core, store_offline_durable, [User, Msg]) of
         {error, circuit_open} ->
             store_offline_with_failover(User, Msg, RestCores);
         {badrpc, _} ->

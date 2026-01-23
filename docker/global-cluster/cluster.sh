@@ -34,8 +34,11 @@ case "${1:-help}" in
     up)
         echo "=== Starting Global Cluster ==="
         docker compose -f "$COMPOSE_FILE" up -d
-        echo "Waiting for cluster to stabilize..."
-        sleep 10
+        echo ""
+        echo "=== Initializing Cluster (with readiness checks) ==="
+        # Use explicit readiness checks instead of sleep
+        "$SCRIPT_DIR/init_cluster.sh"
+        echo ""
         docker compose -f "$COMPOSE_FILE" ps
         ;;
     

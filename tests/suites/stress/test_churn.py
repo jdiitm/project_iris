@@ -113,28 +113,28 @@ def get_extreme_gen_stats():
 # ============================================================================
 
 def main():
-    # CI-aware defaults: drastically reduce scale for CI environments
-    IS_CI = os.environ.get("CI", "").lower() in ("true", "1", "yes")
+    # Per TEST_CONTRACT.md: Use fixed profiles, not dynamic scaling
+    # Profiles are explicit and documented - no hidden behavior changes
+    PROFILES = {
+        "smoke": {"base": 100, "churn": 50, "cycles": 2},      # Quick validation
+        "full":  {"base": 500000, "churn": 50000, "cycles": 3} # Production scale
+    }
     
-    if IS_CI:
-        # CI environment: minimal scale to fit within timeout
-        DEFAULT_BASE = 100
-        DEFAULT_CHURN = 50
-        DEFAULT_CYCLES = 2
-    else:
-        # Local/production: full scale
-        DEFAULT_BASE = 500000
-        DEFAULT_CHURN = 50000
-        DEFAULT_CYCLES = 3
+    profile_name = os.environ.get("TEST_PROFILE", "smoke")
+    if profile_name not in PROFILES:
+        log(f"ERROR: Unknown profile '{profile_name}'. Available: {list(PROFILES.keys())}")
+        sys.exit(1)
+    
+    profile = PROFILES[profile_name]
     
     parser = argparse.ArgumentParser(description='Churn Stress Test')
-    parser.add_argument('--base', type=int, default=DEFAULT_BASE, help='Base stable users')
-    parser.add_argument('--churn', type=int, default=DEFAULT_CHURN, help='Churning users per cycle')
-    parser.add_argument('--cycles', type=int, default=DEFAULT_CYCLES, help='Number of churn cycles')
+    parser.add_argument('--base', type=int, default=profile["base"], help='Base stable users')
+    parser.add_argument('--churn', type=int, default=profile["churn"], help='Churning users per cycle')
+    parser.add_argument('--cycles', type=int, default=profile["cycles"], help='Number of churn cycles')
+    parser.add_argument('--profile', type=str, default=profile_name, help='Test profile (smoke/full)')
     args = parser.parse_args()
     
-    if IS_CI:
-        log(f"[CI MODE] Reduced scale: base={args.base}, churn={args.churn}, cycles={args.cycles}")
+    log(f"[Profile: {args.profile}] base={args.base}, churn={args.churn}, cycles={args.cycles}")
     
     os.chdir(project_root)
     

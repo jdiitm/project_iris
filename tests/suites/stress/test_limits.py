@@ -128,39 +128,33 @@ def get_metrics():
 # ============================================================================
 
 def main():
-    # CI-aware defaults: reduce scale for CI environments
-    IS_CI = os.environ.get("CI", "").lower() in ("true", "1", "yes")
+    # Per TEST_CONTRACT.md: Use fixed profiles, not dynamic scaling
+    PROFILES = {
+        "smoke": {"users": 100, "timeout": 120, "ram_mb": 1024},    # Quick validation
+        "full":  {"users": 1000000, "timeout": 600, "ram_mb": 16384} # Production scale
+    }
     
-    if IS_CI:
-        # CI environment: minimal scale to fit within timeout
-        DEFAULT_USERS = 100
-        TIMEOUT = int(os.environ.get("STRESS_TIMEOUT", "120"))  # 2 min for CI
-    else:
-        # Local/production: full scale
-        DEFAULT_USERS = 1000000
-        TIMEOUT = int(os.environ.get("STRESS_TIMEOUT", "600"))  # 10 min default
+    profile_name = os.environ.get("TEST_PROFILE", "smoke")
+    if profile_name not in PROFILES:
+        log(f"ERROR: Unknown profile '{profile_name}'. Available: {list(PROFILES.keys())}")
+        sys.exit(1)
+    
+    profile = PROFILES[profile_name]
     
     parser = argparse.ArgumentParser()
-    parser.add_argument('--users', type=int, default=DEFAULT_USERS)
-    parser.add_argument('--timeout', type=int, default=TIMEOUT, help='Monitoring timeout in seconds')
+    parser.add_argument('--users', type=int, default=profile["users"])
+    parser.add_argument('--timeout', type=int, default=profile["timeout"], help='Monitoring timeout in seconds')
+    parser.add_argument('--profile', type=str, default=profile_name, help='Test profile (smoke/full)')
     args = parser.parse_args()
     
-    if IS_CI:
-        log(f"[CI MODE] Reduced scale: users={args.users}, timeout={args.timeout}s")
+    log(f"[Profile: {args.profile}] users={args.users}, timeout={args.timeout}s")
     
     # Ensure correct CWD
     os.chdir(project_root)
     init_csv()
     
-    # RAM limit scales with users
-    # Base system usage + per-user overhead
-    # In CI, other tests may leave residual memory so be generous
-    if IS_CI:
-        # CI mode: base 1GB + 50KB/user (very generous for stability)
-        limit_ram = 1024 + int(args.users * 50 / 1024)
-    else:
-        # Production: base 500MB + 15KB/user with 1.5x margin
-        limit_ram = max(500, int(args.users * 15 / 1024 * 1.5))
+    # RAM limit is fixed per profile - no dynamic adjustment
+    limit_ram = profile["ram_mb"]
     
     with ClusterManager(project_root=project_root) as cluster:
         # Recompile the extreme generator
@@ -242,14 +236,17 @@ def main():
         else:
             log(f"[PASS] RAM within limit ({limit_ram} MB)")
         
-        # For CI mode with small user count, lower the expectation
-        min_expected_conns = int(args.users * 0.3) if IS_CI else int(args.users * 0.5)
+        # Connection expectation based on profile
+        # smoke: 30% due to shorter test duration
+        # full: 50% of target
+        is_smoke = profile_name == "smoke"
+        min_expected_conns = int(args.users * 0.3) if is_smoke else int(args.users * 0.5)
         
         if max_conns < min_expected_conns:
             log(f"[FAIL] Did not reach connection target (Got {max_conns}, Expected > {min_expected_conns})")
-            # In CI mode, this might be due to timing - don't fail if edge is stable
-            if IS_CI and verify_edge_alive():
-                log("[INFO] Edge is stable - connection count may be low due to CI timing. Passing.")
+            # In smoke profile, this might be due to timing - don't fail if edge is stable
+            if is_smoke and verify_edge_alive():
+                log("[INFO] Edge is stable - connection count may be low due to timing. Passing.")
                 failed = False
             else:
                 failed = True

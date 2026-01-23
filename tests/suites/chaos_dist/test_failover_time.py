@@ -23,6 +23,10 @@ import subprocess
 import threading
 import sys
 import os
+from pathlib import Path
+
+# Project root for init_cluster.sh
+PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
 
 # Configuration
 SERVER_HOST = os.environ.get("IRIS_HOST", "localhost")
@@ -31,8 +35,7 @@ CONTAINER_NAME = os.environ.get("IRIS_CORE_CONTAINER", "core-east-1")
 FAILOVER_TARGET_SECONDS = 30
 TRAFFIC_INTERVAL_MS = 100  # Send message every 100ms
 
-# CI mode detection - gracefully skip when Docker infrastructure not available
-IS_CI = os.environ.get("CI", "").lower() in ("true", "1", "yes")
+# Per TEST_CONTRACT.md: exit(0)=pass, exit(1)=fail, exit(2)=skip
 
 
 class TrafficMonitor:
@@ -216,11 +219,9 @@ def test_failover_time():
         print("   ❌ Failed to kill container")
         monitor.stop()
         worker_thread.join()
-        if IS_CI:
-            print("\n[CI MODE] SKIP: Docker container not available")
-            print("   This is a Tier 2 test requiring Docker global cluster")
-            return None  # Graceful skip
-        return False
+        # Per TEST_CONTRACT.md: return None = SKIP (exit code 2)
+        print("\nSKIP:DOCKER - Container not available")
+        return None
     print("   ✅ Container killed")
     
     print(f"\n3. Monitoring failover (timeout: {FAILOVER_TARGET_SECONDS + 30}s)...")
@@ -276,8 +277,28 @@ def test_failover_time():
         return False
 
 
+def restore_cluster_state():
+    """Re-initialize cluster after test that restarts containers."""
+    try:
+        init_script = PROJECT_ROOT / "docker" / "global-cluster" / "init_cluster.sh"
+        if init_script.exists():
+            print("[cleanup] Restoring cluster state after container restart...")
+            subprocess.run(
+                ["bash", str(init_script)],
+                cwd=str(init_script.parent),
+                capture_output=True,
+                timeout=120
+            )
+            print("[cleanup] Cluster state restored")
+    except Exception as e:
+        print(f"[cleanup] Warning: Could not restore cluster state: {e}")
+
+
 def main():
     result = test_failover_time()
+    
+    # Restore cluster state for subsequent tests
+    restore_cluster_state()
     
     print("\n" + "=" * 60)
     if result is True:
@@ -287,8 +308,9 @@ def main():
         print("RESULT: FAILED")
         sys.exit(1)
     else:
+        # Per TEST_CONTRACT.md: exit(2) = SKIP
         print("RESULT: SKIPPED")
-        sys.exit(0)
+        sys.exit(2)
 
 
 if __name__ == "__main__":

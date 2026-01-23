@@ -220,15 +220,16 @@ find_user_across_cores([Core | Rest], User) ->
     end.
 
 store_offline_via_node(Node, User, Msg, Fallbacks) ->
+    %% DURABILITY FIX: Use store_offline_durable for RPO=0 guarantee
     case whereis(iris_circuit_breaker) of
         undefined ->
-            case rpc:call(Node, iris_core, store_offline, [User, Msg], 5000) of
+            case rpc:call(Node, iris_core, store_offline_durable, [User, Msg], 5000) of
                 {badrpc, _} -> try_route_fallbacks(Fallbacks, User, Msg);
                 _ -> ok
             end;
         _ ->
             case iris_circuit_breaker:call_with_fallback(
-                    Node, iris_core, store_offline, [User, Msg], Fallbacks) of
+                    Node, iris_core, store_offline_durable, [User, Msg], Fallbacks) of
                 {error, circuit_open} -> try_route_fallbacks(Fallbacks, User, Msg);
                 {badrpc, _} -> try_route_fallbacks(Fallbacks, User, Msg);
                 _ -> ok
@@ -244,7 +245,8 @@ try_route_fallbacks([Node | Rest], User, Msg) ->
             UserPid ! {deliver_msg, Msg},
             ok;
         {error, not_found} ->
-            case rpc:call(Node, iris_core, store_offline, [User, Msg], 5000) of
+            %% DURABILITY FIX: Use store_offline_durable for RPO=0 guarantee
+            case rpc:call(Node, iris_core, store_offline_durable, [User, Msg], 5000) of
                 {badrpc, _} -> try_route_fallbacks(Rest, User, Msg);
                 _ -> ok
             end;
@@ -270,7 +272,8 @@ route_legacy(User, Msg, State) ->
 
 store_offline_async(Node, User, Msg) ->
     spawn(fun() ->
-        try rpc:call(Node, iris_core, store_offline, [User, Msg])
+        %% DURABILITY FIX: Use store_offline_durable for RPO=0 guarantee
+        try rpc:call(Node, iris_core, store_offline_durable, [User, Msg])
         catch _:_ -> ok
         end
     end).

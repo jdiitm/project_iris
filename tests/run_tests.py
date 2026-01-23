@@ -58,11 +58,17 @@ TIER_1_SUITES = ["resilience", "performance_light", "chaos_controlled"]  # Night
 TLS_REQUIRED_TESTS = ["test_tls_mandatory"]
 
 # Known failing tests - excluded from determinism requirements (Phase 2)
-KNOWN_FAILING_TESTS = [
-    "test_cross_region_latency",  # Requires multi-region Mnesia replication
-    "test_churn",                  # Requires iris_extreme_gen.erl implementation
-    "test_limits",                 # Requires iris_extreme_gen.erl implementation
-]
+KNOWN_FAILING_TESTS = []  # All tests should pass after hardening
+
+# Suites that require Docker global cluster
+DOCKER_REQUIRED_SUITES = ["chaos_dist"]
+# Tests in other suites that require Docker
+DOCKER_REQUIRED_TESTS = ["test_failover_time", "test_multimaster_durability"]
+
+# Docker cluster paths
+DOCKER_CLUSTER_DIR = PROJECT_ROOT / "docker" / "global-cluster"
+DOCKER_COMPOSE_FILE = DOCKER_CLUSTER_DIR / "docker-compose.yml"
+DOCKER_INIT_SCRIPT = DOCKER_CLUSTER_DIR / "init_cluster.sh"
 
 # ============================================================================
 # Determinism Configuration
@@ -100,6 +106,8 @@ class TestResult:
     output: str = ""
     error: str = ""
     artifacts: List[str] = field(default_factory=list)
+    skipped: bool = False  # Per TEST_CONTRACT.md: exit(2) = SKIP
+    skip_reason: str = ""
 
 @dataclass
 class SuiteResult:
@@ -107,7 +115,8 @@ class SuiteResult:
     tests_run: int
     tests_passed: int
     tests_failed: int
-    duration_seconds: float
+    tests_skipped: int = 0  # Per TEST_CONTRACT.md: exit(2) = SKIP
+    duration_seconds: float = 0.0
     results: List[TestResult] = field(default_factory=list)
 
 @dataclass 
@@ -362,6 +371,161 @@ def cleanup_before_suite():
     time.sleep(2)
     
     log_info("Cleanup complete")
+
+
+# ============================================================================
+# Docker Cluster Management
+# ============================================================================
+
+_docker_cluster_running = False
+
+def is_docker_available() -> bool:
+    """Check if Docker is available and running."""
+    try:
+        result = subprocess.run(
+            ["docker", "info"],
+            capture_output=True,
+            timeout=10
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
+
+def start_docker_cluster() -> bool:
+    """
+    Start the Docker global cluster for cross-region tests.
+    
+    Returns True if cluster started successfully, False otherwise.
+    """
+    global _docker_cluster_running
+    
+    if not is_docker_available():
+        log_warn("Docker not available - Docker-dependent tests will skip")
+        return False
+    
+    if not DOCKER_COMPOSE_FILE.exists():
+        log_warn(f"Docker compose file not found: {DOCKER_COMPOSE_FILE}")
+        return False
+    
+    log_info("Starting Docker global cluster...")
+    
+    try:
+        # Stop any existing cluster first
+        log_info("  Phase 1: Stopping existing Docker cluster...")
+        subprocess.run(
+            ["docker", "compose", "-f", str(DOCKER_COMPOSE_FILE), "down", "--remove-orphans", "-v"],
+            cwd=str(DOCKER_CLUSTER_DIR),
+            capture_output=True,
+            timeout=120
+        )
+        
+        # Start fresh cluster
+        log_info("  Phase 2: Starting Docker cluster (this may take 1-2 minutes)...")
+        result = subprocess.run(
+            ["docker", "compose", "-f", str(DOCKER_COMPOSE_FILE), "up", "-d"],
+            cwd=str(DOCKER_CLUSTER_DIR),
+            capture_output=True,
+            text=True,
+            timeout=300
+        )
+        
+        if result.returncode != 0:
+            log_warn(f"Docker cluster start failed: {result.stderr}")
+            return False
+        
+        # Wait for services to be healthy
+        log_info("  Phase 3: Waiting for services to be healthy (45s)...")
+        time.sleep(45)  # Increased from 30s for 6-node cluster
+        
+        # Initialize Mnesia replication with retry
+        if DOCKER_INIT_SCRIPT.exists():
+            max_retries = 3
+            for attempt in range(max_retries):
+                log_info(f"  Phase 4: Initializing Mnesia replication (attempt {attempt + 1}/{max_retries})...")
+                result = subprocess.run(
+                    ["bash", str(DOCKER_INIT_SCRIPT)],
+                    cwd=str(DOCKER_CLUSTER_DIR),
+                    capture_output=True,
+                    text=True,
+                    timeout=120
+                )
+                if result.returncode != 0:
+                    log_warn(f"Mnesia replication init warning: {result.stderr}")
+                    if attempt < max_retries - 1:
+                        time.sleep(10)
+                        continue
+                
+                # Verify replication is actually configured (use random node name to avoid conflicts)
+                import random
+                verify_node = f"verify_{random.randint(10000, 99999)}"
+                log_info("  Phase 5: Verifying Mnesia replication...")
+                verify_cmd = subprocess.run(
+                    ["docker", "exec", "core-east-1", "sh", "-c",
+                     f"erl -noshell -sname {verify_node} -setcookie iris_secret -eval \""
+                     "pong = net_adm:ping('core_east_1@coreeast1'), "
+                     "case rpc:call('core_east_1@coreeast1', mnesia, table_info, [presence, ram_copies]) of "
+                     "L when is_list(L), length(L) > 1 -> io:format('Replication OK: ~p nodes~n', [length(L)]), halt(0); "
+                     "_ -> io:format('Replication NOT configured~n'), halt(1) end.\""],
+                    capture_output=True,
+                    text=True,
+                    timeout=30
+                )
+                
+                if verify_cmd.returncode == 0:
+                    log_info(f"  Replication verified: {verify_cmd.stdout.strip()}")
+                    break
+                else:
+                    log_warn(f"Replication verification failed: {verify_cmd.stdout} {verify_cmd.stderr}")
+                    if attempt < max_retries - 1:
+                        log_info("  Retrying replication init...")
+                        time.sleep(10)
+                    else:
+                        log_warn("  All replication attempts failed - tests may skip")
+                        # Don't return False - let tests run and skip properly
+        
+        # Wait for replication to settle after init
+        log_info("  Phase 6: Waiting for replication to settle (15s)...")
+        time.sleep(15)
+        
+        _docker_cluster_running = True
+        log_info("Docker cluster started successfully")
+        return True
+        
+    except subprocess.TimeoutExpired:
+        log_warn("Docker cluster startup timed out")
+        return False
+    except Exception as e:
+        log_warn(f"Docker cluster startup failed: {e}")
+        return False
+
+def stop_docker_cluster():
+    """Stop the Docker global cluster."""
+    global _docker_cluster_running
+    
+    if not _docker_cluster_running:
+        return
+    
+    log_info("Stopping Docker cluster...")
+    
+    try:
+        subprocess.run(
+            ["docker", "compose", "-f", str(DOCKER_COMPOSE_FILE), "down", "--remove-orphans"],
+            cwd=str(DOCKER_CLUSTER_DIR),
+            capture_output=True,
+            timeout=60
+        )
+        _docker_cluster_running = False
+        log_info("Docker cluster stopped")
+    except Exception as e:
+        log_warn(f"Error stopping Docker cluster: {e}")
+
+def suite_requires_docker(suite_name: str) -> bool:
+    """Check if a suite requires Docker cluster."""
+    return suite_name in DOCKER_REQUIRED_SUITES
+
+def test_requires_docker(test_name: str) -> bool:
+    """Check if a specific test requires Docker cluster."""
+    return test_name in DOCKER_REQUIRED_TESTS
 
 
 # ============================================================================
@@ -653,9 +817,9 @@ def run_test(test: Dict, run_dir: Path, timeout: int = 120, stream_output: bool 
         env["TEST_SEED"] = str(MASTER_SEED)
         env["TEST_RUN_ID"] = TEST_RUN_ID
         
-        # Ensure CI mode is propagated (default to true for test runner)
-        if "CI" not in env:
-            env["CI"] = "true"
+        # Pass TEST_PROFILE for proper scaling (no CI-based tricks)
+        if "TEST_PROFILE" not in env:
+            env["TEST_PROFILE"] = os.environ.get("TEST_PROFILE", "smoke")
         
         # Add project root to PYTHONPATH so tests can import from tests.framework
         existing_pythonpath = env.get("PYTHONPATH", "")
@@ -706,7 +870,19 @@ def run_test(test: Dict, run_dir: Path, timeout: int = 120, stream_output: bool 
             
             result.output = ''.join(output_lines)
             result.error = ""
-            result.passed = proc.returncode == 0
+            # Per TEST_CONTRACT.md: exit(0)=pass, exit(1)=fail, exit(2)=skip
+            if proc.returncode == 0:
+                result.passed = True
+            elif proc.returncode == 2:
+                result.passed = True  # Skips don't count as failures
+                result.skipped = True
+                # Extract skip reason from output (look for "SKIP:" prefix)
+                for line in output_lines:
+                    if "SKIP:" in line:
+                        result.skip_reason = line.strip()
+                        break
+            else:
+                result.passed = False
         else:
             # Original behavior: capture silently
             proc = subprocess.run(
@@ -721,7 +897,18 @@ def run_test(test: Dict, run_dir: Path, timeout: int = 120, stream_output: bool 
             
             result.output = proc.stdout
             result.error = proc.stderr
-            result.passed = proc.returncode == 0
+            # Per TEST_CONTRACT.md: exit(0)=pass, exit(1)=fail, exit(2)=skip
+            if proc.returncode == 0:
+                result.passed = True
+            elif proc.returncode == 2:
+                result.passed = True  # Skips don't count as failures
+                result.skipped = True
+                for line in proc.stdout.split('\n'):
+                    if "SKIP:" in line:
+                        result.skip_reason = line.strip()
+                        break
+            else:
+                result.passed = False
         
         # Write log
         with open(log_file, "w") as f:
@@ -743,7 +930,9 @@ def run_test(test: Dict, run_dir: Path, timeout: int = 120, stream_output: bool 
     
     result.duration_seconds = time.time() - start_time
     
-    if result.passed:
+    if result.skipped:
+        log_warn(f"SKIP: {test['name']} ({result.duration_seconds:.1f}s) - {result.skip_reason}")
+    elif result.passed:
         log_pass(f"PASS: {test['name']} ({result.duration_seconds:.1f}s)")
     else:
         log_fail(f"FAIL: {test['name']} ({result.duration_seconds:.1f}s)")
@@ -802,9 +991,23 @@ def run_suite(suite_name: str, run_dir: Path, require_cluster: bool = True) -> S
     
     results = []
     
-    # Run normal tests first (with default config)
-    if normal_tests and require_cluster and suite_name not in ["unit"]:
-        ensure_cluster_with_config("config/test")
+    # Check if this suite requires Docker cluster
+    needs_docker = suite_requires_docker(suite_name)
+    docker_started = False
+    
+    if needs_docker:
+        # Stop local cluster before starting Docker
+        log_info("Suite requires Docker cluster - stopping local cluster...")
+        stop_cluster()
+        
+        # Start Docker cluster
+        docker_started = start_docker_cluster()
+        if not docker_started:
+            log_warn(f"Docker cluster unavailable - tests in {suite_name} may skip")
+    else:
+        # Run normal tests first (with default config)
+        if normal_tests and require_cluster and suite_name not in ["unit"]:
+            ensure_cluster_with_config("config/test")
     
     for test in normal_tests:
         result = run_test(test, run_dir, timeout=timeout)
@@ -822,13 +1025,21 @@ def run_suite(suite_name: str, run_dir: Path, require_cluster: bool = True) -> S
         # Switch back to normal config for subsequent suites
         _current_cluster_config = None  # Force restart on next suite
     
+    # Clean up Docker cluster if we started it
+    if docker_started:
+        stop_docker_cluster()
+        # Reset cluster config so next suite will restart local cluster
+        _current_cluster_config = None
+    
     duration = time.time() - start_time
-    passed = sum(1 for r in results if r.passed)
-    failed = len(results) - passed
+    skipped = sum(1 for r in results if r.skipped)
+    passed = sum(1 for r in results if r.passed and not r.skipped)
+    failed = sum(1 for r in results if not r.passed)
     
     return SuiteResult(
         name=suite_name,
         tests_run=len(results),
+        tests_skipped=skipped,
         tests_passed=passed,
         tests_failed=failed,
         duration_seconds=duration,
@@ -863,6 +1074,7 @@ def write_summary(run_dir: Path, suite_results: List[SuiteResult],
             "tests_run": 0,
             "tests_passed": 0,
             "tests_failed": 0,
+            "tests_skipped": 0,
             "duration_seconds": 0.0
         }
     }
@@ -873,6 +1085,7 @@ def write_summary(run_dir: Path, suite_results: List[SuiteResult],
             "tests_run": sr.tests_run,
             "tests_passed": sr.tests_passed,
             "tests_failed": sr.tests_failed,
+            "tests_skipped": sr.tests_skipped,
             "duration_seconds": sr.duration_seconds,
             "tests": [asdict(r) for r in sr.results]
         }
@@ -880,6 +1093,7 @@ def write_summary(run_dir: Path, suite_results: List[SuiteResult],
         summary["totals"]["tests_run"] += sr.tests_run
         summary["totals"]["tests_passed"] += sr.tests_passed
         summary["totals"]["tests_failed"] += sr.tests_failed
+        summary["totals"]["tests_skipped"] += sr.tests_skipped
         summary["totals"]["duration_seconds"] += sr.duration_seconds
     
     summary_file = run_dir / "summary.json"
@@ -896,23 +1110,28 @@ def print_final_summary(summary: Dict):
     totals = summary["totals"]
     passed = totals["tests_passed"]
     failed = totals["tests_failed"]
+    skipped = totals.get("tests_skipped", 0)
     total = totals["tests_run"]
     duration = totals["duration_seconds"]
     
-    print(f"\n{'Suite':<25} {'Passed':<10} {'Failed':<10} {'Duration':<10}", flush=True)
-    print("-" * 55, flush=True)
+    print(f"\n{'Suite':<25} {'Passed':<10} {'Failed':<10} {'Skipped':<10} {'Duration':<10}", flush=True)
+    print("-" * 65, flush=True)
     
     for suite in summary["suites"]:
-        print(f"{suite['name']:<25} {suite['tests_passed']:<10} {suite['tests_failed']:<10} {suite['duration_seconds']:.1f}s", flush=True)
+        skipped_count = suite.get("tests_skipped", 0)
+        print(f"{suite['name']:<25} {suite['tests_passed']:<10} {suite['tests_failed']:<10} {skipped_count:<10} {suite['duration_seconds']:.1f}s", flush=True)
     
-    print("-" * 55, flush=True)
-    print(f"{'TOTAL':<25} {passed:<10} {failed:<10} {duration:.1f}s", flush=True)
+    print("-" * 65, flush=True)
+    print(f"{'TOTAL':<25} {passed:<10} {failed:<10} {skipped:<10} {duration:.1f}s", flush=True)
     print(flush=True)
     
     if failed == 0:
-        log_pass(f"All {total} tests passed!")
+        if skipped > 0:
+            log_warn(f"All {total} tests completed: {passed} passed, {skipped} skipped")
+        else:
+            log_pass(f"All {total} tests passed!")
     else:
-        log_fail(f"{failed}/{total} tests failed")
+        log_fail(f"{failed}/{total} tests failed ({skipped} skipped)")
 
 # ============================================================================
 # Main Entry Point

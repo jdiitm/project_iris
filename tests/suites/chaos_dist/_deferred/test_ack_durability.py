@@ -304,8 +304,28 @@ def run_simplified_test():
         return None
 
 
+def restore_cluster_state():
+    """Re-initialize cluster after test that restarts containers."""
+    try:
+        init_script = PROJECT_ROOT / "docker" / "global-cluster" / "init_cluster.sh"
+        if init_script.exists():
+            log("[cleanup] Restoring cluster state after container restart...")
+            subprocess.run(
+                ["bash", str(init_script)],
+                cwd=str(init_script.parent),
+                capture_output=True,
+                timeout=120
+            )
+            log("[cleanup] Cluster state restored")
+    except Exception as e:
+        log(f"[cleanup] Warning: Could not restore cluster state: {e}")
+
+
 def main():
     result = test_ack_implies_durability()
+    
+    # Restore cluster state for subsequent tests
+    restore_cluster_state()
     
     print("\n" + "=" * 60)
     if result is True:
