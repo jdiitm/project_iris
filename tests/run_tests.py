@@ -653,6 +653,10 @@ def run_test(test: Dict, run_dir: Path, timeout: int = 120, stream_output: bool 
         env["TEST_SEED"] = str(MASTER_SEED)
         env["TEST_RUN_ID"] = TEST_RUN_ID
         
+        # Ensure CI mode is propagated (default to true for test runner)
+        if "CI" not in env:
+            env["CI"] = "true"
+        
         # Add project root to PYTHONPATH so tests can import from tests.framework
         existing_pythonpath = env.get("PYTHONPATH", "")
         env["PYTHONPATH"] = f"{PROJECT_ROOT}:{existing_pythonpath}" if existing_pythonpath else str(PROJECT_ROOT)
