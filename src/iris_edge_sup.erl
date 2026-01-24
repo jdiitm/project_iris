@@ -64,7 +64,8 @@ init([]) ->
         }
     ] ++ [
         %% ROUTER POOL (Multi-Core Optimization)
-        %% Spawn 8 router shards to utilize all vCPUs
+        %% AUDIT FIX: Auto-tune pool size based on scheduler count
+        %% Uses iris_async_router:get_pool_size() for dynamic sizing
         #{
             id => list_to_atom("iris_async_router_" ++ integer_to_list(I)),
             start => {iris_async_router, start_link, [I]},
@@ -72,7 +73,7 @@ init([]) ->
             shutdown => 5000,
             type => worker,
             modules => [iris_async_router]
-        } || I <- lists:seq(1, 8)
+        } || I <- lists:seq(1, iris_async_router:get_pool_size())
     ] ++ [
         %% TCP Listener - handles raw TCP connections
         #{

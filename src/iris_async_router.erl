@@ -12,11 +12,16 @@
 
 -export([start_link/1, route/2, route_async/2]).
 -export([register_local/2, unregister_local/1]).
--export([get_local_count/0, get_stats/0]).
+-export([get_local_count/0, get_stats/0, get_pool_size/0]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
 -define(LOCAL_PRESENCE, local_presence_v2).
--define(POOL_SIZE, 8).
+
+%% Pool size configuration
+%% AUDIT FIX: Auto-tune based on scheduler count instead of hardcoded value
+-define(MIN_POOL_SIZE, 4).
+-define(MAX_POOL_SIZE, 128).
+-define(DEFAULT_POOL_SIZE, 8).  %% Fallback if auto-tune fails
 
 -record(state, {
     shard_id :: integer(),
@@ -35,10 +40,26 @@ start_link(ShardId) ->
     Name = list_to_atom("iris_async_router_" ++ integer_to_list(ShardId)),
     gen_server:start_link({local, Name}, ?MODULE, [ShardId], []).
 
+%% @doc Get the current pool size (auto-tuned or configured)
+%% This is called by supervisors to determine how many workers to start
+-spec get_pool_size() -> pos_integer().
+get_pool_size() ->
+    case application:get_env(iris_edge, router_pool_size) of
+        {ok, Size} when is_integer(Size), Size > 0 ->
+            %% Explicitly configured - use it
+            Size;
+        _ ->
+            %% Auto-tune: Use 75% of schedulers, bounded by min/max
+            Schedulers = erlang:system_info(schedulers_online),
+            TargetSize = max(?MIN_POOL_SIZE, (Schedulers * 3) div 4),
+            min(TargetSize, ?MAX_POOL_SIZE)
+    end.
+
 %% Route a message - Sharded by User ID
 -spec route(binary(), binary()) -> ok.
 route(User, Msg) ->
-    ShardId = (erlang:phash2(User, ?POOL_SIZE) + 1),
+    PoolSize = get_pool_size(),
+    ShardId = (erlang:phash2(User, PoolSize) + 1),
     Name = list_to_atom("iris_async_router_" ++ integer_to_list(ShardId)),
     gen_server:cast(Name, {route, User, Msg}).
 
@@ -61,7 +82,8 @@ get_local_count() ->
 
 %% Aggregate Stats from all shards
 get_stats() ->
-    Shards = lists:seq(1, ?POOL_SIZE),
+    PoolSize = get_pool_size(),
+    Shards = lists:seq(1, PoolSize),
     StatsList = [call_shard_stats(I) || I <- Shards],
     aggregate_stats(StatsList).
 

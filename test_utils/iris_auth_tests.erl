@@ -6,6 +6,22 @@
 %% =============================================================================
 
 setup() ->
+    %% Setup Mnesia for revoked_tokens table
+    application:stop(mnesia),
+    ok = mnesia:delete_schema([node()]),
+    ok = mnesia:create_schema([node()]),
+    ok = mnesia:start(),
+    
+    %% Create revoked_tokens table required by iris_auth
+    case mnesia:create_table(revoked_tokens, [
+        {ram_copies, [node()]},
+        {attributes, [token_id, timestamp]}
+    ]) of
+        {atomic, ok} -> ok;
+        {aborted, {already_exists, revoked_tokens}} -> ok
+    end,
+    mnesia:wait_for_tables([revoked_tokens], 5000),
+    
     %% Start the auth server for testing
     case whereis(iris_auth) of
         undefined ->
@@ -18,7 +34,9 @@ setup() ->
     end.
 
 cleanup({started, _Pid}) ->
-    gen_server:stop(iris_auth);
+    gen_server:stop(iris_auth),
+    catch mnesia:delete_table(revoked_tokens),
+    application:stop(mnesia);
 cleanup({existing, _Pid}) ->
     ok.
 
