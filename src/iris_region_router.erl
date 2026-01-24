@@ -195,24 +195,26 @@ discover_and_route(TargetRegion, UserId, Msg) ->
             end
     end.
 
-%% Bridge routing (async, for high-latency regions)
+%% Bridge routing (async, for high-latency regions or when direct RPC fails)
 route_via_bridge(TargetRegion, UserId, Msg) ->
-    %% Check if bridge process is available
+    %% Use the bridge module for reliable async delivery
+    %% This guarantees the message is durably queued before returning
     case whereis(iris_region_bridge) of
         undefined ->
-            %% No bridge - fall back to RPC
-            route_via_rpc(TargetRegion, UserId, Msg);
-        BridgePid ->
-            %% Send to bridge for async delivery
-            BridgePid ! {route, TargetRegion, UserId, Msg},
-            ok
+            %% Bridge not started - queue directly to Mnesia and return ok
+            %% The message will be picked up when bridge starts
+            logger:warning("Bridge not running, storing cross-region message directly"),
+            iris_region_bridge:send_cross_region(TargetRegion, UserId, Msg);
+        _BridgePid ->
+            %% Bridge running - use its API for durable queueing
+            iris_region_bridge:send_cross_region(TargetRegion, UserId, Msg)
     end.
 
 %% Store message for later cross-region delivery
 store_cross_region_offline(TargetRegion, UserId, Msg) ->
-    %% Store in local Mnesia with region tag
-    Key = {cross_region, TargetRegion, UserId, erlang:system_time(millisecond)},
-    iris_store:put(cross_region_queue, Key, Msg, #{durability => guaranteed}).
+    %% Use the bridge for reliable cross-region queueing
+    %% This ensures durable storage and automatic retry
+    iris_region_bridge:send_cross_region(TargetRegion, UserId, Msg).
 
 %% =============================================================================
 %% Internal: Helpers

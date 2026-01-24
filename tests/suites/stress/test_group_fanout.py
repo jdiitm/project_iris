@@ -266,17 +266,16 @@ def test_batch_fanout():
     log(f"=== Test: Batch Fan-out ({BURST_MESSAGES} messages) ===")
     
     code = f"""
+    %% Start Mnesia (schema created by iris_group if needed)
     mnesia:start(),
     
-    %% Create ram_copies tables for test environment
-    catch mnesia:create_table(group, [{{ram_copies, [node()]}}, {{attributes, [id, name, created_by, created_at, max_members]}}]),
-    catch mnesia:create_table(group_member, [{{ram_copies, [node()]}}, {{attributes, [group_id, user_id, role, joined_at]}}]),
-    catch mnesia:create_table(group_sender_key, [{{ram_copies, [node()]}}, {{attributes, [group_id, key_id, sender_key, created_at]}}]),
-    
-    %% Wait for tables
-    mnesia:wait_for_tables([group, group_member, group_sender_key], 5000),
-    
+    %% Start iris_group which initializes tables with correct attributes
     {{ok, _}} = iris_group:start_link(),
+    
+    %% Clear any stale data
+    catch mnesia:clear_table(group),
+    catch mnesia:clear_table(group_member),
+    catch mnesia:clear_table(group_sender_key),
     
     %% Create group
     {{ok, GroupId}} = iris_group:create_group(<<"Batch Group">>, <<"sender">>),
