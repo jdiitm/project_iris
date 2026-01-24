@@ -28,7 +28,7 @@ import subprocess
 def run_erlang_test(code):
     """Run Erlang code and return output."""
     full_code = f"""
-        cd /home/j/.gemini/antigravity/scratch/project_iris && \
+        cd {PROJECT_ROOT} && \
         erl -pa ebin -noshell -sname test_region_$RANDOM -setcookie iris_secret -eval '
         try
             {code}
