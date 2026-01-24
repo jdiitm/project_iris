@@ -223,7 +223,7 @@ def main():
            # actually ClusterManager 'build' runs make all.
            # But we need chaos_resources.erl etc.
            # Let's ensure they are compiled.
-           subprocess.run("erlc -o ebin src/chaos_resources.erl src/chaos_monkey.erl src/iris_extreme_gen.erl 2>/dev/null", shell=True)
+           subprocess.run("erlc -o ebin test_utils/chaos_resources.erl test_utils/chaos_monkey.erl test_utils/iris_extreme_gen.erl 2>/dev/null", shell=True)
         
         monitor = SystemMonitor(edge_node, args.log)
         processes = []
