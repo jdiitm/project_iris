@@ -9,6 +9,10 @@
 %% 2. Cascade failure detection via downstream health tracking
 %% 3. Per-destination queue tracking for fan-out throttling
 %% 4. Automatic recovery when pressure subsides
+%%
+%% AUDIT FIX: All admission checks are now lockfree via sharded ETS.
+%% Previously, non-NORMAL levels serialized through gen_server:call.
+%% Now all levels use ETS for admission decisions.
 %% =============================================================================
 
 -export([start_link/0]).
@@ -36,8 +40,10 @@
 -define(CHECK_INTERVAL_MS, 1000).
 -define(DECAY_INTERVAL_MS, 5000).
 
-%% AUDIT2 FIX: ETS table for lockfree admission checks
+%% AUDIT FIX: Sharded ETS for lockfree admission checks at ALL levels
 -define(FLOW_ETS, iris_flow_controller_ets).
+-define(SHARD_COUNT, 16).  %% Number of shards for rate counters
+-define(DEST_ETS, iris_flow_controller_dest_ets).  %% Per-destination tracking
 
 -record(state, {
     level = ?LEVEL_NORMAL :: integer(),
@@ -50,24 +56,13 @@
     core_health = #{} :: map(),  %% Node -> {successes, failures, last_check_time}
     cascade_detected = false :: boolean(),
     
-    %% Per-destination tracking (for fan-out control)
-    dest_queues = #{} :: map(),  %% User -> {depth, drain_rate, priority}
-    
     %% Rate limiting state
-    requests_this_window = 0 :: integer(),
     window_start :: integer(),
     
-    %% Stats
+    %% Stats (updated periodically from shards)
     admitted = 0 :: integer(),
     rejected = 0 :: integer(),
     shed_by_fanout = 0 :: integer()
-}).
-
--record(dest_stats, {
-    depth = 0 :: integer(),
-    drain_rate = 0.0 :: float(),
-    priority = normal :: normal | throttled | blocked,
-    last_update :: integer()
 }).
 
 %% =============================================================================
@@ -79,22 +74,58 @@ start_link() ->
 
 %% Check if a request should be admitted
 %% Returns: {allow, Level} | {deny, Reason, RetryAfterMs}
+%% 
+%% AUDIT FIX: This is now FULLY lockfree - no gen_server:call at any level.
+%% All state is read from ETS tables.
 -spec check_admission(binary()) -> {allow, integer()} | {deny, atom(), integer()}.
 check_admission(User) ->
     check_admission(User, #{}).
 
 -spec check_admission(binary(), map()) -> {allow, integer()} | {deny, atom(), integer()}.
-check_admission(User, Opts) ->
-    %% AUDIT2 FIX: Lockfree fast path for NORMAL level
-    %% Read level from ETS to avoid gen_server:call bottleneck
-    case ets:lookup(?FLOW_ETS, level) of
-        [{level, ?LEVEL_NORMAL}] ->
-            %% Fast path: just allow (update stats async)
-            gen_server:cast(?SERVER, {admit, 1}),
-            {allow, ?LEVEL_NORMAL};
-        _ ->
-            %% Complex path: delegate to gen_server
-            gen_server:call(?SERVER, {check_admission, User, Opts})
+check_admission(User, _Opts) ->
+    %% Determine shard for this user (consistent hashing)
+    Shard = erlang:phash2(User, ?SHARD_COUNT),
+    
+    %% Read level from ETS (lockfree)
+    Level = case ets:lookup(?FLOW_ETS, level) of
+        [{level, L}] -> L;
+        [] -> ?LEVEL_NORMAL
+    end,
+    
+    %% All admission decisions are now lockfree
+    case Level of
+        ?LEVEL_NORMAL ->
+            %% Fast path: always allow, increment shard counter
+            ets:update_counter(?FLOW_ETS, {admitted, Shard}, 1, {{admitted, Shard}, 0}),
+            {allow, Level};
+        
+        ?LEVEL_SLOW ->
+            %% Rate limit check via sharded counter
+            case check_rate_limit_lockfree(Shard) of
+                allow ->
+                    ets:update_counter(?FLOW_ETS, {admitted, Shard}, 1, {{admitted, Shard}, 0}),
+                    {allow, Level};
+                deny ->
+                    ets:update_counter(?FLOW_ETS, {rejected, Shard}, 1, {{rejected, Shard}, 0}),
+                    {deny, rate_limited, 100}
+            end;
+        
+        ?LEVEL_SHED ->
+            %% Check destination priority via ETS
+            case check_fanout_priority_lockfree(User) of
+                allow ->
+                    ets:update_counter(?FLOW_ETS, {admitted, Shard}, 1, {{admitted, Shard}, 0}),
+                    {allow, Level};
+                deny ->
+                    ets:update_counter(?FLOW_ETS, {rejected, Shard}, 1, {{rejected, Shard}, 0}),
+                    ets:update_counter(?FLOW_ETS, {shed_fanout, Shard}, 1, {{shed_fanout, Shard}, 0}),
+                    {deny, load_shed, 1000}
+            end;
+        
+        ?LEVEL_CRITICAL ->
+            %% Reject everything
+            ets:update_counter(?FLOW_ETS, {rejected, Shard}, 1, {{rejected, Shard}, 0}),
+            {deny, system_overload, 5000}
     end.
 
 %% Record downstream call result (for cascade detection)
@@ -106,15 +137,36 @@ record_failure(Node) ->
 
 %% Track messages queued for a destination (for fan-out control)
 track_destination(User, QueueDepth) ->
-    gen_server:cast(?SERVER, {track_dest, User, QueueDepth}).
+    %% Lockfree: write directly to ETS
+    Now = erlang:system_time(millisecond),
+    
+    %% Read current state (if any)
+    Priority = case ets:lookup(?DEST_ETS, User) of
+        [{User, OldDepth, _OldDrainRate, _OldPriority, LastUpdate}] ->
+            %% Calculate drain rate
+            Elapsed = max(1, Now - LastUpdate),
+            DrainRate = (OldDepth - QueueDepth) / Elapsed * 1000,
+            calculate_priority(QueueDepth, DrainRate);
+        [] ->
+            normal
+    end,
+    
+    ets:insert(?DEST_ETS, {User, QueueDepth, 0.0, Priority, Now}),
+    ok.
 
-%% Get priority for a destination
+%% Get priority for a destination (lockfree)
 get_destination_priority(User) ->
-    gen_server:call(?SERVER, {get_dest_priority, User}).
+    case ets:lookup(?DEST_ETS, User) of
+        [{User, _Depth, _Rate, Priority, _LastUpdate}] -> Priority;
+        [] -> normal
+    end.
 
-%% Get current pressure level
+%% Get current pressure level (lockfree)
 get_level() ->
-    gen_server:call(?SERVER, get_level).
+    case ets:lookup(?FLOW_ETS, level) of
+        [{level, L}] -> L;
+        [] -> ?LEVEL_NORMAL
+    end.
 
 %% Get detailed stats
 get_stats() ->
@@ -127,41 +179,46 @@ get_stats() ->
 init([]) ->
     process_flag(trap_exit, true),
     
-    %% AUDIT2 FIX: Create ETS table for lockfree reads
-    %% This removes the gen_server:call bottleneck for admission checks
-    ets:new(?FLOW_ETS, [named_table, public, {read_concurrency, true}]),
+    %% Create ETS tables for lockfree operation
+    %% Flow control table (level, counters)
+    ets:new(?FLOW_ETS, [named_table, public, {write_concurrency, true}, {read_concurrency, true}]),
     ets:insert(?FLOW_ETS, {level, ?LEVEL_NORMAL}),
+    
+    %% Initialize shard counters
+    lists:foreach(fun(Shard) ->
+        ets:insert(?FLOW_ETS, {{admitted, Shard}, 0}),
+        ets:insert(?FLOW_ETS, {{rejected, Shard}, 0}),
+        ets:insert(?FLOW_ETS, {{shed_fanout, Shard}, 0}),
+        ets:insert(?FLOW_ETS, {{requests, Shard}, 0})
+    end, lists:seq(0, ?SHARD_COUNT - 1)),
+    
+    %% Per-destination tracking table
+    ets:new(?DEST_ETS, [named_table, public, {write_concurrency, true}, {read_concurrency, true}]),
+    
+    %% Initialize rate limiting state
+    ets:insert(?FLOW_ETS, {window_start, erlang:system_time(second)}),
+    ets:insert(?FLOW_ETS, {max_rate, application:get_env(iris_core, max_request_rate, 100000)}),
     
     %% Start periodic check
     erlang:send_after(?CHECK_INTERVAL_MS, self(), check_resources),
     erlang:send_after(?DECAY_INTERVAL_MS, self(), decay_counters),
     
-    {ok, #state{window_start = os:system_time(second)}}.
-
-handle_call({check_admission, User, Opts}, _From, State) ->
-    {Result, NewState} = do_check_admission(User, Opts, State),
-    {reply, Result, NewState};
-
-handle_call({get_dest_priority, User}, _From, State) ->
-    Priority = case maps:get(User, State#state.dest_queues, undefined) of
-        undefined -> normal;
-        #dest_stats{priority = P} -> P
-    end,
-    {reply, Priority, State};
-
-handle_call(get_level, _From, State) ->
-    {reply, State#state.level, State};
+    {ok, #state{window_start = erlang:system_time(second)}}.
 
 handle_call(get_stats, _From, State) ->
+    %% Aggregate stats from all shards
+    {TotalAdmitted, TotalRejected, TotalShedFanout} = aggregate_shard_stats(),
+    
     Stats = #{
         level => level_name(State#state.level),
         memory_percent => State#state.memory_percent,
         cascade_detected => State#state.cascade_detected,
-        admitted => State#state.admitted,
-        rejected => State#state.rejected,
-        shed_by_fanout => State#state.shed_by_fanout,
+        admitted => TotalAdmitted,
+        rejected => TotalRejected,
+        shed_by_fanout => TotalShedFanout,
         core_health => format_core_health(State#state.core_health),
-        high_fanout_dests => count_high_fanout(State#state.dest_queues)
+        high_fanout_dests => count_high_fanout_ets(),
+        shard_count => ?SHARD_COUNT
     },
     {reply, Stats, State};
 
@@ -178,33 +235,6 @@ handle_cast({downstream_failure, Node}, State) ->
     NewCascade = detect_cascade(NewHealth),
     {noreply, State#state{core_health = NewHealth, cascade_detected = NewCascade}};
 
-handle_cast({track_dest, User, QueueDepth}, State) ->
-    Now = os:system_time(millisecond),
-    NewStats = case maps:get(User, State#state.dest_queues, undefined) of
-        undefined ->
-            #dest_stats{depth = QueueDepth, last_update = Now};
-        Old = #dest_stats{depth = OldDepth, last_update = LastUpdate} ->
-            %% Calculate drain rate
-            Elapsed = max(1, Now - LastUpdate),
-            DrainRate = (OldDepth - QueueDepth) / Elapsed * 1000,  %% msgs/sec
-            Priority = calculate_priority(QueueDepth, DrainRate, State#state.level),
-            Old#dest_stats{
-                depth = QueueDepth,
-                drain_rate = DrainRate,
-                priority = Priority,
-                last_update = Now
-            }
-    end,
-    NewQueues = maps:put(User, NewStats, State#state.dest_queues),
-    {noreply, State#state{dest_queues = NewQueues}};
-
-%% AUDIT2 FIX: Handle async admit counter increment
-handle_cast({admit, Count}, State) ->
-    {noreply, State#state{
-        admitted = State#state.admitted + Count,
-        requests_this_window = State#state.requests_this_window + Count
-    }};
-
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
@@ -212,7 +242,7 @@ handle_info(check_resources, State) ->
     NewState = update_resource_metrics(State),
     NewLevel = calculate_level(NewState),
     
-    %% AUDIT2 FIX: Update ETS for lockfree reads
+    %% Update ETS for lockfree reads
     ets:insert(?FLOW_ETS, {level, NewLevel}),
     
     %% Log level changes
@@ -228,18 +258,29 @@ handle_info(check_resources, State) ->
 
 handle_info(decay_counters, State) ->
     %% Decay old core health data
-    Now = os:system_time(second),
+    Now = erlang:system_time(second),
     NewHealth = maps:filter(fun(_Node, {_S, _F, LastCheck}) ->
         Now - LastCheck < 60  %% Keep data for 60 seconds
     end, State#state.core_health),
     
     %% Clean up stale destination tracking
-    CleanQueues = maps:filter(fun(_User, #dest_stats{last_update = LU}) ->
-        os:system_time(millisecond) - LU < 30000  %% 30 second TTL
-    end, State#state.dest_queues),
+    NowMs = erlang:system_time(millisecond),
+    ets:foldl(fun({User, _Depth, _Rate, _Priority, LastUpdate}, Acc) ->
+        if NowMs - LastUpdate > 30000 ->  %% 30 second TTL
+            ets:delete(?DEST_ETS, User);
+           true -> ok
+        end,
+        Acc
+    end, ok, ?DEST_ETS),
+    
+    %% Reset rate limit window
+    ets:insert(?FLOW_ETS, {window_start, erlang:system_time(second)}),
+    lists:foreach(fun(Shard) ->
+        ets:insert(?FLOW_ETS, {{requests, Shard}, 0})
+    end, lists:seq(0, ?SHARD_COUNT - 1)),
     
     erlang:send_after(?DECAY_INTERVAL_MS, self(), decay_counters),
-    {noreply, State#state{core_health = NewHealth, dest_queues = CleanQueues}};
+    {noreply, State#state{core_health = NewHealth}};
 
 handle_info(_Info, State) ->
     {noreply, State}.
@@ -248,71 +289,44 @@ terminate(_Reason, _State) ->
     ok.
 
 %% =============================================================================
-%% Internal: Admission Control
+%% Internal: Lockfree Admission Checks
 %% =============================================================================
 
-do_check_admission(User, Opts, State = #state{level = Level}) ->
-    %% Fast path for normal operation
-    case Level of
-        ?LEVEL_NORMAL ->
-            NewState = State#state{
-                admitted = State#state.admitted + 1,
-                requests_this_window = State#state.requests_this_window + 1
-            },
-            {{allow, Level}, NewState};
-        
-        ?LEVEL_SLOW ->
-            %% Rate limit but generally allow
-            case should_rate_limit(State) of
-                false ->
-                    NewState = State#state{admitted = State#state.admitted + 1},
-                    {{allow, Level}, NewState};
-                true ->
-                    NewState = State#state{rejected = State#state.rejected + 1},
-                    {{deny, rate_limited, 100}, NewState}
-            end;
-        
-        ?LEVEL_SHED ->
-            %% Check destination priority - shed high fanout first
-            case check_fanout_priority(User, Opts, State) of
-                allow ->
-                    NewState = State#state{admitted = State#state.admitted + 1},
-                    {{allow, Level}, NewState};
-                deny ->
-                    NewState = State#state{
-                        rejected = State#state.rejected + 1,
-                        shed_by_fanout = State#state.shed_by_fanout + 1
-                    },
-                    {{deny, load_shed, 1000}, NewState}
-            end;
-        
-        ?LEVEL_CRITICAL ->
-            %% Reject everything
-            NewState = State#state{rejected = State#state.rejected + 1},
-            {{deny, system_overload, 5000}, NewState}
+%% Rate limit check - reads from sharded counters
+check_rate_limit_lockfree(Shard) ->
+    %% Increment request counter for this shard
+    ets:update_counter(?FLOW_ETS, {requests, Shard}, 1, {{requests, Shard}, 0}),
+    
+    %% Check total rate across all shards
+    TotalRequests = lists:sum([
+        case ets:lookup(?FLOW_ETS, {requests, S}) of
+            [{{requests, S}, Count}] -> Count;
+            [] -> 0
+        end
+    || S <- lists:seq(0, ?SHARD_COUNT - 1)]),
+    
+    [{window_start, WindowStart}] = ets:lookup(?FLOW_ETS, window_start),
+    [{max_rate, MaxRate}] = ets:lookup(?FLOW_ETS, max_rate),
+    
+    WindowDuration = max(1, erlang:system_time(second) - WindowStart),
+    RatePerSecond = TotalRequests / WindowDuration,
+    
+    case RatePerSecond > MaxRate of
+        true -> deny;
+        false -> allow
     end.
 
-should_rate_limit(#state{requests_this_window = Requests, window_start = Start}) ->
-    Now = os:system_time(second),
-    WindowDuration = Now - Start,
-    if WindowDuration < 1 -> false;
-       true ->
-           RatePerSecond = Requests / max(1, WindowDuration),
-           MaxRate = application:get_env(iris_core, max_request_rate, 100000),
-           RatePerSecond > MaxRate
-    end.
-
-check_fanout_priority(User, _Opts, #state{dest_queues = Queues}) ->
-    case maps:get(User, Queues, undefined) of
-        undefined -> allow;
-        #dest_stats{priority = blocked} -> deny;
-        #dest_stats{priority = throttled} ->
+%% Fan-out priority check - reads from destination ETS
+check_fanout_priority_lockfree(User) ->
+    case ets:lookup(?DEST_ETS, User) of
+        [{User, _Depth, _Rate, blocked, _LastUpdate}] -> deny;
+        [{User, _Depth, _Rate, throttled, _LastUpdate}] ->
             %% 50% chance of allowing throttled destinations
             case rand:uniform(2) of
                 1 -> allow;
                 2 -> deny
             end;
-        #dest_stats{priority = normal} -> allow
+        _ -> allow
     end.
 
 %% =============================================================================
@@ -361,7 +375,7 @@ calculate_level(#state{memory_percent = Mem, cascade_detected = Cascade}) ->
 %% =============================================================================
 
 update_core_health(Node, Result, Health) ->
-    Now = os:system_time(second),
+    Now = erlang:system_time(second),
     {Successes, Failures, _} = maps:get(Node, Health, {0, 0, Now}),
     NewEntry = case Result of
         success -> {Successes + 1, max(0, Failures - 1), Now};
@@ -389,7 +403,13 @@ detect_cascade(Health) ->
 %% Internal: Fan-out Priority
 %% =============================================================================
 
-calculate_priority(QueueDepth, DrainRate, Level) ->
+calculate_priority(QueueDepth, DrainRate) ->
+    %% Read current level from ETS
+    Level = case ets:lookup(?FLOW_ETS, level) of
+        [{level, L}] -> L;
+        [] -> ?LEVEL_NORMAL
+    end,
+    
     %% High queue depth with slow drain = problem
     if
         QueueDepth > 10000 -> blocked;
@@ -399,13 +419,34 @@ calculate_priority(QueueDepth, DrainRate, Level) ->
         true -> normal
     end.
 
-count_high_fanout(Queues) ->
-    maps:fold(fun(_User, #dest_stats{priority = P}, Acc) ->
-        case P of
+%% =============================================================================
+%% Internal: Stats Aggregation
+%% =============================================================================
+
+aggregate_shard_stats() ->
+    lists:foldl(fun(Shard, {AccA, AccR, AccS}) ->
+        Admitted = case ets:lookup(?FLOW_ETS, {admitted, Shard}) of
+            [{{admitted, Shard}, A}] -> A;
+            [] -> 0
+        end,
+        Rejected = case ets:lookup(?FLOW_ETS, {rejected, Shard}) of
+            [{{rejected, Shard}, R}] -> R;
+            [] -> 0
+        end,
+        ShedFanout = case ets:lookup(?FLOW_ETS, {shed_fanout, Shard}) of
+            [{{shed_fanout, Shard}, S}] -> S;
+            [] -> 0
+        end,
+        {AccA + Admitted, AccR + Rejected, AccS + ShedFanout}
+    end, {0, 0, 0}, lists:seq(0, ?SHARD_COUNT - 1)).
+
+count_high_fanout_ets() ->
+    ets:foldl(fun({_User, _Depth, _Rate, Priority, _LastUpdate}, Acc) ->
+        case Priority of
             normal -> Acc;
             _ -> Acc + 1
         end
-    end, 0, Queues).
+    end, 0, ?DEST_ETS).
 
 format_core_health(Health) ->
     maps:fold(fun(Node, {S, F, _}, Acc) ->

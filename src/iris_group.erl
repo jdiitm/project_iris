@@ -40,7 +40,12 @@
     store_sender_key/4,       %% (GroupId, UserId, KeyId, SenderKey) -> ok
     get_sender_key/3,         %% (GroupId, UserId, KeyId) -> {ok, SenderKey} | {error, not_found}
     get_all_sender_keys/2,    %% (GroupId, UserId) -> [{KeyId, SenderKey}]
-    rotate_sender_key/3       %% (GroupId, UserId, NewSenderKey) -> {ok, KeyId}
+    rotate_sender_key/3,      %% (GroupId, UserId, NewSenderKey) -> {ok, KeyId}
+    
+    %% AUDIT FIX: Member reconnect and key sync
+    handle_member_reconnect/2,  %% (GroupId, UserId) -> {ok, [KeyUpdate]} | {error, Reason}
+    get_sender_keys_since/2,    %% (GroupId, Since) -> [{UserId, KeyId, SenderKey}]
+    update_member_last_seen/2   %% (GroupId, UserId) -> ok
 ]).
 
 %% gen_server callbacks
@@ -69,7 +74,8 @@
     key         :: {binary(), binary()}, %% {GroupId, UserId}
     role        :: admin | member,       %% Role in group
     joined_at   :: integer(),            %% Unix timestamp
-    added_by    :: binary()              %% Who added this member
+    added_by    :: binary(),             %% Who added this member
+    last_seen   :: integer()             %% AUDIT FIX: Track last seen for key sync
 }).
 
 %% Group sender keys (for E2EE)
@@ -148,9 +154,10 @@ get_members(GroupId) ->
     case mnesia:dirty_read(group, GroupId) of
         [] -> {error, not_found};
         [_] ->
+            %% Use explicit tuple syntax for MatchSpec to ensure correct arity
+            %% Record: {group_member, Key, Role, JoinedAt, AddedBy, LastSeen}
             MatchSpec = [{
-                #group_member{key = {GroupId, '$1'}, role = '$2', 
-                             joined_at = '$3', added_by = '$4'},
+                {group_member, {GroupId, '$1'}, '$2', '$3', '$4', '_'},
                 [],
                 [#{user_id => '$1', role => '$2', joined_at => '$3', added_by => '$4'}]
             }],
@@ -226,6 +233,75 @@ rotate_sender_key(GroupId, UserId, NewSenderKey) ->
     {ok, KeyId}.
 
 %% =============================================================================
+%% AUDIT FIX: Member Reconnect and Key Sync
+%% =============================================================================
+%% When a member reconnects after being offline, they need to receive all
+%% sender keys that were rotated while they were away. This prevents the
+%% "can't decrypt new messages" issue.
+%% =============================================================================
+
+%% @doc Handle member reconnect - sync all keys updated since last_seen
+-spec handle_member_reconnect(binary(), binary()) -> 
+    {ok, [{binary(), binary(), binary()}]} | {error, term()}.
+handle_member_reconnect(GroupId, UserId) ->
+    case mnesia:dirty_read(group_member, {GroupId, UserId}) of
+        [] -> 
+            {error, not_member};
+        [#group_member{last_seen = LastSeen}] ->
+            %% Get all sender keys updated since last_seen
+            SinceTime = case LastSeen of
+                undefined -> 0;
+                LS -> LS
+            end,
+            
+            UpdatedKeys = get_sender_keys_since(GroupId, SinceTime),
+            
+            %% Update member's last_seen
+            update_member_last_seen(GroupId, UserId),
+            
+            %% Log for debugging
+            case UpdatedKeys of
+                [] -> ok;
+                _ ->
+                    logger:info("Syncing ~p sender keys to member ~s in group ~s",
+                               [length(UpdatedKeys), UserId, GroupId])
+            end,
+            
+            {ok, UpdatedKeys}
+    end.
+
+%% @doc Get all sender keys updated since a given timestamp
+-spec get_sender_keys_since(binary(), integer()) -> 
+    [{binary(), binary(), binary()}].  %% [{UserId, KeyId, SenderKey}]
+get_sender_keys_since(GroupId, Since) ->
+    MatchSpec = [{
+        #group_sender_key{key = {GroupId, '$1', '$2'}, 
+                          sender_key = '$3', 
+                          created_at = '$4',
+                          _ = '_'},
+        [{'>', '$4', Since}],
+        [{{'$1', '$2', '$3'}}]
+    }],
+    try
+        mnesia:dirty_select(group_sender_key, MatchSpec)
+    catch
+        _:_ -> []
+    end.
+
+%% @doc Update member's last_seen timestamp
+-spec update_member_last_seen(binary(), binary()) -> ok.
+update_member_last_seen(GroupId, UserId) ->
+    Now = erlang:system_time(second),
+    case mnesia:dirty_read(group_member, {GroupId, UserId}) of
+        [Member] ->
+            UpdatedMember = Member#group_member{last_seen = Now},
+            mnesia:dirty_write(group_member, UpdatedMember),
+            ok;
+        [] ->
+            ok  %% Member not found, ignore
+    end.
+
+%% =============================================================================
 %% gen_server Callbacks
 %% =============================================================================
 
@@ -275,10 +351,16 @@ terminate(_Reason, _State) ->
 %% =============================================================================
 
 init_tables() ->
+    %% Determine storage type: disc_copies if schema supports it, else ram_copies
+    StorageType = case mnesia:table_info(schema, disc_copies) of
+        [] -> ram_copies;  %% No disc schema, use ram
+        _ -> disc_copies   %% Disc schema exists
+    end,
+    
     %% Create group table
     case mnesia:create_table(group, [
         {attributes, record_info(fields, group)},
-        {disc_copies, [node()]},
+        {StorageType, [node()]},
         {type, set}
     ]) of
         {atomic, ok} -> ok;
@@ -290,7 +372,7 @@ init_tables() ->
     %% Create group_member table
     case mnesia:create_table(group_member, [
         {attributes, record_info(fields, group_member)},
-        {disc_copies, [node()]},
+        {StorageType, [node()]},
         {type, set}
     ]) of
         {atomic, ok} -> ok;
@@ -302,7 +384,7 @@ init_tables() ->
     %% Create group_sender_key table
     case mnesia:create_table(group_sender_key, [
         {attributes, record_info(fields, group_sender_key)},
-        {disc_copies, [node()]},
+        {StorageType, [node()]},
         {type, set}
     ]) of
         {atomic, ok} -> ok;
@@ -349,12 +431,13 @@ do_create_group(GroupName, CreatorId) ->
                 },
                 mnesia:write(group, Group, write),
                 
-                %% Add creator as admin
+                %% Add creator as admin with last_seen initialized
                 Member = #group_member{
                     key = {GroupId, CreatorId},
                     role = admin,
                     joined_at = Now,
-                    added_by = CreatorId
+                    added_by = CreatorId,
+                    last_seen = Now  %% AUDIT FIX: Initialize last_seen
                 },
                 mnesia:write(group_member, Member, write),
                 
@@ -419,12 +502,13 @@ do_add_member(GroupId, UserId, AddedBy) ->
                         {ok, _} ->
                             Now = erlang:system_time(second),
                             F = fun() ->
-                                %% Add member
+                                %% Add member with last_seen initialized
                                 Member = #group_member{
                                     key = {GroupId, UserId},
                                     role = member,
                                     joined_at = Now,
-                                    added_by = AddedBy
+                                    added_by = AddedBy,
+                                    last_seen = Now  %% AUDIT FIX: Initialize last_seen
                                 },
                                 mnesia:write(group_member, Member, write),
                                 

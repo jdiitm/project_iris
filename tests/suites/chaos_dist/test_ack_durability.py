@@ -28,6 +28,16 @@ import time
 import subprocess
 import sys
 import os
+from pathlib import Path
+
+# Project root for locating scripts
+PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
+
+
+def log(msg):
+    """Print timestamped log message."""
+    print(msg)
+
 
 # Test configuration
 SERVER_HOST = os.environ.get("IRIS_HOST", "localhost")
