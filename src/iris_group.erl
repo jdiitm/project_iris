@@ -314,7 +314,19 @@ init_tables() ->
     %% Add secondary index on group_member for user lookups
     catch mnesia:add_table_index(group_member, role),
     
-    ok.
+    %% Wait for all tables to be available
+    Tables = [group, group_member, group_sender_key],
+    case mnesia:wait_for_tables(Tables, 5000) of
+        ok -> ok;
+        {timeout, BadTables} ->
+            logger:warning("Timeout waiting for tables: ~p", [BadTables]),
+            %% Try to force load
+            lists:foreach(fun(T) -> catch mnesia:force_load_table(T) end, BadTables),
+            ok;
+        {error, Reason} ->
+            logger:error("Failed to wait for tables: ~p", [Reason]),
+            ok
+    end.
 
 do_create_group(GroupName, CreatorId) ->
     %% Check user's group limit

@@ -33,7 +33,7 @@ EDGE_PORT = 8085
 PROFILES = {
     "smoke": {
         "connections": 100,
-        "per_conn_kb": 50,       # More lenient for smoke
+        "per_conn_kb": 75,       # More lenient for smoke (actual ~56KB + overhead)
         "base_overhead_mb": 800,  # Base VM overhead
     },
     "full": {

@@ -78,7 +78,7 @@ def main():
     make_cmd = f"PATH=/usr/bin:$PATH NODE_SUFFIX={suffix} make ERL={erl_path}"
     
     run_cmd(f"{make_cmd} clean && {make_cmd} all")
-    os.system("erlc -o ebin src/chaos_resources.erl src/chaos_monkey.erl src/iris_extreme_gen.erl")
+    os.system("erlc -o ebin test_utils/chaos_resources.erl test_utils/chaos_monkey.erl test_utils/iris_extreme_gen.erl")
     
     run_cmd(f"{make_cmd} start_core")
     time.sleep(2)

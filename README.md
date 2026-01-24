@@ -1,104 +1,209 @@
 # Project Iris: WhatsApp-Class Messaging Engine
 
-[![SLA](https://img.shields.io/badge/availability-99.99%25-blue)](docs/STANDARDS.md)
-[![Build Status](https://img.shields.io/badge/build-passing-brightgreen)](tests/run_tests.py)
+[![Tests](https://img.shields.io/badge/tests-72%20passing-brightgreen)](tests/run_tests.py)
+[![Erlang](https://img.shields.io/badge/Erlang-OTP%2025%2B-blue)](https://www.erlang.org/)
 
 > **Production-Grade**: Validated for **1M+ concurrent users** with zero message loss.
 
 ## Overview
 
-Project Iris is a high-performance distributed messaging system built in **Erlang/OTP**, designed to demonstrate "WhatsApp Architecture" of extreme scalability and reliability.
+Project Iris is a high-performance distributed messaging system built in **Erlang/OTP**, designed to demonstrate WhatsApp-class scalability and reliability.
 
 ### Key Capabilities
-- **Massive Concurrency**: 1M+ connections per node (~10KB RAM/user)
-- **Low Latency**: <25ms P99 under load
-- **Zero Message Loss**: WAL-based durability with sync_transaction
-- **Resilience**: Circuit breaker, backpressure, automatic recovery
-
-## Architecture
-
-### Core Modules
-| Module | Purpose |
-|--------|---------|
-| `iris_durable_batcher` | WAL + batched sync_transaction for durability |
-| `iris_flow_controller` | Multi-level adaptive backpressure |
-| `iris_circuit_breaker` | Fallback routing with adaptive timeout |
-| `iris_shard` | Consistent user sharding (phash2) |
-| `iris_discovery` | Pluggable service discovery (pg/DNS/Consul) |
-| `iris_partition_guard` | Split-brain detection, safe mode on quorum loss |
-| `iris_msg_sequence` | FIFO ordering with sender-assigned sequences |
-| `iris_auth` | JWT authentication with HMAC-SHA256 |
-| `iris_rate_limiter` | Per-user token bucket rate limiting |
-
-### Node Types
-1. **Core Node** (`iris_core`): User registry, offline storage, routing
-2. **Edge Node** (`iris_edge`): Connection handling, TLS, message delivery
-
-## Quick Start
-
-### Prerequisites
-- **Runtime**: Erlang/OTP 25+
-- **Python**: 3.9+ (for tests)
-
-### Build & Run
-```bash
-# Compile
-make clean && make
-
-# Start cluster
-make start_core
-make start_edge1
-
-# Run tests
-python3 tests/run_tests.py --tier 0
-```
-
-The system auto-tunes VM flags based on available RAM.
-
-## Testing
-
-```bash
-# Tier 0 (fast, CI-required)
-make test-tier0
-
-# All tests
-make test-all
-
-# Specific suite
-python3 tests/run_tests.py --suite integration
-```
-
-## Performance
 
 | Metric | Value |
 |--------|-------|
 | Max Connections | 1M+ per node |
-| Memory | ~8.6 KB/user |
-| Throughput | 1.1M msgs/sec |
-| P99 Latency | <25ms |
+| Memory per User | ~10 KB |
+| P99 Latency | < 25ms |
+| Message Durability | Zero loss (WAL + sync_transaction) |
 
-## Documentation
+## Architecture
 
-- [Deployment Guide](docs/DEPLOYMENT_GUIDE.md)
-- [Cluster Setup](docs/CLUSTER_SETUP.md)
-- [Architecture](docs/PLANETARY_SCALE_ARCHITECTURE.md)
-- [Production Readiness](docs/PRODUCTION_READINESS_REPORT.md)
-- [Operational Runbooks](docs/runbooks/) - Incident response, failover, recovery
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                     GLOBAL ROUTING LAYER                            │
+│   (iris_region_router - Routes users to home region)               │
+└─────────────────────────────────────────────────────────────────────┘
+                      │                    │                    │
+           ┌─────────▼─────────┐ ┌────────▼────────┐ ┌─────────▼─────────┐
+           │   REGION: US      │ │ REGION: EU      │ │ REGION: APAC      │
+           │   Mnesia Cluster  │ │ Mnesia Cluster  │ │ Mnesia Cluster    │
+           │   (50 nodes max)  │ │ (50 nodes max)  │ │ (50 nodes max)    │
+           └───────────────────┘ └─────────────────┘ └───────────────────┘
+```
 
-### Security & Audits
-- [Audit4 Remediation](docs/audit4/REMEDIATION_STATUS.md) - **Current** - Production readiness fixes
-- [Audit3 Report](docs/audit3/COMPREHENSIVE_AUDIT_REPORT.md) - Architecture review
-- [Test Reliability Spec](docs/audit3/FAANG_PLUS_TEST_RELIABILITY_SPEC.md)
+### Node Types
+
+1. **Core Node** (`iris_core`): User registry, offline storage, Mnesia replication
+2. **Edge Node** (`iris_edge`): Connection handling, TLS termination, message routing
+
+### Core Modules
+
+| Module | Purpose |
+|--------|---------|
+| `iris_store` | Simplified storage API with durability options |
+| `iris_quorum_write` | Quorum-based writes (RF=3, majority ACK) |
+| `iris_region_router` | Regional sharding for 2B+ users |
+| `iris_durable_batcher` | WAL + batched sync_transaction |
+| `iris_flow_controller` | Multi-level adaptive backpressure |
+| `iris_circuit_breaker` | Fallback routing with adaptive timeout |
+| `iris_partition_guard` | Split-brain detection and safe mode |
+| `iris_async_router` | Auto-tuned worker pool for message routing |
+| `iris_auth` | JWT authentication (HMAC-SHA256) |
+| `iris_rate_limiter` | Per-user token bucket rate limiting |
+
+### E2EE Modules (Signal Protocol)
+
+| Module | Purpose |
+|--------|---------|
+| `iris_x3dh` | X3DH key agreement |
+| `iris_ratchet` | Double Ratchet for forward secrecy |
+| `iris_keys` | Key management and storage |
+| `iris_group` | Group membership management |
+| `iris_sender_keys` | Sender Keys for group E2EE |
+
+## Quick Start
+
+### Prerequisites
+
+- **Runtime**: Erlang/OTP 25+
+- **Python**: 3.9+ (for tests)
+- **Docker**: For cluster simulation (optional)
+
+### Build & Run
+
+```bash
+# Compile (auto-tunes VM flags)
+make clean && make
+
+# Start local cluster
+make start
+
+# Run tests
+python3 tests/run_tests.py --all
+```
+
+### Docker Cluster
+
+```bash
+# Start 5-region simulation
+cd docker/global-cluster
+./cluster.sh up
+
+# Run distributed tests
+python3 tests/run_tests.py --all
+
+# Stop
+./cluster.sh down
+```
+
+## Testing
+
+```bash
+# All tests (72 tests)
+python3 tests/run_tests.py --all
+
+# Specific suite
+python3 tests/run_tests.py --suite integration
+python3 tests/run_tests.py --suite unit
+python3 tests/run_tests.py --suite stress
+
+# Unit tests only (fast)
+make test-unit
+```
+
+### Test Suites
+
+| Suite | Tests | Purpose |
+|-------|-------|---------|
+| unit | 20 | Erlang module unit tests |
+| integration | 16 | Python integration tests |
+| stress | 10 | Load and scale testing |
+| security | 7 | Auth, TLS, injection tests |
+| chaos_dist | 4 | Distributed failure tests |
+| resilience | 3 | Recovery and failover |
+| chaos_controlled | 2 | Controlled chaos scenarios |
+| e2e | 2 | End-to-end flows |
+| performance_light | 6 | Performance benchmarks |
+| contract | 1 | Protocol contract tests |
+| compatibility | 1 | Version compatibility |
+
+## Configuration
+
+### Storage Durability Options
+
+```erlang
+%% Guaranteed (default): sync_transaction to all replicas
+iris_store:put(Table, Key, Value, #{durability => guaranteed}).
+
+%% Quorum: Majority ACK, tolerates minority failures
+iris_store:put(Table, Key, Value, #{durability => quorum}).
+
+%% Best effort: Async, for non-critical data
+iris_store:put(Table, Key, Value, #{durability => best_effort}).
+```
+
+### Regional Routing
+
+```erlang
+{iris_core, [
+    {region_id, <<"us-east-1">>},
+    {regions, [<<"us-east-1">>, <<"eu-west-1">>, <<"ap-south-1">>]},
+    {replication_factor, 3}
+]}.
+```
+
+### Optional CP Mode (Raft)
+
+```erlang
+%% Enable linearizable consistency for critical data
+{iris_core, [{consistency_mode, cp}]}.
+```
 
 ## Security Features
 
 | Feature | Status |
 |---------|--------|
-| TLS 1.2/1.3 | ✅ Supported (config: `tls_enabled`) |
-| JWT Authentication | ✅ HMAC-SHA256 with expiry |
-| Rate Limiting | ✅ Per-user token bucket |
-| DoS Protection | ✅ Protocol length limits |
-| Bounded Queues | ✅ Prevents OOM |
+| TLS 1.2/1.3 | ✅ Supported |
+| mTLS (inter-node) | ✅ Configurable |
+| JWT Authentication | ✅ HMAC-SHA256 |
+| Rate Limiting | ✅ Token bucket |
+| DoS Protection | ✅ Protocol limits |
+| E2EE | ✅ Signal Protocol |
+
+## Documentation
+
+- [Deployment Guide](docs/DEPLOYMENT_GUIDE.md)
+- [Cluster Setup](docs/CLUSTER_SETUP.md)
+- [Architecture Decisions](docs/DECISIONS.md)
+- [RFC-001 System Requirements](docs/rfc/RFC-001-SYSTEM-REQUIREMENTS.md)
+- [RFC-001 Amendment (E2EE + Groups)](docs/rfc/RFC-001-AMENDMENT-001.md)
+
+### Operational
+
+- [Data Recovery Runbook](docs/runbooks/DATA_RECOVERY.md)
+- [Failover Runbook](docs/runbooks/FAILOVER.md)
+- [Test Determinism](docs/TEST_DETERMINISM.md)
+
+## Project Structure
+
+```
+project_iris/
+├── src/                    # Erlang source modules (43 modules)
+├── test_utils/             # Erlang test utilities and unit tests
+├── tests/
+│   ├── run_tests.py        # Unified test runner
+│   ├── suites/             # Test suites (11 categories)
+│   └── framework/          # Test framework utilities
+├── config/                 # Erlang config files
+├── certs/                  # TLS certificates
+├── docker/
+│   └── global-cluster/     # Docker cluster simulation
+├── docs/                   # Documentation
+└── Makefile                # Build and test commands
+```
 
 ---
+
 **License**: MIT

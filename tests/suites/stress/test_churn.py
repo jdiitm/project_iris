@@ -140,7 +140,7 @@ def main():
     
     with ClusterManager(project_root=project_root) as cluster:
         # Recompile helper for load generation
-        subprocess.run("erlc -o ebin src/iris_extreme_gen.erl", shell=True, check=True)
+        subprocess.run("erlc -o ebin test_utils/iris_extreme_gen.erl", shell=True, check=True)
         
         # Verify edge is alive before starting
         if not verify_edge_alive():

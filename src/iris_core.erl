@@ -311,8 +311,27 @@ repair_failed_tables([Table | Rest]) ->
     repair_failed_tables(Rest).
 
 %% Completely destroy and recreate a corrupted table
+%% AUDIT FIX: Added safety gate to prevent accidental data loss
+%% Set {iris_core, [{allow_table_nuke, true}]} to enable (DANGEROUS)
 nuke_and_recreate_table(Table) ->
-    logger:warning("NUKING corrupted table: ~p", [Table]),
+    case application:get_env(iris_core, allow_table_nuke, false) of
+        true ->
+            logger:warning("NUKING corrupted table ~p (allow_table_nuke=true)", [Table]),
+            do_nuke_and_recreate(Table);
+        false ->
+            %% SAFE DEFAULT: Crash and alert operator instead of deleting data
+            logger:error("========================================"),
+            logger:error("CRITICAL: Table ~p corrupted!", [Table]),
+            logger:error("Manual intervention required."),
+            logger:error("Options:"),
+            logger:error("  1. Restore from backup (recommended)"),
+            logger:error("  2. Set allow_table_nuke=true and restart (DATA LOSS)"),
+            logger:error("========================================"),
+            exit({table_corrupted_manual_intervention, Table})
+    end.
+
+%% Internal: Actually perform the dangerous table nuke operation
+do_nuke_and_recreate(Table) ->
     %% Step 1: Delete from Mnesia (may fail if table is in bad state)
     catch mnesia:delete_table(Table),
     timer:sleep(500),
