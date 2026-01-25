@@ -317,14 +317,30 @@ def run_simplified_test():
 def restore_cluster_state():
     """Re-initialize cluster after test that restarts containers."""
     try:
+        # First ensure all core containers are running
+        log("[cleanup] Restoring cluster state after container restart...")
+        
+        cores = ["core-east-1", "core-east-2", "core-west-1", "core-west-2", "core-eu-1", "core-eu-2"]
+        for core in cores:
+            result = subprocess.run(
+                ["docker", "inspect", "--format", "{{.State.Status}}", core],
+                capture_output=True, text=True
+            )
+            if result.stdout.strip() in ["exited", "created"]:
+                log(f"[cleanup] Restarting stopped container: {core}")
+                subprocess.run(["docker", "start", core], capture_output=True)
+        
+        # Wait for containers to stabilize
+        time.sleep(10)
+        
+        # Run init script
         init_script = PROJECT_ROOT / "docker" / "global-cluster" / "init_cluster.sh"
         if init_script.exists():
-            log("[cleanup] Restoring cluster state after container restart...")
             subprocess.run(
                 ["bash", str(init_script)],
                 cwd=str(init_script.parent),
                 capture_output=True,
-                timeout=120
+                timeout=180  # Increased timeout
             )
             log("[cleanup] Cluster state restored")
     except Exception as e:
