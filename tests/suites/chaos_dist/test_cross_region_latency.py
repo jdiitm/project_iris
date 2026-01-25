@@ -117,14 +117,37 @@ def start_docker_cluster():
         # Wait for edges to come up
         for i in range(60):  # 60 seconds max
             if check_cluster_running():
-                print("[Docker] Cluster is ready!")
-                return True
+                print("[Docker] Cluster containers ready!")
+                break
             time.sleep(1)
             if i % 10 == 9:
                 print(f"[Docker] Still waiting... ({i+1}s)")
+        else:
+            print("[Docker] Timeout waiting for cluster containers")
+            return False
         
-        print("[Docker] Timeout waiting for cluster")
-        return False
+        # Initialize cross-region replication (calls init_cluster.sh)
+        init_script = os.path.join(DOCKER_COMPOSE_DIR, "init_cluster.sh")
+        if os.path.exists(init_script):
+            print("[Docker] Initializing cross-region replication...")
+            init_result = subprocess.run(
+                ["bash", init_script],
+                cwd=DOCKER_COMPOSE_DIR,
+                capture_output=True,
+                text=True,
+                timeout=300
+            )
+            if init_result.returncode != 0:
+                print(f"[Docker] Replication init returned non-zero: {init_result.returncode}")
+                # Log last few lines
+                for line in (init_result.stdout + init_result.stderr).strip().split('\n')[-5:]:
+                    print(f"  {line}")
+                # Continue anyway - test will detect if replication not working
+            else:
+                print("[Docker] Replication initialized successfully!")
+        
+        print("[Docker] Cluster is ready!")
+        return True
         
     except subprocess.TimeoutExpired:
         print("[Docker] Timeout starting cluster")
@@ -326,21 +349,21 @@ def main():
         auto_start = os.environ.get("IRIS_AUTO_START_DOCKER", "true").lower() == "true"
         
         if not auto_start:
-            print("\n[SKIP] Docker cluster not running and auto-start disabled")
+            print("\nSKIP:INFRA - Docker cluster not running and auto-start disabled")
             print("       Set IRIS_AUTO_START_DOCKER=true to auto-start")
             print("       Or manually run: make cluster-up")
-            sys.exit(0)  # Exit 0 = graceful skip
+            sys.exit(2)  # Exit 2 = skip
         
         if not check_docker_available():
-            print("\n[SKIP] Docker not available on this system")
+            print("\nSKIP:INFRA - Docker not available on this system")
             print("       This test requires the Docker global cluster")
             print("       See: docker/global-cluster/README.md")
-            sys.exit(0)  # Exit 0 = graceful skip
+            sys.exit(2)  # Exit 2 = skip
         
         if not start_docker_cluster():
-            print("\n[SKIP] Failed to start Docker cluster")
+            print("\nSKIP:INFRA - Failed to start Docker cluster")
             print("       Try running manually: cd docker/global-cluster && docker compose up -d")
-            sys.exit(0)  # Exit 0 = graceful skip
+            sys.exit(2)  # Exit 2 = skip
         
         cluster_started_by_us = True
     else:

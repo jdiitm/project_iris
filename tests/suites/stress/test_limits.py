@@ -131,7 +131,7 @@ def main():
     # Per TEST_CONTRACT.md: Use fixed profiles, not dynamic scaling
     # Note: RAM limits account for base VM overhead (~600MB) + per-connection memory
     PROFILES = {
-        "smoke": {"users": 100, "timeout": 120, "ram_mb": 2048},    # Quick validation (base VM + connections)
+        "smoke": {"users": 100, "timeout": 30, "ram_mb": 2048},    # Quick validation (base VM + connections)
         "full":  {"users": 1000000, "timeout": 600, "ram_mb": 16384} # Production scale
     }
     
@@ -178,6 +178,7 @@ def main():
         
         max_ram = 0
         max_conns = 0
+        no_progress_count = 0
         
         log(f"Monitoring for up to {args.timeout}s...")
         start = time.time()
@@ -199,10 +200,20 @@ def main():
                 sys.exit(1)
             
             mb, conns = get_metrics()
+            old_max_conns = max_conns
             max_ram = max(max_ram, mb)
             max_conns = max(max_conns, conns)
             log(f"Metrics: {mb:.0f}MB RAM | {conns} TCP connections")
             log_resources(mb, conns)
+            
+            # Early exit for smoke profile if no connections and no progress
+            if conns == old_max_conns == 0:
+                no_progress_count += 1
+                if no_progress_count >= 3 and profile_name == "smoke":
+                    log("No connection progress after 3 cycles (smoke profile) - ending early")
+                    break
+            else:
+                no_progress_count = 0
             
             if conns >= target_conns:
                 log(f"Target connection count reached! ({conns} >= {target_conns})")

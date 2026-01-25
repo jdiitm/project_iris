@@ -107,7 +107,13 @@ complete_login(User, TransportPid) ->
     
     %% PHASE 2: Sync to Core - SYNCHRONOUS for reliability
     CoreNode = get_core_node(),
-    rpc:call(CoreNode, iris_core, register_user, [User, node(), TransportPid], 5000),
+    case rpc:call(CoreNode, iris_core, register_user, [User, node(), TransportPid], 5000) of
+        ok -> ok;
+        {badrpc, Reason} -> 
+            logger:warning("Failed to register ~p on Core ~p: ~p", [User, CoreNode, Reason]);
+        {error, Reason} ->
+            logger:warning("Core registration error for ~p: ~p", [User, Reason])
+    end,
 
     %% PHASE 3: Retrieve offline messages SYNCHRONOUSLY (RFC FR-2 compliance)
     %% Messages MUST be delivered when recipient connects

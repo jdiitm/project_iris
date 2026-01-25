@@ -42,8 +42,12 @@ def test_message_ordering():
         sender = IrisClient(host, port)
         receiver = IrisClient(host, port)
         
-        sender.login("ordering_sender")
-        receiver.login("ordering_receiver")
+        # Use unique names to avoid stale offline messages from previous tests
+        run_id = int(time.time())
+        sender_name = f"ordering_sender_{run_id}"
+        receiver_name = f"ordering_receiver_{run_id}"
+        sender.login(sender_name)
+        receiver.login(receiver_name)
         
         print(f"✓ Connected sender and receiver to {host}:{port}")
         
@@ -53,7 +57,7 @@ def test_message_ordering():
         
         for i in range(num_messages):
             msg_content = f"msg_{i:03d}_{int(time.time() * 1000)}"
-            sender.send_msg("ordering_receiver", msg_content)
+            sender.send_msg(receiver_name, msg_content)
             sent_sequence.append(msg_content)
         
         print(f"✓ Sent {num_messages} messages in sequence")
@@ -129,16 +133,22 @@ def test_interleaved_conversations():
         receiver_b = IrisClient(host, port)
         receiver_c = IrisClient(host, port)
         
-        sender.login("interleave_sender")
-        receiver_b.login("interleave_b")
-        receiver_c.login("interleave_c")
+        # Use unique names to avoid stale offline messages
+        run_id = int(time.time())
+        sender_name = f"interleave_sender_{run_id}"
+        b_name = f"interleave_b_{run_id}"
+        c_name = f"interleave_c_{run_id}"
+        
+        sender.login(sender_name)
+        receiver_b.login(b_name)
+        receiver_c.login(c_name)
         
         print(f"✓ Connected 3 clients")
         
         # Interleave sends
         for i in range(5):
-            sender.send_msg("interleave_b", f"to_b_{i}")
-            sender.send_msg("interleave_c", f"to_c_{i}")
+            sender.send_msg(b_name, f"to_b_{i}")
+            sender.send_msg(c_name, f"to_c_{i}")
         
         print("✓ Sent 10 interleaved messages (5 to B, 5 to C)")
         

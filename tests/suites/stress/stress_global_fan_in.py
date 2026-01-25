@@ -16,22 +16,32 @@ if project_root not in sys.path:
 from tests.framework.cluster import ClusterManager, get_cluster
 
 # Per TEST_CONTRACT.md: Use fixed profiles, not dynamic scaling
+# Updated per PRINCIPAL_AUDIT_REPORT.md to support "Messi scenario" stress testing
 PROFILES = {
     "smoke": {
-        "vip_buckets": 50,
-        "regions": 2,
-        "senders_per_region": 10,
-        "normal_users": 1000,
+        "vip_buckets": 100,
+        "regions": 5,
+        "senders_per_region": 20,       # 5 x 20 = 100 senders
+        "normal_users": 2000,
         "duration": 30,
-        "batch_size": 5
+        "batch_size": 10
     },
     "full": {
-        "vip_buckets": 200,
+        "vip_buckets": 500,
         "regions": 5,
-        "senders_per_region": 50,
-        "normal_users": 20000,
-        "duration": 60,
-        "batch_size": 15
+        "senders_per_region": 2000,     # 5 x 2000 = 10,000 senders
+        "normal_users": 50000,
+        "duration": 120,
+        "batch_size": 50
+    },
+    # Extreme profile for Messi scenario (requires cloud deployment)
+    "extreme": {
+        "vip_buckets": 1000,
+        "regions": 5,
+        "senders_per_region": 200000,   # 5 x 200K = 1M senders
+        "normal_users": 100000,
+        "duration": 300,
+        "batch_size": 100
     }
 }
 

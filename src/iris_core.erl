@@ -126,20 +126,35 @@ init([]) ->
 %%%===================================================================
 
 register_user(User, Node, Pid) ->
-    %% Rationale: Transactional safety for global presence consistency.
-    F = fun() -> mnesia:write({presence, User, Node, Pid}) end,
-    case mnesia:transaction(F) of
-        {atomic, ok} -> ok;
-        {aborted, Reason} ->
-            logger:error("Failed to register user ~p: ~p", [User, Reason]),
-            {error, Reason}
+    %% PRINCIPAL_AUDIT_REPORT: Support both legacy Mnesia and new ETS-backed presence.
+    %% Set IRIS_PRESENCE_BACKEND=ets to use lockfree ETS (recommended for scale).
+    case application:get_env(iris_core, presence_backend, mnesia) of
+        ets ->
+            %% Lockfree ETS-backed presence (~1μs, no global lock)
+            iris_presence:register(User, Node, Pid);
+        mnesia ->
+            %% Legacy Mnesia-backed presence (global lock, ~1ms)
+            F = fun() -> mnesia:write({presence, User, Node, Pid}) end,
+            case mnesia:transaction(F) of
+                {atomic, ok} -> ok;
+                {aborted, Reason} ->
+                    logger:error("Failed to register user ~p: ~p", [User, Reason]),
+                    {error, Reason}
+            end
     end.
 
 lookup_user(User) ->
-    %% Rationale: Dirty reads are 10x faster and acceptable for "Online" status.
-    case mnesia:dirty_read(presence, User) of
-        [{presence, User, Node, Pid}] -> {ok, Node, Pid};
-        [] -> {error, not_found}
+    %% PRINCIPAL_AUDIT_REPORT: Support both backends for lookup.
+    case application:get_env(iris_core, presence_backend, mnesia) of
+        ets ->
+            %% Lockfree ETS lookup
+            iris_presence:lookup(User);
+        mnesia ->
+            %% Legacy Mnesia dirty_read (still fast, but requires Mnesia)
+            case mnesia:dirty_read(presence, User) of
+                [{presence, User, Node, Pid}] -> {ok, Node, Pid};
+                [] -> {error, not_found}
+            end
     end.
 
 store_offline(User, Msg) ->

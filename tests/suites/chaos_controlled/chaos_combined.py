@@ -41,11 +41,27 @@ from tests.framework.cluster import ClusterManager, get_cluster
 # ============================================================================
 
 PRESETS = {
+    "smoke": {
+        "user_count": 100,
+        "offline_workers": 10,
+        "duration": 15,
+        "ramp_time": 3,
+        "flood_time": 5,
+        "chaos_time": 5,
+        "recovery_time": 5,
+        "enable_network_chaos": False,
+        "enable_memory_stress": False,
+        "enable_cpu_stress": False,
+        "description": "Quick smoke test (100 users, ~18s)"
+    },
     "laptop": {
         "user_count": 50000,
         "offline_workers": 100,
         "duration": 60,
         "ramp_time": 15,
+        "flood_time": 30,
+        "chaos_time": 30,
+        "recovery_time": 30,
         "enable_network_chaos": False,
         "enable_memory_stress": False,
         "enable_cpu_stress": True,
@@ -56,6 +72,9 @@ PRESETS = {
         "offline_workers": 500,
         "duration": 180,
         "ramp_time": 30,
+        "flood_time": 60,
+        "chaos_time": 60,
+        "recovery_time": 30,
         "enable_network_chaos": False,
         "enable_memory_stress": False,
         "enable_cpu_stress": True,
@@ -66,6 +85,9 @@ PRESETS = {
         "offline_workers": 1000,
         "duration": 300,
         "ramp_time": 60,
+        "flood_time": 120,
+        "chaos_time": 120,
+        "recovery_time": 60,
         "enable_network_chaos": False,
         "enable_memory_stress": True,
         "enable_cpu_stress": True,
@@ -193,8 +215,12 @@ def stress_memory(edge_node, mb=2000):
 # ============================================================================
 
 def main():
+    # Select default mode based on TEST_PROFILE
+    test_profile = os.environ.get("TEST_PROFILE", "smoke")
+    default_mode = "smoke" if test_profile == "smoke" else "laptop"
+    
     parser = argparse.ArgumentParser(description='Combined Chaos Test Suite')
-    parser.add_argument('--mode', choices=['laptop', 'standard', 'extreme'], default='laptop',
+    parser.add_argument('--mode', choices=['smoke', 'laptop', 'standard', 'extreme'], default=default_mode,
                         help='Test intensity mode')
     parser.add_argument('--log', type=str, default=None, help='CSV log file for metrics')
     parser.add_argument('--skip-restart', action='store_true', help='Skip cluster restart')
@@ -239,7 +265,7 @@ def main():
             print_section("PHASE 2: OFFLINE FLOOD")
             flood_cmd = f"/usr/bin/erl +P 2000000 -setcookie iris_secret -sname flooder -hidden -noshell -pa ebin -eval \"iris_extreme_gen:start({config['offline_workers']}, {config['duration']}, offline_flood), timer:sleep(infinity).\""
             processes.append(run_cmd(flood_cmd, async_run=True))
-            monitor.monitor_loop(30, "FLOOD")
+            monitor.monitor_loop(config.get('flood_time', 30), "FLOOD")
             
             # Phase 3: Chaos
             print_section("PHASE 3: CHAOS UNLEASHED")
@@ -262,7 +288,7 @@ def main():
             log_experiment("process_killer", chaos_duration)
             
             # Run Chaos
-            monitor.monitor_loop(max(30, chaos_duration), "CHAOS")
+            monitor.monitor_loop(config.get('chaos_time', max(30, chaos_duration)), "CHAOS")
             
             # Phase 4: Recovery
             print_section("PHASE 4: RECOVERY")
@@ -270,7 +296,7 @@ def main():
             if config['enable_network_chaos']:
                 apply_network_chaos(False)
             stop_chaos_monkey(edge_node)
-            monitor.monitor_loop(30, "RECOVERY")
+            monitor.monitor_loop(config.get('recovery_time', 30), "RECOVERY")
             
             print_section("TEST COMPLETE")
             

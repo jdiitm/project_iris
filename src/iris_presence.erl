@@ -1,215 +1,291 @@
 -module(iris_presence).
 
 %% =============================================================================
-%% Versioned Presence Module (AUDIT FIX: Online/Offline Race Condition)
+%% ETS-Backed Regional Presence Manager
 %% =============================================================================
-%% 
-%% PROBLEM: User disconnects while sender looks up presence.
-%% 1. Sender queries presence → sees {online, Node, Pid}
-%% 2. User disconnects → presence deleted
-%% 3. Sender sends to Pid → process dead, message lost
+%% Per PRINCIPAL_AUDIT_REPORT.md Hard Stop #1:
+%% Replace mnesia:transaction for presence with lockfree ETS.
 %%
-%% SOLUTION: Add monotonic version number to presence entries.
-%% - Every presence update increments the version
-%% - Routing layer includes expected version when sending
-%% - If version mismatches, message is re-routed or stored offline
+%% Design:
+%% - Local writes to ETS (lockfree, ~1μs)
+%% - Async broadcast to other regions via gen_server:cast
+%% - Eventual consistency acceptable (user appears online within 1s)
+%% - Heartbeat-based expiration (users offline after 30s no heartbeat)
 %%
+%% This eliminates the global Mnesia lock bottleneck that limited
+%% the system to ~10,000 tx/sec.
 %% =============================================================================
 
--export([init_table/0]).
--export([register/3, unregister/1]).
--export([lookup/1, lookup_versioned/1]).
--export([route_to_online/3, route_to_online/4]).
--export([get_version/1]).
+-behaviour(gen_server).
 
-%% ETS table for version counters (lockfree)
--define(VERSION_ETS, iris_presence_versions).
+%% API
+-export([start_link/0]).
+-export([register/3, unregister/1, lookup/1, heartbeat/1]).
+-export([get_all_local/0, get_stats/0]).
+-export([broadcast_update/3, broadcast_removal/1]).
 
-%% Presence record with version
--record(presence_v2, {
-    user_id :: binary(),
+%% gen_server callbacks
+-export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
+
+-define(SERVER, ?MODULE).
+-define(ETS_TABLE, presence_local).
+-define(HEARTBEAT_INTERVAL_MS, 10000).  %% 10 seconds
+-define(EXPIRY_THRESHOLD_MS, 30000).    %% 30 seconds without heartbeat = offline
+-define(CLEANUP_INTERVAL_MS, 5000).     %% Cleanup check every 5 seconds
+-define(BROADCAST_GROUP, iris_presence_broadcast).
+
+-record(state, {
+    cleanup_timer :: reference() | undefined,
+    stats = #{} :: map()
+}).
+
+-record(presence_entry, {
+    user :: binary(),
     node :: node(),
     pid :: pid(),
-    version :: non_neg_integer(),
-    connected_at :: integer()
+    timestamp :: integer(),  %% erlang:system_time(millisecond)
+    last_heartbeat :: integer()
 }).
 
 %% =============================================================================
 %% API
 %% =============================================================================
 
-%% @doc Initialize Mnesia table for versioned presence
--spec init_table() -> ok | {error, term()}.
-init_table() ->
-    %% Create Mnesia table
-    Result = mnesia:create_table(presence_v2, [
-        {attributes, record_info(fields, presence_v2)},
-        {record_name, presence_v2},
-        {ram_copies, [node()]},  %% In-memory for speed
-        {type, set}
-    ]),
-    case Result of
-        {atomic, ok} -> ok;
-        {aborted, {already_exists, presence_v2}} -> ok;
-        {aborted, Reason} -> 
-            logger:error("Failed to create presence_v2 table: ~p", [Reason]),
-            ok  %% Continue anyway, table might exist on other node
-    end,
-    
-    %% Create ETS table for version counters
-    case ets:info(?VERSION_ETS) of
-        undefined ->
-            ets:new(?VERSION_ETS, [named_table, public, {write_concurrency, true}]);
-        _ -> ok
-    end,
-    ok.
+-spec start_link() -> {ok, pid()} | {error, term()}.
+start_link() ->
+    gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
 
-%% @doc Register user as online with versioned presence
--spec register(binary(), node(), pid()) -> {ok, non_neg_integer()} | {error, term()}.
-register(UserId, Node, Pid) when is_binary(UserId), is_pid(Pid) ->
-    %% Increment version (lockfree)
-    Version = ets:update_counter(?VERSION_ETS, UserId, 1, {UserId, 0}),
-    
-    Record = #presence_v2{
-        user_id = UserId,
+%% @doc Register a user's presence (lockfree ETS insert)
+%% This is the hot path - must be as fast as possible
+-spec register(binary(), node(), pid()) -> ok.
+register(User, Node, Pid) ->
+    Now = erlang:system_time(millisecond),
+    Entry = #presence_entry{
+        user = User,
         node = Node,
         pid = Pid,
-        version = Version,
-        connected_at = erlang:system_time(millisecond)
+        timestamp = Now,
+        last_heartbeat = Now
     },
-    
-    F = fun() -> mnesia:write(presence_v2, Record, write) end,
-    case mnesia:transaction(F) of
-        {atomic, ok} -> {ok, Version};
-        {aborted, Reason} -> {error, Reason}
-    end.
-
-%% @doc Unregister user (mark as offline)
--spec unregister(binary()) -> ok.
-unregister(UserId) when is_binary(UserId) ->
-    %% Increment version to invalidate any in-flight routing decisions
-    ets:update_counter(?VERSION_ETS, UserId, 1, {UserId, 0}),
-    
-    %% Delete presence entry
-    mnesia:dirty_delete(presence_v2, UserId),
+    %% Lockfree ETS insert - O(1), ~1μs
+    true = ets:insert(?ETS_TABLE, {User, Entry}),
+    %% Async broadcast to other nodes (fire-and-forget)
+    spawn(fun() -> broadcast_update(User, Node, Pid) end),
     ok.
 
-%% @doc Lookup user presence (simple, without version)
--spec lookup(binary()) -> {ok, node(), pid()} | {error, not_found}.
-lookup(UserId) ->
-    case mnesia:dirty_read(presence_v2, UserId) of
-        [#presence_v2{node = Node, pid = Pid}] -> {ok, Node, Pid};
-        [] -> {error, not_found}
-    end.
+%% @doc Unregister a user's presence
+-spec unregister(binary()) -> ok.
+unregister(User) ->
+    ets:delete(?ETS_TABLE, User),
+    spawn(fun() -> broadcast_removal(User) end),
+    ok.
 
-%% @doc Lookup user presence with version
--spec lookup_versioned(binary()) -> {ok, node(), pid(), non_neg_integer()} | {error, not_found}.
-lookup_versioned(UserId) ->
-    case mnesia:dirty_read(presence_v2, UserId) of
-        [#presence_v2{node = Node, pid = Pid, version = Version}] -> 
-            {ok, Node, Pid, Version};
-        [] -> 
+%% @doc Lookup a user's presence (lockfree ETS lookup)
+-spec lookup(binary()) -> {ok, node(), pid()} | {error, not_found | expired}.
+lookup(User) ->
+    case ets:lookup(?ETS_TABLE, User) of
+        [{User, Entry}] ->
+            %% Check if entry is expired
+            Now = erlang:system_time(millisecond),
+            Age = Now - Entry#presence_entry.last_heartbeat,
+            if
+                Age > ?EXPIRY_THRESHOLD_MS ->
+                    %% Entry expired - remove it
+                    ets:delete(?ETS_TABLE, User),
+                    {error, expired};
+                true ->
+                    {ok, Entry#presence_entry.node, Entry#presence_entry.pid}
+            end;
+        [] ->
             {error, not_found}
     end.
 
-%% @doc Get current version for a user (even if offline)
--spec get_version(binary()) -> non_neg_integer().
-get_version(UserId) ->
-    case ets:lookup(?VERSION_ETS, UserId) of
-        [{UserId, Version}] -> Version;
-        [] -> 0
-    end.
-
-%% @doc Route message to online user with version check
-%% Returns: ok | {ok, offline} | {error, version_mismatch}
--spec route_to_online(binary(), binary(), non_neg_integer()) -> 
-    ok | {ok, offline} | {error, term()}.
-route_to_online(UserId, Msg, ExpectedVersion) ->
-    route_to_online(UserId, Msg, ExpectedVersion, #{}).
-
--spec route_to_online(binary(), binary(), non_neg_integer(), map()) -> 
-    ok | {ok, offline} | {error, term()}.
-route_to_online(UserId, Msg, ExpectedVersion, Opts) ->
-    case lookup_versioned(UserId) of
-        {ok, Node, Pid, CurrentVersion} when CurrentVersion == ExpectedVersion ->
-            %% Version matches - safe to deliver
-            case Node == node() of
-                true ->
-                    %% Local delivery
-                    deliver_local(Pid, Msg);
-                false ->
-                    %% Remote delivery via RPC
-                    deliver_remote(Node, Pid, Msg)
-            end;
-        
-        {ok, _Node, _Pid, CurrentVersion} when CurrentVersion > ExpectedVersion ->
-            %% Version changed - presence was updated (user reconnected)
-            %% Re-route with new version
-            ReRoute = maps:get(auto_reroute, Opts, true),
-            case ReRoute of
-                true ->
-                    %% Recursive call with new version
-                    route_to_online(UserId, Msg, CurrentVersion, Opts);
-                false ->
-                    {error, version_mismatch}
-            end;
-        
-        {error, not_found} ->
-            %% User is offline - store for later delivery
-            store_offline_fallback(UserId, Msg)
-    end.
-
-%% =============================================================================
-%% Internal: Delivery
-%% =============================================================================
-
-deliver_local(Pid, Msg) ->
-    case is_process_alive(Pid) of
-        true ->
-            Pid ! {deliver_msg, Msg},
+%% @doc Update heartbeat timestamp for a user
+-spec heartbeat(binary()) -> ok | {error, not_found}.
+heartbeat(User) ->
+    Now = erlang:system_time(millisecond),
+    case ets:lookup(?ETS_TABLE, User) of
+        [{User, Entry}] ->
+            NewEntry = Entry#presence_entry{last_heartbeat = Now},
+            ets:insert(?ETS_TABLE, {User, NewEntry}),
             ok;
-        false ->
-            %% Process died between lookup and delivery
-            %% This is rare but possible - the version check should have caught it
-            {error, process_dead}
+        [] ->
+            {error, not_found}
     end.
 
-deliver_remote(Node, Pid, Msg) ->
-    %% Try to deliver via RPC
-    case rpc:call(Node, erlang, is_process_alive, [Pid], 2000) of
+%% @doc Get all local presence entries (for debugging/sync)
+-spec get_all_local() -> [{binary(), node(), pid()}].
+get_all_local() ->
+    ets:foldl(fun({User, Entry}, Acc) ->
+        [{User, Entry#presence_entry.node, Entry#presence_entry.pid} | Acc]
+    end, [], ?ETS_TABLE).
+
+%% @doc Get presence stats
+-spec get_stats() -> map().
+get_stats() ->
+    gen_server:call(?SERVER, get_stats).
+
+%% @doc Broadcast presence update to other nodes
+-spec broadcast_update(binary(), node(), pid()) -> ok.
+broadcast_update(User, Node, Pid) ->
+    %% Get all presence servers in the cluster
+    Members = get_broadcast_members(),
+    %% Cast to each (fire-and-forget, async)
+    lists:foreach(fun(Member) ->
+        gen_server:cast(Member, {presence_update, User, Node, Pid})
+    end, Members),
+    ok.
+
+%% @doc Broadcast presence removal to other nodes
+-spec broadcast_removal(binary()) -> ok.
+broadcast_removal(User) ->
+    Members = get_broadcast_members(),
+    lists:foreach(fun(Member) ->
+        gen_server:cast(Member, {presence_remove, User})
+    end, Members),
+    ok.
+
+%% =============================================================================
+%% gen_server callbacks
+%% =============================================================================
+
+init([]) ->
+    %% Create public ETS table for lockfree access
+    %% - public: any process can read/write
+    %% - set: key-value with unique keys
+    %% - {write_concurrency, true}: optimized for concurrent writes
+    %% - {read_concurrency, true}: optimized for concurrent reads
+    ?ETS_TABLE = ets:new(?ETS_TABLE, [
+        named_table,
+        public,
+        set,
+        {keypos, 1},
+        {write_concurrency, true},
+        {read_concurrency, true}
+    ]),
+    
+    %% Join broadcast group for cross-node updates
+    ok = join_broadcast_group(),
+    
+    %% Start cleanup timer
+    TimerRef = erlang:send_after(?CLEANUP_INTERVAL_MS, self(), cleanup_expired),
+    
+    logger:info("iris_presence started with ETS-backed lockfree presence"),
+    
+    {ok, #state{
+        cleanup_timer = TimerRef,
+        stats = #{
+            registers => 0,
+            unregisters => 0,
+            lookups => 0,
+            expirations => 0,
+            broadcasts_sent => 0,
+            broadcasts_received => 0
+        }
+    }}.
+
+handle_call(get_stats, _From, State) ->
+    %% Add current table size to stats
+    TableSize = ets:info(?ETS_TABLE, size),
+    Stats = maps:merge(State#state.stats, #{table_size => TableSize}),
+    {reply, Stats, State};
+
+handle_call(_Request, _From, State) ->
+    {reply, ok, State}.
+
+handle_cast({presence_update, User, Node, Pid}, State) ->
+    %% Received broadcast from another node - update local ETS
+    Now = erlang:system_time(millisecond),
+    Entry = #presence_entry{
+        user = User,
+        node = Node,
+        pid = Pid,
+        timestamp = Now,
+        last_heartbeat = Now
+    },
+    ets:insert(?ETS_TABLE, {User, Entry}),
+    
+    %% Update stats
+    NewStats = maps:update_with(broadcasts_received, fun(V) -> V + 1 end, 1, State#state.stats),
+    {noreply, State#state{stats = NewStats}};
+
+handle_cast({presence_remove, User}, State) ->
+    %% Received removal broadcast from another node
+    ets:delete(?ETS_TABLE, User),
+    NewStats = maps:update_with(broadcasts_received, fun(V) -> V + 1 end, 1, State#state.stats),
+    {noreply, State#state{stats = NewStats}};
+
+handle_cast(_Msg, State) ->
+    {noreply, State}.
+
+handle_info(cleanup_expired, State) ->
+    %% Periodic cleanup of expired entries
+    Now = erlang:system_time(millisecond),
+    Threshold = Now - ?EXPIRY_THRESHOLD_MS,
+    
+    %% Find and delete expired entries
+    Expired = ets:foldl(fun({User, Entry}, Acc) ->
+        if
+            Entry#presence_entry.last_heartbeat < Threshold ->
+                [User | Acc];
+            true ->
+                Acc
+        end
+    end, [], ?ETS_TABLE),
+    
+    %% Delete expired entries
+    lists:foreach(fun(User) ->
+        ets:delete(?ETS_TABLE, User)
+    end, Expired),
+    
+    %% Update stats
+    ExpiredCount = length(Expired),
+    NewStats = if
+        ExpiredCount > 0 ->
+            maps:update_with(expirations, fun(V) -> V + ExpiredCount end, ExpiredCount, State#state.stats);
         true ->
-            %% Process is alive - send
-            Pid ! {deliver_msg, Msg},
-            ok;
-        false ->
-            {error, process_dead};
-        {badrpc, Reason} ->
-            {error, {rpc_failed, Reason}}
-    end.
+            State#state.stats
+    end,
+    
+    if
+        ExpiredCount > 0 ->
+            logger:debug("Cleaned up ~p expired presence entries", [ExpiredCount]);
+        true ->
+            ok
+    end,
+    
+    %% Reschedule cleanup
+    TimerRef = erlang:send_after(?CLEANUP_INTERVAL_MS, self(), cleanup_expired),
+    
+    {noreply, State#state{cleanup_timer = TimerRef, stats = NewStats}};
+
+handle_info(_Info, State) ->
+    {noreply, State}.
+
+terminate(_Reason, State) ->
+    %% Cancel cleanup timer
+    case State#state.cleanup_timer of
+        undefined -> ok;
+        Ref -> erlang:cancel_timer(Ref)
+    end,
+    ok.
 
 %% =============================================================================
-%% Internal: Offline Fallback
+%% Internal Functions
 %% =============================================================================
 
-store_offline_fallback(UserId, Msg) ->
-    %% Use iris_core's offline storage
-    case whereis(iris_core) of
-        undefined ->
-            %% Core not running, try iris_store directly
-            try
-                iris_store:put(offline_msg, 
-                    {UserId, erlang:system_time(microsecond)}, 
-                    Msg, 
-                    #{durability => guaranteed}),
-                {ok, offline}
-            catch
-                _:_ -> {error, storage_unavailable}
-            end;
-        _ ->
-            try
-                iris_core:store_offline_durable(UserId, Msg),
-                {ok, offline}
-            catch
-                _:_ -> {error, storage_unavailable}
-            end
-    end.
+join_broadcast_group() ->
+    %% Use pg for cross-node group membership
+    %% This allows us to find all presence servers in the cluster
+    case pg:start_link(?BROADCAST_GROUP) of
+        {ok, _} -> ok;
+        {error, {already_started, _}} -> ok
+    end,
+    pg:join(?BROADCAST_GROUP, presence_servers, self()),
+    ok.
+
+get_broadcast_members() ->
+    %% Get all presence servers except self
+    Self = self(),
+    Members = pg:get_members(?BROADCAST_GROUP, presence_servers),
+    [M || M <- Members, M =/= Self].
