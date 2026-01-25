@@ -313,11 +313,19 @@ def run_offline_verify(args):
 # ============================================================================
 
 def main():
+    # Profile-based defaults
+    profile_name = os.environ.get("TEST_PROFILE", "smoke")
+    profile_defaults = {
+        "smoke": {"users": 100, "duration": 20},
+        "full": {"users": 50000, "duration": 120},
+    }
+    defaults = profile_defaults.get(profile_name, profile_defaults["smoke"])
+    
     parser = argparse.ArgumentParser(description='Combined Resilience Test Suite')
     parser.add_argument('--mode', choices=['split', 'oom', 'disk', 'backpressure', 'offline'],
                         default='oom', help='Test mode')
-    parser.add_argument('--users', type=int, default=50000, help='User/connection count')
-    parser.add_argument('--duration', type=int, default=120, help='Test duration (seconds)')
+    parser.add_argument('--users', type=int, default=defaults["users"], help='User/connection count')
+    parser.add_argument('--duration', type=int, default=defaults["duration"], help='Test duration (seconds)')
     args = parser.parse_args()
     
     # Ensure CWD is project root or scripts work

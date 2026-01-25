@@ -15,13 +15,33 @@ if project_root not in sys.path:
 
 from tests.framework.cluster import ClusterManager, get_cluster
 
+# Test profiles
+TEST_PROFILE = os.environ.get("TEST_PROFILE", "smoke")
+PROFILES = {
+    "smoke": {
+        "users_per_region": 50,
+        "duration": 10,
+        "batch_size": 10,
+    },
+    "full": {
+        "users_per_region": 100000,
+        "duration": 60,
+        "batch_size": 100,
+    }
+}
+if TEST_PROFILE not in PROFILES:
+    print(f"ERROR: Unknown profile '{TEST_PROFILE}'. Available: {list(PROFILES.keys())}")
+    sys.exit(1)
+
+CONFIG = PROFILES[TEST_PROFILE]
+
 # Configuration
 # Two Regions: Region 1 (Producers), Region 2 (Consumers for Inter-Region)
 # For Intra-Region: Region 1 -> Region 1
 NUM_REGIONS = 2
-USERS_PER_REGION = 100000 # Increased to 100,000 (Total 200,000)
-DURATION = 60 # Increased duration
-BATCH_SIZE = 100
+USERS_PER_REGION = CONFIG['users_per_region']
+DURATION = CONFIG['duration']
+BATCH_SIZE = CONFIG['batch_size']
 
 # Stats
 stats_lock = threading.Lock()

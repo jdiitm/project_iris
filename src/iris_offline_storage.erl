@@ -2,6 +2,8 @@
 -export([store/3, store_batch/3, retrieve/2]).
 -export([store_sync/3]).  %% Direct sync_transaction mode (for critical paths)
 -export([store_durable/3]).  %% AUDIT FIX: Guaranteed durable - ACK only after persistence
+%% PRINCIPAL_AUDIT_REPORT: Lockfree cursor-based retrieval (Hard Stop #2)
+-export([retrieve_cursor/3, delete_confirmed/4, retrieve_lockfree/2, delete_all_async/2]).
 
 %% Mnesia table definition (created in iris_core:init_db/0):
 %% {offline_msg, User, Timestamp, Msg}
@@ -131,6 +133,81 @@ retrieve(User, Count) ->
             logger:error("Error retrieving offline msgs: ~p", [Error]),
             []
     end.
+
+%% =============================================================================
+%% Cursor-Based Retrieval (Per PRINCIPAL_AUDIT_REPORT Hard Stop #2)
+%% =============================================================================
+%% This provides lockfree retrieval using dirty reads.
+%% Messages are deleted async AFTER delivery is confirmed.
+%% Usage pattern:
+%%   {Msgs, Cursor} = retrieve_cursor(User, Count, 0),
+%%   ... deliver Msgs to client ...
+%%   ... on ACK: delete_cursor(User, Count, 0, Cursor) ...
+%% =============================================================================
+
+%% @doc Retrieve a batch of messages without global lock (dirty read)
+%% Returns {Messages, NextCursor} where NextCursor is used for pagination.
+%% Messages are NOT deleted - caller must confirm delivery then call delete_confirmed/3.
+-spec retrieve_cursor(binary(), integer(), integer()) -> {list(), integer()}.
+retrieve_cursor(User, Count, Cursor) ->
+    %% Calculate batch range (e.g., buckets Cursor to Cursor+BatchSize)
+    BatchSize = min(10, Count - Cursor),  %% Max 10 buckets per batch
+    EndCursor = Cursor + BatchSize,
+    
+    %% Dirty read (lockfree) from buckets
+    Msgs = lists:flatmap(fun(ID) ->
+        Key = {User, ID},
+        case mnesia:dirty_read(offline_msg, Key) of
+            [] -> [];
+            Records -> [Msg || {_, _, _, Msg} <- Records]
+        end
+    end, lists:seq(Cursor, EndCursor - 1)),
+    
+    NextCursor = if
+        EndCursor >= Count -> done;
+        true -> EndCursor
+    end,
+    
+    {Msgs, NextCursor}.
+
+%% @doc Delete messages after delivery is confirmed (async, fire-and-forget)
+%% Call this AFTER client ACKs receipt of messages from retrieve_cursor.
+-spec delete_confirmed(binary(), integer(), integer(), integer()) -> ok.
+delete_confirmed(User, _Count, FromCursor, ToCursor) ->
+    %% Spawn async delete to not block the caller
+    spawn(fun() ->
+        lists:foreach(fun(ID) ->
+            Key = {User, ID},
+            mnesia:dirty_delete(offline_msg, Key)
+        end, lists:seq(FromCursor, ToCursor - 1))
+    end),
+    ok.
+
+%% @doc Retrieve all messages using lockfree cursor-based approach
+%% This is a convenience wrapper that retrieves everything without holding locks.
+-spec retrieve_lockfree(binary(), integer()) -> list().
+retrieve_lockfree(User, Count) ->
+    %% Collect all messages using dirty reads
+    AllMsgs = lists:flatmap(fun(ID) ->
+        Key = {User, ID},
+        case mnesia:dirty_read(offline_msg, Key) of
+            [] -> [];
+            Records -> Records
+        end
+    end, lists:seq(0, Count - 1)),
+    
+    %% Sort and extract (don't delete - let caller confirm first)
+    sort_and_extract(AllMsgs).
+
+%% @doc Delete all offline messages for a user (async, for cleanup)
+-spec delete_all_async(binary(), integer()) -> ok.
+delete_all_async(User, Count) ->
+    spawn(fun() ->
+        lists:foreach(fun(ID) ->
+            mnesia:dirty_delete(offline_msg, {User, ID})
+        end, lists:seq(0, Count - 1))
+    end),
+    ok.
 
 sort_and_extract(Records) ->
     Sorted = lists:sort(fun({_, _, Ts1, _}, {_, _, Ts2, _}) -> Ts1 =< Ts2 end, Records),

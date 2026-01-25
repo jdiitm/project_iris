@@ -331,8 +331,8 @@ def test_multimaster_durability():
     current_phase = TestPhase.INIT
     
     if not check_docker_available():
-        log("Docker not available - skipping")
-        return None
+        print("SKIP:INFRA - Docker not available")
+        sys.exit(2)
     
     # Check if core containers are running, try to start if not
     primary_running = check_container_running(PRIMARY_CORE)
@@ -346,22 +346,22 @@ def test_multimaster_durability():
         
         if not auto_start:
             log("Auto-start disabled (set IRIS_AUTO_START_DOCKER=true to enable)")
-            log("Start cluster with: make cluster-up")
-            return None
+            print("SKIP:INFRA - Cluster not running and auto-start disabled. Start with: make cluster-up")
+            sys.exit(2)
         
         log("Attempting to start Docker cluster...")
         if not start_docker_cluster():
-            log("Failed to start Docker cluster")
-            return None
+            print("SKIP:INFRA - Failed to start Docker cluster")
+            sys.exit(2)
         
         # Re-check after starting
         if not check_container_running(PRIMARY_CORE):
-            log(f"Primary core {PRIMARY_CORE} still not running after cluster start")
-            return None
+            print(f"SKIP:INFRA - Primary core {PRIMARY_CORE} still not running after cluster start")
+            sys.exit(2)
         
         if not check_container_running(SECONDARY_CORE):
-            log(f"Secondary core {SECONDARY_CORE} still not running after cluster start")
-            return None
+            print(f"SKIP:INFRA - Secondary core {SECONDARY_CORE} still not running after cluster start")
+            sys.exit(2)
     
     # Generate unique test identifiers
     test_id = generate_unique_id()
@@ -381,15 +381,15 @@ def test_multimaster_durability():
     try:
         sock = connect(SERVER_HOST, PRIMARY_EDGE_PORT)
     except Exception as e:
-        log(f"Failed to connect: {e}")
-        return None
+        print(f"FAIL - Failed to connect to primary edge: {e}")
+        sys.exit(1)
     
     log(f"Logging in as {sender}")
     success, response = login(sock, sender)
     if not success:
-        log(f"Login failed: {response}")
+        print(f"FAIL - Login failed: {response}")
         sock.close()
-        return None
+        sys.exit(1)
     
     log(f"Sending message to offline receiver: {receiver}")
     ack_received, response = send_message(sock, receiver, test_message)

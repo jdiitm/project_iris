@@ -7,9 +7,17 @@ import sys
 # --- Configuration ---
 CORE_NODE = "iris_core"
 EDGE_NODE = "iris_edge1"
-USER_COUNT = 1000000  # 1 MILLION USERS
-OFFLINE_WORKERS = 1000 # Increased for larger scale
-DURATION = 300       # 5 Minutes
+
+# Profile-based configuration
+TEST_PROFILE = os.environ.get("TEST_PROFILE", "smoke")
+PROFILES = {
+    "smoke": {"user_count": 100, "offline_workers": 10, "duration": 15},
+    "full": {"user_count": 1000000, "offline_workers": 1000, "duration": 300},
+}
+_config = PROFILES.get(TEST_PROFILE, PROFILES["smoke"])
+USER_COUNT = _config["user_count"]
+OFFLINE_WORKERS = _config["offline_workers"]
+DURATION = _config["duration"]
 
 def get_node_name(short_name):
     hostname = subprocess.check_output("hostname -s", shell=True).decode().strip()
@@ -64,14 +72,19 @@ def monitor_system(duration, tag):
         except: pass
 
 def main():
-    print_section("PROJECT IRIS: ULTIMATE CHAOS (1M USERS)")
-    print(f"Target: {USER_COUNT} Users | 3-Step Verification | PID Corruption")
+    # Profile-based timing
+    ramp_time = 5 if TEST_PROFILE == "smoke" else 60
+    flood_time = 5 if TEST_PROFILE == "smoke" else 30
+    chaos_time = 5 if TEST_PROFILE == "smoke" else 120
+    recovery_time = 5 if TEST_PROFILE == "smoke" else 30
+    
+    print_section(f"PROJECT IRIS: ULTIMATE CHAOS ({USER_COUNT} USERS)")
+    print(f"Target: {USER_COUNT} Users | Profile: {TEST_PROFILE}")
     
     # 0. Prep
     setup_ip_aliases()
     os.system("make stop >/dev/null 2>&1; killall beam.smp >/dev/null 2>&1")
     
-    # Ensure we use the correct Erlang
     # Ensure we use the correct Erlang
     erl_path = "/usr/bin/erl" if os.path.exists("/usr/bin/erl") else "erl"
     suffix = os.environ.get("IRIS_NODE_SUFFIX", "")
@@ -82,27 +95,23 @@ def main():
     
     run_cmd(f"{make_cmd} start_core")
     time.sleep(2)
-    # Start Edge with Higher limits explicitly just in case makefile doesn't catch it
-    # But makefile has +P 2000000 so we are good.
     run_cmd(f"{make_cmd} start_edge1")
-    time.sleep(5)
+    time.sleep(3 if TEST_PROFILE == "smoke" else 5)
     
     # 1. Ramp Up (The Million March)
-    print_section("PHASE 1: THE MILLION MARCH (Ramp Up)")
-    # We use 'normal' mode first to establish baseline
-    load_cmd = f"/usr/bin/erl +P 2000000 -sname loader -hidden -noshell -pa ebin -eval \"iris_extreme_gen:start({USER_COUNT}, {DURATION+300}, normal), timer:sleep(infinity).\""
+    print_section("PHASE 1: RAMP UP")
+    load_cmd = f"/usr/bin/erl +P 2000000 -sname loader -hidden -noshell -pa ebin -eval \"iris_extreme_gen:start({USER_COUNT}, {DURATION+60}, normal), timer:sleep(infinity).\""
     p_load = run_cmd(load_cmd, async_run=True)
     
-    print("Allowing 60s for ramp up...")
-    monitor_system(60, "RAMP-UP")
+    print(f"Allowing {ramp_time}s for ramp up...")
+    monitor_system(ramp_time, "RAMP-UP")
     
     # 2. Disk Crusher (Offline Flood)
     print_section("PHASE 2: DISK CRUSHER (Mnesia Stress)")
-    # Flood offline messages to random users (forcing disk writes)
     flood_cmd = f"/usr/bin/erl +P 2000000 -sname flooder -hidden -noshell -pa ebin -eval \"iris_extreme_gen:start({OFFLINE_WORKERS}, {DURATION}, offline_flood), timer:sleep(infinity).\""
     p_flood = run_cmd(flood_cmd, async_run=True)
     
-    monitor_system(30, "FLOODING")
+    monitor_system(flood_time, "FLOODING")
     
     # 3. Protocol & PID Corruption
     print_section("PHASE 3: PROTOCOL CORRUPTION")
@@ -115,13 +124,13 @@ def main():
     print("[CHAOS] Starting Sniper (Kill Router)...")
     run_cmd(f"erl -sname monkey_sniper -hidden -noshell -pa ebin -eval \"rpc:call('{EDGE_FULL}', chaos_monkey, kill_system, [5000, [iris_router, iris_router_worker]]), init:stop().\"")
 
-    print(f"Holding Load for {120} seconds...")
-    monitor_system(120, "CHAOS-HOLD")
+    print(f"Holding Load for {chaos_time}s...")
+    monitor_system(chaos_time, "CHAOS-HOLD")
     
     # recovery
     print_section("PHASE 4: RECOVERY")
     run_cmd(f"erl -sname monkey_stop -hidden -noshell -pa ebin -eval \"rpc:call('{EDGE_FULL}', chaos_monkey, stop, []), init:stop().\"")
-    monitor_system(30, "RECOVERY")
+    monitor_system(recovery_time, "RECOVERY")
     
     print_section("TEST COMPLETE")
     p_load.kill()

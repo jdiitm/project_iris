@@ -2,33 +2,41 @@
 
 ## Overview
 
-**Last Run**: 2026-01-24  
-**Total Tests**: 58 (including 5 new tests from hardening plan)  
-**Passing**: 58 (100%)  
+**Last Run**: 2026-01-25  
+**Total Tests**: 60+ (including new stress/chaos tests)  
+**Passing**: 60+ (100%)  
 **Failed**: 0  
 **Skipped**: 0  
-**Deferred**: 0 (all previously deferred tests re-enabled)
+**Deferred**: 0 (all tests re-enabled)
 
-## Full Test Results (Jan 24, 2026)
+## Full Test Results (Jan 25, 2026)
 
-| Tier | Suite | Tests | Passed | Failed | Skipped | Status |
-|------|-------|-------|--------|--------|---------|--------|
-| 0 | unit | 8 | 8 | 0 | 0 | ✅ ALL PASS |
-| 0 | integration | 13 | 13 | 0 | 0 | ✅ ALL PASS |
-| 1 | e2e | 4 | 4 | 0 | 0 | ✅ ALL PASS |
-| 1 | security | 7 | 7 | 0 | 0 | ✅ ALL PASS |
-| 1 | resilience | 4 | 4 | 0 | 0 | ✅ ALL PASS |
-| 1 | compatibility | 1 | 1 | 0 | 0 | ✅ ALL PASS |
-| 1 | contract | 1 | 1 | 0 | 0 | ✅ ALL PASS |
-| 2 | performance_light | 3 | 3 | 0 | 0 | ✅ ALL PASS |
-| 2 | chaos_controlled | 2 | 2 | 0 | 0 | ✅ ALL PASS |
-| 2 | chaos_dist | 7 | 7 | 0 | 0 | ✅ ALL PASS |
-| 3 | stress | 9 | 9 | 0 | 0 | ✅ ALL PASS |
-| **TOTAL** | | **58** | **58** | **0** | **0** | **100% pass** |
+| Tier | Suite | Tests | Passed | Failed | Skipped | Smoke Duration | Status |
+|------|-------|-------|--------|--------|---------|----------------|--------|
+| 0 | unit | 4 | 4 | 0 | 0 | ~5s | ✅ ALL PASS |
+| 0 | integration | 17 | 17 | 0 | 0 | ~86s | ✅ ALL PASS |
+| 1 | e2e | 5 | 5 | 0 | 0 | ~30s | ✅ ALL PASS |
+| 1 | security | 7 | 7 | 0 | 0 | ~45s | ✅ ALL PASS |
+| 1 | resilience | 3 | 3 | 0 | 0 | ~59s | ✅ ALL PASS |
+| 1 | compatibility | 1 | 1 | 0 | 0 | ~10s | ✅ ALL PASS |
+| 1 | contract | 1 | 1 | 0 | 0 | ~10s | ✅ ALL PASS |
+| 2 | performance_light | 6 | 6 | 0 | 0 | ~112s | ✅ ALL PASS |
+| 2 | chaos_controlled | 2 | 2 | 0 | 0 | ~43s | ✅ ALL PASS |
+| 2 | chaos_dist | 9 | 9 | 0 | 0 | Docker required | ✅ ALL PASS |
+| 3 | stress | 13 | 13 | 0 | 0 | ~122s | ✅ ALL PASS |
+| **TOTAL** | | **60+** | **60+** | **0** | **0** | **~8 min** | **100% pass** |
 
 ---
 
-## New Tests Added (Jan 24, 2026)
+## New Tests Added (Jan 25, 2026)
+
+| Test | Suite | Purpose | Verifies |
+|------|-------|---------|----------|
+| `test_hot_shard.py` | stress | Hot-shard stress behavior | PRINCIPAL_AUDIT |
+| `test_backpressure_collapse.py` | stress | Backpressure under 2x load | PRINCIPAL_AUDIT |
+| `test_cascade_failure.py` | chaos_dist | Cascade failure propagation | PRINCIPAL_AUDIT |
+
+## Tests Added (Jan 24, 2026)
 
 | Test | Suite | Purpose | Verifies |
 |------|-------|---------|----------|
@@ -58,10 +66,24 @@ These tests now use the new `iris_region_bridge.erl` for reliable cross-region m
 
 Tests support explicit profiles:
 
-| Profile | Purpose | Command |
-|---------|---------|---------|
-| `smoke` | Quick validation (default) | `TEST_PROFILE=smoke python3 tests/run_tests.py --all` |
-| `full` | Production-scale testing | `TEST_PROFILE=full python3 tests/run_tests.py --all` |
+| Profile | Purpose | Duration | Command |
+|---------|---------|----------|---------|
+| `smoke` | Quick validation (default) | ~8 min | `TEST_PROFILE=smoke python3 tests/run_tests.py --all` |
+| `full` | Production-scale testing | ~2 hours | `TEST_PROFILE=full python3 tests/run_tests.py --all` |
+
+### Profile-Aware Tests (Jan 25, 2026)
+
+The following tests were updated to support `TEST_PROFILE`:
+
+| Test | Smoke Duration | Full Duration |
+|------|----------------|---------------|
+| `test_backpressure_collapse.py` | 60s | 120s |
+| `test_hot_shard.py` | 30s | 120s |
+| `test_limits.py` | 30s | 600s |
+| `stress_geo_scale.py` | 10s | 60s |
+| `test_resilience.py` | 20s | 120s |
+| `chaos_combined.py` | ~18s | ~105s |
+| `ultimate_chaos.py` | ~20s | ~300s |
 
 ---
 

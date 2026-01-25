@@ -1,17 +1,21 @@
 # Test Invariants Documentation
 
+**Last Updated**: 2026-01-25
+
 This document defines the critical system invariants that MUST be validated by the test suite. Every invariant has an associated test that MUST pass before release.
 
 ## Overview
 
-| Invariant | RFC Reference | Test Location | Severity |
-|-----------|---------------|---------------|----------|
-| Message Ordering | FR-5 | `integration/test_ordering.py` | Critical |
-| Delivery Guarantee | Section 5.1 | `chaos_dist/test_ack_durability.py` | Critical |
-| Idempotency | Section 5.1 | `integration/test_deduplication.py` | Critical |
-| Durability | NFR-6, NFR-8 | `chaos_dist/test_multimaster_durability.py` | Critical |
-| Offline/Online | FR-2 | `integration/test_offline_storage.py` | High |
-| Clock Skew | NFR-4 | `resilience/test_clock_skew.py` | Medium |
+| Invariant | RFC Reference | Test Location | Severity | Status |
+|-----------|---------------|---------------|----------|--------|
+| Message Ordering | FR-5 | `integration/test_message_ordering.py` | Critical | ✅ |
+| Delivery Guarantee | Section 5.1 | `chaos_dist/test_ack_durability.py` | Critical | ✅ |
+| Idempotency | Section 5.1 | `integration/test_deduplication.py` | Critical | ✅ |
+| Durability | NFR-6, NFR-8 | `chaos_dist/test_multimaster_durability.py` | Critical | ✅ |
+| Offline/Online | FR-2 | `integration/test_offline_storage.py` | High | ✅ |
+| Clock Skew | NFR-4 | `resilience/test_clock_skew.py` | Medium | ✅ |
+| Backpressure | PRINCIPAL_AUDIT | `stress/test_backpressure_collapse.py` | High | ✅ NEW |
+| Hot-Shard | PRINCIPAL_AUDIT | `stress/test_hot_shard.py` | High | ✅ NEW |
 
 ---
 

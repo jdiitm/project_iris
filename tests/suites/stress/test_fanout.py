@@ -47,15 +47,16 @@ SERVER_PORT = int(os.environ.get("IRIS_PORT", "8085"))
 TIMEOUT = 10
 
 # Per TEST_CONTRACT.md: Use fixed profiles, not dynamic scaling
+# Updated per PRINCIPAL_AUDIT_REPORT.md to support broadcast fairness testing
 TEST_PROFILE = os.environ.get("TEST_PROFILE", "smoke")
 
 PROFILE_THRESHOLDS = {
     "smoke": {
         "timeout_multiplier": 3.0,
-        "small": {"recipients": 5, "rate": 50, "max_latency_ms": 200},
-        "medium": {"recipients": 20, "rate": 200, "max_latency_ms": 400},
-        "large": {"recipients": 50, "rate": 500, "max_latency_ms": 1000},
-        "burst": {"recipients": 20, "rate": 1000, "max_latency_ms": 1000, "max_loss": 0.01},
+        "small": {"recipients": 10, "rate": 100, "max_latency_ms": 200},
+        "medium": {"recipients": 50, "rate": 500, "max_latency_ms": 400},
+        "large": {"recipients": 100, "rate": 1000, "max_latency_ms": 1000},
+        "burst": {"recipients": 50, "rate": 2000, "max_latency_ms": 1000, "max_loss": 0.01},
     },
     "full": {
         "timeout_multiplier": 1.0,
@@ -63,6 +64,14 @@ PROFILE_THRESHOLDS = {
         "medium": {"recipients": 100, "rate": 1000, "max_latency_ms": 200},
         "large": {"recipients": 1000, "rate": 5000, "max_latency_ms": 500},
         "burst": {"recipients": 100, "rate": 10000, "max_latency_ms": 500, "max_loss": 0},
+    },
+    # Extreme profile for broadcast fairness testing (PRINCIPAL_AUDIT_REPORT Section 4)
+    "extreme": {
+        "timeout_multiplier": 1.0,
+        "small": {"recipients": 100, "rate": 500, "max_latency_ms": 100},
+        "medium": {"recipients": 500, "rate": 2500, "max_latency_ms": 200},
+        "large": {"recipients": 1000, "rate": 5000, "max_latency_ms": 500},
+        "burst": {"recipients": 500, "rate": 20000, "max_latency_ms": 1000, "max_loss": 0.001},
     }
 }
 

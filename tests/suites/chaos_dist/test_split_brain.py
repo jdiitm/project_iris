@@ -226,12 +226,12 @@ def test_split_brain_detection():
     
     # Prerequisites
     if not check_docker_available():
-        log("Docker not available - skipping")
-        return None
+        print("SKIP:INFRA - Docker not available")
+        sys.exit(2)
     
     if not check_cluster_running():
-        log("Cluster not running. Start with: make cluster-up")
-        return None
+        print("SKIP:INFRA - Cluster not running. Start with: make cluster-up")
+        sys.exit(2)
     
     test_id = str(int(time.time()))
     results = {

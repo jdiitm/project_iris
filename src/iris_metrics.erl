@@ -12,6 +12,9 @@
 -export([start_link/0]).
 -export([inc/1, inc/2, observe/2, set/2]).
 -export([get_metrics/0, export_prometheus/0]).
+%% PRINCIPAL_AUDIT_REPORT: Route-specific latency tracking
+-export([observe_latency/3, observe_latency/4]).
+-export([get_latency_percentile/2, get_latency_stats/1]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
@@ -192,3 +195,111 @@ format_value(V) when is_float(V) ->
     list_to_binary(io_lib:format("~.2f", [V]));
 format_value(V) ->
     iolist_to_binary(io_lib:format("~p", [V])).
+
+%% =============================================================================
+%% Route-Specific Latency Tracking (Per PRINCIPAL_AUDIT_REPORT Section 5)
+%% =============================================================================
+%% Metrics tracked:
+%% - iris.latency.intra_region.p50/p99
+%% - iris.latency.cross_region.{source}.{dest}.p50/p99
+%% - iris.presence_lookup.duration_ms
+%% - iris.offline_store.duration_ms
+%% - iris.rpc.cross_region.duration_ms
+%% =============================================================================
+
+-define(LATENCY_TABLE, iris_latency_samples).
+-define(MAX_SAMPLES, 1000).  %% Keep last 1000 samples per metric
+
+%% @doc Observe a latency measurement for a route
+%% Route types: intra_region, cross_region, presence_lookup, offline_store, rpc
+-spec observe_latency(atom(), atom(), number()) -> ok.
+observe_latency(Route, Phase, DurationMs) ->
+    observe_latency(Route, Phase, undefined, DurationMs).
+
+%% @doc Observe a latency measurement with source/dest (for cross-region)
+-spec observe_latency(atom(), atom(), atom() | undefined, number()) -> ok.
+observe_latency(Route, Phase, Dest, DurationMs) ->
+    %% Build the metric key
+    Key = case Dest of
+        undefined -> {latency, Route, Phase};
+        _ -> {latency, Route, Phase, Dest}
+    end,
+    
+    %% Store sample in ETS (ring buffer style)
+    Timestamp = erlang:system_time(millisecond),
+    
+    try
+        %% Get or create the sample list
+        case ets:lookup(?LATENCY_TABLE, Key) of
+            [] ->
+                ets:insert(?LATENCY_TABLE, {Key, [{Timestamp, DurationMs}]});
+            [{Key, Samples}] ->
+                %% Keep only last MAX_SAMPLES
+                NewSamples = lists:sublist([{Timestamp, DurationMs} | Samples], ?MAX_SAMPLES),
+                ets:insert(?LATENCY_TABLE, {Key, NewSamples})
+        end
+    catch
+        error:badarg ->
+            %% Table doesn't exist, create it
+            try
+                ets:new(?LATENCY_TABLE, [named_table, public, set, {write_concurrency, true}]),
+                ets:insert(?LATENCY_TABLE, {Key, [{Timestamp, DurationMs}]})
+            catch
+                error:badarg -> ok  %% Race condition, another process created it
+            end
+    end,
+    
+    %% Also update the standard histogram
+    MetricName = make_latency_metric_name(Route, Phase, Dest),
+    observe(MetricName, DurationMs),
+    
+    ok.
+
+%% @doc Get a specific percentile for a latency metric
+-spec get_latency_percentile(tuple(), float()) -> number() | undefined.
+get_latency_percentile(Key, Percentile) when Percentile >= 0, Percentile =< 1 ->
+    case ets:lookup(?LATENCY_TABLE, Key) of
+        [] -> undefined;
+        [{Key, Samples}] ->
+            Values = [V || {_, V} <- Samples],
+            calculate_percentile(Values, Percentile)
+    end.
+
+%% @doc Get latency stats for a metric (p50, p99, count, mean)
+-spec get_latency_stats(tuple()) -> map() | undefined.
+get_latency_stats(Key) ->
+    case ets:lookup(?LATENCY_TABLE, Key) of
+        [] -> undefined;
+        [{Key, Samples}] ->
+            Values = [V || {_, V} <- Samples],
+            Count = length(Values),
+            if
+                Count > 0 ->
+                    #{
+                        count => Count,
+                        p50 => calculate_percentile(Values, 0.5),
+                        p99 => calculate_percentile(Values, 0.99),
+                        mean => lists:sum(Values) / Count,
+                        min => lists:min(Values),
+                        max => lists:max(Values)
+                    };
+                true ->
+                    undefined
+            end
+    end.
+
+%% Internal helpers for latency tracking
+
+make_latency_metric_name(Route, Phase, undefined) ->
+    list_to_atom("iris_latency_" ++ atom_to_list(Route) ++ "_" ++ atom_to_list(Phase));
+make_latency_metric_name(Route, Phase, Dest) ->
+    list_to_atom("iris_latency_" ++ atom_to_list(Route) ++ "_" ++ 
+                 atom_to_list(Phase) ++ "_" ++ atom_to_list(Dest)).
+
+calculate_percentile([], _) -> 0;
+calculate_percentile(Values, Percentile) ->
+    Sorted = lists:sort(Values),
+    Len = length(Sorted),
+    Index = round(Percentile * Len),
+    Idx = max(1, min(Index, Len)),
+    lists:nth(Idx, Sorted).
