@@ -74,6 +74,18 @@ Tests support explicit profiles:
 | `iris_region_bridge.erl` | Cross-region message relay with durability |
 | `iris_presence.erl` | Versioned presence for race condition prevention |
 | `tests/framework/wait.py` | Polling utilities replacing time.sleep() |
+| `scripts/verify_cluster_ready.py` | Cluster readiness verification |
+| `docker/global-cluster/init_cluster.sh` | Mnesia replication initialization |
+
+### Cluster Test Infrastructure
+
+| Component | File | Purpose |
+|-----------|------|---------|
+| Cluster startup | `cluster.sh up` | Start Docker containers |
+| Replication init | `init_cluster.sh` | Configure Mnesia multi-master |
+| Verification | `verify_cluster_ready.py` | Validate cluster health |
+| Test target | `make test-cluster-dist` | Run all cluster tests |
+| Test flag | `--with-cluster` | Enable Docker in test runner |
 
 ### Test Contract
 
@@ -90,40 +102,80 @@ All tests follow the contract defined in [TEST_CONTRACT.md](TEST_CONTRACT.md):
 ### Quick Start
 
 ```bash
-# Start Docker cluster
-./docker/global-cluster/cluster.sh up
-
-# Run all tests
+# Run all local tests (no Docker required)
 python3 tests/run_tests.py --all
 
+# Run all tests INCLUDING cross-region (auto-starts Docker)
+python3 tests/run_tests.py --all --with-cluster
+
+# Run specific suite
+python3 tests/run_tests.py --suite integration
+```
+
+### Test Tiers
+
+| Tier | Suites | Command |
+|------|--------|---------|
+| 0 | unit, integration | `make test-tier0` |
+| 1 | resilience, performance_light, chaos_controlled | `make test-tier1` |
+| 2 | chaos_dist, stress | `make test-cluster-dist` |
+
+### Cross-Region Tests (Docker Required)
+
+The `chaos_dist` suite requires a Docker global cluster with multi-region Mnesia replication.
+
+**Option 1: Automated (Recommended)**
+```bash
+# Runs all cluster-dependent tests with automatic lifecycle management
+make test-cluster-dist
+```
+
+**Option 2: Manual Cluster Management**
+```bash
+# Start cluster with replication
+./docker/global-cluster/cluster.sh up
+
+# Verify cluster is ready
+python3 scripts/verify_cluster_ready.py
+
+# Run specific cross-region tests
+python3 tests/suites/chaos_dist/test_cross_region_latency.py
+python3 tests/suites/chaos_dist/test_multimaster_durability.py
+
 # Stop cluster
-./docker/global-cluster/cluster.sh down
+make cluster-down
 ```
 
-### Specific Test Suites
+**Option 3: Test Runner with Cluster**
+```bash
+# Run all tests with Docker cluster support
+python3 tests/run_tests.py --all --with-cluster
+
+# Run specific suite with Docker cluster
+python3 tests/run_tests.py --suite chaos_dist
+```
+
+### Cluster Verification
+
+Before running cross-region tests, verify the cluster is ready:
 
 ```bash
-# Unit tests only (no cluster needed)
-make test-unit
+# Full verification (including cross-region delivery test)
+python3 scripts/verify_cluster_ready.py
 
-# Integration tests
-python3 tests/run_tests.py --tier 0
+# Quick verification (skip delivery test)
+python3 scripts/verify_cluster_ready.py --quick
 
-# Chaos tests (require Docker cluster)
-./docker/global-cluster/cluster.sh up
-python3 tests/run_tests.py --tier 2
+# Via Makefile
+make cluster-verify
+make cluster-verify-quick
 ```
 
-### Cross-Region Tests
-
-```bash
-# Start cluster and initialize replication
-./docker/global-cluster/cluster.sh up
-./docker/global-cluster/cluster.sh setup-replication
-
-# Run cross-region tests
-make test-cross-region
-```
+The verification script checks:
+1. All core containers are running
+2. Mnesia cluster has formed with all nodes
+3. Key tables have >= 2 replicas (replication working)
+4. Cross-region message delivery works (West → Sydney)
 
 ---
 

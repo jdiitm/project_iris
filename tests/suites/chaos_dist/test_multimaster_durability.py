@@ -177,19 +177,127 @@ def wait_for_container_healthy(container_name, timeout=60):
 
 
 def check_container_running(container_name):
-    """Check if container is running."""
+    """
+    Check if container is running.
+    
+    Uses multiple strategies:
+    1. Direct inspect (exact name)
+    2. Filter by name pattern (handles compose prefixes)
+    """
+    # Try direct inspect first
     result = subprocess.run(
         ["docker", "inspect", "--format", "{{.State.Running}}", container_name],
         capture_output=True,
         text=True
     )
-    return "true" in result.stdout.lower()
+    if "true" in result.stdout.lower():
+        return True
+    
+    # Fallback: search by name pattern using docker ps
+    # This handles cases where compose adds directory prefix
+    result = subprocess.run(
+        ["docker", "ps", "--filter", f"name={container_name}", "--format", "{{.Names}}"],
+        capture_output=True,
+        text=True
+    )
+    if result.stdout.strip():
+        log(f"Found container matching '{container_name}': {result.stdout.strip()}")
+        return True
+    
+    return False
 
 
 def check_docker_available():
     """Check if Docker is available."""
     result = subprocess.run(["docker", "ps"], capture_output=True)
     return result.returncode == 0
+
+
+def start_docker_cluster():
+    """Attempt to start the Docker global cluster if not running."""
+    docker_compose_dir = PROJECT_ROOT / "docker" / "global-cluster"
+    docker_compose_file = docker_compose_dir / "docker-compose.yml"
+    
+    if not docker_compose_file.exists():
+        log(f"Docker compose file not found: {docker_compose_file}")
+        return False
+    
+    log("Attempting to start Docker global cluster...")
+    
+    try:
+        # Start cluster
+        result = subprocess.run(
+            ["docker", "compose", "-f", str(docker_compose_file), "up", "-d"],
+            cwd=str(docker_compose_dir),
+            capture_output=True,
+            text=True,
+            timeout=180
+        )
+        
+        if result.returncode != 0:
+            log(f"Docker compose failed: {result.stderr}")
+            return False
+        
+        log("Cluster starting, waiting for containers...")
+        
+        # Wait for core containers
+        for i in range(90):  # 90 seconds max
+            if check_container_running(PRIMARY_CORE) and check_container_running(SECONDARY_CORE):
+                log("Core containers are running!")
+                break
+            time.sleep(1)
+            if i % 15 == 14:
+                log(f"Still waiting... ({i+1}s)")
+        else:
+            log("Timeout waiting for core containers")
+            return False
+        
+        # Initialize replication
+        return reinit_cluster_replication()
+        
+    except subprocess.TimeoutExpired:
+        log("Timeout starting cluster")
+        return False
+    except Exception as e:
+        log(f"Error starting cluster: {e}")
+        return False
+
+
+def reinit_cluster_replication():
+    """Reinitialize Mnesia replication."""
+    init_script = PROJECT_ROOT / "docker" / "global-cluster" / "init_cluster.sh"
+    
+    if not init_script.exists():
+        log(f"Init script not found: {init_script}")
+        return False
+    
+    log("Initializing Mnesia replication...")
+    
+    try:
+        result = subprocess.run(
+            ["bash", str(init_script)],
+            cwd=str(init_script.parent),
+            capture_output=True,
+            text=True,
+            timeout=180
+        )
+        
+        if result.returncode == 0:
+            log("Replication initialized successfully")
+            time.sleep(10)  # Let it settle
+            return True
+        else:
+            log(f"Init script returned {result.returncode}")
+            for line in result.stdout.strip().split('\n')[-5:]:
+                log(f"  {line}")
+            return False
+            
+    except subprocess.TimeoutExpired:
+        log("Timeout running init script")
+        return False
+    except Exception as e:
+        log(f"Error running init script: {e}")
+        return False
 
 
 def reconnect_edge_to_core(edge_container, core_node):
@@ -226,15 +334,34 @@ def test_multimaster_durability():
         log("Docker not available - skipping")
         return None
     
-    if not check_container_running(PRIMARY_CORE):
-        log(f"Primary core {PRIMARY_CORE} not running")
-        log("Start cluster with: make cluster-up")
-        return None
+    # Check if core containers are running, try to start if not
+    primary_running = check_container_running(PRIMARY_CORE)
+    secondary_running = check_container_running(SECONDARY_CORE)
     
-    if not check_container_running(SECONDARY_CORE):
-        log(f"Secondary core {SECONDARY_CORE} not running")
-        log("Multi-master requires at least 2 core nodes per region")
-        return None
+    if not primary_running or not secondary_running:
+        log(f"Primary ({PRIMARY_CORE}): {'running' if primary_running else 'NOT running'}")
+        log(f"Secondary ({SECONDARY_CORE}): {'running' if secondary_running else 'NOT running'}")
+        
+        auto_start = os.environ.get("IRIS_AUTO_START_DOCKER", "true").lower() == "true"
+        
+        if not auto_start:
+            log("Auto-start disabled (set IRIS_AUTO_START_DOCKER=true to enable)")
+            log("Start cluster with: make cluster-up")
+            return None
+        
+        log("Attempting to start Docker cluster...")
+        if not start_docker_cluster():
+            log("Failed to start Docker cluster")
+            return None
+        
+        # Re-check after starting
+        if not check_container_running(PRIMARY_CORE):
+            log(f"Primary core {PRIMARY_CORE} still not running after cluster start")
+            return None
+        
+        if not check_container_running(SECONDARY_CORE):
+            log(f"Secondary core {SECONDARY_CORE} still not running after cluster start")
+            return None
     
     # Generate unique test identifiers
     test_id = generate_unique_id()
@@ -369,14 +496,30 @@ def test_multimaster_durability():
 def restore_cluster_state():
     """Re-initialize cluster after test that restarts containers."""
     try:
+        # First ensure all core containers are running
+        log("[cleanup] Restoring cluster state after container restart...")
+        
+        cores = ["core-east-1", "core-east-2", "core-west-1", "core-west-2", "core-eu-1", "core-eu-2"]
+        for core in cores:
+            result = subprocess.run(
+                ["docker", "inspect", "--format", "{{.State.Status}}", core],
+                capture_output=True, text=True
+            )
+            if result.stdout.strip() in ["exited", "created"]:
+                log(f"[cleanup] Restarting stopped container: {core}")
+                subprocess.run(["docker", "start", core], capture_output=True)
+        
+        # Wait for containers to stabilize
+        time.sleep(10)
+        
+        # Run init script
         init_script = PROJECT_ROOT / "docker" / "global-cluster" / "init_cluster.sh"
         if init_script.exists():
-            log("[cleanup] Restoring cluster state after container restart...")
             subprocess.run(
                 ["bash", str(init_script)],
                 cwd=str(init_script.parent),
                 capture_output=True,
-                timeout=120
+                timeout=180  # Increased timeout
             )
             log("[cleanup] Cluster state restored")
     except Exception as e:

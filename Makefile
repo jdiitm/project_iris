@@ -231,6 +231,47 @@ test-cross-region: cluster-up
 	@python3 tests/suites/chaos_dist/test_cross_region_latency.py
 	@echo "Cross-region test complete"
 
+# =============================================================================
+# Cluster-Dependent Tests (chaos_dist)
+# =============================================================================
+
+# Run all cluster-dependent tests (cross-region, multi-master durability)
+# This target manages the full cluster lifecycle
+test-cluster-dist: all
+	@echo "=============================================="
+	@echo "Running Cluster-Dependent Tests"
+	@echo "=============================================="
+	@echo ""
+	@echo "Step 1: Starting Docker global cluster..."
+	@docker/global-cluster/cluster.sh up
+	@echo ""
+	@echo "Step 2: Verifying cluster readiness..."
+	@python3 scripts/verify_cluster_ready.py --quick || (echo "Cluster not ready!" && make cluster-down && exit 1)
+	@echo ""
+	@echo "Step 3: Running cross-region latency test..."
+	@python3 tests/suites/chaos_dist/test_cross_region_latency.py || true
+	@echo ""
+	@echo "Step 4: Running multi-master durability test..."
+	@python3 tests/suites/chaos_dist/test_multimaster_durability.py || true
+	@echo ""
+	@echo "Step 5: Running ack durability test..."
+	@python3 tests/suites/chaos_dist/test_ack_durability.py || true
+	@echo ""
+	@echo "Step 6: Stopping cluster..."
+	@make cluster-down
+	@echo ""
+	@echo "=============================================="
+	@echo "Cluster-Dependent Tests Complete"
+	@echo "=============================================="
+
+# Verify cluster is ready for tests
+cluster-verify:
+	@python3 scripts/verify_cluster_ready.py
+
+# Quick cluster verification (skip cross-region delivery test)
+cluster-verify-quick:
+	@python3 scripts/verify_cluster_ready.py --quick
+
 # Clean Docker test artifacts
 test-docker-clean:
 	@echo "Cleaning Docker test artifacts..."

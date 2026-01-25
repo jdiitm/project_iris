@@ -64,6 +64,15 @@ KNOWN_FAILING_TESTS = []  # All tests should pass after hardening
 DOCKER_REQUIRED_SUITES = ["chaos_dist"]
 # Tests in other suites that require Docker
 DOCKER_REQUIRED_TESTS = ["test_failover_time", "test_multimaster_durability"]
+# Tests that kill/restart containers or modify network and may corrupt cluster state
+# After these tests, cluster needs full restart before next test
+CLUSTER_CORRUPTING_TESTS = [
+    "test_ack_durability",
+    "test_dist_failover", 
+    "test_failover_time",
+    "test_multimaster_durability",
+    "test_split_brain"  # Disconnects/reconnects network
+]
 
 # Docker cluster paths
 DOCKER_CLUSTER_DIR = PROJECT_ROOT / "docker" / "global-cluster"
@@ -391,6 +400,65 @@ def is_docker_available() -> bool:
     except Exception:
         return False
 
+
+def wait_for_mnesia_cluster(timeout: int = 120) -> bool:
+    """
+    Wait for Mnesia cluster to form with all nodes joined.
+    
+    This checks that db_nodes on core-east-1 includes multiple nodes,
+    indicating the cluster has formed.
+    """
+    import random
+    
+    start_time = time.time()
+    attempt = 0
+    
+    while time.time() - start_time < timeout:
+        attempt += 1
+        try:
+            # Query Mnesia db_nodes via RPC to the actual running node
+            probe_name = f"probe_{random.randint(10000, 99999)}"
+            result = subprocess.run(
+                ["docker", "exec", "core-east-1", "sh", "-c",
+                 f"erl -noshell -sname {probe_name} -setcookie iris_secret -eval '"
+                 "case net_adm:ping(core_east_1@coreeast1) of "
+                 "pong -> "
+                 "  DbNodes = rpc:call(core_east_1@coreeast1, mnesia, system_info, [db_nodes], 5000), "
+                 "  case DbNodes of "
+                 "    L when is_list(L), length(L) >= 2 -> io:format(\"READY:~p\", [length(L)]); "
+                 "    _ -> io:format(\"WAITING\") "
+                 "  end; "
+                 "pang -> io:format(\"NOCONN\") "
+                 "end, halt().'"],
+                capture_output=True,
+                text=True,
+                timeout=15
+            )
+            
+            output = result.stdout.strip()
+            
+            if "READY:" in output:
+                # Extract node count
+                try:
+                    count = int(output.split("READY:")[1])
+                    log_info(f"  Mnesia cluster has {count} nodes")
+                    return True
+                except:
+                    pass
+            
+            if attempt % 5 == 0:
+                log_info(f"  Still waiting for Mnesia cluster... ({int(time.time() - start_time)}s)")
+            
+        except subprocess.TimeoutExpired:
+            pass
+        except Exception as e:
+            if attempt % 10 == 0:
+                log_warn(f"  Error checking Mnesia: {e}")
+        
+        time.sleep(3)
+    
+    return False
+
 def start_docker_cluster() -> bool:
     """
     Start the Docker global cluster for cross-region tests.
@@ -433,59 +501,72 @@ def start_docker_cluster() -> bool:
             log_warn(f"Docker cluster start failed: {result.stderr}")
             return False
         
-        # Wait for services to be healthy
-        log_info("  Phase 3: Waiting for services to be healthy (45s)...")
-        time.sleep(45)  # Increased from 30s for 6-node cluster
+        # Wait for services to be healthy - increased for 6-node cluster
+        log_info("  Phase 3: Waiting for containers to start (30s)...")
+        time.sleep(30)
+        
+        # Phase 4: Wait for Mnesia cluster to form (all nodes join)
+        log_info("  Phase 4: Waiting for Mnesia cluster to form...")
+        mnesia_ready = wait_for_mnesia_cluster(timeout=120)
+        if not mnesia_ready:
+            log_warn("  Mnesia cluster did not form completely - continuing anyway")
+        else:
+            log_info("  Mnesia cluster formed successfully")
         
         # Initialize Mnesia replication with retry
+        # The init_cluster.sh script now has its own retry logic and verification
         if DOCKER_INIT_SCRIPT.exists():
-            max_retries = 3
-            for attempt in range(max_retries):
-                log_info(f"  Phase 4: Initializing Mnesia replication (attempt {attempt + 1}/{max_retries})...")
-                result = subprocess.run(
-                    ["bash", str(DOCKER_INIT_SCRIPT)],
-                    cwd=str(DOCKER_CLUSTER_DIR),
-                    capture_output=True,
-                    text=True,
-                    timeout=120
-                )
-                if result.returncode != 0:
-                    log_warn(f"Mnesia replication init warning: {result.stderr}")
-                    if attempt < max_retries - 1:
-                        time.sleep(10)
-                        continue
-                
-                # Verify replication is actually configured (use random node name to avoid conflicts)
-                import random
-                verify_node = f"verify_{random.randint(10000, 99999)}"
-                log_info("  Phase 5: Verifying Mnesia replication...")
-                verify_cmd = subprocess.run(
-                    ["docker", "exec", "core-east-1", "sh", "-c",
-                     f"erl -noshell -sname {verify_node} -setcookie iris_secret -eval \""
-                     "pong = net_adm:ping('core_east_1@coreeast1'), "
-                     "case rpc:call('core_east_1@coreeast1', mnesia, table_info, [presence, ram_copies]) of "
-                     "L when is_list(L), length(L) > 1 -> io:format('Replication OK: ~p nodes~n', [length(L)]), halt(0); "
-                     "_ -> io:format('Replication NOT configured~n'), halt(1) end.\""],
-                    capture_output=True,
-                    text=True,
-                    timeout=30
-                )
-                
-                if verify_cmd.returncode == 0:
-                    log_info(f"  Replication verified: {verify_cmd.stdout.strip()}")
-                    break
-                else:
-                    log_warn(f"Replication verification failed: {verify_cmd.stdout} {verify_cmd.stderr}")
-                    if attempt < max_retries - 1:
-                        log_info("  Retrying replication init...")
-                        time.sleep(10)
-                    else:
-                        log_warn("  All replication attempts failed - tests may skip")
-                        # Don't return False - let tests run and skip properly
+            log_info("  Phase 5: Initializing cross-region replication...")
+            result = subprocess.run(
+                ["bash", str(DOCKER_INIT_SCRIPT)],
+                cwd=str(DOCKER_CLUSTER_DIR),
+                capture_output=True,
+                text=True,
+                timeout=300  # Increased timeout - init script now does more verification
+            )
+            
+            if result.returncode != 0:
+                log_warn(f"Mnesia replication init returned non-zero: {result.returncode}")
+                # Log last few lines of output for debugging
+                output_lines = (result.stdout + result.stderr).strip().split('\n')
+                for line in output_lines[-10:]:
+                    log_warn(f"    {line}")
+                # Continue anyway - tests will skip if replication not working
+            else:
+                log_info("  Replication initialization completed successfully")
+                # Log success output
+                for line in result.stdout.strip().split('\n')[-5:]:
+                    log_info(f"    {line}")
         
         # Wait for replication to settle after init
         log_info("  Phase 6: Waiting for replication to settle (15s)...")
         time.sleep(15)
+        
+        # Phase 7: Run verification script for comprehensive check
+        verify_script = PROJECT_ROOT / "scripts" / "verify_cluster_ready.py"
+        if verify_script.exists():
+            log_info("  Phase 7: Running cluster verification script...")
+            # Try verification with retry
+            for verify_attempt in range(2):
+                verify_result = subprocess.run(
+                    ["python3", str(verify_script), "--quick"],
+                    capture_output=True,
+                    text=True,
+                    timeout=90
+                )
+                if verify_result.returncode == 0:
+                    log_info("  Cluster verification: PASSED")
+                    break
+                else:
+                    if verify_attempt == 0:
+                        log_warn("  Cluster verification: FAILED - retrying in 10s...")
+                        time.sleep(10)
+                    else:
+                        log_warn("  Cluster verification: WARNINGS (see output)")
+                        # Print last few lines of verification output
+                        lines = verify_result.stdout.strip().split('\n')
+                        for line in lines[-5:]:
+                            log_warn(f"    {line}")
         
         _docker_cluster_running = True
         log_info("Docker cluster started successfully")
@@ -995,6 +1076,20 @@ def run_suite(suite_name: str, run_dir: Path, require_cluster: bool = True) -> S
     needs_docker = suite_requires_docker(suite_name)
     docker_started = False
     
+    # Reorder tests: put cluster-corrupting tests LAST to minimize restarts
+    if needs_docker:
+        def test_sort_key(test):
+            # Tests are dictionaries with "name" key
+            test_name = test.get("name", "") if isinstance(test, dict) else str(test)
+            # Tests that corrupt cluster go last (return 1), others first (return 0)
+            is_corrupting = test_name in CLUSTER_CORRUPTING_TESTS
+            return (1 if is_corrupting else 0, test_name)  # Secondary sort by name for stability
+        
+        original_order = [t.get("name", "?") for t in normal_tests]
+        normal_tests = sorted(normal_tests, key=test_sort_key)
+        new_order = [t.get("name", "?") for t in normal_tests]
+        log_info(f"Reordered tests: {original_order} -> {new_order}")
+    
     if needs_docker:
         # Stop local cluster before starting Docker
         log_info("Suite requires Docker cluster - stopping local cluster...")
@@ -1012,6 +1107,15 @@ def run_suite(suite_name: str, run_dir: Path, require_cluster: bool = True) -> S
     for test in normal_tests:
         result = run_test(test, run_dir, timeout=timeout)
         results.append(result)
+        
+        # If this test corrupts the cluster, restart Docker before next test
+        test_name = test.get("name", "") if isinstance(test, dict) else str(test)
+        if needs_docker and test_name in CLUSTER_CORRUPTING_TESTS:
+            log_info(f"Test {test_name} may have corrupted cluster - restarting Docker...")
+            stop_docker_cluster()
+            time.sleep(5)  # Brief pause
+            if not start_docker_cluster():
+                log_warn("Failed to restart Docker cluster after corrupting test")
     
     # Run TLS-required tests with TLS config
     if tls_tests and require_cluster:
@@ -1149,6 +1253,8 @@ Examples:
   %(prog)s --tier 1                  Run CI Tier 1 (nightly)
   %(prog)s --list                    List all available tests
   %(prog)s --all                     Run all tests
+  %(prog)s --all --with-cluster      Run all tests including cross-region (starts Docker)
+  %(prog)s --suite chaos_dist        Run chaos_dist tests (starts Docker automatically)
         """
     )
     
@@ -1158,6 +1264,8 @@ Examples:
     parser.add_argument("--list", action="store_true", help="List all tests")
     parser.add_argument("--ci", action="store_true", help="CI mode (stricter failure handling)")
     parser.add_argument("--no-cluster", action="store_true", help="Don't manage cluster lifecycle")
+    parser.add_argument("--with-cluster", action="store_true", 
+                        help="Use Docker global cluster for cross-region tests (auto-starts if needed)")
     parser.add_argument("--timeout", type=int, default=120, help="Per-test timeout in seconds")
     
     args = parser.parse_args()
@@ -1220,14 +1328,40 @@ Examples:
     # Perform initial cleanup
     cleanup_before_suite()
     
+    # Determine cluster mode
+    # --with-cluster: Explicitly use Docker cluster for cross-region tests
+    # --no-cluster: Don't manage any cluster (tests handle their own)
+    use_docker_cluster = args.with_cluster
+    manage_cluster = not args.no_cluster
+    
+    if use_docker_cluster:
+        log_info("Docker cluster mode: ENABLED (--with-cluster)")
+    
     # Run suites
     suite_results = []
+    docker_cluster_started = False
+    
     for suite in suites_to_run:
-        result = run_suite(suite, run_dir, require_cluster=not args.no_cluster)
+        # Check if this suite needs Docker cluster
+        needs_docker = suite_requires_docker(suite) or (use_docker_cluster and suite in TIER_1_SUITES)
+        
+        # Start Docker cluster if needed and not already running
+        if needs_docker and use_docker_cluster and not docker_cluster_started:
+            log_info("Starting Docker global cluster for cross-region tests...")
+            docker_cluster_started = start_docker_cluster()
+            if not docker_cluster_started:
+                log_warn("Docker cluster unavailable - some tests may skip")
+        
+        result = run_suite(suite, run_dir, require_cluster=manage_cluster)
         suite_results.append(result)
     
-    # Cleanup cluster
-    if not args.no_cluster:
+    # Cleanup Docker cluster if we started it
+    if docker_cluster_started:
+        log_info("Stopping Docker global cluster...")
+        stop_docker_cluster()
+    
+    # Cleanup local cluster
+    if manage_cluster and not use_docker_cluster:
         stop_cluster()
     
     # Capture end resources
