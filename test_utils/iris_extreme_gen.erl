@@ -2,7 +2,7 @@
 -export([start/3, start/5, worker_init/8, get_stats/0, get_latency_stats/0]).
 
 -define(TARGET_HOST, {127,0,0,1}).
--define(TARGET_PORT, 8080).
+-define(TARGET_PORT, 8085).  %% Edge default port
 -define(PENDING_MSGS, pending_msgs_ets).
 -define(LATENCY_SAMPLES, latency_samples_ets).
 
