@@ -893,6 +893,7 @@ def run_test(test: Dict, run_dir: Path, timeout: int = 120, stream_output: bool 
         env["IRIS_TEST_ARTIFACTS"] = str(test_artifact_dir)
         env["IRIS_PROJECT_ROOT"] = str(PROJECT_ROOT)
         env["PYTHONUNBUFFERED"] = "1"  # Force unbuffered output for child processes
+        env["IRIS_TEST_RUNNER"] = "1"  # Signal that test runner is managing cluster
         
         # Pass determinism configuration to child processes
         env["TEST_SEED"] = str(MASTER_SEED)
