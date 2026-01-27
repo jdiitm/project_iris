@@ -105,17 +105,57 @@ This ordering is enforced by the test runner and MUST NOT be overridden.
 
 ### Seeding Requirements
 
-All random operations MUST use the seeded random instance from `tests/conftest.py`:
+All random operations MUST use seeded random. There are two approved patterns:
+
+#### Pattern 1: Use conftest utilities (preferred)
 
 ```python
-# CORRECT: Use seeded random
+# CORRECT: Use seeded random from conftest
 from tests.conftest import get_seeded_random
 rng = get_seeded_random()
 username = ''.join(rng.choices(string.ascii_lowercase, k=8))
+```
 
+#### Pattern 2: Seed at module level with TEST_SEED (fallback)
+
+When conftest is not available or for standalone test files:
+
+```python
+import os
+import random
+
+# CORRECT: Seed at module initialization
+TEST_SEED = int(os.environ.get("TEST_SEED", "42"))
+random.seed(TEST_SEED)
+
+# Now random.* calls are deterministic
+username = ''.join(random.choices(string.ascii_lowercase, k=8))
+```
+
+#### Pattern 3: Per-worker seeding (for parallel workers)
+
+When spawning multiple workers/threads:
+
+```python
+def worker(worker_id: int):
+    # Each worker gets a deterministic but unique seed
+    worker_seed = TEST_SEED + worker_id
+    rng = random.Random(worker_seed)
+    # Use rng.* for all randomness in this worker
+```
+
+### INCORRECT Patterns
+
+```python
 # INCORRECT: Using unseeded random
 import random
 username = ''.join(random.choices(string.ascii_lowercase, k=8))
+
+# INCORRECT: Time-based seeds
+random.seed(int(time.time()))
+
+# INCORRECT: OS randomness
+random.seed(os.urandom(8))
 ```
 
 ### Deterministic Identifiers
@@ -259,17 +299,140 @@ TEST_SUITE=unit make test-docker
 
 ---
 
+## Exception Handling in Tests
+
+### Prohibited Patterns
+
+Tests MUST NOT silently swallow exceptions, as this creates false positives:
+
+```python
+# PROHIBITED: Bare except with pass
+try:
+    send_message(target, payload)
+except:
+    pass  # NEVER DO THIS - hides real failures
+
+# PROHIBITED: Catching Exception without action
+try:
+    result = connection.recv(1024)
+except Exception:
+    pass  # Masks connection errors as "success"
+
+# PROHIBITED: Ignoring specific errors
+try:
+    messages.append(client.recv_msg())
+except socket.timeout:
+    pass  # May cause test to pass with 0 messages received
+```
+
+### Approved Patterns
+
+```python
+# APPROVED: Log and count errors
+errors = 0
+try:
+    send_message(target, payload)
+except socket.timeout as e:
+    logging.warning(f"Timeout sending to {target}: {e}")
+    errors += 1
+except socket.error as e:
+    logging.error(f"Socket error: {e}")
+    errors += 1
+
+# At end of test:
+assert errors < max_allowed_errors, f"Too many errors: {errors}"
+
+# APPROVED: Explicit error tracking
+try:
+    result = client.recv_msg(timeout=5)
+    if result:
+        received.append(result)
+except socket.timeout:
+    timeouts += 1
+    logging.debug(f"Receive timeout (total: {timeouts})")
+
+# APPROVED: Cleanup blocks (ONLY exception)
+try:
+    sock.close()
+except Exception:
+    pass  # Acceptable ONLY in cleanup/teardown
+```
+
+### Enforcement Grep
+
+Before merging any test changes, run:
+
+```bash
+# Should return NO matches (except documented cleanup blocks)
+grep -rn "except:$" tests/
+grep -rn "except Exception:$" tests/
+grep -rn "except:.*pass" tests/
+```
+
+---
+
+## Cluster Management Requirements
+
+### Every Test Must Manage Its Own Cluster
+
+Tests MUST NOT assume a cluster is running from a previous test:
+
+```python
+# WRONG: Assumes cluster is already running
+def main():
+    if not check_server():
+        print("Start cluster with: make start")
+        sys.exit(1)
+    run_test()
+
+# CORRECT: Uses ClusterManager context manager
+from tests.framework.cluster import ClusterManager
+
+def main():
+    with ClusterManager(project_root=project_root) as cluster:
+        run_test()  # Cluster guaranteed to be running
+    # Cluster automatically stopped
+```
+
+### Rationale
+
+When tests share cluster state:
+1. Test ordering becomes significant (violates independence)
+2. One test stopping the cluster breaks subsequent tests
+3. Port conflicts arise when multiple clusters attempt to start
+4. Flaky failures that only occur in certain test orders
+
+### Path Setup for ClusterManager
+
+```python
+import os
+import sys
+
+# Add project root to path for imports
+current_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.abspath(os.path.join(current_dir, "../../.."))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
+from tests.framework.cluster import ClusterManager
+```
+
+---
+
 ## Standards for New Tests
 
 ### Checklist for New Tests
 
-- [ ] Uses seeded random from `tests/conftest.py`
+- [ ] Uses seeded random (see Randomness Control section)
 - [ ] Uses deterministic IDs, not timestamps or UUIDs
+- [ ] Uses `ClusterManager` for cluster lifecycle
+- [ ] NO bare `except: pass` blocks
 - [ ] Cleans up any created state (files, processes, connections)
 - [ ] Uses polling/retry for async operations, not fixed sleeps
 - [ ] Has generous timeouts that work on slow CI runners
 - [ ] Works when run in isolation AND as part of full suite
 - [ ] Documented in test docstring with purpose and requirements
+- [ ] Returns explicit exit code via `sys.exit(0)` or `sys.exit(1)`
 
 ### Test File Template
 
@@ -377,10 +540,83 @@ lsof -i :8085
 
 ---
 
+## BEAM/Erlang-Specific Considerations
+
+### CPU Utilization Measurement
+
+Erlang BEAM uses a multi-scheduler architecture where CPU% is reported as the sum across all schedulers:
+
+| Reported CPU | Meaning |
+|--------------|---------|
+| 100% | 1 core fully utilized |
+| 300% | 3 cores fully utilized |
+| 400% | 4 cores fully utilized |
+
+**Implication**: An idle BEAM process on a 24-core machine may report 100-300% CPU due to scheduler threads. Tests MUST NOT assume single-threaded CPU semantics.
+
+```python
+# WRONG: Assumes single-threaded
+assert idle_cpu < 5  # Will always fail
+
+# CORRECT: Accounts for multi-scheduler
+assert idle_cpu < 300  # Allows for scheduler overhead
+```
+
+### Memory Baseline
+
+BEAM preallocates memory based on the `+P` (process limit) and `+Q` (port limit) flags:
+
+| Flag Setting | Approximate Preallocation |
+|--------------|---------------------------|
+| +P 1000 +Q 1000 | ~50 MB |
+| +P 100000 +Q 100000 | ~200 MB |
+| +P 1000000 +Q 1000000 | ~800-1500 MB |
+
+The auto-tune script (`scripts/auto_tune.sh`) sets high limits for production readiness, causing high baseline memory. Tests MUST account for this:
+
+```python
+# WRONG: Assumes minimal baseline
+BASE_MEMORY_THRESHOLD = 100  # MB - will always fail with auto-tune
+
+# CORRECT: Accounts for BEAM preallocation
+BASE_MEMORY_THRESHOLD = 1500  # MB - allows for +P/+Q preallocation
+```
+
+### Process Detection
+
+When monitoring Erlang processes, use `beam.smp` not the node name:
+
+```python
+# WRONG: May not match
+result = subprocess.run(["ps", "-C", "iris_edge1"], ...)
+
+# CORRECT: Matches BEAM processes
+result = subprocess.run(["ps", "-C", "beam.smp", "-o", "%cpu="], ...)
+```
+
+### Node Connectivity
+
+BEAM nodes require time to establish connections. Always use retry/polling:
+
+```python
+# WRONG: Assumes immediate connectivity
+rpc.call(node, module, function, args)  # May get {badrpc, nodedown}
+
+# CORRECT: Wait for connectivity
+for attempt in range(10):
+    result = rpc.call(node, module, function, args)
+    if result != {'badrpc', 'nodedown'}:
+        break
+    time.sleep(1)
+```
+
+---
+
 ## Changelog
 
 | Date | Change | Author |
 |------|--------|--------|
+| 2026-01-27 | Added BEAM-specific guidelines, exception handling, cluster management | AI Assistant |
 | 2026-01-22 | Initial determinism standards | AI Assistant |
 
 ---
@@ -388,5 +624,5 @@ lsof -i :8085
 ## References
 
 - [Test Status](TEST_STATUS.md) - Current test results
-- [Test Invariants](TEST_INVARIANTS.md) - Formal test invariants
+- [Test Invariants](TEST_INVARIANTS.md) - Formal test invariants (includes BEAM CPU/Memory invariants)
 - [RFC-001](rfc/RFC-001-SYSTEM-REQUIREMENTS.md) - System requirements
