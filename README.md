@@ -1,6 +1,6 @@
 # Project Iris: WhatsApp-Class Messaging Engine
 
-[![Tests](https://img.shields.io/badge/tests-72%20passing-brightgreen)](tests/run_tests.py)
+[![Tests](https://img.shields.io/badge/tests-85%20passing-brightgreen)](tests/run_tests.py)
 [![Erlang](https://img.shields.io/badge/Erlang-OTP%2025%2B-blue)](https://www.erlang.org/)
 
 > **Production-Grade**: Validated for **1M+ concurrent users** with zero message loss.
@@ -101,7 +101,7 @@ python3 tests/run_tests.py --all
 ## Testing
 
 ```bash
-# All tests (72 tests)
+# All tests (85 tests)
 python3 tests/run_tests.py --all
 
 # Specific suite
@@ -117,15 +117,15 @@ make test-unit
 
 | Suite | Tests | Purpose |
 |-------|-------|---------|
-| unit | 20 | Erlang module unit tests |
-| integration | 16 | Python integration tests |
-| stress | 10 | Load and scale testing |
+| unit | 21 | Erlang module unit tests |
+| integration | 17 | Python integration tests |
+| stress | 13 | Load and scale testing |
+| chaos_dist | 9 | Distributed failure tests |
 | security | 7 | Auth, TLS, injection tests |
-| chaos_dist | 4 | Distributed failure tests |
+| performance_light | 6 | Performance benchmarks |
+| e2e | 5 | End-to-end flows |
 | resilience | 3 | Recovery and failover |
 | chaos_controlled | 2 | Controlled chaos scenarios |
-| e2e | 2 | End-to-end flows |
-| performance_light | 6 | Performance benchmarks |
 | contract | 1 | Protocol contract tests |
 | compatibility | 1 | Version compatibility |
 
@@ -190,7 +190,7 @@ iris_store:put(Table, Key, Value, #{durability => best_effort}).
 
 ```
 project_iris/
-├── src/                    # Erlang source modules (43 modules)
+├── src/                    # Erlang source modules (46 modules)
 ├── test_utils/             # Erlang test utilities and unit tests
 ├── tests/
 │   ├── run_tests.py        # Unified test runner

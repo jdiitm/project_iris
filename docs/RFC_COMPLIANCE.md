@@ -1,7 +1,9 @@
 # RFC-001 Compliance Status
 
-**Last Updated**: 2026-01-24 (Hardening Fix Plan Implementation)
+**Last Updated**: 2026-01-27 (Full Test Suite Pass)
 **Reference**: [RFC-001-SYSTEM-REQUIREMENTS.md](rfc/RFC-001-SYSTEM-REQUIREMENTS.md)
+
+> **Test Status**: All 85 tests pass deterministically with `TEST_PROFILE=smoke TEST_SEED=42`. See [TEST_STATUS.md](TEST_STATUS.md) for details.
 
 ---
 
