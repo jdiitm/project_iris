@@ -127,24 +127,12 @@ def start_docker_cluster():
             return False
         
         # Initialize cross-region replication (calls init_cluster.sh)
-        init_script = os.path.join(DOCKER_COMPOSE_DIR, "init_cluster.sh")
-        if os.path.exists(init_script):
-            print("[Docker] Initializing cross-region replication...")
-            init_result = subprocess.run(
-                ["bash", init_script],
-                cwd=DOCKER_COMPOSE_DIR,
-                capture_output=True,
-                text=True,
-                timeout=300
-            )
-            if init_result.returncode != 0:
-                print(f"[Docker] Replication init returned non-zero: {init_result.returncode}")
-                # Log last few lines
-                for line in (init_result.stdout + init_result.stderr).strip().split('\n')[-5:]:
-                    print(f"  {line}")
-                # Continue anyway - test will detect if replication not working
-            else:
-                print("[Docker] Replication initialized successfully!")
+        # Use reinit_cluster_replication which has retry logic
+        print("[Docker] Initializing cross-region replication...")
+        if reinit_cluster_replication(max_attempts=3):
+            print("[Docker] Replication initialized successfully!")
+        else:
+            print("[Docker] Initial replication setup had issues, will retry during test...")
         
         print("[Docker] Cluster is ready!")
         return True
@@ -170,43 +158,89 @@ def stop_docker_cluster():
         pass
 
 
-def reinit_cluster_replication():
-    """Reinitialize Mnesia replication without restarting containers."""
-    print("[Reinit] Attempting to reinitialize cluster replication...")
+def reinit_cluster_replication(max_attempts=3, do_full_restart=False):
+    """Reinitialize Mnesia replication.
+    
+    Args:
+        max_attempts: Number of times to attempt reinitialization
+        do_full_restart: If True, do a full cluster restart (clears volumes)
+        
+    Returns:
+        True if replication was successfully initialized, False otherwise
+    """
+    if do_full_restart:
+        print("[Reinit] Performing FULL cluster restart (clearing Mnesia state)...")
+        compose_file = os.path.join(DOCKER_COMPOSE_DIR, "docker-compose.yml")
+        
+        # Stop and remove volumes
+        subprocess.run(
+            ["docker", "compose", "-f", compose_file, "down", "--remove-orphans", "-v"],
+            cwd=DOCKER_COMPOSE_DIR,
+            capture_output=True,
+            timeout=120
+        )
+        time.sleep(5)
+        
+        # Start fresh
+        result = subprocess.run(
+            ["docker", "compose", "-f", compose_file, "up", "-d"],
+            cwd=DOCKER_COMPOSE_DIR,
+            capture_output=True,
+            timeout=180
+        )
+        if result.returncode != 0:
+            print("[Reinit] Failed to restart cluster")
+            return False
+        
+        # Wait for containers
+        print("[Reinit] Waiting for containers to be healthy (60s)...")
+        time.sleep(60)
+    
+    print(f"[Reinit] Attempting to reinitialize cluster replication (up to {max_attempts} attempts)...")
     
     init_script = os.path.join(DOCKER_COMPOSE_DIR, "init_cluster.sh")
     if not os.path.exists(init_script):
         print(f"[Reinit] Init script not found: {init_script}")
         return False
     
-    try:
-        result = subprocess.run(
-            ["bash", init_script],
-            cwd=DOCKER_COMPOSE_DIR,
-            capture_output=True,
-            text=True,
-            timeout=180
-        )
+    for attempt in range(max_attempts):
+        print(f"[Reinit] Attempt {attempt + 1}/{max_attempts}...")
         
-        if result.returncode == 0:
-            print("[Reinit] Replication reinitialized successfully")
-            # Wait for replication to settle
-            print("[Reinit] Waiting 15s for replication to propagate...")
-            time.sleep(15)
-            return True
-        else:
-            print(f"[Reinit] Init script returned non-zero: {result.returncode}")
-            # Print last few lines for debugging
-            for line in result.stdout.strip().split('\n')[-5:]:
-                print(f"  {line}")
-            return False
+        try:
+            result = subprocess.run(
+                ["bash", init_script],
+                cwd=DOCKER_COMPOSE_DIR,
+                capture_output=True,
+                text=True,
+                timeout=300  # Increased timeout for robustness
+            )
             
-    except subprocess.TimeoutExpired:
-        print("[Reinit] Timeout running init script")
-        return False
-    except Exception as e:
-        print(f"[Reinit] Error: {e}")
-        return False
+            if result.returncode == 0:
+                print("[Reinit] Replication reinitialized successfully")
+                # Wait for replication to settle
+                print("[Reinit] Waiting 20s for replication to propagate...")
+                time.sleep(20)
+                return True
+            else:
+                print(f"[Reinit] Init script returned non-zero: {result.returncode}")
+                # Print last few lines for debugging
+                for line in result.stdout.strip().split('\n')[-5:]:
+                    print(f"  {line}")
+                if attempt < max_attempts - 1:
+                    print(f"[Reinit] Waiting 10s before retry...")
+                    time.sleep(10)
+                
+        except subprocess.TimeoutExpired:
+            print("[Reinit] Timeout running init script")
+            if attempt < max_attempts - 1:
+                time.sleep(5)
+        except Exception as e:
+            print(f"[Reinit] Error: {e}")
+            if attempt < max_attempts - 1:
+                time.sleep(5)
+    
+    print(f"[Reinit] Failed after {max_attempts} attempts")
+    return False
 
 
 class LatencyReceiver:
@@ -371,7 +405,8 @@ def main():
     
     try:
         # Try latency test with retry on replication failure
-        max_attempts = 2
+        # Use escalating recovery: first try reinit, then full restart
+        max_attempts = 4
         for attempt in range(max_attempts):
             result = run_latency_test(attempt + 1, max_attempts)
             
@@ -382,14 +417,23 @@ def main():
             elif result == "retry":
                 if attempt < max_attempts - 1:
                     print(f"\n[Retry] Attempting to reinitialize replication...")
-                    if reinit_cluster_replication():
+                    
+                    # Escalating recovery: after 2 failed attempts, do full restart
+                    do_full = (attempt >= 2)
+                    if do_full:
+                        print("[Retry] Multiple failures - escalating to full cluster restart...")
+                    
+                    if reinit_cluster_replication(max_attempts=3, do_full_restart=do_full):
                         print(f"[Retry] Retrying test (attempt {attempt + 2}/{max_attempts})...")
                         continue
                     else:
-                        print("[Retry] Reinitialization failed")
-                # If we're on the last attempt or reinit failed, skip
-                print("\nSKIP:CLUSTER - Cross-region Mnesia replication not configured")
-                sys.exit(2)
+                        print("[Retry] Reinitialization failed, will try test again anyway...")
+                        time.sleep(5)
+                        continue
+                # If we're on the last attempt, FAIL (not skip) - cluster must work
+                print("\n❌ FAIL: Cross-region Mnesia replication could not be established")
+                print("   This is a cluster infrastructure failure that must be fixed.")
+                sys.exit(1)  # FAIL, not skip - all tests must pass
     finally:
         # Optionally stop cluster if we started it
         if cluster_started_by_us and os.environ.get("IRIS_CLEANUP_DOCKER", "false").lower() == "true":

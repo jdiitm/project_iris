@@ -127,25 +127,68 @@ try_fallbacks([Node | Rest], Mod, Fun, Args, _LastError) ->
             Result
     end.
 
-%% AUDIT2 FIX: Lockfree ETS-based circuit check
-%% Reads directly from ETS, no gen_server:call bottleneck
+%% P1-H5 FIX: Lockfree ETS-based circuit check with atomic half-open transition
+%% Prevents thundering herd on recovery by rate-limiting probe requests
+-define(HALF_OPEN_PROBE_INTERVAL_MS, 1000).  %% Only allow 1 probe per second
+
 check_circuit(Node) ->
     case ets:lookup(?BREAKER_ETS, Node) of
         [] -> allow;  %% Unknown node = allow
         [{Node, closed}] -> allow;
-        [{Node, half_open}] -> allow;  %% Allow to test recovery
+        [{Node, half_open, LastProbe}] -> 
+            %% P1-H5 FIX: Rate limit probes in half-open state
+            Now = os:system_time(millisecond),
+            case Now - LastProbe > ?HALF_OPEN_PROBE_INTERVAL_MS of
+                true ->
+                    %% Allow probe, update last probe time atomically
+                    case ets:select_replace(?BREAKER_ETS, [
+                        {{Node, half_open, LastProbe}, [], [{{Node, half_open, Now}}]}
+                    ]) of
+                        1 -> allow;  %% Successfully claimed the probe slot
+                        0 -> deny    %% Another process claimed it first
+                    end;
+                false ->
+                    deny  %% Too soon for another probe
+            end;
+        [{Node, half_open}] ->
+            %% Legacy format - upgrade to new format with timestamp
+            Now = os:system_time(millisecond),
+            ets:insert(?BREAKER_ETS, {Node, half_open, Now}),
+            allow;
         [{Node, open, LastFail, Timeout}] ->
             Now = os:system_time(millisecond),
             case LastFail of
                 undefined -> 
-                    %% Transition to half-open (async notify gen_server)
-                    gen_server:cast(?SERVER, {transition_half_open, Node}),
-                    allow;
+                    %% P1-H5 FIX: Use atomic compare-and-swap for transition
+                    try_transition_half_open(Node, Now);
                 _ when Now - LastFail > Timeout ->
-                    gen_server:cast(?SERVER, {transition_half_open, Node}),
-                    allow;
+                    %% P1-H5 FIX: Use atomic compare-and-swap for transition  
+                    try_transition_half_open(Node, Now);
                 _ -> deny
             end
+    end.
+
+%% P1-H5 FIX: Atomic half-open transition to prevent thundering herd
+try_transition_half_open(Node, Now) ->
+    %% Try to atomically transition from open to half_open
+    %% Only one process should succeed
+    case ets:lookup(?BREAKER_ETS, Node) of
+        [{Node, open, _LastFail, _Timeout}] ->
+            %% Attempt atomic transition using select_replace
+            case ets:select_replace(?BREAKER_ETS, [
+                {{Node, open, '_', '_'}, [], [{{Node, half_open, Now}}]}
+            ]) of
+                1 ->
+                    %% Successfully transitioned - notify gen_server and allow probe
+                    gen_server:cast(?SERVER, {transition_half_open, Node}),
+                    allow;
+                0 ->
+                    %% Another process transitioned first - check new state
+                    check_circuit(Node)
+            end;
+        _ ->
+            %% State changed while we were checking
+            check_circuit(Node)
     end.
 
 record_success_with_latency(Node, Latency) ->
@@ -348,9 +391,11 @@ format_breaker_status(#breaker{status = Status, failures = F, successes = S,
     }.
 
 %% AUDIT2 FIX: Update ETS for lockfree reads
+%% P1-H5 FIX: half_open includes last probe timestamp for rate limiting
 update_ets_status(Node, #breaker{status = closed}) ->
     ets:insert(?BREAKER_ETS, {Node, closed});
 update_ets_status(Node, #breaker{status = half_open}) ->
-    ets:insert(?BREAKER_ETS, {Node, half_open});
+    Now = os:system_time(millisecond),
+    ets:insert(?BREAKER_ETS, {Node, half_open, Now});
 update_ets_status(Node, #breaker{status = open, last_failure = LF, reset_timeout = T}) ->
     ets:insert(?BREAKER_ETS, {Node, open, LF, T}).

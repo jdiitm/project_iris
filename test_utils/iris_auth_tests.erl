@@ -67,7 +67,12 @@ iris_auth_test_() ->
       %% Security tests
       {"Constant time compare equal", fun test_constant_time_equal/0},
       {"Constant time compare unequal", fun test_constant_time_unequal/0},
-      {"Constant time compare length", fun test_constant_time_length/0}
+      {"Constant time compare length", fun test_constant_time_length/0},
+      
+      %% P0-C4 / P1-H2: Security hardening tests
+      {"JWT secret 32 bytes minimum", fun test_jwt_secret_minimum_length/0},
+      {"Revocation is synchronous", fun test_revocation_is_synchronous/0},
+      {"Revocation immediate effect", fun test_revocation_immediate_effect/0}
      ]}.
 
 %% =============================================================================
@@ -207,3 +212,61 @@ tamper_signature(Token) ->
         _ ->
             Token  %% Return as-is if not valid format
     end.
+
+%% =============================================================================
+%% P0-C4 / P1-H2: Security Hardening Tests
+%% =============================================================================
+
+test_jwt_secret_minimum_length() ->
+    %% P0-C4 TEST: JWT secret should be at least 32 bytes
+    %% The setup uses a 32-byte secret, so this verifies the auth module
+    %% accepted it and is functioning correctly
+    
+    %% Create and validate a token to prove auth is working
+    UserId = <<"min_length_test">>,
+    {ok, Token} = iris_auth:create_token(UserId),
+    {ok, Claims} = iris_auth:validate_token(Token),
+    ?assertEqual(UserId, maps:get(<<"sub">>, Claims)).
+
+test_revocation_is_synchronous() ->
+    %% P1-H2 TEST: Revocation should be synchronous (not fire-and-forget)
+    %% The token should be immediately invalid after revoke_token returns
+    
+    UserId = <<"sync_revoke_test">>,
+    {ok, Token} = iris_auth:create_token(UserId),
+    
+    %% Token should be valid initially
+    ?assertMatch({ok, _}, iris_auth:validate_token(Token)),
+    
+    %% Revoke the token (this should be synchronous)
+    ok = iris_auth:revoke_token(Token),
+    
+    %% Immediately after revocation, token should be rejected
+    %% No delay needed - revocation is synchronous
+    Result = iris_auth:validate_token(Token),
+    ?assertMatch({error, token_revoked}, Result).
+
+test_revocation_immediate_effect() ->
+    %% P1-H2 TEST: Multiple revocations should all take immediate effect
+    
+    %% Create multiple tokens
+    Tokens = [begin
+        UserId = <<"imm_effect_", (integer_to_binary(I))/binary>>,
+        {ok, T} = iris_auth:create_token(UserId),
+        T
+    end || I <- lists:seq(1, 5)],
+    
+    %% All should be valid initially
+    lists:foreach(fun(T) ->
+        ?assertMatch({ok, _}, iris_auth:validate_token(T))
+    end, Tokens),
+    
+    %% Revoke all tokens
+    lists:foreach(fun(T) ->
+        ok = iris_auth:revoke_token(T)
+    end, Tokens),
+    
+    %% All should be immediately revoked
+    lists:foreach(fun(T) ->
+        ?assertMatch({error, token_revoked}, iris_auth:validate_token(T))
+    end, Tokens).

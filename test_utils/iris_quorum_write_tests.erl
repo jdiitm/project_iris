@@ -266,6 +266,51 @@ repair_async_test_() ->
       ]}}.
 
 %% =============================================================================
+%% P1-H4: Worker Tracking Tests
+%% =============================================================================
+
+worker_tracking_test_() ->
+    {"Worker tracking (P1-H4 fix)",
+     {setup, fun setup/0, fun cleanup/1,
+      [
+       {"Worker map correctly tracks nodes", fun() ->
+            %% P1-H4 TEST: Verify write_durable works correctly after worker tracking fix
+            %% The bug was that wrong workers were being removed during result collection
+            iris_quorum_write:set_replication_factor(1),
+            
+            %% Write should succeed (proves workers are tracked correctly)
+            Result = iris_quorum_write:write_durable(
+                test_quorum_table, worker_track_key1, <<"value1">>),
+            ?assertEqual(ok, Result),
+            
+            %% Multiple sequential writes should all succeed
+            lists:foreach(fun(I) ->
+                Key = list_to_atom("worker_track_key_" ++ integer_to_list(I)),
+                Value = list_to_binary("value_" ++ integer_to_list(I)),
+                ?assertEqual(ok, iris_quorum_write:write_durable(
+                    test_quorum_table, Key, Value))
+            end, lists:seq(2, 5)),
+            
+            application:unset_env(iris_core, replication_factor)
+        end},
+       
+       {"Read quorum works after worker fix", fun() ->
+            %% P1-H4 TEST: Verify read_quorum also uses correct worker tracking
+            iris_quorum_write:set_replication_factor(1),
+            
+            %% Write a value
+            ok = iris_quorum_write:local_sync_write(
+                test_quorum_table, read_track_key, <<"read_value">>),
+            
+            %% Read should succeed
+            Result = iris_quorum_write:read_quorum(test_quorum_table, read_track_key),
+            ?assertEqual({ok, <<"read_value">>}, Result),
+            
+            application:unset_env(iris_core, replication_factor)
+        end}
+      ]}}.
+
+%% =============================================================================
 %% Integration Test Placeholder
 %% =============================================================================
 

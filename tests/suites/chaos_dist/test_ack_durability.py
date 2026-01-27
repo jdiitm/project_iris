@@ -166,6 +166,127 @@ def check_container_exists(container_name):
     return result.returncode == 0
 
 
+def check_cluster_replication_healthy():
+    """Check if Mnesia replication is working (tables have >= 2 copies)."""
+    # Try to use shared utility first
+    try:
+        import sys
+        sys.path.insert(0, str(PROJECT_ROOT / "tests" / "utilities"))
+        from cluster_utils import check_cluster_replication_healthy as _check
+        return _check()
+    except ImportError:
+        pass
+    
+    # Fallback implementation
+    try:
+        import random
+        probe_id = random.randint(10000, 99999)
+        result = subprocess.run(
+            ["docker", "exec", "core-east-1", "sh", "-c",
+             f"erl -noshell -sname probe{probe_id} -setcookie iris_secret -eval \""
+             "case net_adm:ping('core_east_1@coreeast1') of "
+             "pong -> "
+             "  Tables = [offline_msg, presence, user_status], "
+             "  Results = lists:map(fun(T) -> "
+             "    Ram = rpc:call('core_east_1@coreeast1', mnesia, table_info, [T, ram_copies], 5000), "
+             "    Disc = rpc:call('core_east_1@coreeast1', mnesia, table_info, [T, disc_copies], 5000), "
+             "    case {Ram, Disc} of "
+             "      {{badrpc, _}, _} -> false; "
+             "      {_, {badrpc, _}} -> false; "
+             "      {R, D} when is_list(R), is_list(D) -> length(R) + length(D) >= 2; "
+             "      _ -> false "
+             "    end "
+             "  end, Tables), "
+             "  case lists:all(fun(X) -> X end, Results) of "
+             "    true -> io:format('healthy'), halt(0); "
+             "    false -> io:format('unhealthy'), halt(1) "
+             "  end; "
+             "pang -> io:format('unreachable'), halt(1) "
+             "end.\""],
+            capture_output=True, text=True, timeout=30
+        )
+        return "healthy" in result.stdout
+    except Exception as e:
+        log(f"  Cluster health check failed: {e}")
+        return False
+
+
+def ensure_cluster_healthy():
+    """Ensure cluster replication is healthy, reinitializing if needed.
+    
+    Returns True if cluster is healthy, False if all attempts failed.
+    Uses escalating recovery: first try reinit, then full restart.
+    """
+    # Try to use shared utility first
+    try:
+        import sys
+        sys.path.insert(0, str(PROJECT_ROOT / "tests" / "utilities"))
+        from cluster_utils import ensure_cluster_healthy as _ensure
+        return _ensure(max_attempts=3)
+    except ImportError:
+        pass
+    
+    # Fallback implementation with escalating recovery
+    init_script = PROJECT_ROOT / "docker" / "global-cluster" / "init_cluster.sh"
+    docker_dir = PROJECT_ROOT / "docker" / "global-cluster"
+    compose_file = docker_dir / "docker-compose.yml"
+    
+    for attempt in range(3):
+        if check_cluster_replication_healthy():
+            log(f"  Cluster replication is healthy")
+            return True
+        
+        log(f"  Cluster unhealthy, reinitializing (attempt {attempt+1}/3)...")
+        
+        # Escalate to full restart after 2 failed attempts
+        if attempt >= 2:
+            log("  Escalating to full cluster restart...")
+            try:
+                subprocess.run(
+                    ["docker", "compose", "-f", str(compose_file), "down", "--remove-orphans", "-v"],
+                    cwd=str(docker_dir), capture_output=True, timeout=120
+                )
+                time.sleep(5)
+                subprocess.run(
+                    ["docker", "compose", "-f", str(compose_file), "up", "-d"],
+                    cwd=str(docker_dir), capture_output=True, timeout=180
+                )
+                log("  Waiting for containers (60s)...")
+                time.sleep(60)
+            except Exception as e:
+                log(f"  Full restart failed: {e}")
+        
+        if not init_script.exists():
+            log(f"  Init script not found: {init_script}")
+            return False
+        
+        try:
+            result = subprocess.run(
+                ["bash", str(init_script)],
+                cwd=str(init_script.parent),
+                capture_output=True,
+                text=True,
+                timeout=300
+            )
+            if result.returncode == 0:
+                log("  Reinitialization successful, waiting for propagation...")
+                time.sleep(20)
+            else:
+                log(f"  Reinitialization returned non-zero: {result.returncode}")
+                for line in (result.stdout + result.stderr).strip().split('\n')[-3:]:
+                    log(f"    {line}")
+                time.sleep(10)
+        except subprocess.TimeoutExpired:
+            log("  Reinitialization timed out")
+            time.sleep(10)
+        except Exception as e:
+            log(f"  Reinitialization error: {e}")
+            time.sleep(10)
+    
+    # Final check after all attempts
+    return check_cluster_replication_healthy()
+
+
 def test_ack_implies_durability():
     """
     Main test: ACK implies durability.
@@ -186,6 +307,13 @@ def test_ack_implies_durability():
         print(f"  ⚠️ Container {CONTAINER_NAME} not found")
         print("  Start cluster with: make cluster-up")
         return None  # Skip, not fail
+    
+    # Ensure cluster replication is healthy before running durability test
+    print("\n0. Ensuring cluster replication is healthy...")
+    if not ensure_cluster_healthy():
+        print("  ❌ Could not establish healthy cluster replication after 3 attempts")
+        print("  This is required for ACK-durability to work correctly")
+        return False  # FAIL - cluster must be healthy for this test
     
     sender = f"durability_sender_{int(time.time())}"
     receiver = f"durability_receiver_{int(time.time())}"
@@ -330,33 +458,41 @@ def run_simplified_test():
 
 
 def restore_cluster_state():
-    """Re-initialize cluster after test that restarts containers."""
+    """Re-initialize cluster after test that restarts containers.
+    
+    IMPORTANT: After killing Mnesia nodes, their state becomes stale.
+    We must do a FULL cluster restart to ensure clean state.
+    """
     try:
-        # First ensure all core containers are running
-        log("[cleanup] Restoring cluster state after container restart...")
-        
-        cores = ["core-east-1", "core-east-2", "core-west-1", "core-west-2", "core-eu-1", "core-eu-2"]
-        for core in cores:
-            result = subprocess.run(
-                ["docker", "inspect", "--format", "{{.State.Status}}", core],
-                capture_output=True, text=True
-            )
-            if result.stdout.strip() in ["exited", "created"]:
-                log(f"[cleanup] Restarting stopped container: {core}")
-                subprocess.run(["docker", "start", core], capture_output=True)
-        
-        # Wait for containers to stabilize
-        time.sleep(10)
-        
-        # Run init script
-        init_script = PROJECT_ROOT / "docker" / "global-cluster" / "init_cluster.sh"
-        if init_script.exists():
+        # Import from shared utility
+        import sys
+        sys.path.insert(0, str(PROJECT_ROOT / "tests" / "utilities"))
+        try:
+            from cluster_utils import restore_cluster_state as _restore
+            _restore()
+        except ImportError:
+            # Fallback if utility not available
+            log("[cleanup] Restoring cluster state (inline fallback)...")
+            docker_dir = PROJECT_ROOT / "docker" / "global-cluster"
+            compose_file = docker_dir / "docker-compose.yml"
+            
             subprocess.run(
-                ["bash", str(init_script)],
-                cwd=str(init_script.parent),
-                capture_output=True,
-                timeout=180  # Increased timeout
+                ["docker", "compose", "-f", str(compose_file), "down", "--remove-orphans", "-v"],
+                cwd=str(docker_dir), capture_output=True, timeout=60
             )
+            time.sleep(5)
+            subprocess.run(
+                ["docker", "compose", "-f", str(compose_file), "up", "-d"],
+                cwd=str(docker_dir), capture_output=True, timeout=180
+            )
+            time.sleep(60)
+            
+            init_script = docker_dir / "init_cluster.sh"
+            if init_script.exists():
+                subprocess.run(
+                    ["bash", str(init_script)],
+                    cwd=str(docker_dir), capture_output=True, timeout=300
+                )
             log("[cleanup] Cluster state restored")
     except Exception as e:
         log(f"[cleanup] Warning: Could not restore cluster state: {e}")

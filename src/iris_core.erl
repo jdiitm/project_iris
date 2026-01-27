@@ -487,6 +487,7 @@ is_core_node(Node) ->
     lists:prefix("core", NodeStr) orelse lists:prefix("iris_core", NodeStr).
 
 %% Helper: Add table copies to all nodes that don't have them
+%% Retries on failure (schema may not be active yet on remote nodes)
 replicate_table(Table, CopyType, Nodes) ->
     case lists:member(Table, mnesia:system_info(tables)) of
         false ->
@@ -503,16 +504,40 @@ replicate_table(Table, CopyType, Nodes) ->
             NodesToAdd = Nodes -- CurrentCopies,
             
             lists:foreach(fun(Node) ->
-                logger:info("Adding ~p copy of ~p to ~p", [CopyType, Table, Node]),
-                case mnesia:add_table_copy(Table, Node, CopyType) of
-                    {atomic, ok} ->
-                        logger:info("Successfully added ~p to ~p", [Table, Node]);
-                    {aborted, {already_exists, _, _}} ->
-                        logger:debug("Table ~p already exists on ~p", [Table, Node]);
-                    {aborted, Reason} ->
-                        logger:warning("Failed to add ~p to ~p: ~p", [Table, Node, Reason])
-                end
+                add_table_copy_with_retry(Table, Node, CopyType, 3)
             end, NodesToAdd),
             
             ok
     end.
+
+%% Add table copy with retries (handles transient failures like schema not active)
+add_table_copy_with_retry(Table, Node, CopyType, Retries) ->
+    add_table_copy_with_retry(Table, Node, CopyType, Retries, 1).
+
+add_table_copy_with_retry(Table, Node, CopyType, MaxRetries, Attempt) when Attempt =< MaxRetries ->
+    logger:info("Adding ~p copy of ~p to ~p (attempt ~p/~p)", 
+                [CopyType, Table, Node, Attempt, MaxRetries]),
+    case mnesia:add_table_copy(Table, Node, CopyType) of
+        {atomic, ok} ->
+            logger:info("Successfully added ~p to ~p", [Table, Node]),
+            ok;
+        {aborted, {already_exists, _, _}} ->
+            logger:debug("Table ~p already exists on ~p", [Table, Node]),
+            ok;
+        {aborted, {system_limit, _, _} = Reason} ->
+            %% Schema not active yet - wait and retry
+            logger:warning("Failed to add ~p to ~p: ~p - retrying in 5s", [Table, Node, Reason]),
+            timer:sleep(5000),
+            add_table_copy_with_retry(Table, Node, CopyType, MaxRetries, Attempt + 1);
+        {aborted, {not_active, _, _} = Reason} ->
+            %% Schema not active yet - wait and retry
+            logger:warning("Failed to add ~p to ~p: ~p - retrying in 5s", [Table, Node, Reason]),
+            timer:sleep(5000),
+            add_table_copy_with_retry(Table, Node, CopyType, MaxRetries, Attempt + 1);
+        {aborted, Reason} ->
+            logger:warning("Failed to add ~p to ~p: ~p", [Table, Node, Reason]),
+            {error, Reason}
+    end;
+add_table_copy_with_retry(Table, Node, _CopyType, MaxRetries, _Attempt) ->
+    logger:error("Failed to add ~p to ~p after ~p attempts", [Table, Node, MaxRetries]),
+    {error, max_retries_exceeded}.

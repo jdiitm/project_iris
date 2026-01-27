@@ -116,19 +116,53 @@ erl -name iris_edge@$(hostname -I | awk '{print $1}') \
         {regions, [<<"us-east-1">>, <<"eu-west-1">>]},
         
         %% Consistency mode: ap | hardened_ap | cp
-        {consistency_mode, hardened_ap}
+        {consistency_mode, hardened_ap},
+        
+        %% P1-H1: Split-brain protection (REQUIRED for production)
+        %% List all expected core nodes - partition guard will block writes
+        %% when quorum is lost to prevent data divergence
+        {expected_cluster_nodes, ['core1@host1', 'core2@host2', 'core3@host3']},
+        
+        %% P1-H6: WAL directory for durable batcher
+        %% MUST be on persistent storage (NOT tmpfs/ramfs)
+        %% Default: data/wal (relative to application directory)
+        {wal_directory, "/var/lib/iris/wal"}
     ]},
     
     {iris_edge, [
         %% Auto-tune router pool (default) or set explicitly
         %% {router_pool_size, 16},
         
-        %% Authentication
-        {jwt_secret, <<"CHANGE_ME_IN_PRODUCTION">>},
-        {auth_enabled, true}
+        %% P0-C4: JWT Authentication (REQUIRED for production)
+        %% Secret MUST be at least 32 bytes and identical across all nodes
+        %% Without this, auth will fail when users connect to different nodes
+        {jwt_secret, <<"CHANGE_ME_TO_32_BYTES_OR_MORE!!!">>},
+        {auth_enabled, true},
+        
+        %% For testing ONLY - allows random secret generation
+        %% NEVER enable in production - causes auth failures
+        %% {allow_random_secret, true}
     ]}
 ].
 ```
+
+### Critical Configuration Notes
+
+#### JWT Secret (P0-C4)
+- **MUST** be at least 32 bytes
+- **MUST** be identical across all nodes in the cluster
+- If not configured with `allow_random_secret=false`, startup will fail
+- Random secrets cause auth failures when users reconnect to different nodes
+
+#### Expected Cluster Nodes (P1-H1)
+- **MUST** list all expected core nodes for split-brain protection
+- Partition guard will block writes when fewer than half the nodes are reachable
+- Without this, silent data divergence can occur during network partitions
+
+#### WAL Directory (P1-H6)
+- **MUST** be on persistent storage (real disk, not tmpfs)
+- `/tmp` is often tmpfs on modern Linux - DO NOT use for WAL
+- System will warn on startup if WAL appears to be on tmpfs
 
 ### Auto-Tuning
 
@@ -236,12 +270,19 @@ application:set_env(iris_core, allow_table_nuke, true).
 
 ## Security Checklist
 
-- [ ] TLS certificates configured for client connections
-- [ ] mTLS configured for inter-node communication (optional)
-- [ ] Erlang cookie secured (`chmod 400 ~/.erlang.cookie`)
+### Required for Production
+- [ ] **JWT secret**: 32+ bytes, identical across all nodes (P0-C4)
+- [ ] **Expected cluster nodes**: Listed for partition guard (P1-H1)
+- [ ] **WAL directory**: On persistent storage, not tmpfs (P1-H6)
+- [ ] **TLS certificates**: Configured for client connections
+- [ ] **Erlang cookie**: Secured (`chmod 400 ~/.erlang.cookie`)
+- [ ] **`allow_table_nuke`**: Set to `false`
+
+### Recommended
+- [ ] mTLS configured for inter-node communication
 - [ ] Firewall rules: 4369 (epmd), 9000-9010 (distribution)
-- [ ] JWT secret configured (not default value)
-- [ ] `allow_table_nuke` set to `false`
+- [ ] Monitoring for partition events
+- [ ] Token revocation propagation verified across nodes (P1-H2)
 
 ## Multi-Region Deployment
 

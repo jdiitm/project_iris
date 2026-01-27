@@ -298,33 +298,41 @@ def test_failover_time():
 
 
 def restore_cluster_state():
-    """Re-initialize cluster after test that restarts containers."""
+    """Re-initialize cluster after test that restarts containers.
+    
+    IMPORTANT: After killing Mnesia nodes, their state becomes stale.
+    We must do a FULL cluster restart to ensure clean state.
+    """
     try:
-        # First ensure all core containers are running
-        print("[cleanup] Restoring cluster state after container restart...")
-        
-        cores = ["core-east-1", "core-east-2", "core-west-1", "core-west-2", "core-eu-1", "core-eu-2"]
-        for core in cores:
-            result = subprocess.run(
-                ["docker", "inspect", "--format", "{{.State.Status}}", core],
-                capture_output=True, text=True
-            )
-            if result.stdout.strip() in ["exited", "created"]:
-                print(f"[cleanup] Restarting stopped container: {core}")
-                subprocess.run(["docker", "start", core], capture_output=True)
-        
-        # Wait for containers to stabilize
-        time.sleep(10)
-        
-        # Run init script
-        init_script = PROJECT_ROOT / "docker" / "global-cluster" / "init_cluster.sh"
-        if init_script.exists():
+        # Import from shared utility
+        import sys
+        sys.path.insert(0, str(PROJECT_ROOT / "tests" / "utilities"))
+        try:
+            from cluster_utils import restore_cluster_state as _restore
+            _restore()
+        except ImportError:
+            # Fallback if utility not available
+            print("[cleanup] Restoring cluster state (inline fallback)...")
+            docker_dir = PROJECT_ROOT / "docker" / "global-cluster"
+            compose_file = docker_dir / "docker-compose.yml"
+            
             subprocess.run(
-                ["bash", str(init_script)],
-                cwd=str(init_script.parent),
-                capture_output=True,
-                timeout=180  # Increased timeout
+                ["docker", "compose", "-f", str(compose_file), "down", "--remove-orphans", "-v"],
+                cwd=str(docker_dir), capture_output=True, timeout=60
             )
+            time.sleep(5)
+            subprocess.run(
+                ["docker", "compose", "-f", str(compose_file), "up", "-d"],
+                cwd=str(docker_dir), capture_output=True, timeout=180
+            )
+            time.sleep(60)
+            
+            init_script = docker_dir / "init_cluster.sh"
+            if init_script.exists():
+                subprocess.run(
+                    ["bash", str(init_script)],
+                    cwd=str(docker_dir), capture_output=True, timeout=300
+                )
             print("[cleanup] Cluster state restored")
     except Exception as e:
         print(f"[cleanup] Warning: Could not restore cluster state: {e}")

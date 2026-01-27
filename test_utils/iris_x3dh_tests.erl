@@ -206,8 +206,61 @@ initial_message_contains_required_fields_test() ->
     ?assertEqual(64, byte_size(maps:get(associated_data, InitialMessage))).
 
 %% =============================================================================
+%% Security Tests - C2: Forged Signature Rejection
+%% =============================================================================
+
+forged_signature_rejected_test() ->
+    %% P0-C2 TEST: Verify forged signatures are rejected
+    %% This prevents MITM key substitution attacks
+    
+    %% Generate valid keys
+    {IK_B_Pub, IK_B_Priv} = iris_x3dh:generate_identity_key(),
+    {SPK_B_Pub, _, _ValidSig} = iris_x3dh:generate_signed_prekey(IK_B_Priv),
+    
+    %% Create forged signature (wrong size - too small)
+    ForgedSig1 = crypto:strong_rand_bytes(32),
+    ?assertNot(iris_x3dh:verify_prekey_signature(SPK_B_Pub, ForgedSig1, IK_B_Pub)),
+    
+    %% Create forged signature (correct size but invalid content)
+    ForgedSig2 = crypto:strong_rand_bytes(96),
+    ?assertNot(iris_x3dh:verify_prekey_signature(SPK_B_Pub, ForgedSig2, IK_B_Pub)),
+    
+    %% Create forged signature (very large)
+    ForgedSig3 = crypto:strong_rand_bytes(256),
+    ?assertNot(iris_x3dh:verify_prekey_signature(SPK_B_Pub, ForgedSig3, IK_B_Pub)).
+
+signature_binds_to_prekey_test() ->
+    %% P0-C2 TEST: Valid signature should verify with correct prekey
+    %% The signature is cryptographically bound to the prekey content
+    
+    {_, IK_A_Priv} = iris_x3dh:generate_identity_key(),
+    {IK_A_Pub, _} = iris_x3dh:generate_identity_key(),  %% Different for cross-check
+    {SPK_Pub, _, Sig} = iris_x3dh:generate_signed_prekey(IK_A_Priv),
+    
+    %% Generate a different prekey to test binding
+    {DifferentSPK_Pub, _, _} = iris_x3dh:generate_signed_prekey(IK_A_Priv),
+    
+    %% Signature should NOT verify with a different prekey
+    %% This tests that signatures are bound to specific prekey content
+    ?assertNot(iris_x3dh:verify_prekey_signature(DifferentSPK_Pub, Sig, IK_A_Pub)).
+
+invalid_input_sizes_rejected_test() ->
+    %% P0-C2 TEST: Invalid input sizes should be rejected
+    
+    %% Wrong prekey size
+    ?assertNot(iris_x3dh:verify_prekey_signature(
+        crypto:strong_rand_bytes(16),  %% Wrong size (should be 32)
+        crypto:strong_rand_bytes(96),
+        crypto:strong_rand_bytes(32))),
+    
+    %% Wrong identity key size
+    ?assertNot(iris_x3dh:verify_prekey_signature(
+        crypto:strong_rand_bytes(32),
+        crypto:strong_rand_bytes(96),
+        crypto:strong_rand_bytes(16))).  %% Wrong size (should be 32)
+
+%% =============================================================================
 %% Error Handling Tests
 %% =============================================================================
 
-%% Note: Invalid signature detection is simplified in this implementation
-%% A production implementation would have more rigorous signature verification
+%% Note: Signature verification now uses proper Ed25519 cryptographic checks

@@ -53,10 +53,14 @@ write_durable(Table, Key, Value, Opts) ->
     Parent = self(),
     Ref = make_ref(),
     
-    Workers = [spawn_monitor(fun() ->
-        Result = do_replica_write(Node, Table, Key, Value, Timeout),
-        Parent ! {Ref, Node, Result}
-    end) || Node <- Replicas],
+    %% P1-H4 FIX: Track Node -> {Pid, MRef} mapping for proper cleanup
+    Workers = lists:foldl(fun(Node, Acc) ->
+        {Pid, MRef} = spawn_monitor(fun() ->
+            Result = do_replica_write(Node, Table, Key, Value, Timeout),
+            Parent ! {Ref, Node, Result}
+        end),
+        maps:put(Node, {Pid, MRef}, Acc)
+    end, #{}, Replicas),
     
     %% Collect results with timeout
     {Successes, Failures} = collect_results(Ref, Workers, Timeout, [], []),
@@ -98,10 +102,14 @@ read_quorum(Table, Key, Opts) ->
     Parent = self(),
     Ref = make_ref(),
     
-    Workers = [spawn_monitor(fun() ->
-        Result = do_replica_read(Node, Table, Key, Timeout),
-        Parent ! {Ref, Node, Result}
-    end) || Node <- Replicas],
+    %% P1-H4 FIX: Use map-based worker tracking
+    Workers = lists:foldl(fun(Node, Acc) ->
+        {Pid, MRef} = spawn_monitor(fun() ->
+            Result = do_replica_read(Node, Table, Key, Timeout),
+            Parent ! {Ref, Node, Result}
+        end),
+        maps:put(Node, {Pid, MRef}, Acc)
+    end, #{}, Replicas),
     
     %% Collect and reconcile results
     {Results, _Failures} = collect_read_results(Ref, Workers, Timeout, []),
@@ -211,12 +219,13 @@ do_replica_read(Node, Table, Key, Timeout) ->
 %% Internal: Result Collection
 %% =============================================================================
 
-collect_results(_Ref, [], _Timeout, Successes, Failures) ->
+%% P1-H4 FIX: Workers is now a map of Node -> {Pid, MRef}
+collect_results(_Ref, Workers, _Timeout, Successes, Failures) when map_size(Workers) == 0 ->
     {Successes, Failures};
 collect_results(Ref, Workers, Timeout, Successes, Failures) ->
     receive
         {Ref, Node, {ok, Node}} ->
-            %% Success - remove from workers
+            %% Success - remove worker for this node
             Workers2 = remove_worker_for_node(Workers, Node),
             collect_results(Ref, Workers2, Timeout, [Node | Successes], Failures);
         {Ref, Node, {error, Node, Reason}} ->
@@ -224,18 +233,21 @@ collect_results(Ref, Workers, Timeout, Successes, Failures) ->
             Workers2 = remove_worker_for_node(Workers, Node),
             collect_results(Ref, Workers2, Timeout, Successes, [{Node, Reason} | Failures]);
         {'DOWN', MRef, process, _Pid, Reason} ->
-            %% Worker crashed
-            Workers2 = lists:keydelete(MRef, 2, Workers),
-            collect_results(Ref, Workers2, Timeout, Successes, [{unknown, Reason} | Failures])
+            %% Worker crashed - find which node it belonged to
+            {CrashedNode, Workers2} = remove_worker_by_mref(Workers, MRef),
+            collect_results(Ref, Workers2, Timeout, Successes, [{CrashedNode, Reason} | Failures])
     after Timeout ->
         %% Timeout - treat remaining as failures
-        TimedOut = [{unknown, timeout} || _ <- Workers],
-        %% Clean up workers
-        [demonitor(MRef, [flush]) || {_, MRef} <- Workers],
+        TimedOut = [{Node, timeout} || Node <- maps:keys(Workers)],
+        %% Clean up remaining workers
+        maps:foreach(fun(_Node, {_Pid, MRef}) ->
+            demonitor(MRef, [flush])
+        end, Workers),
         {Successes, Failures ++ TimedOut}
     end.
 
-collect_read_results(_Ref, [], _Timeout, Results) ->
+%% P1-H4 FIX: Workers is now a map of Node -> {Pid, MRef}
+collect_read_results(_Ref, Workers, _Timeout, Results) when map_size(Workers) == 0 ->
     {Results, []};
 collect_read_results(Ref, Workers, Timeout, Results) ->
     receive
@@ -249,20 +261,37 @@ collect_read_results(Ref, Workers, Timeout, Results) ->
             Workers2 = remove_worker_for_node(Workers, ErrNode),
             collect_read_results(Ref, Workers2, Timeout, Results);
         {'DOWN', MRef, process, _Pid, _Reason} ->
-            Workers2 = lists:keydelete(MRef, 2, Workers),
+            {_CrashedNode, Workers2} = remove_worker_by_mref(Workers, MRef),
             collect_read_results(Ref, Workers2, Timeout, Results)
     after Timeout ->
-        [demonitor(MRef, [flush]) || {_, MRef} <- Workers],
+        maps:foreach(fun(_Node, {_Pid, MRef}) ->
+            demonitor(MRef, [flush])
+        end, Workers),
         {Results, []}
     end.
 
-remove_worker_for_node(Workers, _Node) ->
-    %% Simple removal - in production would track Node -> MRef mapping
-    case Workers of
-        [{_, MRef} | Rest] -> 
+%% P1-H4 FIX: Remove worker by node (O(1) lookup in map)
+remove_worker_for_node(Workers, Node) ->
+    case maps:get(Node, Workers, undefined) of
+        undefined ->
+            Workers;
+        {_Pid, MRef} ->
             demonitor(MRef, [flush]),
-            Rest;
-        [] -> []
+            maps:remove(Node, Workers)
+    end.
+
+%% P1-H4 FIX: Remove worker by monitor reference (find node by MRef)
+remove_worker_by_mref(Workers, MRef) ->
+    case maps:fold(fun(Node, {_Pid, M}, Acc) ->
+        case M of
+            MRef -> {found, Node};
+            _ -> Acc
+        end
+    end, not_found, Workers) of
+        {found, Node} ->
+            {Node, maps:remove(Node, Workers)};
+        not_found ->
+            {unknown, Workers}
     end.
 
 reconcile_reads([]) ->

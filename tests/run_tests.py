@@ -65,13 +65,14 @@ DOCKER_REQUIRED_SUITES = ["chaos_dist"]
 # Tests in other suites that require Docker
 DOCKER_REQUIRED_TESTS = ["test_failover_time", "test_multimaster_durability"]
 # Tests that kill/restart containers or modify network and may corrupt cluster state
-# After these tests, cluster needs full restart before next test
+# After these tests, cluster needs FULL restart (with volume removal) to clear Mnesia state
 CLUSTER_CORRUPTING_TESTS = [
-    "test_ack_durability",
-    "test_dist_failover", 
-    "test_failover_time",
-    "test_multimaster_durability",
-    "test_split_brain"  # Disconnects/reconnects network
+    "test_ack_durability",       # Kills core-east-1
+    "test_cascade_failure",      # Kills core-eu-2
+    "test_dist_failover",        # Kills multiple containers
+    "test_failover_time",        # Kills core-east-1
+    "test_multimaster_durability",  # Kills core-east-1 with SIGKILL
+    "test_split_brain",          # Disconnects/reconnects network
 ]
 
 # Docker cluster paths
@@ -579,8 +580,13 @@ def start_docker_cluster() -> bool:
         log_warn(f"Docker cluster startup failed: {e}")
         return False
 
-def stop_docker_cluster():
-    """Stop the Docker global cluster."""
+def stop_docker_cluster(remove_volumes: bool = False):
+    """Stop the Docker global cluster.
+    
+    Args:
+        remove_volumes: If True, also remove Docker volumes (Mnesia data).
+                       Use this after tests that corrupt cluster state.
+    """
     global _docker_cluster_running
     
     if not _docker_cluster_running:
@@ -589,11 +595,16 @@ def stop_docker_cluster():
     log_info("Stopping Docker cluster...")
     
     try:
+        cmd = ["docker", "compose", "-f", str(DOCKER_COMPOSE_FILE), "down", "--remove-orphans"]
+        if remove_volumes:
+            cmd.append("-v")  # Remove volumes to clear Mnesia state
+            log_info("  (removing volumes to clear Mnesia state)")
+        
         subprocess.run(
-            ["docker", "compose", "-f", str(DOCKER_COMPOSE_FILE), "down", "--remove-orphans"],
+            cmd,
             cwd=str(DOCKER_CLUSTER_DIR),
             capture_output=True,
-            timeout=60
+            timeout=120  # Increased timeout for volume removal
         )
         _docker_cluster_running = False
         log_info("Docker cluster stopped")
@@ -1109,12 +1120,13 @@ def run_suite(suite_name: str, run_dir: Path, require_cluster: bool = True) -> S
         result = run_test(test, run_dir, timeout=timeout)
         results.append(result)
         
-        # If this test corrupts the cluster, restart Docker before next test
+        # If this test corrupts the cluster, do a FULL restart (with volume removal)
+        # This ensures clean Mnesia state for subsequent tests
         test_name = test.get("name", "") if isinstance(test, dict) else str(test)
         if needs_docker and test_name in CLUSTER_CORRUPTING_TESTS:
-            log_info(f"Test {test_name} may have corrupted cluster - restarting Docker...")
-            stop_docker_cluster()
-            time.sleep(5)  # Brief pause
+            log_info(f"Test {test_name} corrupted cluster - full restart with volume cleanup...")
+            stop_docker_cluster(remove_volumes=True)  # CRITICAL: remove volumes!
+            time.sleep(10)  # Allow time for cleanup
             if not start_docker_cluster():
                 log_warn("Failed to restart Docker cluster after corrupting test")
     
