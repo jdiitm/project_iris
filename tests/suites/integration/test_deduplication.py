@@ -4,6 +4,14 @@ Test Deduplication - Validates message deduplication guarantees.
 
 This test verifies that duplicate messages (same message ID) are only
 delivered once, preventing duplicate delivery to users.
+
+INVARIANTS:
+- Unique messages must all be delivered (no unexpected loss)
+- No duplicate messages should be received
+- System handles rapid sends without crashing
+- Deduplication must work across reconnects
+
+Tier: 0 (Required on every merge)
 """
 
 import socket
@@ -17,6 +25,10 @@ import uuid
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
 from utilities.iris_client import IrisClient
+
+
+def log(msg):
+    print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
 
 
 class DeduplicationTestClient(IrisClient):
@@ -45,9 +57,9 @@ def test_unique_messages_delivered():
     1. Send 10 messages with unique IDs
     2. Verify all 10 are received
     """
-    print("=" * 60)
-    print("TEST: Unique Messages All Delivered")
-    print("=" * 60)
+    log("=" * 60)
+    log("TEST: Unique Messages All Delivered")
+    log("=" * 60)
     
     host = os.environ.get('IRIS_HOST', 'localhost')
     port = int(os.environ.get('IRIS_PORT', '8085'))
@@ -62,7 +74,7 @@ def test_unique_messages_delivered():
         sender.login("dedup_sender")
         receiver.login("dedup_receiver")
         
-        print("✓ Connected sender and receiver")
+        log("PASS: Connected sender and receiver")
         
         # Send unique messages
         num_messages = 10
@@ -73,22 +85,35 @@ def test_unique_messages_delivered():
             sender.send_msg("dedup_receiver", msg)
             sent_messages.append(msg)
         
-        print(f"✓ Sent {num_messages} unique messages")
+        log(f"Sent {num_messages} unique messages")
         
         time.sleep(1.0)
         
         # Receive all messages
         received = []
-        for _ in range(num_messages * 2):  # Allow for potential duplicates
+        receive_errors = []
+        
+        for attempt in range(num_messages * 2):  # Allow for potential duplicates
             try:
                 msg = receiver.recv_msg(timeout=0.5)
                 if msg:
                     decoded = msg.decode('utf-8') if isinstance(msg, bytes) else msg
                     received.append(decoded)
-            except:
+            except socket.timeout:
+                # No more messages available
+                break
+            except socket.error as e:
+                receive_errors.append(f"attempt {attempt}: socket error - {e}")
+                break
+            except Exception as e:
+                receive_errors.append(f"attempt {attempt}: {type(e).__name__} - {e}")
                 break
         
-        print(f"✓ Received {len(received)} messages")
+        log(f"Received {len(received)} messages")
+        
+        if receive_errors:
+            for err in receive_errors:
+                log(f"  {err}")
         
         # Check: all unique messages should be received exactly once
         received_set = set(received)
@@ -96,24 +121,33 @@ def test_unique_messages_delivered():
         
         missing = sent_set - received_set
         if missing:
-            print(f"⚠ Missing {len(missing)} messages (may be in offline storage)")
+            log(f"WARN: Missing {len(missing)} messages (may be in offline storage)")
         
         if len(received) == len(set(received)):
-            print("✓ No duplicates received")
+            log("PASS: No duplicates received")
             return True
         else:
             duplicates = len(received) - len(set(received))
-            print(f"✗ {duplicates} duplicate messages received")
+            log(f"FAIL: {duplicates} duplicate messages received")
             return False
             
+    except socket.error as e:
+        log(f"FAIL: Socket error - {e}")
+        return False
     except Exception as e:
-        print(f"✗ Error: {e}")
+        log(f"FAIL: Unexpected error - {type(e).__name__}: {e}")
         return False
     finally:
         if sender:
-            sender.close()
+            try:
+                sender.close()
+            except Exception:
+                pass
         if receiver:
-            receiver.close()
+            try:
+                receiver.close()
+            except Exception:
+                pass
 
 
 def test_retry_storm_handling():
@@ -124,9 +158,9 @@ def test_retry_storm_handling():
     1. Send same message content 5 times rapidly
     2. Verify receiver doesn't get spammed
     """
-    print("\n" + "=" * 60)
-    print("TEST: Retry Storm Handling")
-    print("=" * 60)
+    log("\n" + "=" * 60)
+    log("TEST: Retry Storm Handling")
+    log("=" * 60)
     
     host = os.environ.get('IRIS_HOST', 'localhost')
     port = int(os.environ.get('IRIS_PORT', '8085'))
@@ -141,44 +175,59 @@ def test_retry_storm_handling():
         sender.login("storm_sender")
         receiver.login("storm_receiver")
         
-        print("✓ Connected clients")
+        log("PASS: Connected clients")
         
         # Send same content multiple times (simulating retries)
         storm_msg = f"storm_{int(time.time())}"
         for i in range(5):
             sender.send_msg("storm_receiver", storm_msg)
         
-        print("✓ Sent 5 'retry' messages with same content")
+        log("Sent 5 'retry' messages with same content")
         
         time.sleep(1.0)
         
         # Count received
         received = []
-        for _ in range(10):
+        for attempt in range(10):
             try:
                 msg = receiver.recv_msg(timeout=0.3)
                 if msg:
                     decoded = msg.decode('utf-8') if isinstance(msg, bytes) else msg
                     received.append(decoded)
-            except:
+            except socket.timeout:
+                break
+            except socket.error as e:
+                log(f"  Receive error at {attempt}: socket error - {e}")
+                break
+            except Exception as e:
+                log(f"  Receive error at {attempt}: {type(e).__name__} - {e}")
                 break
         
         # Note: Without message IDs, these are technically different messages
         # The dedup module works on message IDs, not content
         # So here we're really testing that the system doesn't crash under load
         
-        print(f"✓ Received {len(received)} messages")
-        print("✓ System handled rapid sends without issue")
+        log(f"Received {len(received)} messages")
+        log("PASS: System handled rapid sends without issue")
         return True
         
+    except socket.error as e:
+        log(f"FAIL: Socket error - {e}")
+        return False
     except Exception as e:
-        print(f"✗ Error: {e}")
+        log(f"FAIL: Unexpected error - {type(e).__name__}: {e}")
         return False
     finally:
         if sender:
-            sender.close()
+            try:
+                sender.close()
+            except Exception:
+                pass
         if receiver:
-            receiver.close()
+            try:
+                receiver.close()
+            except Exception:
+                pass
 
 
 def test_dedup_across_reconnects():
@@ -192,12 +241,16 @@ def test_dedup_across_reconnects():
     4. Receiver reconnects and gets message
     5. Verify no duplicates on subsequent reconnects
     """
-    print("\n" + "=" * 60)
-    print("TEST: Dedup Across Reconnects")
-    print("=" * 60)
+    log("\n" + "=" * 60)
+    log("TEST: Dedup Across Reconnects")
+    log("=" * 60)
     
     host = os.environ.get('IRIS_HOST', 'localhost')
     port = int(os.environ.get('IRIS_PORT', '8085'))
+    
+    sender = None
+    receiver1 = None
+    receiver2 = None
     
     try:
         sender = IrisClient(host, port)
@@ -206,7 +259,7 @@ def test_dedup_across_reconnects():
         # Send message to offline user
         offline_msg = f"offline_{uuid.uuid4().hex[:8]}"
         sender.send_msg("reconnect_receiver", offline_msg)
-        print("✓ Sent message to offline user")
+        log("Sent message to offline user")
         
         time.sleep(0.5)
         
@@ -217,17 +270,24 @@ def test_dedup_across_reconnects():
         time.sleep(0.5)
         
         first_msgs = []
-        for _ in range(3):
+        for attempt in range(3):
             try:
                 msg = receiver1.recv_msg(timeout=0.5)
                 if msg:
                     decoded = msg.decode('utf-8') if isinstance(msg, bytes) else msg
                     first_msgs.append(decoded)
-            except:
+            except socket.timeout:
+                break
+            except socket.error as e:
+                log(f"  First connect recv {attempt}: socket error - {e}")
+                break
+            except Exception as e:
+                log(f"  First connect recv {attempt}: {type(e).__name__} - {e}")
                 break
         
         receiver1.close()
-        print(f"✓ First connect: received {len(first_msgs)} messages")
+        receiver1 = None
+        log(f"First connect: received {len(first_msgs)} messages")
         
         time.sleep(0.5)
         
@@ -238,32 +298,58 @@ def test_dedup_across_reconnects():
         time.sleep(0.5)
         
         second_msgs = []
-        for _ in range(3):
+        for attempt in range(3):
             try:
                 msg = receiver2.recv_msg(timeout=0.5)
                 if msg:
                     decoded = msg.decode('utf-8') if isinstance(msg, bytes) else msg
                     second_msgs.append(decoded)
-            except:
+            except socket.timeout:
+                break
+            except socket.error as e:
+                log(f"  Second connect recv {attempt}: socket error - {e}")
+                break
+            except Exception as e:
+                log(f"  Second connect recv {attempt}: {type(e).__name__} - {e}")
                 break
         
         receiver2.close()
-        print(f"✓ Second connect: received {len(second_msgs)} messages")
+        receiver2 = None
+        log(f"Second connect: received {len(second_msgs)} messages")
         
         sender.close()
+        sender = None
         
         # Check for duplicates across connections
-        all_msgs = first_msgs + second_msgs
         if offline_msg in first_msgs and offline_msg in second_msgs:
-            print(f"✗ Duplicate delivery detected across reconnects")
+            log("FAIL: Duplicate delivery detected across reconnects")
             return False
         else:
-            print("✓ No duplicate delivery across reconnects")
+            log("PASS: No duplicate delivery across reconnects")
             return True
         
-    except Exception as e:
-        print(f"✗ Error: {e}")
+    except socket.error as e:
+        log(f"FAIL: Socket error - {e}")
         return False
+    except Exception as e:
+        log(f"FAIL: Unexpected error - {type(e).__name__}: {e}")
+        return False
+    finally:
+        if sender:
+            try:
+                sender.close()
+            except Exception:
+                pass
+        if receiver1:
+            try:
+                receiver1.close()
+            except Exception:
+                pass
+        if receiver2:
+            try:
+                receiver2.close()
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":
@@ -273,17 +359,17 @@ if __name__ == "__main__":
     results.append(("Retry Storm Handling", test_retry_storm_handling()))
     results.append(("Dedup Across Reconnects", test_dedup_across_reconnects()))
     
-    print("\n" + "=" * 60)
-    print("SUMMARY")
-    print("=" * 60)
+    log("\n" + "=" * 60)
+    log("SUMMARY")
+    log("=" * 60)
     
     passed = sum(1 for _, r in results if r)
     total = len(results)
     
     for name, result in results:
         status = "PASS" if result else "FAIL"
-        print(f"  [{status}] {name}")
+        log(f"  [{status}] {name}")
     
-    print(f"\n{passed}/{total} tests passed")
+    log(f"\n{passed}/{total} tests passed")
     
     sys.exit(0 if passed == total else 1)

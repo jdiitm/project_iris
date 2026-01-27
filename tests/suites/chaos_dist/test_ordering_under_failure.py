@@ -35,6 +35,10 @@ import struct
 import threading
 import random
 
+# Determinism: seed from environment
+TEST_SEED = int(os.environ.get("TEST_SEED", 42))
+random.seed(TEST_SEED)
+
 # Add project root to sys.path
 current_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.abspath(os.path.join(current_dir, "../../.."))
