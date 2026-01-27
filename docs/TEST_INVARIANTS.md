@@ -1,10 +1,12 @@
 # Test Invariants Documentation
 
-**Last Updated**: 2026-01-25
+**Last Updated**: 2026-01-27
 
 This document defines the critical system invariants that MUST be validated by the test suite. Every invariant has an associated test that MUST pass before release.
 
 ## Overview
+
+### System Invariants
 
 | Invariant | RFC Reference | Test Location | Severity | Status |
 |-----------|---------------|---------------|----------|--------|
@@ -14,8 +16,18 @@ This document defines the critical system invariants that MUST be validated by t
 | Durability | NFR-6, NFR-8 | `chaos_dist/test_multimaster_durability.py` | Critical | ✅ |
 | Offline/Online | FR-2 | `integration/test_offline_storage.py` | High | ✅ |
 | Clock Skew | NFR-4 | `resilience/test_clock_skew.py` | Medium | ✅ |
-| Backpressure | PRINCIPAL_AUDIT | `stress/test_backpressure_collapse.py` | High | ✅ NEW |
-| Hot-Shard | PRINCIPAL_AUDIT | `stress/test_hot_shard.py` | High | ✅ NEW |
+| Backpressure | PRINCIPAL_AUDIT | `stress/test_backpressure_collapse.py` | High | ✅ |
+| Hot-Shard | PRINCIPAL_AUDIT | `stress/test_hot_shard.py` | High | ✅ |
+
+### Test Infrastructure Invariants (NEW - Jan 27, 2026)
+
+| Invariant | Reference | Enforcement | Severity | Status |
+|-----------|-----------|-------------|----------|--------|
+| Cluster Management | TEST_DETERMINISM | ClusterManager usage | High | ✅ |
+| Exception Handling | TEST_DETERMINISM | No bare except:pass | Critical | ✅ |
+| BEAM CPU Thresholds | TEST_INVARIANTS | Multi-scheduler aware | High | ✅ |
+| BEAM Memory Baseline | TEST_INVARIANTS | +P/+Q preallocation aware | High | ✅ |
+| Deterministic Seeding | TEST_DETERMINISM | TEST_SEED everywhere | High | ✅ |
 
 ---
 
@@ -418,6 +430,214 @@ def test_clock_skew():
 
 ---
 
+---
+
+## 9. Cluster Management Invariant (Test Infrastructure)
+
+### Definition
+
+> Every test that requires a cluster MUST manage its own cluster lifecycle using `ClusterManager`.
+
+### Rationale
+
+Tests that rely on external cluster state create ordering dependencies and race conditions. When test A stops the cluster and test B assumes it's running, test B fails spuriously.
+
+### Formal Statement
+
+```
+∀ t ∈ Tests:
+  requires_cluster(t) ⟹ uses_cluster_manager(t)
+```
+
+### How It Can Fail
+
+| Failure Mode | Cause | Detection |
+|--------------|-------|-----------|
+| "Server not available" | Previous test stopped cluster | Connection refused on port 8085 |
+| Port conflict | Multiple clusters attempted | Address already in use |
+| Stale node name | Erlang node name collision | {badrpc, nodedown} |
+
+### Correct Pattern
+
+```python
+from tests.framework.cluster import ClusterManager
+
+def main():
+    with ClusterManager(project_root=project_root) as cluster:
+        # All test logic here - cluster guaranteed to be running
+        run_test()
+    # Cluster automatically stopped on exit
+```
+
+### Test Files Requiring This Pattern
+
+- All `performance_light/*.py` tests
+- All `integration/*.py` tests  
+- All `e2e/*.py` tests
+- Any test that connects to port 8085
+
+---
+
+## 10. Exception Handling Invariant (Test Quality)
+
+### Definition
+
+> Tests MUST NOT swallow exceptions with bare `except: pass` blocks.
+
+### Rationale
+
+Bare exception handlers create false positives - tests that "pass" by silently ignoring failures. This masks real bugs and violates the test contract.
+
+### Formal Statement
+
+```
+∀ t ∈ Tests:
+  ¬contains(t, "except: pass") ∧ ¬contains(t, "except Exception: pass")
+```
+
+### Prohibited Patterns
+
+```python
+# PROHIBITED: Swallows all errors
+try:
+    send_message(target, payload)
+except:
+    pass
+
+# PROHIBITED: Ignores specific errors without logging
+try:
+    connection.recv(1024)
+except socket.timeout:
+    pass
+```
+
+### Approved Patterns
+
+```python
+# APPROVED: Log and count errors
+try:
+    send_message(target, payload)
+except socket.timeout as e:
+    logging.warning(f"Timeout sending to {target}: {e}")
+    errors += 1
+except socket.error as e:
+    logging.error(f"Socket error: {e}")
+    errors += 1
+
+# APPROVED: Expected cleanup failures
+try:
+    sock.close()
+except Exception:
+    pass  # OK only for cleanup, and MUST be documented
+```
+
+### Enforcement
+
+Run `grep -r "except:$\|except Exception:$" tests/` before merging - should return no matches outside cleanup blocks.
+
+---
+
+## 11. BEAM CPU Utilization Invariant (Performance Tests)
+
+### Definition
+
+> CPU thresholds for Erlang/BEAM tests MUST account for multi-scheduler architecture.
+
+### Background
+
+Erlang BEAM uses multiple schedulers (typically one per CPU core). CPU utilization is reported as the sum across all schedulers, meaning:
+- 100% = 1 core fully utilized
+- 400% = 4 cores fully utilized
+- On a 24-core machine, idle BEAM can report 200-300% due to scheduler overhead
+
+### Threshold Guidelines
+
+| Profile | Idle CPU Max | Load CPU Max | Rationale |
+|---------|--------------|--------------|-----------|
+| smoke | 300% | 400% | Allows 3-4 cores for scheduler overhead |
+| full | 100% | 800% | Tighter idle, allows 8 cores under load |
+
+### Incorrect Assumptions
+
+```python
+# WRONG: Assumes single-threaded model
+PROFILES = {
+    "smoke": {
+        "idle_cpu_max": 5,   # Will always fail on BEAM
+        "load_cpu_max": 50,  # Will always fail on BEAM
+    }
+}
+```
+
+### Correct Configuration
+
+```python
+# CORRECT: Accounts for multi-scheduler
+PROFILES = {
+    "smoke": {
+        # Note: Erlang BEAM uses multiple schedulers, so CPU% can exceed 100%
+        # on multi-core systems (e.g., 300% = 3 cores utilized)
+        "idle_cpu_max": 300,   # % (allows up to 3 cores for BEAM schedulers)
+        "load_cpu_max": 400,   # % (allows up to 4 cores under load)
+    }
+}
+```
+
+### Test Files
+
+- `tests/suites/performance_light/test_cpu_utilization.py` ✅
+
+---
+
+## 12. BEAM Memory Baseline Invariant (Performance Tests)
+
+### Definition
+
+> Memory thresholds MUST account for BEAM VM preallocation based on +P/+Q flags.
+
+### Background
+
+Erlang BEAM preallocates memory based on:
+- `+P` flag: Maximum process limit (affects process table size)
+- `+Q` flag: Maximum port limit (affects port table size)
+- Auto-tuning script sets these to ~1M for production readiness
+
+With `+P 1043576 +Q 1043576`, BEAM preallocates ~800-1500MB at startup.
+
+### Threshold Guidelines
+
+| Profile | Base Overhead (MB) | Per-Connection (KB) | Rationale |
+|---------|-------------------|---------------------|-----------|
+| smoke | 1500 | 50 | Accounts for BEAM preallocation |
+| full | 2000 | 30 | Higher baseline, tighter per-conn |
+
+### Incorrect Assumptions
+
+```python
+# WRONG: Assumes minimal startup overhead
+PROFILE_THRESHOLDS = {
+    "smoke": {"base_overhead_mb": 100}  # Will always fail with auto-tune
+}
+```
+
+### Correct Configuration
+
+```python
+# CORRECT: Accounts for BEAM preallocation
+PROFILE_THRESHOLDS = {
+    "smoke": {
+        "base_overhead_mb": 1500,  # BEAM preallocates for +P/+Q
+        "per_connection_kb": 50,
+    }
+}
+```
+
+### Test Files
+
+- `tests/suites/performance_light/benchmark_memory.py` ✅
+
+---
+
 ## Adding New Invariants
 
 When adding a new invariant:
@@ -443,3 +663,4 @@ When adding a new invariant:
 - [RFC-001-SYSTEM-REQUIREMENTS.md](rfc/RFC-001-SYSTEM-REQUIREMENTS.md) - System requirements
 - [RFC-001-TEST-DEVIATIONS.md](rfc/RFC-001-TEST-DEVIATIONS.md) - Known test deviations
 - [TEST_STATUS.md](TEST_STATUS.md) - Current test status
+- [TEST_DETERMINISM.md](TEST_DETERMINISM.md) - Determinism standards

@@ -1,7 +1,7 @@
 # Test Return Code Contract
 
 **Effective Date**: 2026-01-23  
-**Last Updated**: 2026-01-25  
+**Last Updated**: 2026-01-27  
 **Status**: MANDATORY for all tests - **FULLY IMPLEMENTED**
 
 ---
@@ -108,6 +108,55 @@ profile = os.environ.get("TEST_PROFILE", "smoke")
 threshold = THRESHOLDS[profile]["connections"]
 ```
 
+### DO NOT swallow exceptions (Added 2026-01-27)
+
+```python
+# WRONG - Creates false positives
+try:
+    send_message(target, payload)
+except:
+    pass  # Hides ALL errors, test appears to pass
+
+# WRONG - Ignores specific errors
+try:
+    result = recv_message(timeout=5)
+except socket.timeout:
+    pass  # Test passes with 0 messages received
+
+# CORRECT - Log, count, and assert on errors
+errors = 0
+try:
+    send_message(target, payload)
+except socket.timeout as e:
+    logging.warning(f"Timeout: {e}")
+    errors += 1
+except socket.error as e:
+    logging.error(f"Socket error: {e}")
+    errors += 1
+
+# Fail if too many errors
+assert errors < max_errors, f"Too many errors: {errors}"
+```
+
+### DO NOT assume cluster is running (Added 2026-01-27)
+
+```python
+# WRONG - Depends on previous test's cluster state
+def main():
+    if not check_server():
+        print("Start cluster with: make start")
+        sys.exit(1)  # Fails if previous test stopped cluster
+    run_test()
+
+# CORRECT - Manage own cluster lifecycle
+from tests.framework.cluster import ClusterManager
+
+def main():
+    with ClusterManager(project_root=project_root) as cluster:
+        run_test()  # Cluster guaranteed to be running
+    # Cluster automatically stopped
+```
+
 ---
 
 ## Skip Reasons (Required Documentation)
@@ -156,22 +205,23 @@ For each test file, verify:
 - [x] All prerequisite failures use `exit(2)` with reason - **✅ DONE (2026-01-25)**
 - [x] All assertion failures use `exit(1)` - **✅ DONE**
 - [x] Success path uses `exit(0)` - **✅ DONE**
+- [x] No bare `except: pass` blocks - **✅ DONE (2026-01-27)** - All replaced with explicit error handling
+- [x] Uses `ClusterManager` for cluster lifecycle - **✅ DONE (2026-01-27)** - All performance_light tests updated
+- [x] Uses `TEST_SEED` for randomness - **✅ DONE (2026-01-27)** - 14+ files seeded
 
-### Verification Status (2026-01-25)
+### Verification Status (2026-01-27)
 
-All 60+ tests now follow the contract:
-- **Unit tests**: 4 tests ✅
+All 61 tests in core suites follow the contract:
+- **Unit tests**: 21 tests ✅
 - **Integration tests**: 17 tests ✅
 - **E2E tests**: 5 tests ✅
 - **Contract tests**: 1 test ✅
 - **Compatibility tests**: 1 test ✅
 - **Security tests**: 7 tests ✅
-- **Stress tests**: 13 tests ✅
 - **Resilience tests**: 3 tests ✅
-- **Performance tests**: 6 tests ✅
-- **Chaos tests**: 2 tests ✅
+- **Performance_light tests**: 6 tests ✅
 
-Total smoke duration: **~8 minutes** for all suites
+Total smoke duration: **~6 minutes** for core suites (unit through performance_light)
 
 ---
 
@@ -183,5 +233,32 @@ Starting from this date, any PR that introduces:
 2. `return None` in test functions
 3. Dynamic threshold adjustment
 4. `exit(0)` without actual test passing
+5. Bare `except: pass` blocks (added 2026-01-27)
+6. Tests that don't use `ClusterManager` when requiring a cluster (added 2026-01-27)
+7. Unseeded random operations (added 2026-01-27)
 
 Will be **automatically rejected** by CI checks.
+
+### Pre-Commit Checks
+
+Run these commands before submitting PRs:
+
+```bash
+# Check for bare exception handlers
+grep -rn "except:$" tests/
+grep -rn "except Exception:$" tests/
+
+# Check for unseeded random (should use TEST_SEED)
+grep -rn "random\." tests/ | grep -v "random.seed" | grep -v "random.Random"
+
+# Verify all tests pass deterministically
+TEST_SEED=42 python3 tests/run_tests.py --suite unit --suite integration --suite e2e
+```
+
+---
+
+## See Also
+
+- [TEST_INVARIANTS.md](TEST_INVARIANTS.md) - System and test infrastructure invariants
+- [TEST_DETERMINISM.md](TEST_DETERMINISM.md) - Determinism standards and BEAM-specific guidelines
+- [TEST_STATUS.md](TEST_STATUS.md) - Current test results
