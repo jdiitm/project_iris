@@ -18,6 +18,7 @@
 -export([revoke_token/1]).
 -export([get_user_from_token/1]).
 -export([is_auth_enabled/0]).
+-export([receive_revocation/2]).  %% P1-H2: Cross-node revocation propagation
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
 -define(SERVER, ?MODULE).
@@ -100,22 +101,41 @@ get_user_from_token(Token) ->
 %% =============================================================================
 
 init([]) ->
-    %% P0-5 FIX: Require explicit JWT secret configuration
+    %% P0-C4 FIX: Require explicit JWT secret configuration
     %% Random secrets cause auth failures when users connect to different nodes
     Secret = case application:get_env(iris_edge, jwt_secret) of
-        {ok, S} when is_binary(S) -> S;
-        {ok, S} when is_list(S) -> list_to_binary(S);
+        {ok, S} when is_binary(S), byte_size(S) >= 32 -> 
+            S;
+        {ok, S} when is_list(S), length(S) >= 32 -> 
+            list_to_binary(S);
+        {ok, S} when is_binary(S) ->
+            logger:error("SECURITY: jwt_secret is too short (~p bytes). Minimum 32 bytes required.", 
+                        [byte_size(S)]),
+            error({jwt_secret_too_short, byte_size(S)});
+        {ok, S} when is_list(S) ->
+            logger:error("SECURITY: jwt_secret is too short (~p chars). Minimum 32 chars required.", 
+                        [length(S)]),
+            error({jwt_secret_too_short, length(S)});
         undefined -> 
-            %% In production, this should error. For testing, log warning and generate.
+            %% P0-C4: Strict enforcement based on allow_random_secret flag
             case application:get_env(iris_edge, allow_random_secret, false) of
                 true ->
                     logger:warning("JWT secret not configured, generating random (NOT FOR PRODUCTION)"),
+                    logger:warning("Set iris_edge.jwt_secret in production deployments"),
                     generate_secret();
                 false ->
-                    %% Log error but still generate for backward compat - will be enforced in future
-                    logger:error("SECURITY: jwt_secret not configured! Set iris_edge.jwt_secret or enable allow_random_secret for testing"),
-                    logger:error("SECURITY: Random secrets cause auth failures in load-balanced deployments"),
-                    generate_secret()
+                    %% P0-C4 FIX: CRASH on startup if secret not configured
+                    %% This prevents silent auth failures in production
+                    logger:error("======================================================="),
+                    logger:error("FATAL: jwt_secret not configured!"),
+                    logger:error(""),
+                    logger:error("In production: Set iris_edge.jwt_secret to a 32+ byte secret"),
+                    logger:error("For testing:   Set iris_edge.allow_random_secret = true"),
+                    logger:error(""),
+                    logger:error("Random secrets cause authentication failures when"),
+                    logger:error("users connect to different nodes in a cluster."),
+                    logger:error("======================================================="),
+                    error(jwt_secret_not_configured)
             end
     end,
     
@@ -143,10 +163,19 @@ handle_call({create, UserId, ExtraClaims, TTL}, _From, State) ->
 
 handle_call({revoke, TokenId}, _From, State = #state{revoked_count = Count}) ->
     Now = os:system_time(second),
-    %% P0-4 FIX: Store revocation in BOTH local ETS (fast path) and Mnesia (distributed)
+    %% P1-H2 FIX: Synchronous revocation with cross-node propagation
+    %% 1. Store in local ETS (immediate effect on this node)
     ets:insert(?REVOCATION_TABLE, {TokenId, Now}),
-    %% Persist to Mnesia for cross-node visibility
-    spawn(fun() -> persist_revocation(TokenId, Now) end),
+    
+    %% 2. Persist to Mnesia synchronously (distributed durability)
+    case persist_revocation_sync(TokenId, Now) of
+        ok ->
+            %% 3. Push to other nodes for immediate effect (don't wait for Mnesia sync)
+            propagate_revocation(TokenId, Now);
+        {error, Reason} ->
+            logger:warning("Revocation persistence failed: ~p (local ETS still valid)", [Reason])
+    end,
+    
     {reply, ok, State#state{revoked_count = Count + 1}};
 
 handle_call(_Request, _From, State) ->
@@ -242,19 +271,49 @@ is_revoked(TokenId) ->
             end
     end.
 
-%% P0-4 FIX: Persist revocation to Mnesia for cross-node distribution
-persist_revocation(TokenId, Timestamp) ->
+%% P1-H2 FIX: Synchronous revocation persistence with proper error handling
+persist_revocation_sync(TokenId, Timestamp) ->
     try
         F = fun() -> mnesia:write({revoked_tokens, TokenId, Timestamp}) end,
-        case mnesia:transaction(F) of
-            {atomic, ok} -> ok;
+        case mnesia:activity(sync_transaction, F) of
+            ok -> ok;
+            {atomic, _} -> ok;
             {aborted, Reason} ->
-                logger:warning("Failed to persist revocation: ~p", [Reason])
+                logger:warning("Failed to persist revocation: ~p", [Reason]),
+                {error, Reason}
         end
     catch
         _:Error ->
-            logger:warning("Revocation persistence error: ~p", [Error])
+            logger:warning("Revocation persistence error: ~p", [Error]),
+            {error, Error}
     end.
+
+%% P1-H2 FIX: Push revocation to all cluster nodes for immediate effect
+%% This ensures revocation takes effect within ~60s across all nodes (RFC FR-11)
+propagate_revocation(TokenId, Timestamp) ->
+    %% Get all connected nodes
+    Nodes = nodes(),
+    case Nodes of
+        [] -> ok;  %% Single node deployment
+        _ ->
+            %% Async push to all nodes (fire and forget, Mnesia is source of truth)
+            spawn(fun() ->
+                lists:foreach(fun(Node) ->
+                    try
+                        rpc:cast(Node, ?MODULE, receive_revocation, [TokenId, Timestamp])
+                    catch
+                        _:_ -> ok  %% Ignore errors, Mnesia will sync eventually
+                    end
+                end, Nodes)
+            end)
+    end.
+
+%% P1-H2 FIX: Receive revocation push from another node
+-spec receive_revocation(binary(), integer()) -> ok.
+receive_revocation(TokenId, Timestamp) ->
+    %% Insert into local ETS for immediate effect
+    ets:insert(?REVOCATION_TABLE, {TokenId, Timestamp}),
+    ok.
 
 %% =============================================================================
 %% Internal: JWT Creation
