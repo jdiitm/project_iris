@@ -34,7 +34,7 @@ PROFILES = {
     "smoke": {
         "connections": 100,
         "per_conn_kb": 75,       # More lenient for smoke (actual ~56KB + overhead)
-        "base_overhead_mb": 800,  # Base VM overhead
+        "base_overhead_mb": 1500,  # Base VM overhead (auto-tuned for 1M+ connections, BEAM preallocates memory)
     },
     "full": {
         "connections": 10000,

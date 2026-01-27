@@ -9,6 +9,10 @@ import random
 import argparse
 import concurrent.futures
 
+# Determinism: seed from environment
+TEST_SEED = int(os.environ.get("TEST_SEED", 42))
+random.seed(TEST_SEED)
+
 # Configuration
 USER_COUNT = 100
 MSGS_PER_USER = 10

@@ -23,9 +23,14 @@ import json
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 sys.path.insert(0, PROJECT_ROOT)
 
+import random
+
 # Test configuration
 TEST_PROFILE = os.environ.get("TEST_PROFILE", "smoke")
 TEST_SEED = int(os.environ.get("TEST_SEED", "42"))
+
+# Determinism: seed from environment
+random.seed(TEST_SEED)
 
 
 def log(msg):

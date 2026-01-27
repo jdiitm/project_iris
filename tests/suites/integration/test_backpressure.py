@@ -6,6 +6,14 @@ Tests:
 1. Connection acceptance during load
 2. Graceful degradation under pressure
 3. Recovery after overload
+
+INVARIANTS:
+- Connection acceptance rate >= 90%
+- Message throughput >= 500 msg/s
+- Concurrent load success rate >= 80%
+- System must recover after load
+
+Tier: 0 (Required on every merge)
 """
 
 import sys
@@ -13,6 +21,7 @@ import os
 import time
 import random
 import string
+import socket
 import threading
 import concurrent.futures
 
@@ -23,165 +32,271 @@ sys.path.insert(0, PROJECT_ROOT)
 from tests.framework import TestLogger, ClusterManager
 from tests.utilities import IrisClient
 
+# Determinism: seed from environment
+TEST_SEED = int(os.environ.get("TEST_SEED", 42))
+random.seed(TEST_SEED)
+
+# Thresholds
+MIN_CONNECTION_RATE = 0.90  # 90% connection success
+MIN_THROUGHPUT = 500  # 500 msg/s minimum
+MIN_CONCURRENT_SUCCESS_RATE = 0.80  # 80% success under concurrent load
+
+
+def log(msg):
+    print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
+
 
 def random_user():
+    """Generate a random username with deterministic seed offset."""
     return ''.join(random.choices(string.ascii_lowercase, k=8))
 
 
 def test_connection_acceptance():
-    """Test that connections are accepted under normal load"""
-    print("\n=== Test: Connection Acceptance ===")
+    """Test that connections are accepted under normal load."""
+    log("\n=== Test: Connection Acceptance ===")
+    log(f"Threshold: {MIN_CONNECTION_RATE*100:.0f}% connection success")
     
     clients = []
     success = 0
     failed = 0
+    errors = []
+    
+    TARGET_CONNECTIONS = 20
     
     # Try to establish multiple connections
-    for i in range(20):
+    for i in range(TARGET_CONNECTIONS):
         try:
             client = IrisClient()
             client.login(f"bp_user_{random_user()}")
             clients.append(client)
             success += 1
+        except socket.timeout as e:
+            failed += 1
+            errors.append(f"Connection {i}: timeout")
+        except socket.error as e:
+            failed += 1
+            errors.append(f"Connection {i}: socket error - {e}")
         except Exception as e:
             failed += 1
+            errors.append(f"Connection {i}: unexpected - {type(e).__name__}: {e}")
     
-    print(f"  Connections: {success} success, {failed} failed")
+    log(f"Connections: {success}/{TARGET_CONNECTIONS} success, {failed} failed")
+    
+    # Log errors if any
+    if errors:
+        for err in errors[:5]:
+            log(f"  Error: {err}")
     
     # Cleanup
     for c in clients:
         try:
             c.close()
-        except:
-            pass
+        except socket.error as e:
+            log(f"  Cleanup warning: socket error closing client - {e}")
+        except Exception as e:
+            log(f"  Cleanup warning: {type(e).__name__} closing client - {e}")
     
-    if success >= 18:  # 90% success
-        print(f"✓ Connection acceptance normal")
+    # ASSERTION
+    connection_rate = success / TARGET_CONNECTIONS
+    if connection_rate >= MIN_CONNECTION_RATE:
+        log(f"PASS: Connection rate {connection_rate*100:.0f}% >= {MIN_CONNECTION_RATE*100:.0f}%")
         return True
     else:
-        print(f"✗ Too many connection failures")
+        log(f"FAIL: Connection rate {connection_rate*100:.0f}% < {MIN_CONNECTION_RATE*100:.0f}%")
         return False
 
 
 def test_message_throughput():
-    """Test message throughput under load"""
-    print("\n=== Test: Message Throughput ===")
+    """Test message throughput under load."""
+    log("\n=== Test: Message Throughput ===")
+    log(f"Threshold: {MIN_THROUGHPUT} msg/s minimum")
     
-    sender = IrisClient()
-    receiver = IrisClient()
+    try:
+        sender = IrisClient()
+        receiver = IrisClient()
+    except Exception as e:
+        log(f"FAIL: Could not create clients - {type(e).__name__}: {e}")
+        return False
     
     sender_user = f"sender_{random_user()}"
     receiver_user = f"receiver_{random_user()}"
     
-    sender.login(sender_user)
-    receiver.login(receiver_user)
+    try:
+        sender.login(sender_user)
+        receiver.login(receiver_user)
+    except Exception as e:
+        log(f"FAIL: Login failed - {type(e).__name__}: {e}")
+        try:
+            sender.close()
+            receiver.close()
+        except Exception:
+            pass
+        return False
     
     # Send messages rapidly
-    start = time.time()
     count = 100
+    errors = 0
     
+    start = time.time()
     for i in range(count):
-        sender.send_msg(receiver_user, f"throughput_{i}")
+        try:
+            sender.send_msg(receiver_user, f"throughput_{i}")
+        except socket.error as e:
+            errors += 1
+            if errors == 1:
+                log(f"  Send error at msg {i}: {e}")
+        except Exception as e:
+            errors += 1
+            if errors == 1:
+                log(f"  Send error at msg {i}: {type(e).__name__}: {e}")
     
     elapsed = time.time() - start
-    rate = count / elapsed if elapsed > 0 else 0
+    successful_sends = count - errors
+    rate = successful_sends / elapsed if elapsed > 0 else 0
     
-    print(f"  Sent {count} msgs in {elapsed:.2f}s ({rate:.1f} msg/s)")
+    log(f"Sent {successful_sends}/{count} msgs in {elapsed:.2f}s ({rate:.1f} msg/s)")
     
-    sender.close()
-    receiver.close()
+    try:
+        sender.close()
+        receiver.close()
+    except Exception as e:
+        log(f"  Cleanup warning: {e}")
     
-    if rate > 50:  # At least 50 msg/s
-        print(f"✓ Throughput acceptable")
+    # ASSERTION
+    if rate >= MIN_THROUGHPUT:
+        log(f"PASS: Throughput {rate:.0f} msg/s >= {MIN_THROUGHPUT}")
         return True
     else:
-        print(f"✗ Throughput too low")
+        log(f"FAIL: Throughput {rate:.0f} msg/s < {MIN_THROUGHPUT}")
         return False
 
 
 def test_concurrent_load():
-    """Test behavior under concurrent connection load"""
-    print("\n=== Test: Concurrent Load ===")
+    """Test behavior under concurrent connection load."""
+    log("\n=== Test: Concurrent Load ===")
+    log(f"Threshold: {MIN_CONCURRENT_SUCCESS_RATE*100:.0f}% success rate")
     
-    results = {"success": 0, "failed": 0}
+    results = {"success": 0, "failed": 0, "errors": []}
     lock = threading.Lock()
     
-    def connect_and_send():
+    TARGET_CONCURRENT = 30
+    
+    def connect_and_send(worker_id):
+        # Per-worker random for thread safety
+        worker_random = random.Random(TEST_SEED + worker_id)
+        user_suffix = ''.join(worker_random.choices(string.ascii_lowercase, k=8))
+        
         try:
             client = IrisClient()
-            user = f"concurrent_{random_user()}"
+            user = f"concurrent_{user_suffix}"
             client.login(user)
             
             # Send a few messages
             for i in range(5):
-                client.send_msg(f"target_{random_user()}", f"msg_{i}")
+                target_suffix = ''.join(worker_random.choices(string.ascii_lowercase, k=8))
+                client.send_msg(f"target_{target_suffix}", f"msg_{i}")
             
             client.close()
             
             with lock:
                 results["success"] += 1
             return True
+        except socket.timeout as e:
+            with lock:
+                results["failed"] += 1
+                results["errors"].append(f"Worker {worker_id}: timeout")
+            return False
+        except socket.error as e:
+            with lock:
+                results["failed"] += 1
+                results["errors"].append(f"Worker {worker_id}: socket error - {e}")
+            return False
         except Exception as e:
             with lock:
                 results["failed"] += 1
+                results["errors"].append(f"Worker {worker_id}: {type(e).__name__}: {e}")
             return False
     
     # Run concurrent connections
     with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
-        futures = [executor.submit(connect_and_send) for _ in range(30)]
+        futures = [executor.submit(connect_and_send, i) for i in range(TARGET_CONCURRENT)]
         concurrent.futures.wait(futures)
     
-    print(f"  Concurrent: {results['success']} success, {results['failed']} failed")
+    log(f"Concurrent: {results['success']}/{TARGET_CONCURRENT} success, {results['failed']} failed")
     
-    if results["success"] >= 25:  # 83% success
-        print(f"✓ Concurrent load handled")
+    # Log errors if any
+    if results["errors"]:
+        for err in results["errors"][:5]:
+            log(f"  Error: {err}")
+    
+    # ASSERTION
+    success_rate = results["success"] / TARGET_CONCURRENT
+    if success_rate >= MIN_CONCURRENT_SUCCESS_RATE:
+        log(f"PASS: Success rate {success_rate*100:.0f}% >= {MIN_CONCURRENT_SUCCESS_RATE*100:.0f}%")
         return True
     else:
-        print(f"✗ Too many failures under load")
+        log(f"FAIL: Success rate {success_rate*100:.0f}% < {MIN_CONCURRENT_SUCCESS_RATE*100:.0f}%")
         return False
 
 
 def test_recovery_after_load():
-    """Test that system recovers after high load"""
-    print("\n=== Test: Recovery After Load ===")
+    """Test that system recovers after high load."""
+    log("\n=== Test: Recovery After Load ===")
     
     # First, create some load
     clients = []
+    load_errors = 0
+    
     for i in range(15):
         try:
             c = IrisClient()
             c.login(f"load_{random_user()}")
             clients.append(c)
-        except:
-            pass
+        except socket.error as e:
+            load_errors += 1
+            log(f"  Load client {i} failed: socket error - {e}")
+        except Exception as e:
+            load_errors += 1
+            log(f"  Load client {i} failed: {type(e).__name__}: {e}")
+    
+    log(f"Created {len(clients)} load clients ({load_errors} failed)")
     
     # Close all (simulate load drop)
-    for c in clients:
+    for i, c in enumerate(clients):
         try:
             c.close()
-        except:
-            pass
+        except socket.error as e:
+            log(f"  Cleanup client {i}: socket error - {e}")
+        except Exception as e:
+            log(f"  Cleanup client {i}: {type(e).__name__}: {e}")
     
     # Wait for recovery
     time.sleep(1)
     
     # System should accept new connections normally
-    new_client = IrisClient()
     try:
+        new_client = IrisClient()
         new_client.login(f"recovery_{random_user()}")
         new_client.send_msg(f"target_{random_user()}", "recovery_test")
         new_client.close()
-        print(f"✓ System recovered after load")
+        log("PASS: System recovered - new connection accepted")
         return True
+    except socket.timeout as e:
+        log(f"FAIL: System not recovered - timeout: {e}")
+        return False
+    except socket.error as e:
+        log(f"FAIL: System not recovered - socket error: {e}")
+        return False
     except Exception as e:
-        print(f"✗ System not recovered: {e}")
+        log(f"FAIL: System not recovered - {type(e).__name__}: {e}")
         return False
 
 
 def main():
-    print("=" * 60)
-    print(" BACKPRESSURE TEST SUITE")
-    print("=" * 60)
+    log("=" * 60)
+    log(" BACKPRESSURE TEST SUITE")
+    log("=" * 60)
+    log(f"Random seed: {TEST_SEED}")
     
     tests = [
         ("Connection Acceptance", test_connection_acceptance),
@@ -200,12 +315,14 @@ def main():
             else:
                 failed += 1
         except Exception as e:
-            print(f"✗ {name} EXCEPTION: {e}")
+            log(f"ERROR in {name}: {type(e).__name__}: {e}")
+            import traceback
+            traceback.print_exc()
             failed += 1
     
-    print("\n" + "=" * 60)
-    print(f" RESULTS: {passed} passed, {failed} failed")
-    print("=" * 60)
+    log("\n" + "=" * 60)
+    log(f" RESULTS: {passed} passed, {failed} failed")
+    log("=" * 60)
     
     return 0 if failed == 0 else 1
 

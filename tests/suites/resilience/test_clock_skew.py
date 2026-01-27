@@ -21,6 +21,12 @@ Test Strategy:
 
 RFC Reference: NFR-16 - Presence propagation tolerates 30s skew
 
+INVARIANTS:
+- Message ordering preserved under clock skew
+- Deduplication works correctly under skew
+- Presence timestamps accurate within tolerance
+- Rapid reconnects handled gracefully
+
 Tier: 1 (Resilience testing)
 """
 
@@ -55,10 +61,10 @@ def log(msg):
 
 def log_test(name, passed, message=""):
     """Log test result."""
-    status = "✓ PASS" if passed else "✗ FAIL"
-    print(f"  {status}: {name}")
+    status = "PASS" if passed else "FAIL"
+    log(f"  {status}: {name}")
     if message:
-        print(f"         {message}")
+        log(f"         {message}")
     results.append((name, passed, message))
 
 
@@ -82,8 +88,10 @@ class SimpleClient:
         if self.sock:
             try:
                 self.sock.close()
-            except:
-                pass
+            except socket.error as e:
+                log(f"  Warning: socket close error - {e}")
+            except Exception as e:
+                log(f"  Warning: close error - {type(e).__name__}: {e}")
             self.sock = None
     
     def login(self, username):
@@ -125,8 +133,11 @@ def check_server_available():
         sock.connect((EDGE_HOST, EDGE_PORT))
         sock.close()
         return True
-    except Exception as e:
+    except socket.error as e:
         log(f"Server not available: {e}")
+        return False
+    except Exception as e:
+        log(f"Server check error: {type(e).__name__}: {e}")
         return False
 
 
@@ -139,7 +150,14 @@ def docker_available():
             timeout=5
         )
         return result.returncode == 0
-    except:
+    except subprocess.TimeoutExpired:
+        log("  Docker check timed out")
+        return False
+    except FileNotFoundError:
+        log("  Docker not installed")
+        return False
+    except Exception as e:
+        log(f"  Docker check error: {type(e).__name__}: {e}")
         return False
 
 
@@ -153,7 +171,11 @@ def get_docker_containers():
             timeout=10
         )
         return result.stdout.strip().split('\n') if result.stdout.strip() else []
-    except:
+    except subprocess.TimeoutExpired:
+        log("  Docker ps timed out")
+        return []
+    except Exception as e:
+        log(f"  Docker ps error: {type(e).__name__}: {e}")
         return []
 
 
@@ -173,6 +195,9 @@ def test_ordering_with_skew():
     if not check_server_available():
         log_test("Message ordering with skew", False, "Server not available")
         return
+    
+    sender = None
+    receiver = None
     
     try:
         sender = SimpleClient()
@@ -212,11 +237,10 @@ def test_ordering_with_skew():
                         if msg in text and msg not in received:
                             received.append(msg)
                             break
-                except:
-                    pass
-        
-        sender.close()
-        receiver.close()
+                except UnicodeDecodeError as e:
+                    log(f"  Decode error: {e}")
+                except Exception as e:
+                    log(f"  Parse error: {type(e).__name__}: {e}")
         
         # Verify order matches
         if len(received) >= 3:
@@ -233,8 +257,15 @@ def test_ordering_with_skew():
             log_test("Message ordering with skew", True, 
                     f"Received {len(received)}/5 messages (low count acceptable for this test)")
     
+    except socket.error as e:
+        log_test("Message ordering with skew", False, f"Socket error: {e}")
     except Exception as e:
-        log_test("Message ordering with skew", False, f"Exception: {e}")
+        log_test("Message ordering with skew", False, f"Exception: {type(e).__name__}: {e}")
+    finally:
+        if sender:
+            sender.close()
+        if receiver:
+            receiver.close()
 
 
 # =============================================================================
@@ -252,6 +283,9 @@ def test_dedup_with_skew():
     if not check_server_available():
         log_test("Deduplication with skew", False, "Server not available")
         return
+    
+    sender = None
+    receiver = None
     
     try:
         sender = SimpleClient()
@@ -286,16 +320,20 @@ def test_dedup_with_skew():
             if data and test_msg_id.encode() in data:
                 receive_count += 1
         
-        sender.close()
-        receiver.close()
-        
         # Ideally we'd have server-side dedup, but at minimum verify
         # the system doesn't crash or hang with rapid duplicates
         log_test("Deduplication with skew", True, 
                 f"Received {receive_count} copies (dedup is server-side)")
     
+    except socket.error as e:
+        log_test("Deduplication with skew", False, f"Socket error: {e}")
     except Exception as e:
-        log_test("Deduplication with skew", False, f"Exception: {e}")
+        log_test("Deduplication with skew", False, f"Exception: {type(e).__name__}: {e}")
+    finally:
+        if sender:
+            sender.close()
+        if receiver:
+            receiver.close()
 
 
 # =============================================================================
@@ -314,6 +352,8 @@ def test_presence_timestamp():
         log_test("Presence timestamp tolerance", False, "Server not available")
         return
     
+    client = None
+    
     try:
         client = SimpleClient()
         client.connect()
@@ -331,6 +371,7 @@ def test_presence_timestamp():
         
         # Disconnect
         client.close()
+        client = None
         disconnect_time = time.time()
         
         # The server should record last-seen time close to disconnect_time
@@ -340,8 +381,13 @@ def test_presence_timestamp():
         log_test("Presence timestamp tolerance", True, 
                 f"Session duration: {elapsed:.1f}s (30s skew tolerance documented)")
     
+    except socket.error as e:
+        log_test("Presence timestamp tolerance", False, f"Socket error: {e}")
     except Exception as e:
-        log_test("Presence timestamp tolerance", False, f"Exception: {e}")
+        log_test("Presence timestamp tolerance", False, f"Exception: {type(e).__name__}: {e}")
+    finally:
+        if client:
+            client.close()
 
 
 # =============================================================================
@@ -390,6 +436,7 @@ def test_rapid_reconnect():
     
     try:
         successful_reconnects = 0
+        reconnect_errors = []
         base_name = f"reconnect_test_{int(time.time())}"
         
         for i in range(5):
@@ -399,9 +446,17 @@ def test_rapid_reconnect():
                 if client.login(f"{base_name}_{i}"):
                     successful_reconnects += 1
                 client.close()
-            except:
-                pass
+            except socket.timeout:
+                reconnect_errors.append(f"reconnect {i}: timeout")
+            except socket.error as e:
+                reconnect_errors.append(f"reconnect {i}: socket error - {e}")
+            except Exception as e:
+                reconnect_errors.append(f"reconnect {i}: {type(e).__name__}: {e}")
             time.sleep(0.1)  # Brief delay
+        
+        if reconnect_errors:
+            for err in reconnect_errors[:3]:
+                log(f"  {err}")
         
         if successful_reconnects >= 4:
             log_test("Rapid reconnect", True, 
@@ -411,7 +466,7 @@ def test_rapid_reconnect():
                     f"Only {successful_reconnects}/5 reconnects succeeded")
     
     except Exception as e:
-        log_test("Rapid reconnect", False, f"Exception: {e}")
+        log_test("Rapid reconnect", False, f"Exception: {type(e).__name__}: {e}")
 
 
 # =============================================================================
@@ -419,11 +474,11 @@ def test_rapid_reconnect():
 # =============================================================================
 
 def main():
-    print("\n" + "=" * 60)
-    print("Clock Skew Tolerance Test (RFC NFR-16)")
-    print("=" * 60)
-    print(f"\nTolerance threshold: {CLOCK_SKEW_SECONDS}s (RFC allows 30s)")
-    print(f"Target: {EDGE_HOST}:{EDGE_PORT}")
+    log("\n" + "=" * 60)
+    log("Clock Skew Tolerance Test (RFC NFR-16)")
+    log("=" * 60)
+    log(f"\nTolerance threshold: {CLOCK_SKEW_SECONDS}s (RFC allows 30s)")
+    log(f"Target: {EDGE_HOST}:{EDGE_PORT}")
     
     # Run all tests
     test_ordering_with_skew()
@@ -433,24 +488,24 @@ def main():
     test_rapid_reconnect()
     
     # Summary
-    print("\n" + "=" * 60)
-    print("SUMMARY")
-    print("=" * 60)
+    log("\n" + "=" * 60)
+    log("SUMMARY")
+    log("=" * 60)
     
     passed = sum(1 for _, p, _ in results if p)
     failed = sum(1 for _, p, _ in results if not p)
     skipped = sum(1 for _, _, m in results if "SKIP" in m)
     
-    print(f"\nTotal: {len(results)} tests")
-    print(f"Passed: {passed} (including {skipped} skipped)")
-    print(f"Failed: {failed}")
+    log(f"\nTotal: {len(results)} tests")
+    log(f"Passed: {passed} (including {skipped} skipped)")
+    log(f"Failed: {failed}")
     
     if failed == 0:
-        print("\n✓ All clock skew tolerance tests passed!")
-        print("  RFC NFR-16 compliance: VALIDATED")
+        log("\nPASS: All clock skew tolerance tests passed")
+        log("  RFC NFR-16 compliance: VALIDATED")
         return 0
     else:
-        print(f"\n✗ {failed} test(s) failed")
+        log(f"\nFAIL: {failed} test(s) failed")
         return 1
 
 

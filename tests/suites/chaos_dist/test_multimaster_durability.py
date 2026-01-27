@@ -36,6 +36,10 @@ import random
 import string
 from pathlib import Path
 
+# Determinism: seed from environment
+TEST_SEED = int(os.environ.get("TEST_SEED", 42))
+random.seed(TEST_SEED)
+
 # Project root for init_cluster.sh
 PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
 

@@ -23,9 +23,14 @@ Run:
 
 import struct
 import sys
+import os
 import time
 import random
 from typing import Tuple, Optional
+
+# Determinism: seed from environment
+TEST_SEED = int(os.environ.get("TEST_SEED", 42))
+random.seed(TEST_SEED)
 
 # Try to import hypothesis, fall back to simple random testing if not available
 try:
