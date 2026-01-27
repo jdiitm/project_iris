@@ -73,6 +73,20 @@ init([]) ->
     %% Get expected cluster nodes from config
     ExpectedNodes = get_expected_nodes(),
     
+    %% P1-H1 FIX: Warn if no expected nodes configured (permissive mode)
+    case ExpectedNodes of
+        [] ->
+            logger:warning("======================================================="),
+            logger:warning("PARTITION GUARD: No expected_cluster_nodes configured!"),
+            logger:warning(""),
+            logger:warning("Split-brain protection is DISABLED."),
+            logger:warning("Configure iris_core.expected_cluster_nodes for production."),
+            logger:warning("Or set iris_core.partition_guard = disabled to silence."),
+            logger:warning("=======================================================");
+        _ ->
+            logger:info("Partition Guard enabled with ~p expected nodes", [length(ExpectedNodes)])
+    end,
+    
     %% Schedule periodic check
     Timer = erlang:send_after(?CHECK_INTERVAL_MS, self(), check_partition),
     

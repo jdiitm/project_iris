@@ -43,7 +43,13 @@ iris_dedup_test_() ->
       
       %% Stats tests
       {"Get stats returns map", fun test_get_stats/0},
-      {"Stats tracks duplicates", fun test_stats_tracks_dups/0}
+      {"Stats tracks duplicates", fun test_stats_tracks_dups/0},
+      
+      %% P0-C3: Bloom filter tier tests
+      {"Bloom tier stats exposed", fun test_bloom_tier_stats/0},
+      {"Bloom catches duplicates", fun test_bloom_catches_duplicates/0},
+      {"Mark seen populates bloom", fun test_mark_seen_populates_bloom/0},
+      {"Hot TTL is 5 minutes", fun test_hot_ttl_is_5_minutes/0}
      ]}.
 
 %% =============================================================================
@@ -126,3 +132,53 @@ test_stats_tracks_dups() ->
     Stats = iris_dedup:get_stats(),
     DupCount = maps:get(duplicates_caught, Stats, 0),
     ?assert(DupCount >= 1).
+
+%% =============================================================================
+%% P0-C3: Tiered Dedup / Bloom Filter Tests
+%% =============================================================================
+
+test_bloom_tier_stats() ->
+    %% P0-C3 TEST: Verify bloom filter stats are exposed
+    Stats = iris_dedup:get_stats(),
+    
+    %% Should have bloom-related stats from tiered implementation
+    ?assert(maps:is_key(bloom_partitions, Stats)),
+    ?assert(maps:is_key(bloom_hits, Stats)),
+    ?assert(maps:is_key(hot_entries, Stats)),
+    ?assert(maps:is_key(warm_ttl_hours, Stats)),
+    
+    %% Verify warm tier is 7 days (168 hours)
+    WarmTtl = maps:get(warm_ttl_hours, Stats, 0),
+    ?assertEqual(168, WarmTtl).
+
+test_bloom_catches_duplicates() ->
+    %% P0-C3 TEST: Bloom filter should catch duplicates
+    MsgId = <<"bloom_catch_", (integer_to_binary(erlang:unique_integer()))/binary>>,
+    
+    %% Mark as seen (goes to both ETS and bloom)
+    iris_dedup:mark_seen(MsgId),
+    
+    %% Should be detected as duplicate via is_duplicate
+    ?assert(iris_dedup:is_duplicate(MsgId)),
+    
+    %% check_and_mark should also return duplicate
+    ?assertEqual(duplicate, iris_dedup:check_and_mark(MsgId)).
+
+test_mark_seen_populates_bloom() ->
+    %% P0-C3 TEST: mark_seen should add to bloom filter
+    MsgId = <<"bloom_mark_", (integer_to_binary(erlang:unique_integer()))/binary>>,
+    
+    %% Before marking - not a duplicate
+    ?assertNot(iris_dedup:is_duplicate(MsgId)),
+    
+    %% Mark as seen
+    ok = iris_dedup:mark_seen(MsgId),
+    
+    %% After marking - should be duplicate (in both ETS and bloom)
+    ?assert(iris_dedup:is_duplicate(MsgId)).
+
+test_hot_ttl_is_5_minutes() ->
+    %% P0-C3 TEST: Hot tier TTL should be 5 minutes (300000 ms)
+    Stats = iris_dedup:get_stats(),
+    HotTtl = maps:get(hot_ttl_ms, Stats, 0),
+    ?assertEqual(300000, HotTtl).
