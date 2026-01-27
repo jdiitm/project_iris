@@ -39,6 +39,9 @@
 -export([get_current_region/0, get_all_regions/0]).
 -export([get_region_endpoint/1, set_region_endpoint/2]).
 -export([route_cross_region/3]).
+%% P1-H3 FIX: Health checking exports
+-export([get_region_health/1, get_all_region_health/0]).
+-export([probe_region/1]).
 
 %% =============================================================================
 %% API: Message Routing
@@ -150,31 +153,145 @@ route_cross_region(TargetRegion, UserId, Msg, Opts) ->
     end.
 
 %% =============================================================================
+%% P1-H3 FIX: Region Health Checking
+%% =============================================================================
+
+%% Health status for region endpoints
+-define(HEALTH_TABLE, iris_region_health).
+-define(HEALTH_PROBE_INTERVAL_MS, 30000).  %% Probe every 30 seconds
+-define(UNHEALTHY_THRESHOLD, 3).           %% 3 consecutive failures = unhealthy
+
+%% @doc Get health status for a specific region
+-spec get_region_health(binary()) -> healthy | degraded | unhealthy | unknown.
+get_region_health(Region) ->
+    ensure_health_table(),
+    case ets:lookup(?HEALTH_TABLE, Region) of
+        [{Region, Status, _LastCheck, _FailCount}] -> Status;
+        [] -> unknown
+    end.
+
+%% @doc Get health status for all regions
+-spec get_all_region_health() -> map().
+get_all_region_health() ->
+    ensure_health_table(),
+    Regions = get_all_regions(),
+    maps:from_list([{R, get_region_health(R)} || R <- Regions]).
+
+%% @doc Probe a region's health (can be called manually or by scheduler)
+-spec probe_region(binary()) -> healthy | unhealthy.
+probe_region(Region) ->
+    ensure_health_table(),
+    case get_region_endpoint(Region) of
+        {ok, Nodes} when length(Nodes) > 0 ->
+            %% Try to ping at least one node
+            Results = [probe_node(N) || N <- Nodes],
+            HealthyCount = length([R || R <- Results, R == healthy]),
+            TotalCount = length(Results),
+            
+            {Status, FailCount} = case HealthyCount of
+                0 -> 
+                    %% All nodes failed
+                    OldFailCount = get_fail_count(Region),
+                    NewFailCount = OldFailCount + 1,
+                    case NewFailCount >= ?UNHEALTHY_THRESHOLD of
+                        true -> {unhealthy, NewFailCount};
+                        false -> {degraded, NewFailCount}
+                    end;
+                N when N == TotalCount ->
+                    {healthy, 0};
+                _ ->
+                    {degraded, 0}
+            end,
+            
+            Now = os:system_time(millisecond),
+            ets:insert(?HEALTH_TABLE, {Region, Status, Now, FailCount}),
+            Status;
+        _ ->
+            unknown
+    end.
+
+probe_node(Node) ->
+    try
+        case net_adm:ping(Node) of
+            pong -> healthy;
+            pang -> unhealthy
+        end
+    catch
+        _:_ -> unhealthy
+    end.
+
+get_fail_count(Region) ->
+    case ets:lookup(?HEALTH_TABLE, Region) of
+        [{Region, _, _, FailCount}] -> FailCount;
+        [] -> 0
+    end.
+
+ensure_health_table() ->
+    case ets:whereis(?HEALTH_TABLE) of
+        undefined ->
+            try
+                ets:new(?HEALTH_TABLE, [named_table, public, set, {read_concurrency, true}])
+            catch
+                error:badarg -> ok  %% Already exists (race)
+            end;
+        _ -> ok
+    end.
+
+%% =============================================================================
 %% Internal: Routing Strategies
 %% =============================================================================
 
 %% Direct RPC routing (low latency, but requires connectivity)
+%% P1-H3 FIX: Integrated with health checking
 route_via_rpc(TargetRegion, UserId, Msg) ->
     case get_region_endpoint(TargetRegion) of
         {ok, Nodes} when length(Nodes) > 0 ->
-            %% Try nodes in order with circuit breaker
-            route_to_region_nodes(Nodes, UserId, Msg);
+            %% P1-H3 FIX: Check region health first
+            case get_region_health(TargetRegion) of
+                unhealthy ->
+                    %% Region is unhealthy - go directly to fallback
+                    logger:warning("Region ~s is unhealthy, using fallback", [TargetRegion]),
+                    store_cross_region_offline(TargetRegion, UserId, Msg);
+                _ ->
+                    %% Try nodes in order with circuit breaker
+                    route_to_region_nodes(Nodes, UserId, Msg, TargetRegion)
+            end;
         {error, _Reason} ->
             %% No endpoints configured - try to discover via pg
             discover_and_route(TargetRegion, UserId, Msg)
     end.
 
-route_to_region_nodes([], _UserId, _Msg) ->
+route_to_region_nodes([], _UserId, _Msg, TargetRegion) ->
+    %% P1-H3 FIX: Update health status on total failure
+    update_region_health_failure(TargetRegion),
     {error, all_region_nodes_failed};
-route_to_region_nodes([Node | Rest], UserId, Msg) ->
+route_to_region_nodes([Node | Rest], UserId, Msg, TargetRegion) ->
     case iris_circuit_breaker:call(
             Node, iris_async_router, route, [UserId, Msg]) of
-        ok -> ok;
+        ok -> 
+            %% P1-H3 FIX: Reset health on success
+            update_region_health_success(TargetRegion),
+            ok;
         {error, circuit_open} ->
-            route_to_region_nodes(Rest, UserId, Msg);
+            route_to_region_nodes(Rest, UserId, Msg, TargetRegion);
         {badrpc, _} ->
-            route_to_region_nodes(Rest, UserId, Msg)
+            route_to_region_nodes(Rest, UserId, Msg, TargetRegion)
     end.
+
+update_region_health_failure(Region) ->
+    ensure_health_table(),
+    FailCount = get_fail_count(Region) + 1,
+    Status = case FailCount >= ?UNHEALTHY_THRESHOLD of
+        true -> unhealthy;
+        false -> degraded
+    end,
+    Now = os:system_time(millisecond),
+    ets:insert(?HEALTH_TABLE, {Region, Status, Now, FailCount}).
+
+update_region_health_success(Region) ->
+    ensure_health_table(),
+    Now = os:system_time(millisecond),
+    ets:insert(?HEALTH_TABLE, {Region, healthy, Now, 0}).
 
 %% Discover region nodes via pg groups
 discover_and_route(TargetRegion, UserId, Msg) ->

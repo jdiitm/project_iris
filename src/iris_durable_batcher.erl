@@ -18,7 +18,9 @@
 -define(POOL_SIZE, 8).
 -define(BATCH_SIZE, 1000).
 -define(FLUSH_INTERVAL_MS, 500).
--define(WAL_DIR, "/tmp/iris_wal").
+%% P1-H6 FIX: WAL directory is now configurable via iris_core.wal_directory
+%% Default changed from /tmp (often tmpfs) to data/wal (persistent)
+-define(DEFAULT_WAL_DIR, "data/wal").
 
 -record(state, {
     shard_id :: integer(),
@@ -72,12 +74,18 @@ get_stats() ->
 init([ShardId]) ->
     process_flag(trap_exit, true),
     
+    %% P1-H6 FIX: Get WAL directory from config (with validation)
+    WalDir = get_wal_directory(),
+    
     %% Ensure WAL directory exists
-    filelib:ensure_dir(?WAL_DIR ++ "/"),
+    ok = filelib:ensure_dir(WalDir ++ "/"),
+    
+    %% P1-H6 FIX: Validate WAL directory is on persistent storage
+    validate_wal_storage(WalDir, ShardId),
     
     %% Open disk_log for this shard
     LogName = list_to_atom("iris_wal_" ++ integer_to_list(ShardId)),
-    LogFile = ?WAL_DIR ++ "/shard_" ++ integer_to_list(ShardId) ++ ".wal",
+    LogFile = WalDir ++ "/shard_" ++ integer_to_list(ShardId) ++ ".wal",
     
     WalLog = case disk_log:open([
         {name, LogName},
@@ -86,12 +94,14 @@ init([ShardId]) ->
         {format, internal},
         {mode, read_write}
     ]) of
-        {ok, Log} -> Log;
+        {ok, Log} -> 
+            logger:info("WAL shard ~p opened at ~s", [ShardId, LogFile]),
+            Log;
         {repaired, Log, _Recovered, _Bad} -> 
-            logger:warning("WAL shard ~p repaired on open", [ShardId]),
+            logger:warning("WAL shard ~p repaired on open at ~s", [ShardId, LogFile]),
             Log;
         {error, Reason} ->
-            logger:error("Failed to open WAL for shard ~p: ~p", [ShardId, Reason]),
+            logger:error("Failed to open WAL for shard ~p at ~s: ~p", [ShardId, LogFile, Reason]),
             undefined
     end,
     
@@ -106,6 +116,70 @@ init([ShardId]) ->
         wal_log = WalLog,
         timer_ref = TRef
     }}.
+
+%% P1-H6 FIX: Get configurable WAL directory
+get_wal_directory() ->
+    case application:get_env(iris_core, wal_directory) of
+        {ok, Dir} when is_list(Dir) -> Dir;
+        {ok, Dir} when is_binary(Dir) -> binary_to_list(Dir);
+        _ -> ?DEFAULT_WAL_DIR
+    end.
+
+%% P1-H6 FIX: Validate WAL directory is suitable for durability
+validate_wal_storage(WalDir, ShardId) ->
+    %% Check if directory is on tmpfs (RAM-only filesystem)
+    %% This is a best-effort check - may not work on all systems
+    case ShardId of
+        1 ->
+            %% Only log warning once (from shard 1)
+            case is_tmpfs(WalDir) of
+                true ->
+                    logger:warning("======================================================="),
+                    logger:warning("WARNING: WAL directory appears to be on tmpfs!"),
+                    logger:warning("Path: ~s", [WalDir]),
+                    logger:warning(""),
+                    logger:warning("tmpfs is RAM-only and does not survive reboots."),
+                    logger:warning("This defeats the purpose of write-ahead logging."),
+                    logger:warning(""),
+                    logger:warning("Configure iris_core.wal_directory to a persistent path."),
+                    logger:warning("=======================================================");
+                false ->
+                    ok;
+                unknown ->
+                    logger:info("WAL directory: ~s (could not verify persistence)", [WalDir])
+            end;
+        _ ->
+            ok
+    end.
+
+%% Check if path is on tmpfs (best effort)
+is_tmpfs(Path) ->
+    %% Try to detect tmpfs via /proc/mounts on Linux
+    try
+        case file:read_file("/proc/mounts") of
+            {ok, Content} ->
+                Lines = string:split(binary_to_list(Content), "\n", all),
+                AbsPath = filename:absname(Path),
+                check_tmpfs_mounts(AbsPath, Lines);
+            {error, _} ->
+                unknown
+        end
+    catch
+        _:_ -> unknown
+    end.
+
+check_tmpfs_mounts(_Path, []) ->
+    false;
+check_tmpfs_mounts(Path, [Line | Rest]) ->
+    case string:split(Line, " ", all) of
+        [_, MountPoint, FsType | _] when FsType == "tmpfs" ->
+            case string:prefix(Path, MountPoint) of
+                nomatch -> check_tmpfs_mounts(Path, Rest);
+                _ -> true
+            end;
+        _ ->
+            check_tmpfs_mounts(Path, Rest)
+    end.
 
 handle_call({store, User, Msg, BucketCount}, _From, State) ->
     case do_wal_write(User, Msg, BucketCount, State) of
