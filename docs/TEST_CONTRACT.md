@@ -211,17 +211,20 @@ For each test file, verify:
 
 ### Verification Status (2026-01-27)
 
-All 61 tests in core suites follow the contract:
+All **85 tests** follow the contract:
 - **Unit tests**: 21 tests ✅
 - **Integration tests**: 17 tests ✅
+- **Stress tests**: 13 tests ✅
+- **Chaos_dist tests**: 9 tests ✅
+- **Security tests**: 7 tests ✅
+- **Performance_light tests**: 6 tests ✅
 - **E2E tests**: 5 tests ✅
+- **Resilience tests**: 3 tests ✅
+- **Chaos_controlled tests**: 2 tests ✅
 - **Contract tests**: 1 test ✅
 - **Compatibility tests**: 1 test ✅
-- **Security tests**: 7 tests ✅
-- **Resilience tests**: 3 tests ✅
-- **Performance_light tests**: 6 tests ✅
 
-Total smoke duration: **~6 minutes** for core suites (unit through performance_light)
+Total smoke duration: **~57 minutes** with Docker cluster (all suites including chaos_dist and stress)
 
 ---
 
