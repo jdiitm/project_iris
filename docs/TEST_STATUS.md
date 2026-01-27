@@ -2,31 +2,50 @@
 
 ## Overview
 
-**Last Run**: 2026-01-27  
-**Total Tests**: 61 (core suites, excluding Docker-dependent chaos_dist)  
-**Passing**: 61 (100%)  
+**Last Run**: 2026-01-27 (Full Suite with Docker Cluster)  
+**Total Tests**: 85 (ALL suites including Docker-dependent tests)  
+**Passing**: 85 (100%)  
 **Failed**: 0  
 **Skipped**: 0  
 **Deferred**: 0 (all tests re-enabled)
 
-## Full Test Results (Jan 27, 2026)
+## ✅ FULL TEST SUITE PASS (Jan 27, 2026)
 
-| Tier | Suite | Tests | Passed | Failed | Skipped | Smoke Duration | Status |
-|------|-------|-------|--------|--------|---------|----------------|--------|
-| 0 | unit | 21 | 21 | 0 | 0 | ~25s | ✅ ALL PASS |
-| 0 | integration | 17 | 17 | 0 | 0 | ~89s | ✅ ALL PASS |
-| 1 | e2e | 5 | 5 | 0 | 0 | ~32s | ✅ ALL PASS |
-| 1 | security | 7 | 7 | 0 | 0 | ~53s | ✅ ALL PASS |
-| 1 | resilience | 3 | 3 | 0 | 0 | ~64s | ✅ ALL PASS |
-| 1 | compatibility | 1 | 1 | 0 | 0 | ~13s | ✅ ALL PASS |
-| 1 | contract | 1 | 1 | 0 | 0 | ~11s | ✅ ALL PASS |
-| 2 | performance_light | 6 | 6 | 0 | 0 | ~121s | ✅ ALL PASS |
-| 2 | chaos_controlled | 2 | 2 | 0 | 0 | ~43s | ⚠️ Requires cluster |
-| 2 | chaos_dist | 9 | 9 | 0 | 0 | Docker required | ⚠️ Docker required |
-| 3 | stress | 13 | 13 | 0 | 0 | ~122s | ⚠️ Requires cluster |
-| **TOTAL** | | **61** | **61** | **0** | **0** | **~6 min** | **100% pass** |
+All 85 tests pass deterministically with `TEST_PROFILE=smoke TEST_SEED=42`.
 
-**Note**: Core suites (unit, integration, e2e, security, resilience, contract, compatibility, performance_light) pass deterministically with `TEST_SEED=42`. Chaos and stress suites require cluster infrastructure.
+| Tier | Suite | Tests | Passed | Failed | Skipped | Duration | Status |
+|------|-------|-------|--------|--------|---------|----------|--------|
+| 0 | unit | 21 | 21 | 0 | 0 | ~31s | ✅ ALL PASS |
+| 0 | integration | 17 | 17 | 0 | 0 | ~87s | ✅ ALL PASS |
+| 1 | e2e | 5 | 5 | 0 | 0 | ~25s | ✅ ALL PASS |
+| 1 | security | 7 | 7 | 0 | 0 | ~87s | ✅ ALL PASS |
+| 1 | resilience | 3 | 3 | 0 | 0 | ~70s | ✅ ALL PASS |
+| 1 | compatibility | 1 | 1 | 0 | 0 | ~14s | ✅ ALL PASS |
+| 1 | contract | 1 | 1 | 0 | 0 | ~1s | ✅ ALL PASS |
+| 2 | performance_light | 6 | 6 | 0 | 0 | ~76s | ✅ ALL PASS |
+| 2 | chaos_controlled | 2 | 2 | 0 | 0 | ~99s | ✅ ALL PASS |
+| 2 | chaos_dist | 9 | 9 | 0 | 0 | ~2436s | ✅ ALL PASS |
+| 3 | stress | 13 | 13 | 0 | 0 | ~504s | ✅ ALL PASS |
+| **TOTAL** | | **85** | **85** | **0** | **0** | **~57 min** | **✅ 100% pass** |
+
+### Key Achievements
+
+- **All chaos_dist tests pass** including previously flaky:
+  - `test_multimaster_durability`: Mnesia RPO=0 validated with SIGKILL
+  - `test_split_brain`: Split-brain prevention verified
+  - `test_ack_durability`: ACK-durability contract validated
+- **All stress tests pass** including `stress_presence` (fixed with ClusterManager)
+- **Zero skipped tests**: Docker cluster starts automatically when needed
+- **Deterministic**: Reproducible with `TEST_SEED=42`
+
+### How to Run Full Suite
+
+```bash
+# Full test run (starts Docker cluster automatically)
+TEST_PROFILE=smoke TEST_SEED=42 python3 tests/run_tests.py --all
+```
+
+**Note**: Requires Docker for chaos_dist suite. Test runner manages Docker cluster lifecycle automatically.
 
 ---
 
