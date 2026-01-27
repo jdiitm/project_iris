@@ -47,9 +47,13 @@ def run_cmd(cmd, bg=False, ignore_fail=False):
         return subprocess.Popen(cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, preexec_fn=os.setsid)
     try:
         return subprocess.check_output(cmd, shell=True).decode()
-    except subprocess.CalledProcessError:
+    except subprocess.CalledProcessError as e:
         if not ignore_fail:
-            pass
+            log(f"Command failed: {cmd[:50]}... (exit code {e.returncode})")
+        return ""
+    except Exception as e:
+        if not ignore_fail:
+            log(f"Command error: {cmd[:50]}... ({e})")
         return ""
 
 def get_tcp_connections(port=8085):

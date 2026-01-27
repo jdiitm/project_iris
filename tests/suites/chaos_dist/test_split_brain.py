@@ -94,10 +94,17 @@ def connect_and_login(port: int, username: str) -> Optional[socket.socket]:
         if b"LOGIN_OK" in response:
             return sock
         else:
+            log(f"Login rejected for {username} on port {port}: {response[:50]}")
             sock.close()
             return None
+    except socket.timeout:
+        log(f"Connection timeout to port {port} for {username}")
+        return None
+    except socket.error as e:
+        log(f"Socket error to port {port} for {username}: {e}")
+        return None
     except Exception as e:
-        log(f"Connection failed to port {port}: {e}")
+        log(f"Unexpected error connecting to port {port}: {e}")
         return None
 
 
@@ -565,9 +572,13 @@ def test_split_brain_detection():
         log("PASS: Split-brain prevented (at least one side rejected writes)")
     
     # Assertion 5: At least some writes should have worked
+    # Zero acked writes means the test didn't actually validate anything
     total_acked = results["east_acked"] + results["west_acked"]
     if total_acked == 0:
-        log("WARN: No writes were acked during test - test may not be meaningful")
+        log("FAIL: No writes were acked during test - cannot validate split-brain behavior")
+        passed = False
+    else:
+        log(f"PASS: {total_acked} writes were acked during partition test")
     
     print("\n" + "=" * 70)
     print("FINAL RESULT")

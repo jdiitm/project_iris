@@ -105,7 +105,11 @@ def send_and_wait(sock, target, message, timeout=2):
         sock.sendall(packet)
         sock.recv(1024)
         return True
-    except:
+    except socket.timeout:
+        return False
+    except socket.error:
+        return False
+    except Exception:
         return False
 
 
@@ -128,12 +132,28 @@ def traffic_worker(monitor, sender_id):
                 sock.close()
                 sock = None
         
+        except socket.timeout:
+            monitor.record_failure()
+            if sock:
+                try:
+                    sock.close()
+                except Exception:
+                    pass
+            sock = None
+        except socket.error:
+            monitor.record_failure()
+            if sock:
+                try:
+                    sock.close()
+                except Exception:
+                    pass
+            sock = None
         except Exception:
             monitor.record_failure()
             if sock:
                 try:
                     sock.close()
-                except:
+                except Exception:
                     pass
             sock = None
         
