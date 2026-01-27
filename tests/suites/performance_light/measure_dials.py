@@ -7,7 +7,7 @@ Validates key performance requirements:
 - NFR-2: Throughput >30,000 msgs/sec
 - NFR-3: P99 latency <500ms (with chaos), <100ms (normal)
 
-This test integrates with the existing cluster started by the test framework.
+This test manages its own cluster via ClusterManager for test isolation.
 """
 
 import socket
@@ -18,6 +18,14 @@ import sys
 import os
 from dataclasses import dataclass
 from typing import List, Tuple
+
+# Add project root to path
+current_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.abspath(os.path.join(current_dir, "../../.."))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
+from tests.framework.cluster import ClusterManager
 
 # Configuration
 SERVER_HOST = os.environ.get("IRIS_HOST", "localhost")
@@ -265,36 +273,37 @@ def main():
     print(f"  Throughput: >{MIN_THROUGHPUT_MSG_SEC} msg/s")
     print(f"  P99 Latency: <{MAX_P99_LATENCY_MS}ms")
     
-    if not check_server():
-        print("\n❌ Server not available")
-        print("Start cluster with: make start")
-        sys.exit(1)
-    
-    results: List[MetricResult] = []
-    
-    # Run measurements
-    results.append(measure_connection_overhead())
-    results.append(measure_throughput())
-    results.append(measure_latency())
-    
-    # Summary
-    print("\n" + "=" * 60)
-    print("RESULTS")
-    print("=" * 60)
-    
-    all_passed = True
-    for result in results:
-        print(f"  {result}")
-        if not result.passed:
-            all_passed = False
-    
-    if all_passed:
-        print("\n✅ All performance metrics within thresholds")
-        sys.exit(0)
-    else:
-        print("\n❌ Some metrics below threshold")
-        print("   Note: Full RFC compliance requires dedicated hardware")
-        sys.exit(1)
+    # Use ClusterManager to ensure cluster is running
+    with ClusterManager(project_root=project_root) as cluster:
+        if not check_server():
+            print("\n❌ Server not available after cluster start")
+            sys.exit(1)
+        
+        results: List[MetricResult] = []
+        
+        # Run measurements
+        results.append(measure_connection_overhead())
+        results.append(measure_throughput())
+        results.append(measure_latency())
+        
+        # Summary
+        print("\n" + "=" * 60)
+        print("RESULTS")
+        print("=" * 60)
+        
+        all_passed = True
+        for result in results:
+            print(f"  {result}")
+            if not result.passed:
+                all_passed = False
+        
+        if all_passed:
+            print("\n✅ All performance metrics within thresholds")
+            sys.exit(0)
+        else:
+            print("\n❌ Some metrics below threshold")
+            print("   Note: Full RFC compliance requires dedicated hardware")
+            sys.exit(1)
 
 
 if __name__ == "__main__":
