@@ -83,6 +83,32 @@ The following components were added to address the adversarial audit findings:
 
 ---
 
+## Security Hardening (2026-01-27)
+
+The following critical security issues were identified in adversarial audit and fixed:
+
+### P0 Critical Fixes
+
+| Issue | Module | Fix | Test |
+|-------|--------|-----|------|
+| **C1: ACK-before-durability** | `iris_edge_conn.erl` | Replaced `rpc:cast` with sync RPC + retry in terminate path; local fallback storage | Unit tests |
+| **C2: E2EE signature bypass** | `iris_x3dh.erl` | Implemented proper Ed25519 signature verification for prekey authentication | `iris_x3dh_tests` |
+| **C3: Dedup window mismatch** | `iris_dedup.erl` | Tiered dedup: 5-min ETS hot cache + 7-day bloom filter warm tier | `iris_dedup_tests` |
+| **C4: JWT secret auto-gen** | `iris_auth.erl` | Fails on startup if secret not configured (with `allow_random_secret=false`) | `iris_auth_tests` |
+
+### P1 High-Severity Fixes
+
+| Issue | Module | Fix | Test |
+|-------|--------|-----|------|
+| **H1: Partition guard permissive** | `iris_partition_guard.erl` | Added startup warning when no expected nodes configured | Unit tests |
+| **H2: Token revocation delay** | `iris_auth.erl` | Sync Mnesia write + cross-node propagation via RPC | `iris_auth_tests` |
+| **H3: Region router no health** | `iris_region_router.erl` | Added health probing and circuit breaker integration | `iris_region_router_tests` |
+| **H4: Quorum worker tracking** | `iris_quorum_write.erl` | Fixed Node→MRef map tracking (was removing wrong workers) | `iris_quorum_write_tests` |
+| **H5: Circuit breaker race** | `iris_circuit_breaker.erl` | Atomic half-open transition + probe rate limiting | `iris_circuit_breaker_tests` |
+| **H6: WAL dir hardcoded** | `iris_durable_batcher.erl` | Configurable via `wal_directory` + tmpfs detection warning | Unit tests |
+
+---
+
 ## Deferred 📋
 
 | RFC Section | Requirement | Reason | Path Forward |
