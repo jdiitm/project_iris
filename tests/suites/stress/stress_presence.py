@@ -29,6 +29,14 @@ import statistics
 import random
 import argparse
 
+# Add project root to sys.path for ClusterManager
+current_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.abspath(os.path.join(current_dir, "../../.."))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
+from tests.framework.cluster import ClusterManager
+
 # Determinism: seed from environment
 TEST_SEED = int(os.environ.get("TEST_SEED", 42))
 random.seed(TEST_SEED)
@@ -332,7 +340,9 @@ def main() -> int:
     parser.add_argument('--skip-restart', action='store_true', help='Skip cluster restart (ignored)')
     args = parser.parse_args()
     
-    return run_test(args)
+    # Use ClusterManager to ensure cluster is running
+    with ClusterManager(project_root=project_root) as cluster:
+        return run_test(args)
 
 if __name__ == "__main__":
     sys.exit(main())
