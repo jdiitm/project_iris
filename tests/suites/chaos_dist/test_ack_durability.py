@@ -89,6 +89,10 @@ def send_message(sock, target, message):
         response = sock.recv(1024)
         return len(response) > 0
     except socket.timeout:
+        log("  Timeout waiting for ACK")
+        return False
+    except socket.error as e:
+        log(f"  Socket error waiting for ACK: {e}")
         return False
 
 
@@ -239,11 +243,22 @@ def test_ack_implies_durability():
     time.sleep(2)
     
     print(f"\n7. Connecting as receiver: {receiver}")
-    try:
-        sock = connect_plaintext()
-        login(sock, receiver)
-    except Exception as e:
-        print(f"  ❌ Reconnection failed: {e}")
+    sock = None
+    for attempt in range(10):
+        try:
+            sock = connect_plaintext()
+            login(sock, receiver)
+            break
+        except Exception as e:
+            if attempt < 9:
+                print(f"  Connection attempt {attempt+1} failed: {e}, retrying in 3s...")
+                time.sleep(3)
+            else:
+                print(f"  ❌ Reconnection failed after 10 attempts: {e}")
+                return False
+    
+    if sock is None:
+        print(f"  ❌ Failed to connect")
         return False
     
     print("\n8. Reading offline messages...")
@@ -361,8 +376,10 @@ def main():
         print("RESULT: FAILED - RFC VIOLATION DETECTED")
         sys.exit(1)
     else:
+        # Per TEST_CONTRACT.md: exit(2) = SKIP
         print("RESULT: SKIPPED (prerequisites not met)")
-        sys.exit(0)
+        print("SKIP:INFRA - Docker cluster not available or not running")
+        sys.exit(2)
 
 
 if __name__ == "__main__":

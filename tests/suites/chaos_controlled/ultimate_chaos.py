@@ -76,9 +76,13 @@ def run_cmd(cmd, async_run=False, ignore_fail=False):
         return subprocess.Popen(cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
         return subprocess.check_output(cmd, shell=True, stderr=subprocess.DEVNULL).decode()
-    except subprocess.CalledProcessError:
+    except subprocess.CalledProcessError as e:
         if not ignore_fail:
-            pass
+            log(f"Command failed: {cmd[:50]}... (exit code {e.returncode})")
+        return ""
+    except Exception as e:
+        if not ignore_fail:
+            log(f"Command error: {cmd[:50]}... ({e})")
         return ""
 
 def setup_ip_aliases():
@@ -341,10 +345,11 @@ def main():
         else:
             log(f"PASS: System responsive (procs: {final_procs})")
         
-        # Assertion 2: Process count healthy
+        # Assertion 2: Process count healthy (no crash, no major leak)
+        # Note: A minimal Erlang node has ~30-50 processes, so < 20 indicates a crash
         if isinstance(final_procs, int):
-            if final_procs < 50:
-                log(f"FAIL: Process count too low ({final_procs})")
+            if final_procs < 20:
+                log(f"FAIL: Process count too low ({final_procs}) - system may have crashed")
                 passed = False
             elif final_procs > 500000:
                 log(f"FAIL: Process count too high ({final_procs}) - leak?")
@@ -396,7 +401,11 @@ def main():
             log(f"PASS: Memory {final_mem:.0f}MB within bounds")
         
         # Assertion 7: Process growth indicates load
-        if proc_delta < 10 and CONFIG['user_count'] >= 100:
+        # Zero or negative growth with 100+ users is a test failure - load wasn't applied
+        if proc_delta <= 0 and CONFIG['user_count'] >= 100:
+            log(f"FAIL: Process count did not grow (delta={proc_delta}) - load generator failed")
+            passed = False
+        elif proc_delta < 10 and CONFIG['user_count'] >= 100:
             log(f"WARN: Process growth only +{proc_delta}")
         else:
             log(f"PASS: Process growth (+{proc_delta}) indicates load")
@@ -418,8 +427,8 @@ def main():
             if p:
                 try:
                     p.kill()
-                except:
-                    pass
+                except Exception:
+                    pass  # Cleanup - OK to ignore
         
         if manage_cluster:
             subprocess.run("pkill -9 beam.smp", shell=True, capture_output=True)

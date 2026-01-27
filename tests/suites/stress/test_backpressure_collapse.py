@@ -36,6 +36,8 @@ project_root = os.path.abspath(os.path.join(current_dir, "../../.."))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
+from tests.framework.cluster import ClusterManager
+
 # Configuration
 SERVER_HOST = os.environ.get("IRIS_HOST", "localhost")
 SERVER_PORT = int(os.environ.get("IRIS_PORT", "8085"))
@@ -140,7 +142,12 @@ class LoadGenerator:
             else:
                 sock.close()
                 return None
-        except Exception:
+        except socket.timeout:
+            return None
+        except socket.error:
+            return None
+        except Exception as e:
+            log(f"  Connection error for {username}: {e}")
             return None
     
     def _receiver_worker(self):
@@ -480,24 +487,26 @@ def main():
     print("Per PRINCIPAL_AUDIT_REPORT.md Section 6.3")
     print("=" * 70)
     
-    # Check prerequisites
-    if not check_server_available():
-        print(f"\nSKIP:INFRA - Server not available at {SERVER_HOST}:{SERVER_PORT}")
-        sys.exit(2)
-    
-    # Run test
-    result = run_backpressure_test()
-    
-    # Analyze and report
-    passed = analyze_results(result)
-    
-    print("\n" + "=" * 70)
-    if passed:
-        print("RESULT: PASSED - System handles backpressure gracefully")
-        sys.exit(0)
-    else:
-        print("RESULT: FAILED - Backpressure handling inadequate")
-        sys.exit(1)
+    # Use ClusterManager to ensure cluster is running
+    with ClusterManager(project_root=project_root) as cluster:
+        # Check prerequisites
+        if not check_server_available():
+            print(f"\nSKIP:INFRA - Server not available at {SERVER_HOST}:{SERVER_PORT}")
+            sys.exit(2)
+        
+        # Run test
+        result = run_backpressure_test()
+        
+        # Analyze and report
+        passed = analyze_results(result)
+        
+        print("\n" + "=" * 70)
+        if passed:
+            print("RESULT: PASSED - System handles backpressure gracefully")
+            sys.exit(0)
+        else:
+            print("RESULT: FAILED - Backpressure handling inadequate")
+            sys.exit(1)
 
 
 if __name__ == "__main__":

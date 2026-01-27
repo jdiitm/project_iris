@@ -36,6 +36,8 @@ project_root = os.path.abspath(os.path.join(current_dir, "../../.."))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
+from tests.framework.cluster import ClusterManager
+
 # Configuration
 SERVER_HOST = os.environ.get("IRIS_HOST", "localhost")
 SERVER_PORT = int(os.environ.get("IRIS_PORT", "8085"))
@@ -164,9 +166,15 @@ def connect_and_login(username: str, timeout: float = TIMEOUT) -> Optional[socke
         if b"LOGIN_OK" in response:
             return sock
         else:
+            log(f"  Login failed for {username}: {response[:30]}")
             sock.close()
             return None
-    except Exception:
+    except socket.timeout:
+        return None
+    except socket.error:
+        return None
+    except Exception as e:
+        log(f"  Connection error for {username}: {e}")
         return None
 
 
@@ -196,10 +204,12 @@ def send_message(sock: socket.socket, target: str, message: str) -> Tuple[bool, 
         # Fire-and-forget: successful send = success
         return True, latency_ms
             
-    except (socket.timeout, ConnectionError, BrokenPipeError, OSError):
-        # Connection issues indicate system under stress
+    except socket.timeout:
         return False, (time.time() - start_time) * 1000
-    except Exception:
+    except (ConnectionError, BrokenPipeError, OSError):
+        return False, (time.time() - start_time) * 1000
+    except Exception as e:
+        log(f"  Unexpected send error: {e}")
         return False, (time.time() - start_time) * 1000
 
 
@@ -493,24 +503,26 @@ def main():
     print("Per PRINCIPAL_AUDIT_REPORT.md Section 3.3")
     print("=" * 70)
     
-    # Check prerequisites
-    if not check_server_available():
-        print(f"\nSKIP:INFRA - Server not available at {SERVER_HOST}:{SERVER_PORT}")
-        sys.exit(2)
-    
-    # Run test
-    result = run_hot_shard_test()
-    
-    # Analyze and report
-    passed = analyze_results(result)
-    
-    print("\n" + "=" * 70)
-    if passed:
-        print("RESULT: PASSED - Hot-shard handling within acceptable limits")
-        sys.exit(0)
-    else:
-        print("RESULT: FAILED - Hot-shard test failed")
-        sys.exit(1)
+    # Use ClusterManager to ensure cluster is running
+    with ClusterManager(project_root=project_root) as cluster:
+        # Check prerequisites
+        if not check_server_available():
+            print(f"\nSKIP:INFRA - Server not available at {SERVER_HOST}:{SERVER_PORT}")
+            sys.exit(2)
+        
+        # Run test
+        result = run_hot_shard_test()
+        
+        # Analyze and report
+        passed = analyze_results(result)
+        
+        print("\n" + "=" * 70)
+        if passed:
+            print("RESULT: PASSED - Hot-shard handling within acceptable limits")
+            sys.exit(0)
+        else:
+            print("RESULT: FAILED - Hot-shard test failed")
+            sys.exit(1)
 
 
 if __name__ == "__main__":
