@@ -79,23 +79,28 @@ unregister(User) ->
     spawn(fun() -> broadcast_removal(User) end),
     ok.
 
+
 %% @doc Lookup a user's presence (Cluster-aware: RPC to Shard Owner)
+%% Strategy: Check local (fast/consistent for local users) -> Check Shard Owner (authoritative)
 -spec lookup(binary()) -> {ok, node(), pid()} | {error, not_found | expired}.
 lookup(User) ->
-    %% 1. Determine Shard Owner
-    ShardId = iris_shard:get_shard(User),
-    Nodes = iris_shard:get_shard_nodes(ShardId),
-    lookup_any_node(Nodes, User).
+    %% 1. Local Optimization (Read your own write)
+    case lookup_local(User) of
+        {ok, Node, Pid} -> {ok, Node, Pid};
+        _ ->
+            %% 2. Remote Lookup (RPC to Shard Owner)
+            ShardId = iris_shard:get_shard(User),
+            Nodes = iris_shard:get_shard_nodes(ShardId),
+            lookup_any_node(Nodes, User)
+    end.
 
 %% @doc Lookup user on specific nodes (try until success)
 lookup_any_node([], _User) -> {error, not_found};
 lookup_any_node([Node | Rest], User) ->
     if Node =:= node() ->
-           %% Local optimization
-           case lookup_local(User) of
-               {error, not_found} -> lookup_any_node(Rest, User);
-               Result -> Result
-           end;
+           %% Already checked local in step 1, but technically we could check again or skip.
+           %% For simplicity, we just skip (assuming step 1 was sufficient)
+           lookup_any_node(Rest, User);
        true ->
            %% Remote RPC
            case rpc:call(Node, ?MODULE, lookup_local, [User], 1000) of
@@ -155,6 +160,7 @@ broadcast_update(User, Node, Pid) ->
     %% AUDIT FIX: Shard-aware routing (Limit broadcast to shard owners)
     ShardId = iris_shard:get_shard(User),
     Members = iris_shard:get_shard_nodes(ShardId),
+    logger:info("DEBUG: broadcast_update ~p -> Shard ~p -> Nodes ~p", [User, ShardId, Members]),
     
     %% Cast to valid members (fire-and-forget, async)
     lists:foreach(fun(Member) ->
