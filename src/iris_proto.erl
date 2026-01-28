@@ -286,11 +286,17 @@ encode_status(User, State, Time) ->
     ULen = byte_size(U),
     <<6, ULen:16, U/binary, StateByte, Time:64>>.
 
-unpack_batch(Blob) -> unpack_batch(Blob, []).
-unpack_batch(<<>>, Acc) -> lists:reverse(Acc);
-unpack_batch(<<Len:16, Msg:Len/binary, Rest/binary>>, Acc) ->
-    unpack_batch(Rest, [Msg | Acc]);
-unpack_batch(_, Acc) -> lists:reverse(Acc). %% Tolerant of trailing garbage
+unpack_batch(Blob) -> unpack_batch(Blob, 1000). %% Default limit 1000
+unpack_batch(Blob, MaxCount) -> unpack_batch_loop(Blob, [], 0, MaxCount).
+
+unpack_batch_loop(<<>>, Acc, _Count, _Max) -> lists:reverse(Acc);
+unpack_batch_loop(<<Len:16, Msg:Len/binary, Rest/binary>>, Acc, Count, Max) ->
+    if Count >= Max ->
+        {error, batch_too_large};
+    true ->
+        unpack_batch_loop(Rest, [Msg | Acc], Count + 1, Max)
+    end;
+unpack_batch_loop(_, Acc, _Count, _Max) -> lists:reverse(Acc). %% Tolerant of trailing garbage
 
 %% Encode reliable message with proper framing (includes MsgLen)
 encode_reliable_msg(MsgId, Msg) ->

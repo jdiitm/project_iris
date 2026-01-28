@@ -32,7 +32,6 @@
 -define(HEARTBEAT_INTERVAL_MS, 10000).  %% 10 seconds
 -define(EXPIRY_THRESHOLD_MS, 30000).    %% 30 seconds without heartbeat = offline
 -define(CLEANUP_INTERVAL_MS, 5000).     %% Cleanup check every 5 seconds
--define(BROADCAST_GROUP, iris_presence_broadcast).
 
 -record(state, {
     cleanup_timer :: reference() | undefined,
@@ -128,20 +127,24 @@ get_stats() ->
 %% @doc Broadcast presence update to other nodes
 -spec broadcast_update(binary(), node(), pid()) -> ok.
 broadcast_update(User, Node, Pid) ->
-    %% Get all presence servers in the cluster
-    Members = get_broadcast_members(),
-    %% Cast to each (fire-and-forget, async)
+    %% AUDIT FIX: Shard-aware routing (Limit broadcast to shard owners)
+    ShardId = iris_shard:get_shard(User),
+    Members = iris_shard:get_shard_nodes(ShardId),
+    
+    %% Cast to valid members (fire-and-forget, async)
     lists:foreach(fun(Member) ->
-        gen_server:cast(Member, {presence_update, User, Node, Pid})
+        gen_server:cast({?SERVER, Member}, {presence_update, User, Node, Pid})
     end, Members),
     ok.
 
 %% @doc Broadcast presence removal to other nodes
 -spec broadcast_removal(binary()) -> ok.
 broadcast_removal(User) ->
-    Members = get_broadcast_members(),
+    ShardId = iris_shard:get_shard(User),
+    Members = iris_shard:get_shard_nodes(ShardId),
+    
     lists:foreach(fun(Member) ->
-        gen_server:cast(Member, {presence_remove, User})
+        gen_server:cast({?SERVER, Member}, {presence_remove, User})
     end, Members),
     ok.
 
@@ -163,9 +166,6 @@ init([]) ->
         {write_concurrency, true},
         {read_concurrency, true}
     ]),
-    
-    %% Join broadcast group for cross-node updates
-    ok = join_broadcast_group(),
     
     %% Start cleanup timer
     TimerRef = erlang:send_after(?CLEANUP_INTERVAL_MS, self(), cleanup_expired),
@@ -274,18 +274,4 @@ terminate(_Reason, State) ->
 %% Internal Functions
 %% =============================================================================
 
-join_broadcast_group() ->
-    %% Use pg for cross-node group membership
-    %% This allows us to find all presence servers in the cluster
-    case pg:start_link(?BROADCAST_GROUP) of
-        {ok, _} -> ok;
-        {error, {already_started, _}} -> ok
-    end,
-    pg:join(?BROADCAST_GROUP, presence_servers, self()),
-    ok.
 
-get_broadcast_members() ->
-    %% Get all presence servers except self
-    Self = self(),
-    Members = pg:get_members(?BROADCAST_GROUP, presence_servers),
-    [M || M <- Members, M =/= Self].
