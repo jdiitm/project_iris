@@ -39,6 +39,9 @@ handle_packet({login, LoginData}, _Current, TransportPid, _Mod) ->
     %% Parse login data: may be just username or "username:token" format
     {User, MaybeToken} = parse_login_data(LoginData),
     
+    %% AUDIT3 FIX: Protect against session memory bloat
+    process_flag(max_heap_size, #{size => 100000, kill => true}), %% ~800KB limit
+    
     %% Rate limiting check
     case rate_limit_check(User) of
         {deny, RetryAfter} ->
