@@ -20,7 +20,7 @@
 
 %% API
 -export([start_link/0]).
--export([register/3, unregister/1, lookup/1, heartbeat/1]).
+-export([register/3, unregister/1, lookup/1, lookup_local/1, heartbeat/1]).
 -export([get_all_local/0, get_stats/0]).
 -export([broadcast_update/3, broadcast_removal/1]).
 
@@ -79,9 +79,34 @@ unregister(User) ->
     spawn(fun() -> broadcast_removal(User) end),
     ok.
 
-%% @doc Lookup a user's presence (lockfree ETS lookup)
+%% @doc Lookup a user's presence (Cluster-aware: RPC to Shard Owner)
 -spec lookup(binary()) -> {ok, node(), pid()} | {error, not_found | expired}.
 lookup(User) ->
+    %% 1. Determine Shard Owner
+    ShardId = iris_shard:get_shard(User),
+    Nodes = iris_shard:get_shard_nodes(ShardId),
+    lookup_any_node(Nodes, User).
+
+%% @doc Lookup user on specific nodes (try until success)
+lookup_any_node([], _User) -> {error, not_found};
+lookup_any_node([Node | Rest], User) ->
+    if Node =:= node() ->
+           %% Local optimization
+           case lookup_local(User) of
+               {error, not_found} -> lookup_any_node(Rest, User);
+               Result -> Result
+           end;
+       true ->
+           %% Remote RPC
+           case rpc:call(Node, ?MODULE, lookup_local, [User], 1000) of
+               {ok, N, P} -> {ok, N, P};
+               _ -> lookup_any_node(Rest, User)
+           end
+    end.
+
+%% @doc Lookup a user's presence (Local ETS only)
+-spec lookup_local(binary()) -> {ok, node(), pid()} | {error, not_found | expired}.
+lookup_local(User) ->
     case ets:lookup(?ETS_TABLE, User) of
         [{User, Entry}] ->
             %% Check if entry is expired
