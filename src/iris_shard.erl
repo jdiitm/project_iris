@@ -12,7 +12,7 @@
 %% =============================================================================
 
 -export([start_link/0]).
--export([get_shard/1, get_shard_node/1, get_shard_nodes/1]).
+-export([get_shard/1, get_shard_node/1, get_shard_nodes/1, jump_hash/2]).
 -export([get_shard_count/0, set_shard_count/1]).
 -export([join_shard/1, leave_shard/1]).
 -export([get_all_shards/0, get_local_shards/0]).
@@ -22,7 +22,7 @@
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
 -define(SERVER, ?MODULE).
--define(DEFAULT_SHARD_COUNT, 64).       %% Default number of shards
+-define(DEFAULT_SHARD_COUNT, 4096).       %% Default number of shards
 -define(PG_SCOPE, iris_shards).         %% pg scope for shard groups
 -define(SHARD_PREFIX, iris_shard_).     %% Prefix for shard group names
 
@@ -43,9 +43,29 @@ start_link() ->
 -spec get_shard(binary()) -> integer().
 get_shard(User) when is_binary(User) ->
     ShardCount = get_shard_count(),
-    erlang:phash2(User, ShardCount);
+    %% AUDIT2 FIX: consistent hashing (Jump Hash) instead of modulo
+    Hash = erlang:phash2(User),
+    jump_hash(Hash, ShardCount);
 get_shard(User) when is_list(User) ->
     get_shard(list_to_binary(User)).
+
+%% Jump Consistent Hash (Google 2014)
+%% Maps a key to a bucket in [0, NumBuckets-1]
+%% Stable mapping: Increasing NumBuckets only moves 1/N keys
+jump_hash(Key, NumBuckets) ->
+    jump_hash_loop(Key, NumBuckets, -1, 0).
+
+jump_hash_loop(_Key, NumBuckets, B, J) when J >= NumBuckets ->
+    B;
+jump_hash_loop(Key, NumBuckets, _B, J) ->
+    NewB = J,
+    %% Linear Congruential Generator step
+    Key1 = (Key * 2862933555777941757 + 1) band 16#FFFFFFFFFFFFFFFF,
+    %% J = (B + 1) * (2^31 / ((Key >> 33) + 1))
+    %% Note: Erlang / is float division
+    NextJFloat = (NewB + 1) * (2147483648.0 / ((Key1 bsr 33) + 1)),
+    NextJ = trunc(NextJFloat),
+    jump_hash_loop(Key1, NumBuckets, NewB, NextJ).
 
 %% @doc Get the primary node for a user's shard
 -spec get_shard_node(binary()) -> {ok, node()} | {error, no_nodes}.

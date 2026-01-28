@@ -62,9 +62,17 @@ set_socket(Pid, Socket) ->
 
 %% Callbacks
 init(_Args) ->
-    Now = os:system_time(millisecond),
-    Timer = erlang:send_after(?RETRY_INTERVAL, self(), check_acks),
-    {ok, wait_for_socket, #data{retry_timer = Timer, last_activity = Now}}.
+    %% AUDIT3 FIX: Enforce global connection limits
+    case iris_ingress_guard:check() of
+        allow ->
+            %% AUDIT3 FIX: Kill process if it grows too large (prevent OOM)
+            process_flag(max_heap_size, #{size => 50000, kill => true}), %% ~400KB limit
+            Now = os:system_time(millisecond),
+            Timer = erlang:send_after(?RETRY_INTERVAL, self(), check_acks),
+            {ok, wait_for_socket, #data{retry_timer = Timer, last_activity = Now}};
+        {deny, _Reason} ->
+            {stop, normal} %% Silent drop or close
+    end.
 
 callback_mode() -> [state_functions, state_enter].
 
@@ -223,6 +231,8 @@ process_buffer(Bin, Data = #data{socket = Socket, user = CurrentUser}) ->
 
 
 terminate(Reason, _State, #data{user = User, pending_acks = Pending}) ->
+    %% AUDIT3 FIX: Decrement connection counter
+    iris_ingress_guard:close(),
     %% Save all pending_acks to offline storage
     save_pending_acks(User, Pending),
     %% Also flush any queued messages
