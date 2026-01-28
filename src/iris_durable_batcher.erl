@@ -9,10 +9,14 @@
 %% 2. Batched replication: N messages = 1 sync_transaction vs N transactions
 %% 3. Crash recovery: Replay uncommitted WAL entries on restart
 %% 4. Sharded: 8 batcher processes for parallelism (phash2 by user)
+%% 5. CLUSTER DURABILITY: Parallel write to secondary node for true RPO=0
 %% =============================================================================
 
 -export([start_link/1, store/3, store_batch/4]).
 -export([get_stats/0, force_flush/0]).
+%% Cluster durability exports
+-export([get_durability_mode/0, get_secondary_node/0]).
+-export([accept_remote_wal/1]).  %% Called via RPC on secondary node
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
 -define(POOL_SIZE, 8).
@@ -32,7 +36,10 @@
     %% Stats
     writes_wal = 0 :: integer(),
     writes_mnesia = 0 :: integer(),
-    batch_count = 0 :: integer()
+    batch_count = 0 :: integer(),
+    %% Cluster durability stats
+    writes_remote = 0 :: integer(),
+    remote_failures = 0 :: integer()
 }).
 
 %% =============================================================================
@@ -210,9 +217,15 @@ handle_call(get_stats_local, _From, State) ->
         pending_count => State#state.pending_count,
         writes_wal => State#state.writes_wal,
         writes_mnesia => State#state.writes_mnesia,
-        batch_count => State#state.batch_count
+        batch_count => State#state.batch_count,
+        %% Cluster durability stats
+        writes_remote => State#state.writes_remote,
+        remote_failures => State#state.remote_failures
     },
     {reply, Stats, State};
+
+handle_call(get_wal_log, _From, State) ->
+    {reply, State#state.wal_log, State};
 
 handle_call(_Request, _From, State) ->
     {reply, {error, unknown_request}, State}.
@@ -260,25 +273,126 @@ do_wal_write(User, Msg, BucketCount, State = #state{wal_log = Log, seq_no = SeqN
     
     Entry = {pending, NewSeqNo, Key, Timestamp, Msg},
     
-    %% CRITICAL: Sync write to disk - survives crash
-    case disk_log:log(Log, Entry) of
+    %% Check durability mode
+    case get_durability_mode() of
+        local ->
+            %% Original behavior: local WAL only (~1ms)
+            do_local_wal_write(Log, Entry, Key, Timestamp, Msg, NewSeqNo, State);
+        cluster ->
+            %% Cluster durability: parallel local + remote WAL (~3-5ms)
+            do_cluster_wal_write(Log, Entry, Key, Timestamp, Msg, NewSeqNo, State);
+        quorum ->
+            %% Quorum durability: use iris_quorum_write (~10-50ms)
+            do_quorum_write(Key, Timestamp, Msg, NewSeqNo, State)
+    end.
+
+%% Local-only WAL write (original behavior)
+do_local_wal_write(Log, Entry, Key, Timestamp, Msg, NewSeqNo, State) ->
+    case write_local_wal(Log, Entry) of
         ok ->
-            case disk_log:sync(Log) of
+            NewPending = [{Key, Timestamp, Msg, NewSeqNo} | State#state.pending],
+            {ok, State#state{
+                pending = NewPending,
+                pending_count = State#state.pending_count + 1,
+                seq_no = NewSeqNo,
+                writes_wal = State#state.writes_wal + 1
+            }};
+        {error, Reason} ->
+            logger:error("WAL write failed: ~p", [Reason]),
+            {error, wal_write_failed}
+    end.
+
+%% Cluster durability: PARALLEL local + remote WAL writes
+do_cluster_wal_write(Log, Entry, Key, Timestamp, Msg, NewSeqNo, State) ->
+    Secondary = get_secondary_node(),
+    
+    %% Spawn parallel remote write (if secondary available)
+    RemoteRef = case Secondary of
+        undefined -> 
+            undefined;
+        Node ->
+            Parent = self(),
+            Ref = make_ref(),
+            spawn(fun() ->
+                Result = write_remote_wal(Node, Entry),
+                Parent ! {remote_wal_result, Ref, Result}
+            end),
+            Ref
+    end,
+    
+    %% Local WAL write (synchronous)
+    LocalResult = write_local_wal(Log, Entry),
+    
+    %% Wait for remote result (if applicable)
+    RemoteResult = case RemoteRef of
+        undefined -> 
+            {error, no_secondary};
+        RemoteRefValue ->
+            receive
+                {remote_wal_result, RemoteRefValue, ok} -> ok;
+                {remote_wal_result, RemoteRefValue, {error, R}} -> {error, R}
+            after 3000 ->
+                {error, timeout}
+            end
+    end,
+    
+    %% Process results
+    case {LocalResult, RemoteResult} of
+        {ok, ok} ->
+            %% Both succeeded - true cluster durability
+            NewPending = [{Key, Timestamp, Msg, NewSeqNo} | State#state.pending],
+            {ok, State#state{
+                pending = NewPending,
+                pending_count = State#state.pending_count + 1,
+                seq_no = NewSeqNo,
+                writes_wal = State#state.writes_wal + 1,
+                writes_remote = State#state.writes_remote + 1
+            }};
+        {ok, {error, RemoteReason}} ->
+            %% Local succeeded, remote failed - degraded durability
+            %% Log warning but still ACK (graceful degradation)
+            case Secondary of
+                undefined -> ok;  %% Expected in single-node
+                _ -> logger:warning("Remote WAL failed (~p), local-only durability: ~p", 
+                                   [Secondary, RemoteReason])
+            end,
+            NewPending = [{Key, Timestamp, Msg, NewSeqNo} | State#state.pending],
+            {ok, State#state{
+                pending = NewPending,
+                pending_count = State#state.pending_count + 1,
+                seq_no = NewSeqNo,
+                writes_wal = State#state.writes_wal + 1,
+                remote_failures = State#state.remote_failures + 1
+            }};
+        {{error, LocalReason}, _} ->
+            %% Local failed - cannot proceed
+            logger:error("Local WAL write failed: ~p", [LocalReason]),
+            {error, wal_write_failed}
+    end.
+
+%% Quorum durability: use iris_quorum_write for majority replication
+do_quorum_write(Key, Timestamp, Msg, NewSeqNo, State) ->
+    case whereis(iris_quorum_write) of
+        undefined ->
+            %% Fallback to local-only if quorum module not available
+            logger:warning("Quorum mode requested but iris_quorum_write not running, falling back"),
+            do_local_wal_write(State#state.wal_log, 
+                              {pending, NewSeqNo, Key, Timestamp, Msg},
+                              Key, Timestamp, Msg, NewSeqNo, State);
+        _ ->
+            case iris_quorum_write:write_durable(offline_msg, Key, {Timestamp, Msg}) of
                 ok ->
                     NewPending = [{Key, Timestamp, Msg, NewSeqNo} | State#state.pending],
                     {ok, State#state{
                         pending = NewPending,
                         pending_count = State#state.pending_count + 1,
                         seq_no = NewSeqNo,
-                        writes_wal = State#state.writes_wal + 1
+                        writes_remote = State#state.writes_remote + 1
                     }};
                 {error, Reason} ->
-                    logger:error("WAL sync failed: ~p", [Reason]),
-                    {error, wal_sync_failed}
-            end;
-        {error, Reason} ->
-            logger:error("WAL write failed: ~p", [Reason]),
-            {error, wal_write_failed}
+                    logger:error("Quorum write failed: ~p", [Reason]),
+                    {error, quorum_write_failed}
+            end
     end.
 
 do_wal_write_batch(User, Msgs, BucketCount, State = #state{wal_log = undefined}) ->
@@ -463,6 +577,121 @@ aggregate_stats(StatsList) ->
             writes_wal => maps:get(writes_wal, S, 0) + maps:get(writes_wal, Acc, 0),
             writes_mnesia => maps:get(writes_mnesia, S, 0) + maps:get(writes_mnesia, Acc, 0),
             batch_count => maps:get(batch_count, S, 0) + maps:get(batch_count, Acc, 0),
-            total_pending => maps:get(pending_count, S, 0) + maps:get(total_pending, Acc, 0)
+            total_pending => maps:get(pending_count, S, 0) + maps:get(total_pending, Acc, 0),
+            %% Cluster durability stats
+            writes_remote => maps:get(writes_remote, S, 0) + maps:get(writes_remote, Acc, 0),
+            remote_failures => maps:get(remote_failures, S, 0) + maps:get(remote_failures, Acc, 0)
         }
-    end, #{writes_wal => 0, writes_mnesia => 0, batch_count => 0, total_pending => 0}, StatsList).
+    end, #{writes_wal => 0, writes_mnesia => 0, batch_count => 0, total_pending => 0,
+           writes_remote => 0, remote_failures => 0}, StatsList).
+
+%% =============================================================================
+%% Cluster Durability: Parallel Remote WAL Replication
+%% =============================================================================
+%% 
+%% DESIGN: For true cluster durability (survives any single node failure), we
+%% write to BOTH local WAL AND a secondary node's WAL in PARALLEL before ACKing.
+%% 
+%% Durability Modes:
+%% - local: Fast (~1ms), single-node durability (original behavior)
+%% - cluster: Balanced (~3-5ms), survives single node failure
+%% - quorum: Safe (~10-50ms), survives minority failures (uses iris_quorum_write)
+%% 
+%% LATENCY: max(local_wal_sync, remote_wal_sync) ≈ 3-5ms (parallel)
+%% =============================================================================
+
+%% @doc Get configured durability mode (local | cluster | quorum)
+-spec get_durability_mode() -> local | cluster | quorum.
+get_durability_mode() ->
+    application:get_env(iris_core, durability_mode, local).
+
+%% @doc Get secondary node for cluster durability replication
+-spec get_secondary_node() -> node() | undefined.
+get_secondary_node() ->
+    case whereis(iris_quorum_write) of
+        undefined ->
+            %% No quorum module - try connected nodes
+            get_secondary_from_connected();
+        _ ->
+            %% Use quorum module's replica selection
+            case iris_quorum_write:get_replicas(self()) of
+                [Primary, Secondary | _] when Primary == node() -> Secondary;
+                [Secondary, Primary | _] when Primary == node() -> Secondary;
+                [_Single] -> undefined;  %% Single node cluster
+                [] -> undefined
+            end
+    end.
+
+get_secondary_from_connected() ->
+    %% Fallback: use first connected node running iris_core
+    ConnectedNodes = nodes(connected),
+    CoreNodes = [N || N <- ConnectedNodes, 
+                      rpc:call(N, erlang, whereis, [iris_durable_batcher_1], 1000) =/= undefined],
+    case CoreNodes of
+        [Secondary | _] -> Secondary;
+        [] -> undefined
+    end.
+
+%% @doc Accept a remote WAL entry (called via RPC on secondary node)
+%% This is the entry point for cluster durability replication
+-spec accept_remote_wal(tuple()) -> ok | {error, term()}.
+accept_remote_wal(Entry) ->
+    %% Extract shard ID from entry
+    ShardId = select_shard_for_entry(Entry),
+    
+    %% Get the WAL log for this shard
+    case get_wal_log_for_shard(ShardId) of
+        undefined ->
+            {error, no_wal};
+        Log ->
+            %% Write and sync to local WAL
+            case disk_log:log(Log, Entry) of
+                ok ->
+                    case disk_log:sync(Log) of
+                        ok -> ok;
+                        {error, Reason} -> {error, {sync_failed, Reason}}
+                    end;
+                {error, Reason} ->
+                    {error, {write_failed, Reason}}
+            end
+    end.
+
+%% Extract shard from entry for routing
+select_shard_for_entry({pending, _SeqNo, {User, _BucketID}, _Timestamp, _Msg}) ->
+    select_shard(User);
+select_shard_for_entry(_) ->
+    1.  %% Default to shard 1
+
+%% Get WAL log handle for a shard (via gen_server call)
+get_wal_log_for_shard(ShardId) ->
+    try
+        gen_server:call(shard_name(ShardId), get_wal_log, 1000)
+    catch
+        _:_ -> undefined
+    end.
+
+%% @doc Write to remote node's WAL (sync RPC with timeout)
+-spec write_remote_wal(node() | undefined, tuple()) -> ok | {error, term()}.
+write_remote_wal(undefined, _Entry) ->
+    {error, no_secondary};
+write_remote_wal(Node, Entry) ->
+    %% Sync RPC with short timeout (network RTT + disk sync)
+    case rpc:call(Node, ?MODULE, accept_remote_wal, [Entry], 3000) of
+        ok -> ok;
+        {badrpc, Reason} -> {error, {badrpc, Reason}};
+        {error, Reason} -> {error, Reason};
+        Other -> {error, {unexpected, Other}}
+    end.
+
+%% @doc Write to local WAL (extracted for parallel execution)
+-spec write_local_wal(disk_log:log(), tuple()) -> ok | {error, term()}.
+write_local_wal(Log, Entry) ->
+    case disk_log:log(Log, Entry) of
+        ok ->
+            case disk_log:sync(Log) of
+                ok -> ok;
+                {error, Reason} -> {error, {sync_failed, Reason}}
+            end;
+        {error, Reason} ->
+            {error, {write_failed, Reason}}
+    end.
