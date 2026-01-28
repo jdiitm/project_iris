@@ -282,7 +282,7 @@ init_db() ->
             logger:info("Found existing Mnesia data at ~s. Starting recovery...", [MnesiaDir]),
             mnesia:start(),
             %% Wait for tables to load from disk
-            Tables = [offline_msg, user_meta, user_status, revoked_tokens],
+            Tables = [offline_msg, user_meta, user_status, revoked_tokens, dedup_log],
             case mnesia:wait_for_tables(Tables, 30000) of
                 ok ->
                     logger:info("All tables loaded successfully");
@@ -439,6 +439,12 @@ recreate_table(revoked_tokens) ->
         {disc_copies, [node()]},
         {attributes, [jti, timestamp]}
     ]);
+recreate_table(dedup_log) ->
+    mnesia:create_table(dedup_log, [
+        {disc_copies, [node()]},
+        {attributes, [msg_id, timestamp]},
+        {type, set}
+    ]);
 recreate_table(Table) ->
     logger:error("Unknown table to recreate: ~p", [Table]).
 
@@ -466,7 +472,14 @@ create_tables(Nodes) ->
         {disc_copies, Nodes},
         {attributes, [jti, timestamp]}
     ]),
-    mnesia:wait_for_tables([presence, offline_msg, user_meta, user_status, revoked_tokens], 5000),
+    %% P0-FIX: Add dedup_log table for bloom filter false positive verification
+    %% Keyed by MsgId, stores timestamp for 7-day TTL cleanup
+    mnesia:create_table(dedup_log, [
+        {disc_copies, Nodes},
+        {attributes, [msg_id, timestamp]},
+        {type, set}
+    ]),
+    mnesia:wait_for_tables([presence, offline_msg, user_meta, user_status, revoked_tokens, dedup_log], 5000),
     logger:info("Tables created.").
 
 %% Legacy wrapper for specific node lists (unused now but kept for API compat)

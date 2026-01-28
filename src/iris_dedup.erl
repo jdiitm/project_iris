@@ -48,6 +48,7 @@
     entries = 0 :: integer(),
     duplicates_caught = 0 :: integer(),
     bloom_hits = 0 :: integer(),
+    bloom_false_positives = 0 :: integer(),  %% P0-FIX: Track false positives
     evictions = 0 :: integer()
 }).
 
@@ -77,13 +78,30 @@ check_and_mark(MsgId) ->
             %% Tier 2: Check bloom filter (7-day window)
             case check_bloom(MsgId) of
                 true ->
-                    %% Probable duplicate (may be false positive)
-                    gen_server:cast(?SERVER, bloom_hit),
-                    duplicate;
+                    %% P0-FIX: Bloom filter hit is PROBABILISTIC.
+                    %% We MUST verify against definitive storage to avoid false positives (Data Loss).
+                    %% False Positive Rate ~0.1% -> 1 in 1000 messages would be dropped without this check.
+                    %% Use dedup_log table which is keyed by MsgId (not offline_msg which uses {User, BucketID}).
+                    case mnesia:dirty_read(dedup_log, MsgId) of
+                        [{dedup_log, MsgId, _Timestamp}] ->
+                            %% Confirmed duplicate in dedup log
+                            gen_server:cast(?SERVER, bloom_hit),
+                            duplicate;
+                        [] ->
+                            %% False positive! The message is NEW.
+                            %% Add to hot cache, bloom, and dedup_log.
+                            logger:info("Dedup: Bloom false positive for ~p - allowing", [MsgId]),
+                            true = ets:insert(?TABLE, {MsgId, Now}),
+                            add_to_bloom(MsgId),
+                            write_dedup_log(MsgId, Now),
+                            gen_server:cast(?SERVER, {false_positive, Now}),
+                            new
+                    end;
                 false ->
-                    %% New message - mark in both tiers
+                    %% New message - mark in all tiers (hot ETS, bloom, dedup_log)
                     true = ets:insert(?TABLE, {MsgId, Now}),
                     add_to_bloom(MsgId),
+                    write_dedup_log(MsgId, Now),
                     gen_server:cast(?SERVER, {new_entry, Now}),
                     new
             end
@@ -104,6 +122,7 @@ mark_seen(MsgId) ->
     Now = os:system_time(millisecond),
     true = ets:insert(?TABLE, {MsgId, Now}),
     add_to_bloom(MsgId),
+    write_dedup_log(MsgId, Now),
     ok.
 
 %% @doc Get dedup stats
@@ -159,6 +178,7 @@ handle_call(get_stats, _From, State) ->
         hot_entries => TableSize,
         duplicates_caught => State#state.duplicates_caught,
         bloom_hits => State#state.bloom_hits,
+        bloom_false_positives => State#state.bloom_false_positives,
         bloom_partitions => BloomPartitions,
         evictions => State#state.evictions,
         max_entries => ?MAX_ENTRIES,
@@ -184,6 +204,12 @@ handle_cast(bloom_hit, State) ->
         bloom_hits = State#state.bloom_hits + 1
     }};
 
+handle_cast({false_positive, _Timestamp}, State) ->
+    %% P0-FIX: Track bloom filter false positives (messages that bloom said "duplicate" but weren't)
+    {noreply, State#state{
+        bloom_false_positives = State#state.bloom_false_positives + 1
+    }};
+
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
@@ -200,6 +226,9 @@ handle_info(cleanup, State) ->
         true -> evict_oldest(Kept - ?MAX_ENTRIES);
         false -> 0
     end,
+    
+    %% P0-FIX: Also cleanup old dedup_log entries (7-day TTL)
+    cleanup_dedup_log(),
     
     %% Reschedule cleanup
     TRef = erlang:send_after(?CLEANUP_INTERVAL, self(), cleanup),
@@ -358,8 +387,52 @@ bloom_set_bits(Bloom, Hashes) ->
     end, Bloom, Hashes).
 
 %% Cleanup bloom partitions older than 7 days
-cleanup_old_bloom_partitions(CurrentPartition) ->
+cleanup_old_bloom_partitions(_CurrentPartition) ->
     %% In a 168-hour rolling window, we keep all partitions
     %% but reset each one when we rotate back to it
     %% The init_bloom_partition call in rotate_bloom handles this
+    ok.
+
+%% =============================================================================
+%% P0-FIX: Dedup Log (Mnesia-backed verification for bloom false positives)
+%% =============================================================================
+
+%% Write message ID to dedup_log for later verification
+%% Uses async dirty_write for performance (eventual consistency OK for dedup)
+write_dedup_log(MsgId, Timestamp) ->
+    %% Async write to avoid blocking hot path
+    spawn(fun() ->
+        try
+            mnesia:dirty_write({dedup_log, MsgId, Timestamp})
+        catch
+            _:Reason ->
+                logger:warning("Dedup log write failed for ~p: ~p", [MsgId, Reason])
+        end
+    end),
+    ok.
+
+%% Cleanup dedup_log entries older than 7 days
+%% Called periodically from handle_info(cleanup, ...)
+cleanup_dedup_log() ->
+    Now = os:system_time(millisecond),
+    CutoffMs = Now - (?WARM_TTL_HOURS * 3600 * 1000),  %% 7 days in ms
+    %% Async cleanup to avoid blocking
+    spawn(fun() ->
+        try
+            %% Use dirty_select for efficiency (no transaction overhead)
+            OldEntries = mnesia:dirty_select(dedup_log, [
+                {{'dedup_log', '$1', '$2'}, [{'<', '$2', CutoffMs}], ['$1']}
+            ]),
+            lists:foreach(fun(MsgId) ->
+                mnesia:dirty_delete(dedup_log, MsgId)
+            end, OldEntries),
+            case length(OldEntries) of
+                0 -> ok;
+                N -> logger:info("Dedup log cleanup: removed ~p old entries", [N])
+            end
+        catch
+            _:Reason ->
+                logger:warning("Dedup log cleanup failed: ~p", [Reason])
+        end
+    end),
     ok.
