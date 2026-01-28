@@ -33,12 +33,12 @@ check_deps:
 # Run unit tests
 test: $(BEAM_FILES)
 	@echo "Running EUnit tests..."
-	@$(ERL) -pa ebin -noshell -eval "case eunit:test([iris_session_tests, iris_proto_tests], []) of ok -> init:stop(0); error -> init:stop(1) end."
+	@$(ERL) -pa ebin -noshell -eval "case eunit:test([iris_session_tests, iris_proto_tests, iris_shard_tests], []) of ok -> init:stop(0); error -> init:stop(1) end."
 
 # Run tests with verbose output
 test-verbose: $(BEAM_FILES)
 	@echo "Running EUnit tests (verbose)..."
-	@$(ERL) -pa ebin -noshell -eval "case eunit:test([iris_session_tests, iris_proto_tests], [verbose]) of ok -> init:stop(0); error -> init:stop(1) end."
+	@$(ERL) -pa ebin -noshell -eval "case eunit:test([iris_session_tests, iris_proto_tests, iris_shard_tests], [verbose]) of ok -> init:stop(0); error -> init:stop(1) end."
 
 # Run all tests via unified test runner
 # Uses stdbuf -oL to force line-buffered output for real-time visibility
