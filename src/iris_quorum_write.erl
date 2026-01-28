@@ -9,6 +9,11 @@
 %% - Failed replicas are repaired asynchronously
 %% - Hot standby: Automatic primary promotion on failure
 %% 
+%% PARTITION SAFETY:
+%% - Respects iris_partition_guard for consistent behavior with iris_store
+%% - Writes blocked during detected partitions (safe mode)
+%% - Ensures operator intent is honored across all write paths
+%% 
 %% DESIGN RATIONALE:
 %% - sync_transaction waits for ALL replicas (slow/stuck node blocks everyone)
 %% - Quorum writes tolerate minority failures without blocking
@@ -36,12 +41,25 @@
 
 %% @doc Write with quorum guarantee (majority of replicas must ACK)
 %% Returns 'ok' when quorum is reached, repairs failed replicas async
+%% 
+%% PARTITION SAFETY: Respects iris_partition_guard to ensure consistent
+%% behavior with iris_store during detected network partitions.
 -spec write_durable(atom(), term(), term()) -> ok | {error, term()}.
 write_durable(Table, Key, Value) ->
     write_durable(Table, Key, Value, #{}).
 
 -spec write_durable(atom(), term(), term(), map()) -> ok | {error, term()}.
 write_durable(Table, Key, Value, Opts) ->
+    %% Check partition guard first - consistent with iris_store behavior
+    case check_partition_guard() of
+        ok ->
+            do_write_durable(Table, Key, Value, Opts);
+        {error, Reason} ->
+            {error, Reason}
+    end.
+
+%% Internal: Actual quorum write implementation
+do_write_durable(Table, Key, Value, Opts) ->
     Timeout = maps:get(timeout, Opts, ?DEFAULT_WRITE_TIMEOUT_MS),
     ReplicationFactor = get_replication_factor(),
     WriteQuorum = (ReplicationFactor div 2) + 1,  %% Majority
@@ -81,6 +99,20 @@ write_durable(Table, Key, Value, Opts) ->
             logger:error("Quorum write failed: ~p/~p successes (need ~p)", 
                         [SuccessCount, length(Replicas), WriteQuorum]),
             {error, {quorum_not_reached, SuccessCount, WriteQuorum}}
+    end.
+
+%% =============================================================================
+%% Internal: Partition Guard Check
+%% =============================================================================
+
+%% @doc Check if partition guard allows writes
+%% Returns 'ok' if safe, {error, partition_detected} if in safe mode
+check_partition_guard() ->
+    case whereis(iris_partition_guard) of
+        undefined -> 
+            ok;  %% Guard not running = permissive
+        _Pid ->
+            iris_partition_guard:is_safe_for_writes()
     end.
 
 %% =============================================================================

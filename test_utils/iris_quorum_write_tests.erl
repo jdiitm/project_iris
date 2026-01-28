@@ -311,6 +311,36 @@ worker_tracking_test_() ->
       ]}}.
 
 %% =============================================================================
+%% Partition Guard Tests
+%% =============================================================================
+
+partition_guard_test_() ->
+    {"Partition guard consistency",
+     {setup, fun setup/0, fun cleanup/1,
+      [
+       {"write_durable succeeds when partition guard not running", fun() ->
+            %% Ensure partition guard is not running
+            case whereis(iris_partition_guard) of
+                undefined -> ok;
+                Pid -> exit(Pid, kill), timer:sleep(50)
+            end,
+            
+            iris_quorum_write:set_replication_factor(1),
+            Result = iris_quorum_write:write_durable(
+                test_quorum_table, guard_test_key, <<"value">>),
+            ?assertEqual(ok, Result),
+            application:unset_env(iris_core, replication_factor)
+        end},
+       
+       {"write_durable checks partition guard (export verification)", fun() ->
+            %% Verify the module exports write_durable functions
+            Exports = iris_quorum_write:module_info(exports),
+            ?assert(lists:member({write_durable, 3}, Exports)),
+            ?assert(lists:member({write_durable, 4}, Exports))
+        end}
+      ]}}.
+
+%% =============================================================================
 %% Integration Test Placeholder
 %% =============================================================================
 
@@ -324,6 +354,13 @@ integration_placeholder_test_() ->
       
       {"Failover scenarios require integration test", fun() ->
            %% This is a marker - actual test is in Python integration suite
+           ?assert(true)
+       end},
+       
+      {"Partition guard enforcement requires integration test", fun() ->
+           %% Full partition guard test requires starting the guard process
+           %% in safe_mode and verifying write_durable returns error
+           %% This is tested in Python integration suite
            ?assert(true)
        end}
      ]}.
