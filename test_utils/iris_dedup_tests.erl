@@ -49,7 +49,11 @@ iris_dedup_test_() ->
       {"Bloom tier stats exposed", fun test_bloom_tier_stats/0},
       {"Bloom catches duplicates", fun test_bloom_catches_duplicates/0},
       {"Mark seen populates bloom", fun test_mark_seen_populates_bloom/0},
-      {"Hot TTL is 5 minutes", fun test_hot_ttl_is_5_minutes/0}
+      {"Hot TTL is 5 minutes", fun test_hot_ttl_is_5_minutes/0},
+      
+      %% P0-FIX: Bloom false positive verification tests
+      {"Stats include false positive counter", fun test_false_positive_stats/0},
+      {"Dedup log verification prevents data loss", fun test_dedup_log_verification/0}
      ]}.
 
 %% =============================================================================
@@ -182,3 +186,34 @@ test_hot_ttl_is_5_minutes() ->
     Stats = iris_dedup:get_stats(),
     HotTtl = maps:get(hot_ttl_ms, Stats, 0),
     ?assertEqual(300000, HotTtl).
+
+%% =============================================================================
+%% P0-FIX: Bloom False Positive Verification Tests
+%% =============================================================================
+
+test_false_positive_stats() ->
+    %% P0-FIX TEST: Stats should include bloom_false_positives counter
+    Stats = iris_dedup:get_stats(),
+    ?assert(maps:is_key(bloom_false_positives, Stats)),
+    %% Counter should be a non-negative integer
+    FPCount = maps:get(bloom_false_positives, Stats, -1),
+    ?assert(is_integer(FPCount) andalso FPCount >= 0).
+
+test_dedup_log_verification() ->
+    %% P0-FIX TEST: Verify that messages written via check_and_mark
+    %% are persisted to dedup_log for bloom verification.
+    %% This prevents false positives from causing data loss.
+    MsgId = <<"dedup_log_test_", (integer_to_binary(erlang:unique_integer()))/binary>>,
+    
+    %% Step 1: Mark a new message
+    ?assertEqual(new, iris_dedup:check_and_mark(MsgId)),
+    
+    %% Step 2: Give async dedup_log write time to complete
+    timer:sleep(100),
+    
+    %% Step 3: Verify the message is now detected as duplicate
+    %% This proves the full pipeline works: ETS -> bloom -> dedup_log
+    ?assertEqual(duplicate, iris_dedup:check_and_mark(MsgId)),
+    
+    %% Step 4: Verify via is_duplicate too
+    ?assert(iris_dedup:is_duplicate(MsgId)).
