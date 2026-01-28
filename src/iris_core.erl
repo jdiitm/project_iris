@@ -119,6 +119,37 @@ init([]) ->
         end
     end),
 
+    %% AUDIT FIX: Auto-wire cross-region replication if configured
+    %% Only if we are a core node
+    spawn(fun() ->
+        case application:get_env(iris_core, regions, []) of
+            [] -> ok;
+            Regions when length(Regions) > 0 ->
+                 %% Wait for cluster to stabilize
+                 timer:sleep(5000),
+                 case is_core_node(node()) of
+                     true ->
+                         logger:info("Regions configured, attempting to wire replication..."),
+                         init_cross_region_replication();
+                     false -> ok
+                 end
+        end
+    end),
+
+    %% SAFETY DEFAULT: Validate presence backend configuration
+    case application:get_env(iris_core, presence_backend) of
+        {ok, Backend} when Backend =:= ets; Backend =:= mnesia ->
+            ok;
+        undefined ->
+            logger:error("CRITICAL: iris_core presence_backend NOT CONFIGURED."),
+            logger:error("Must be set to 'ets' (high scale) or 'mnesia' (legacy)."),
+            logger:error("Refusing to start with unsafe defaults."),
+            exit(presence_backend_not_configured);
+        {ok, Other} ->
+             logger:error("Invalid presence_backend: ~p", [Other]),
+             exit({invalid_presence_backend, Other})
+    end,
+
     {ok, {SupFlags, Children}}.
 
 %%%===================================================================
@@ -134,13 +165,17 @@ register_user(User, Node, Pid) ->
             iris_presence:register(User, Node, Pid);
         mnesia ->
             %% Legacy Mnesia-backed presence (global lock, ~1ms)
-            F = fun() -> mnesia:write({presence, User, Node, Pid}) end,
+            %% WARN: This path is deprecated for high-scale use
+             F = fun() -> mnesia:write({presence, User, Node, Pid}) end,
             case mnesia:transaction(F) of
                 {atomic, ok} -> ok;
                 {aborted, Reason} ->
                     logger:error("Failed to register user ~p: ~p", [User, Reason]),
                     {error, Reason}
-            end
+            end;
+        Other ->
+            %% SAFETY DEFAULT: Crash if invalid config
+            error({invalid_presence_backend, Other})
     end.
 
 lookup_user(User) ->
@@ -200,13 +235,27 @@ update_status(User, offline) ->
 
 get_status(User) ->
     %% Rationale: Multi-tier lookup. RAM -> Disk.
-    case mnesia:dirty_read(presence, User) of
-        [{presence, User, _, _}] -> {online, true, 0};
-        [] -> 
-            case mnesia:dirty_read(user_status, User) of
-                [{user_status, User, LastSeen}] -> {online, false, LastSeen};
-                [] -> {online, false, 0}
+    %% AUDIT FIX: Respect presence_backend config (ets vs mnesia)
+    case application:get_env(iris_core, presence_backend, mnesia) of
+        ets ->
+            %% ETS-backed presence lookup (lockfree)
+            case iris_presence:lookup_local(User) of
+                {ok, _Node, _Pid} -> {online, true, 0};
+                _ -> get_status_from_disk(User)
+            end;
+        mnesia ->
+            %% Legacy Mnesia-backed presence lookup
+            case mnesia:dirty_read(presence, User) of
+                [{presence, User, _, _}] -> {online, true, 0};
+                [] -> get_status_from_disk(User)
             end
+    end.
+
+%% Helper: Get status from disk (user_status table)
+get_status_from_disk(User) ->
+    case mnesia:dirty_read(user_status, User) of
+        [{user_status, User, LastSeen}] -> {online, false, LastSeen};
+        [] -> {online, false, 0}
     end.
 
 %%%===================================================================

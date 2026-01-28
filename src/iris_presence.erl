@@ -20,7 +20,7 @@
 
 %% API
 -export([start_link/0]).
--export([register/3, unregister/1, lookup/1, heartbeat/1]).
+-export([register/3, unregister/1, lookup/1, lookup_local/1, heartbeat/1]).
 -export([get_all_local/0, get_stats/0]).
 -export([broadcast_update/3, broadcast_removal/1]).
 
@@ -32,7 +32,6 @@
 -define(HEARTBEAT_INTERVAL_MS, 10000).  %% 10 seconds
 -define(EXPIRY_THRESHOLD_MS, 30000).    %% 30 seconds without heartbeat = offline
 -define(CLEANUP_INTERVAL_MS, 5000).     %% Cleanup check every 5 seconds
--define(BROADCAST_GROUP, iris_presence_broadcast).
 
 -record(state, {
     cleanup_timer :: reference() | undefined,
@@ -80,9 +79,39 @@ unregister(User) ->
     spawn(fun() -> broadcast_removal(User) end),
     ok.
 
-%% @doc Lookup a user's presence (lockfree ETS lookup)
+
+%% @doc Lookup a user's presence (Cluster-aware: RPC to Shard Owner)
+%% Strategy: Check local (fast/consistent for local users) -> Check Shard Owner (authoritative)
 -spec lookup(binary()) -> {ok, node(), pid()} | {error, not_found | expired}.
 lookup(User) ->
+    %% 1. Local Optimization (Read your own write)
+    case lookup_local(User) of
+        {ok, Node, Pid} -> {ok, Node, Pid};
+        _ ->
+            %% 2. Remote Lookup (RPC to Shard Owner)
+            ShardId = iris_shard:get_shard(User),
+            Nodes = iris_shard:get_shard_nodes(ShardId),
+            lookup_any_node(Nodes, User)
+    end.
+
+%% @doc Lookup user on specific nodes (try until success)
+lookup_any_node([], _User) -> {error, not_found};
+lookup_any_node([Node | Rest], User) ->
+    if Node =:= node() ->
+           %% Already checked local in step 1, but technically we could check again or skip.
+           %% For simplicity, we just skip (assuming step 1 was sufficient)
+           lookup_any_node(Rest, User);
+       true ->
+           %% Remote RPC
+           case rpc:call(Node, ?MODULE, lookup_local, [User], 1000) of
+               {ok, N, P} -> {ok, N, P};
+               _ -> lookup_any_node(Rest, User)
+           end
+    end.
+
+%% @doc Lookup a user's presence (Local ETS only)
+-spec lookup_local(binary()) -> {ok, node(), pid()} | {error, not_found | expired}.
+lookup_local(User) ->
     case ets:lookup(?ETS_TABLE, User) of
         [{User, Entry}] ->
             %% Check if entry is expired
@@ -128,20 +157,25 @@ get_stats() ->
 %% @doc Broadcast presence update to other nodes
 -spec broadcast_update(binary(), node(), pid()) -> ok.
 broadcast_update(User, Node, Pid) ->
-    %% Get all presence servers in the cluster
-    Members = get_broadcast_members(),
-    %% Cast to each (fire-and-forget, async)
+    %% AUDIT FIX: Shard-aware routing (Limit broadcast to shard owners)
+    ShardId = iris_shard:get_shard(User),
+    Members = iris_shard:get_shard_nodes(ShardId),
+    logger:info("DEBUG: broadcast_update ~p -> Shard ~p -> Nodes ~p", [User, ShardId, Members]),
+    
+    %% Cast to valid members (fire-and-forget, async)
     lists:foreach(fun(Member) ->
-        gen_server:cast(Member, {presence_update, User, Node, Pid})
+        gen_server:cast({?SERVER, Member}, {presence_update, User, Node, Pid})
     end, Members),
     ok.
 
 %% @doc Broadcast presence removal to other nodes
 -spec broadcast_removal(binary()) -> ok.
 broadcast_removal(User) ->
-    Members = get_broadcast_members(),
+    ShardId = iris_shard:get_shard(User),
+    Members = iris_shard:get_shard_nodes(ShardId),
+    
     lists:foreach(fun(Member) ->
-        gen_server:cast(Member, {presence_remove, User})
+        gen_server:cast({?SERVER, Member}, {presence_remove, User})
     end, Members),
     ok.
 
@@ -163,9 +197,6 @@ init([]) ->
         {write_concurrency, true},
         {read_concurrency, true}
     ]),
-    
-    %% Join broadcast group for cross-node updates
-    ok = join_broadcast_group(),
     
     %% Start cleanup timer
     TimerRef = erlang:send_after(?CLEANUP_INTERVAL_MS, self(), cleanup_expired),
@@ -274,18 +305,4 @@ terminate(_Reason, State) ->
 %% Internal Functions
 %% =============================================================================
 
-join_broadcast_group() ->
-    %% Use pg for cross-node group membership
-    %% This allows us to find all presence servers in the cluster
-    case pg:start_link(?BROADCAST_GROUP) of
-        {ok, _} -> ok;
-        {error, {already_started, _}} -> ok
-    end,
-    pg:join(?BROADCAST_GROUP, presence_servers, self()),
-    ok.
 
-get_broadcast_members() ->
-    %% Get all presence servers except self
-    Self = self(),
-    Members = pg:get_members(?BROADCAST_GROUP, presence_servers),
-    [M || M <- Members, M =/= Self].

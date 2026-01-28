@@ -33,7 +33,11 @@ iris_proto_test_() ->
      {"Unpack batch multiple messages", fun test_unpack_batch_multiple/0},
      {"Unpack batch single message", fun test_unpack_batch_single/0},
      {"Unpack batch empty", fun test_unpack_batch_empty/0},
-     {"Unpack batch with trailing garbage", fun test_unpack_batch_garbage/0}
+     {"Unpack batch empty", fun test_unpack_batch_empty/0},
+     {"Unpack batch with trailing garbage", fun test_unpack_batch_garbage/0},
+     
+     %% Limit tests
+     {"Unpack batch limit exceed", fun test_unpack_batch_limit/0}
     ].
 
 %% =============================================================================
@@ -217,7 +221,21 @@ test_unpack_batch_garbage() ->
     
     Result = iris_proto:unpack_batch(Blob),
     %% Should return the valid message and ignore trailing garbage
+    %% Should return the valid message and ignore trailing garbage
     ?assertEqual([Msg1], Result).
+
+test_unpack_batch_limit() ->
+    %% Create a batch with 5000 messages (limit is 1000)
+    Msgs = [<<"msg">> || _ <- lists:seq(1, 5000)],
+    BatchBlob = list_to_binary([<<3:16, M/binary>> || M <- Msgs]),
+    
+    %% Should fail
+    ?assertEqual({error, batch_too_large}, iris_proto:unpack_batch(BatchBlob)),
+    
+    %% Small batch should pass
+    SmallMsgs = [<<"msg">> || _ <- lists:seq(1, 10)],
+    SmallBlob = list_to_binary([<<3:16, M/binary>> || M <- SmallMsgs]),
+    ?assertEqual(10, length(iris_proto:unpack_batch(SmallBlob))).
 
 %% =============================================================================
 %% Roundtrip Tests
