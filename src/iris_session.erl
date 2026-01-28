@@ -108,15 +108,19 @@ complete_login(User, TransportPid) ->
         _ -> iris_async_router:register_local(User, TransportPid)
     end,
     
-    %% PHASE 2: Sync to Core - SYNCHRONOUS for reliability
+    %% PHASE 2: Async Core registration (eventual consistency acceptable)
+    %% Local ETS registration (Phase 1) handles immediate routing
+    %% AUDIT FIX: Reduces worst-case login time from 10s to 5s
     CoreNode = get_core_node(),
-    case rpc:call(CoreNode, iris_core, register_user, [User, node(), TransportPid], 5000) of
-        ok -> ok;
-        {badrpc, Reason} -> 
-            logger:warning("Failed to register ~p on Core ~p: ~p", [User, CoreNode, Reason]);
-        {error, Reason} ->
-            logger:warning("Core registration error for ~p: ~p", [User, Reason])
-    end,
+    spawn(fun() ->
+        case rpc:call(CoreNode, iris_core, register_user, [User, node(), TransportPid], 5000) of
+            ok -> ok;
+            {badrpc, Reason} -> 
+                logger:warning("Async Core registration failed for ~p on ~p: ~p", [User, CoreNode, Reason]);
+            {error, Reason} ->
+                logger:warning("Async Core registration error for ~p: ~p", [User, Reason])
+        end
+    end),
 
     %% PHASE 3: Retrieve offline messages SYNCHRONOUSLY (RFC FR-2 compliance)
     %% Messages MUST be delivered when recipient connects
