@@ -107,6 +107,24 @@ The following critical security issues were identified in adversarial audit and 
 | **H5: Circuit breaker race** | `iris_circuit_breaker.erl` | Atomic half-open transition + probe rate limiting | `iris_circuit_breaker_tests` |
 | **H6: WAL dir hardcoded** | `iris_durable_batcher.erl` | Configurable via `wal_directory` + tmpfs detection warning | Unit tests |
 
+### Phase 4: Scalability & Resource Boundedness (2026-01-28)
+
+#### 4.1 Routing Stability (RFC-001 NFR-12)
+- **`iris_shard.erl`**: Replaced (`phash2` modulo) with **Jump Consistent Hash**.
+- **Impact**: Scaling from N to N+1 nodes moves `1/(N+1)` data instead of `~100%`.
+- **Validation**: `iris_shard_tests.erl` confirmed 0.5% movement on resize event (1000 keys).
+
+#### 4.2 Global Lock Breakdown (RFC-001 NFR-3)
+- **`iris_core.erl`**: Removed `mnesia:sync_transaction` (Global Lock) from `store_offline_durable`.
+- **New Path**: `iris_durable_batcher` (WAL) -> Async Replication.
+- **Guarantee**: RPO=0 maintained via local WAL fsync before ACK.
+
+#### 4.3 DoS & OOM Protection (RFC-001 NFR-17)
+- **Ingress Guard**: `iris_ingress_guard.erl` atomic connection limits per node.
+- **Memory Kill Switch**: `mas_heap_size` enforcement on `iris_session` (800KB) and `iris_edge_conn` (400KB).
+- **Validation**: `test_resource_limits.py` confirmed process termination on abuse.
+
+
 ---
 
 ## Deferred 📋
