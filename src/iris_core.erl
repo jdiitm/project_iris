@@ -235,13 +235,27 @@ update_status(User, offline) ->
 
 get_status(User) ->
     %% Rationale: Multi-tier lookup. RAM -> Disk.
-    case mnesia:dirty_read(presence, User) of
-        [{presence, User, _, _}] -> {online, true, 0};
-        [] -> 
-            case mnesia:dirty_read(user_status, User) of
-                [{user_status, User, LastSeen}] -> {online, false, LastSeen};
-                [] -> {online, false, 0}
+    %% AUDIT FIX: Respect presence_backend config (ets vs mnesia)
+    case application:get_env(iris_core, presence_backend, mnesia) of
+        ets ->
+            %% ETS-backed presence lookup (lockfree)
+            case iris_presence:lookup_local(User) of
+                {ok, _Node, _Pid} -> {online, true, 0};
+                _ -> get_status_from_disk(User)
+            end;
+        mnesia ->
+            %% Legacy Mnesia-backed presence lookup
+            case mnesia:dirty_read(presence, User) of
+                [{presence, User, _, _}] -> {online, true, 0};
+                [] -> get_status_from_disk(User)
             end
+    end.
+
+%% Helper: Get status from disk (user_status table)
+get_status_from_disk(User) ->
+    case mnesia:dirty_read(user_status, User) of
+        [{user_status, User, LastSeen}] -> {online, false, LastSeen};
+        [] -> {online, false, 0}
     end.
 
 %%%===================================================================
