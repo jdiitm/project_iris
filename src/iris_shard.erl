@@ -22,7 +22,7 @@
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
 -define(SERVER, ?MODULE).
--define(DEFAULT_SHARD_COUNT, 64).       %% Default number of shards
+-define(DEFAULT_SHARD_COUNT, 4096).       %% Default number of shards
 -define(PG_SCOPE, iris_shards).         %% pg scope for shard groups
 -define(SHARD_PREFIX, iris_shard_).     %% Prefix for shard group names
 

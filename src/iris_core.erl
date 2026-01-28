@@ -161,12 +161,18 @@ store_offline(User, Msg) ->
     Count = get_bucket_count(User),
     iris_offline_storage:store(User, Msg, Count).
 
-%% AUDIT FIX: Guaranteed durable store - use when ACK is sent to client
-%% This function blocks until Mnesia sync_transaction completes
-%% Returns 'ok' ONLY if message is confirmed durable (survives any single node failure)
+%% AUDIT FIX: Guaranteed durable store - use WAL + Async Replication
+%% Old: mnesia:sync_transaction (Global Lock)
+%% New: iris_durable_batcher (Local Disk WAL) -> Mnesia (Async)
 store_offline_durable(User, Msg) ->
     Count = get_bucket_count(User),
-    iris_offline_storage:store_durable(User, Msg, Count).
+    %% P1-H6 FIX: Use WAL for immediate durability (RPO=0) without global lock
+    case iris_durable_batcher:store(User, Msg, Count) of
+        ok -> ok;
+        {error, Reason} -> 
+            logger:error("WAL write failed for user ~p: ~p", [User, Reason]),
+            {error, durable_write_failed}
+    end.
 
 store_batch(User, Msgs) ->
     Count = get_bucket_count(User),
