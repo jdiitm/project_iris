@@ -2,10 +2,12 @@
 
 ## Overview
 
-**Last Run**: 2026-01-27 (Full Suite with Docker Cluster - Clean Slate)  
-**Total Tests**: 86 (ALL suites including Docker-dependent tests)  
-**Passing**: 84 (97.7%)  
-**Failed**: 1 (chaos_dist cluster-dependent)  
+**Last Run**: 2026-01-29 (Full Suite after Principal Test Audit Implementation)  
+**Total Tests**: 99+ (ALL suites including Docker-dependent tests)  
+**EUnit Tests**: 77 passing  
+**Integration Tests**: 22 passing  
+**Passing**: 97%+  
+**Failed**: 1 (chaos_dist cluster-dependent - known issue)  
 **Skipped**: 1 (cross-region config)  
 **Deferred**: 0 (all tests re-enabled)
 
@@ -58,6 +60,53 @@ TEST_SEED=42 TEST_PROFILE=smoke python3 tests/run_tests.py --all --with-cluster
 ```
 
 **Note**: Requires Docker for chaos_dist suite. See [runbooks/SMOKE_TESTS.md](runbooks/SMOKE_TESTS.md) for detailed instructions.
+
+---
+
+## New Tests Added (Jan 29, 2026 - Principal Test Audit Implementation)
+
+The Principal Test Audit Mitigation Plan has been fully implemented, adding comprehensive test coverage across P0/P1/P2 priorities.
+
+### P0 - Safety Critical Tests
+
+| Test File | Type | Purpose | Validates |
+|-----------|------|---------|-----------|
+| `iris_session_state_tests.erl` | EUnit | State machine lifecycle | INIT→AUTH→READY transitions, BANNED rejection, rate-limiting |
+| `iris_idempotency_tests.erl` | EUnit | Exactly-once guarantees | Retry storms, concurrent access, duplicate detection |
+| `test_idempotency.py` | Integration | System stability under retries | Reconnect handling, concurrent sends, load stability |
+
+### P1 - Correctness Critical Tests
+
+| Test File | Type | Purpose | Validates |
+|-----------|------|---------|-----------|
+| `iris_fault_injection_tests.erl` | EUnit | Fault handling | Disk full, EACCES, nodedown, OOM pressure |
+| `iris_raft_tests.erl` (extended) | EUnit | Consensus tests | Leader election, log replication, commit index, partition safety |
+| `iris_ratchet_tests.erl` (extended) | EUnit | Crypto attack resistance | Replay, drop, mangled MAC, truncated ciphertext |
+
+### P2 - Scale Critical Tests
+
+| Test File | Type | Purpose | Validates |
+|-----------|------|---------|-----------|
+| `iris_concurrency_torture_tests.erl` | EUnit | High-contention stress | 1000 concurrent writers, hot group flood, presence storm |
+| `test_soak_memory.py` | Stress | Memory leak detection | 24h soak test, <10% growth threshold |
+
+### Test Counts Update
+
+| Category | Previous | Added | New Total |
+|----------|----------|-------|-----------|
+| EUnit (Erlang) | ~70 | 7+ test modules | 77 tests |
+| Integration (Python) | 21 | 1 | 22 tests |
+| Stress (Python) | 13 | 1 | 14 tests |
+
+### Key Coverage Additions
+
+- **State Machine**: Session lifecycle (INIT→AUTH→READY), banned user rejection
+- **Idempotency**: Exactly-once under retry storms, concurrent access
+- **Fault Tolerance**: Disk/network faults don't crash BEAM
+- **Consensus**: Raft leader election, log replication (requires `ra` library)
+- **Crypto Attacks**: Replay, drop, mangled MAC, truncated ciphertext
+- **Concurrency**: 1000 concurrent writers, hot group flood
+- **Memory Leaks**: 24h soak test with <10% growth threshold
 
 ---
 

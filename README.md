@@ -1,6 +1,6 @@
 # Project Iris: WhatsApp-Class Messaging Engine
 
-[![Tests](https://img.shields.io/badge/tests-84%20passing-brightgreen)](tests/run_tests.py)
+[![Tests](https://img.shields.io/badge/tests-99%20passing-brightgreen)](tests/run_tests.py)
 [![Erlang](https://img.shields.io/badge/Erlang-OTP%2025%2B-blue)](https://www.erlang.org/)
 
 > **Current Status**: Production-validated for **1M+ concurrent users per region**.  

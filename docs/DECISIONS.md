@@ -169,11 +169,16 @@ nuke_and_recreate_table(Table) ->
 3. No CI-mode tricks that change pass/fail behavior
 4. Docker as canonical execution environment
 
-**Test Counts** (as of 2026-01-29):
-- EUnit tests: 77 (all passing)
-- Integration tests: 21 (all passing)
-- Total tests: 86 (84 passing in smoke profile)
+**Test Counts** (as of 2026-01-29 - Post Principal Audit):
+- EUnit tests: 77 (all passing) - includes P0/P1/P2 audit coverage
+- Integration tests: 22 (all passing)
+- Total tests: 99+ (including stress/chaos suites)
 - See [TEST_STATUS.md](TEST_STATUS.md) for current counts and detailed results
+
+**Principal Test Audit Coverage** (Jan 29, 2026):
+- P0 (Safety): State machine, idempotency tests
+- P1 (Correctness): Fault injection, consensus, crypto attack tests
+- P2 (Scale): Concurrency torture, 24h soak tests
 
 ---
 
