@@ -196,6 +196,20 @@ handle_cast({route, User, Msg, MsgId}, State) ->
 handle_cast({route, User, Msg}, State) ->
     handle_cast({route, User, Msg, undefined}, State);
 
+%% FORENSIC_AUDIT_FIX: Handle completion callback from spawned routing tasks
+handle_cast({route_complete, {success, remote}}, State) ->
+    incr_metric(route_success),
+    {noreply, State#state{routed_remote = State#state.routed_remote + 1}};
+
+handle_cast({route_complete, {success, offline}}, State) ->
+    incr_metric(route_offline),
+    {noreply, State#state{routed_offline = State#state.routed_offline + 1}};
+
+handle_cast({route_complete, {failure, _Reason}}, State) ->
+    incr_metric(route_offline),
+    {noreply, State#state{routed_offline = State#state.routed_offline + 1,
+                          route_failures = State#state.route_failures + 1}};
+
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
@@ -210,34 +224,51 @@ terminate(_Reason, _State) ->
 %% =============================================================================
 
 route_to_remote(User, Msg, MsgId, State) ->
-    %% SHARD-AWARE ROUTING
-    %% 1. Get shard for user
-    %% 2. Get nodes serving that shard
-    %% 3. Use circuit breaker with fallback
-    
+    %% FORENSIC_AUDIT_FIX: Spawn ephemeral task to avoid HOL blocking.
+    %% The blocking rpc:call was causing shard GenServers to stall for up to
+    %% 2 seconds per slow cross-region lookup, creating head-of-line blocking.
+    %% Now: GenServer returns immediately, spawned task handles remote routing.
+    Self = self(),
+    spawn(fun() ->
+        Result = do_remote_route(User, Msg, MsgId),
+        gen_server:cast(Self, {route_complete, Result})
+    end),
+    {noreply, State}.
+
+%% FORENSIC_AUDIT_FIX: Extracted blocking logic into separate function
+%% This runs in a spawned process, not blocking the shard GenServer
+do_remote_route(User, Msg, MsgId) ->
     case get_shard_nodes(User) of
         [] ->
-            %% No shard nodes - try legacy routing
-            route_legacy(User, Msg, MsgId, State);
+            %% No shard nodes - try legacy routing (fire-and-forget)
+            do_legacy_route(User, Msg, MsgId);
         [Primary | Fallbacks] ->
             %% Use circuit breaker with fallback nodes
             case route_to_node(Primary, User, Msg, Fallbacks) of
                 ok ->
-                    incr_metric(route_success),
-                    {noreply, State#state{routed_remote = State#state.routed_remote + 1}};
+                    {success, remote};
                 {ok, offline} ->
-                    %% AUDIT FIX: Track offline storage as success (message not lost)
-                    incr_metric(route_offline),
-                    {noreply, State#state{routed_offline = State#state.routed_offline + 1}};
+                    {success, offline};
                 {error, Reason} ->
-                    %% AUDIT FIX: Guaranteed fallback - store offline
+                    %% Guaranteed fallback - store offline
                     logger:warning("Route failed for user ~p (msg_id=~p): ~p, storing offline",
                                    [User, MsgId, Reason]),
                     store_offline_guaranteed(User, Msg, MsgId),
-                    incr_metric(route_offline),
-                    {noreply, State#state{routed_offline = State#state.routed_offline + 1,
-                                          route_failures = State#state.route_failures + 1}}
+                    {failure, Reason}
             end
+    end.
+
+%% Legacy routing extracted for spawned task
+do_legacy_route(User, Msg, MsgId) ->
+    Members = pg:get_members(iris_shards),
+    case Members of
+        [] ->
+            %% No cluster members - store offline guaranteed
+            store_offline_guaranteed(User, Msg, MsgId),
+            {success, offline};
+        [TargetPid | _] ->
+            TargetPid ! {route_remote, User, Msg},
+            {success, remote}
     end.
 
 %% Get nodes for user's shard
@@ -339,21 +370,6 @@ try_route_fallbacks([Node | Rest], User, Msg) ->
             end;
         {badrpc, _} -> 
             try_route_fallbacks(Rest, User, Msg)
-    end.
-
-%% Legacy routing for backwards compatibility
-route_legacy(User, Msg, MsgId, State) ->
-    Members = pg:get_members(iris_shards),
-    case Members of
-        [] ->
-            %% No cluster members - store offline guaranteed
-            store_offline_guaranteed(User, Msg, MsgId),
-            incr_metric(route_offline),
-            {noreply, State#state{routed_offline = State#state.routed_offline + 1}};
-        [TargetPid | _] -> 
-             TargetPid ! {route_remote, User, Msg},
-             incr_metric(route_success),
-             {noreply, State#state{routed_remote = State#state.routed_remote + 1}}
     end.
 
 %% AUDIT FIX: Guaranteed offline storage - NEVER returns error

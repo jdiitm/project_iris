@@ -110,6 +110,34 @@ The Principal Test Audit Mitigation Plan has been fully implemented, adding comp
 
 ---
 
+## New Tests Added (Jan 29, 2026 - Forensic Audit Fixes)
+
+The Chief Architect forensic audit identified critical architectural issues. Validation tests were added for the implemented fixes.
+
+### Forensic Audit Validation Tests
+
+| Test File | Type | Purpose | Validates |
+|-----------|------|---------|-----------|
+| `iris_forensic_audit_tests.erl` | EUnit | HOL blocking fix | Async router returns immediately, no head-of-line blocking |
+| `iris_forensic_audit_tests.erl` | EUnit | ETS presence default | Lockfree presence operations <100μs |
+| `iris_forensic_audit_tests.erl` | EUnit | Cluster manager | Self-healing topology module loads correctly |
+
+### New Modules Added
+
+| Module | Purpose | Audit Finding |
+|--------|---------|---------------|
+| `iris_cluster_manager.erl` | Auto-wire replication on nodeup/nodedown | #3 Missing Cross-Region Operations |
+
+### Configuration Changes
+
+| File | Change | Audit Finding |
+|------|--------|---------------|
+| `iris_core.erl` | Default `presence_backend` to `ets` | #2 Mnesia Global Lock |
+| `config/test.config` | Set `presence_backend` to `ets` | #2 Mnesia Global Lock |
+| `iris_async_router.erl` | Spawn ephemeral tasks for remote routes | #1 HOL Blocking |
+
+---
+
 ## New Tests Added (Jan 27, 2026 - Security Hardening)
 
 | Test | Suite | Purpose | Verifies |
