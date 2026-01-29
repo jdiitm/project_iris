@@ -229,9 +229,66 @@ nuke_and_recreate_table(Table) ->
 
 ---
 
+## 9. Deferred Architectural Work (Forensic Audit 2026-01-29)
+
+The Chief Architect forensic audit identified several items requiring separate RFCs or infrastructure work. These are tracked here for future implementation.
+
+### P1 - Cross-Region Persistent Queue
+
+| Attribute | Value |
+|-----------|-------|
+| **Issue** | Messages to offline cross-region users are tried once then stored locally |
+| **Impact** | Messages can be stranded on local nodes if cross-region link is down |
+| **Fix** | Implement persistent queue using `disk_log` or `khepri` |
+| **Effort** | 2-3 weeks |
+| **Blocked By** | Design RFC required for queue semantics (FIFO vs priority, TTL, overflow) |
+
+### P1 - Mailbox Overflow Protection (AQM)
+
+| Attribute | Value |
+|-----------|-------|
+| **Issue** | "Messi Test" - 1M messages to single user causes mailbox overflow |
+| **Impact** | Celebrity/popular user accounts can crash their shard process |
+| **Fix** | Active Queue Management with backpressure signaling |
+| **Effort** | 1-2 weeks |
+| **Blocked By** | Requires RFC for drop policy (tail drop vs RED vs CoDel) |
+
+### P2 - Network Partition Drill Infrastructure
+
+| Attribute | Value |
+|-----------|-------|
+| **Issue** | No automated chaos testing for network partitions |
+| **Impact** | Cannot validate partition tolerance in CI |
+| **Fix** | Integrate `pumba` or `tc`-based network simulation in CI |
+| **Effort** | 1 week |
+| **Blocked By** | Docker infrastructure changes, CI pipeline updates |
+
+### P3 - iris_router_pool Cleanup
+
+| Attribute | Value |
+|-----------|-------|
+| **Issue** | Orphaned worker pool module not used |
+| **Impact** | Dead code, maintenance burden |
+| **Decision** | Deprecate (ephemeral spawn + circuit breaker sufficient) |
+| **Effort** | 0.5 days |
+| **Blocked By** | None (low priority cleanup) |
+
+### Implemented Fixes (2026-01-29)
+
+The following audit findings were addressed:
+
+| Finding | Fix | Module |
+|---------|-----|--------|
+| HOL Blocking | Spawn ephemeral tasks for remote lookups | `iris_async_router.erl` |
+| Mnesia Global Lock | Default to ETS presence backend | `iris_core.erl` |
+| Missing Cluster Manager | Created self-healing topology manager | `iris_cluster_manager.erl` |
+
+---
+
 ## References
 
 - [RFC-001 System Requirements](rfc/RFC-001-SYSTEM-REQUIREMENTS.md)
 - [RFC-001 Amendment (E2EE + Groups)](rfc/RFC-001-AMENDMENT-001.md)
 - [Test Status](TEST_STATUS.md)
 - [Cluster Setup](CLUSTER_SETUP.md)
+- [5B DAU Roadmap](ROADMAP.md)

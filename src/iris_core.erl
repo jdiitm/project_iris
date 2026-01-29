@@ -75,10 +75,24 @@ init([]) ->
           type => worker,
           restart => permanent},
           
+        %% Presence Manager: ETS-backed lockfree presence registry
+        %% FORENSIC_AUDIT_FIX: Must start early - creates presence_local ETS table
+        #{id => iris_presence,
+          start => {iris_presence, start_link, []},
+          type => worker,
+          restart => permanent},
+          
         %% Partition Guard: Split-brain detection and safe mode
         %% AUDIT FIX: Detects cluster partitions and rejects writes to prevent divergence
         #{id => iris_partition_guard,
           start => {iris_partition_guard, start_link, []},
+          type => worker,
+          restart => permanent},
+          
+        %% Cluster Manager: Self-healing cluster topology
+        %% FORENSIC_AUDIT_FIX: Monitors nodeup/nodedown and auto-wires replication
+        #{id => iris_cluster_manager,
+          start => {iris_cluster_manager, start_link, []},
           type => worker,
           restart => permanent},
           
@@ -157,9 +171,10 @@ init([]) ->
 %%%===================================================================
 
 register_user(User, Node, Pid) ->
-    %% PRINCIPAL_AUDIT_REPORT: Support both legacy Mnesia and new ETS-backed presence.
-    %% Set IRIS_PRESENCE_BACKEND=ets to use lockfree ETS (recommended for scale).
-    case application:get_env(iris_core, presence_backend, mnesia) of
+    %% FORENSIC_AUDIT_FIX: Default to ETS for lockfree presence (was mnesia).
+    %% Mnesia causes global lock bottleneck at scale (~10k tx/sec limit).
+    %% ETS provides ~1μs lockfree operations.
+    case application:get_env(iris_core, presence_backend, ets) of
         ets ->
             %% Lockfree ETS-backed presence (~1μs, no global lock)
             iris_presence:register(User, Node, Pid);
@@ -179,8 +194,8 @@ register_user(User, Node, Pid) ->
     end.
 
 lookup_user(User) ->
-    %% PRINCIPAL_AUDIT_REPORT: Support both backends for lookup.
-    case application:get_env(iris_core, presence_backend, mnesia) of
+    %% FORENSIC_AUDIT_FIX: Default to ETS for lockfree lookup.
+    case application:get_env(iris_core, presence_backend, ets) of
         ets ->
             %% Lockfree ETS lookup
             iris_presence:lookup(User);
@@ -229,14 +244,22 @@ set_bucket_count(User, Count) ->
 
 update_status(User, online) -> ok;
 update_status(User, offline) ->
+    %% FORENSIC_AUDIT_FIX: Unregister from correct backend
     %% Rationale: Atomic delete prevents "ghost" online status if batcher is slow.
-    mnesia:dirty_delete(presence, User),
+    case application:get_env(iris_core, presence_backend, ets) of
+        ets ->
+            %% ETS-backed presence - unregister via iris_presence
+            iris_presence:unregister(User);
+        mnesia ->
+            %% Legacy Mnesia-backed presence
+            mnesia:dirty_delete(presence, User)
+    end,
     iris_status_batcher:submit(User, offline).
 
 get_status(User) ->
     %% Rationale: Multi-tier lookup. RAM -> Disk.
-    %% AUDIT FIX: Respect presence_backend config (ets vs mnesia)
-    case application:get_env(iris_core, presence_backend, mnesia) of
+    %% FORENSIC_AUDIT_FIX: Default to ETS for lockfree status lookup.
+    case application:get_env(iris_core, presence_backend, ets) of
         ets ->
             %% ETS-backed presence lookup (lockfree)
             case iris_presence:lookup_local(User) of
