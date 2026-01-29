@@ -33,6 +33,25 @@
 | Core | 4+ cores | 16GB+ | 100GB SSD | 1Gbps |
 | Edge | 2+ cores | 4GB+ | 20GB | 1Gbps |
 
+### Critical: Mnesia Memory Requirements
+
+**WARNING**: Mnesia `disc_copies` tables load ALL data into RAM on node startup.
+
+| Data Size | Required RAM | Recommendation |
+|-----------|--------------|----------------|
+| < 8 GB | 16 GB | Standard deployment |
+| 8-32 GB | 64 GB | Large deployment |
+| > 32 GB | Consider sharding | Multi-region required |
+
+**Failure Mode**: If dataset exceeds available RAM, the node will OOM during Mnesia table loading and fail to start.
+
+**Monitoring**: Track `mnesia:table_info(TableName, memory)` for all tables. Alert if total approaches 70% of available RAM.
+
+```erlang
+%% Check total Mnesia memory usage (in words, multiply by 8 for bytes)
+lists:sum([mnesia:table_info(T, memory) || T <- mnesia:system_info(tables)]).
+```
+
 ## Deployment Steps
 
 ### 1. OS Configuration (All Nodes)
@@ -116,6 +135,8 @@ erl -name iris_edge@$(hostname -I | awk '{print $1}') \
         {regions, [<<"us-east-1">>, <<"eu-west-1">>]},
         
         %% Consistency mode: ap | hardened_ap | cp
+        %% WARNING: cp mode is EXPERIMENTAL - not recommended for production
+        %% See DECISIONS.md Section 7 for CP mode roadmap
         {consistency_mode, hardened_ap},
         
         %% P1-H1: Split-brain protection (REQUIRED for production)
