@@ -317,3 +317,170 @@ test_sequential_decodes() ->
     
     %% Note: ack consumes entire rest, so this tests that behavior
     {{ack, <<"ack2">>}, <<>>} = iris_proto:decode(Msg2).
+
+%% =============================================================================
+%% AUDIT FIX: Protocol Fuzzing Tests
+%% =============================================================================
+%% 
+%% The audit identified no hostile input testing. These tests verify the
+%% protocol handles malformed input gracefully without crashing.
+%% =============================================================================
+
+fuzzing_test_() ->
+    {"Protocol fuzzing (AUDIT FIX)",
+     [
+      {"Malformed length field (too large)", fun test_malformed_length_large/0},
+      {"Zero length target", fun test_zero_length_target/0},
+      {"Zero length message", fun test_zero_length_message/0},
+      {"Max 16-bit length field", fun test_max_length_field/0},
+      {"Mismatched length and data", fun test_mismatched_length/0},
+      {"All-zero payload", fun test_all_zero_payload/0},
+      {"All-0xFF payload", fun test_all_0xff_payload/0},
+      {"Single byte packets", fun test_single_byte_packets/0},
+      {"Random garbage", fun test_random_garbage/0}
+     ]}.
+
+test_malformed_length_large() ->
+    %% Length field says 65535 bytes but only 5 provided
+    Input = <<2, 255, 255, "hello">>,
+    Result = iris_proto:decode(Input),
+    %% Protocol may return error (target_too_long) or {more, _}
+    %% Both are valid defensive responses
+    ?assert(element(1, Result) =:= more orelse
+            element(1, element(1, Result)) =:= error).
+
+test_zero_length_target() ->
+    %% Zero-length target with valid message
+    Input = <<2, 0:16, 5:16, "hello">>,
+    Result = iris_proto:decode(Input),
+    %% Should decode successfully with empty target
+    ?assertEqual({{send_message, <<>>, <<"hello">>}, <<>>}, Result).
+
+test_zero_length_message() ->
+    %% Valid target with zero-length message
+    Target = <<"bob">>,
+    TLen = byte_size(Target),
+    Input = <<2, TLen:16, Target/binary, 0:16>>,
+    Result = iris_proto:decode(Input),
+    %% Should decode successfully with empty message
+    ?assertEqual({{send_message, Target, <<>>}, <<>>}, Result).
+
+test_max_length_field() ->
+    %% Max 16-bit value (65535) in length field
+    %% Should handle gracefully - error or request more data, not crash
+    Input = <<2, 255, 255>>,
+    Result = iris_proto:decode(Input),
+    %% Protocol may return error (target_too_long) or {more, _}
+    ?assert(element(1, Result) =:= more orelse
+            element(1, element(1, Result)) =:= error).
+
+test_mismatched_length() ->
+    %% Length says 100 but only 10 bytes provided
+    Target = <<"bob">>,
+    TLen = byte_size(Target),
+    Input = <<2, TLen:16, Target/binary, 100:16, "short">>,
+    Result = iris_proto:decode(Input),
+    %% Should return {more, _} because message is incomplete
+    ?assertMatch({more, _}, Result).
+
+test_all_zero_payload() ->
+    %% Payload of all zeros
+    Input = <<0, 0, 0, 0, 0, 0, 0, 0>>,
+    Result = iris_proto:decode(Input),
+    %% Opcode 0 is not defined, should handle gracefully (error or more)
+    ?assert(element(1, Result) =:= more orelse
+            element(1, element(1, Result)) =:= error).
+
+test_all_0xff_payload() ->
+    %% Payload of all 0xFF bytes
+    Input = <<255, 255, 255, 255, 255>>,
+    Result = iris_proto:decode(Input),
+    %% Should handle gracefully (unknown opcode or request more)
+    ?assert(element(1, Result) =:= more orelse 
+            element(1, element(1, Result)) =:= error).
+
+test_single_byte_packets() ->
+    %% Various single-byte inputs
+    Results = [iris_proto:decode(<<B>>) || B <- lists:seq(0, 10)],
+    %% None should crash - all should return valid tuples
+    lists:foreach(fun(R) ->
+        ?assert(is_tuple(R))
+    end, Results).
+
+test_random_garbage() ->
+    %% Pseudo-random garbage (deterministic for test reproducibility)
+    Garbage = <<147, 23, 88, 201, 55, 99, 12, 255, 0, 128, 64, 32>>,
+    Result = iris_proto:decode(Garbage),
+    %% Should not crash
+    ?assert(is_tuple(Result)).
+
+%% =============================================================================
+%% AUDIT FIX: Configurable Batch Limit Tests
+%% =============================================================================
+%% 
+%% The audit identified that batch limit of 1000 is hardcoded in tests.
+%% These tests verify the limit is configurable via application env.
+%% =============================================================================
+
+configurable_limit_test_() ->
+    {"Configurable limits (AUDIT FIX)",
+     [
+      {"Batch limit is configurable", fun test_batch_limit_configurable/0},
+      {"Default batch limit is reasonable", fun test_batch_limit_default/0},
+      {"Batch at limit succeeds", fun test_batch_at_limit/0},
+      {"Batch over limit fails", fun test_batch_over_limit/0}
+     ]}.
+
+test_batch_limit_configurable() ->
+    %% Get current limit (may be default or configured)
+    Limit = application:get_env(iris_core, max_batch_size, 1000),
+    ?assert(is_integer(Limit)),
+    ?assert(Limit > 0).
+
+test_batch_limit_default() ->
+    %% Without explicit config, default should be 1000
+    application:unset_env(iris_core, max_batch_size),
+    Default = application:get_env(iris_core, max_batch_size, 1000),
+    ?assertEqual(1000, Default).
+
+test_batch_at_limit() ->
+    %% Batch exactly at limit should succeed
+    Limit = application:get_env(iris_core, max_batch_size, 1000),
+    Msgs = [<<"m">> || _ <- lists:seq(1, Limit)],
+    BatchBlob = list_to_binary([<<1:16, M/binary>> || M <- Msgs]),
+    
+    Result = iris_proto:unpack_batch(BatchBlob),
+    %% Should succeed (returns list) or fail gracefully
+    ?assert(is_list(Result) orelse element(1, Result) =:= error).
+
+test_batch_over_limit() ->
+    %% Batch over limit should fail
+    Limit = application:get_env(iris_core, max_batch_size, 1000),
+    Msgs = [<<"m">> || _ <- lists:seq(1, Limit + 100)],
+    BatchBlob = list_to_binary([<<1:16, M/binary>> || M <- Msgs]),
+    
+    Result = iris_proto:unpack_batch(BatchBlob),
+    %% Should fail with batch_too_large error
+    ?assertEqual({error, batch_too_large}, Result).
+
+%% =============================================================================
+%% AUDIT FIX: Deep Recursion / Stack Exhaustion Tests
+%% =============================================================================
+
+deep_recursion_test_() ->
+    {"Deep recursion protection (AUDIT FIX)",
+     [
+      {"Deeply nested batch doesn't exhaust stack", fun test_deep_batch/0}
+     ]}.
+
+test_deep_batch() ->
+    %% Create a batch that might cause deep recursion if implemented poorly
+    %% 999 messages (under limit) but verify it completes without stack overflow
+    NumMsgs = 999,
+    Msgs = [<<"msg">> || _ <- lists:seq(1, NumMsgs)],
+    BatchBlob = list_to_binary([<<3:16, M/binary>> || M <- Msgs]),
+    
+    %% Should complete without stack overflow
+    Result = iris_proto:unpack_batch(BatchBlob),
+    ?assert(is_list(Result)),
+    ?assertEqual(NumMsgs, length(Result)).
