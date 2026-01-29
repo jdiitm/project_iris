@@ -1,9 +1,11 @@
 # Project Iris: WhatsApp-Class Messaging Engine
 
-[![Tests](https://img.shields.io/badge/tests-85%20passing-brightgreen)](tests/run_tests.py)
+[![Tests](https://img.shields.io/badge/tests-84%20passing-brightgreen)](tests/run_tests.py)
 [![Erlang](https://img.shields.io/badge/Erlang-OTP%2025%2B-blue)](https://www.erlang.org/)
 
-> **Production-Grade**: Validated for **1M+ concurrent users** with zero message loss.
+> **Current Status**: Production-validated for **1M+ concurrent users per region**.  
+> Planet-scale architecture (2B+ users) requires multi-region deployment.  
+> See [Architecture Decisions](docs/DECISIONS.md) for scaling roadmap.
 
 ## Overview
 
@@ -11,12 +13,15 @@ Project Iris is a high-performance distributed messaging system built in **Erlan
 
 ### Key Capabilities
 
-| Metric | Value |
-|--------|-------|
-| Max Connections | 1M+ per node |
-| Memory per User | ~10 KB |
-| P99 Latency | < 25ms |
-| Message Durability | Zero loss (WAL + sync_transaction) |
+| Metric | Validated | Architectural Target |
+|--------|-----------|---------------------|
+| Concurrent Users | 1M+ per region | 2B+ (20 regions) |
+| Nodes per Region | Up to 50 (Mnesia limit) | 50 |
+| Memory per User | ~10 KB | ~10 KB |
+| P99 Latency | < 25ms | < 50ms cross-region |
+| Message Durability | Zero loss (guaranteed mode)* | Zero loss |
+
+*Durability guarantee applies to `durability => guaranteed` writes. `best_effort` is async, `quorum` tolerates minority failures.*
 
 ## Architecture
 
@@ -101,7 +106,7 @@ python3 tests/run_tests.py --all
 ## Testing
 
 ```bash
-# All tests (85 tests)
+# All tests (86 tests, 84 passing in smoke profile)
 python3 tests/run_tests.py --all
 
 # Specific suite
@@ -117,8 +122,8 @@ make test-unit
 
 | Suite | Tests | Purpose |
 |-------|-------|---------|
-| unit | 21 | Erlang module unit tests |
-| integration | 17 | Python integration tests |
+| unit | 21 | Erlang module unit tests (EUnit: 77 tests) |
+| integration | 21 | Python integration tests |
 | stress | 13 | Load and scale testing |
 | chaos_dist | 9 | Distributed failure tests |
 | security | 7 | Auth, TLS, injection tests |
@@ -128,6 +133,8 @@ make test-unit
 | chaos_controlled | 2 | Controlled chaos scenarios |
 | contract | 1 | Protocol contract tests |
 | compatibility | 1 | Version compatibility |
+
+See [TEST_STATUS.md](docs/TEST_STATUS.md) for detailed test results and current pass rates.
 
 ## Configuration
 
@@ -154,10 +161,12 @@ iris_store:put(Table, Key, Value, #{durability => best_effort}).
 ]}.
 ```
 
-### Optional CP Mode (Raft)
+### CP Mode (Raft) - EXPERIMENTAL
+
+> **Status**: Experimental. Full linearizable consistency requires storage layer changes planned for future releases. See [DECISIONS.md](docs/DECISIONS.md) Section 7 for roadmap.
 
 ```erlang
-%% Enable linearizable consistency for critical data
+%% Enable linearizable consistency for critical data (EXPERIMENTAL)
 {iris_core, [{consistency_mode, cp}]}.
 ```
 
@@ -182,6 +191,7 @@ iris_store:put(Table, Key, Value, #{durability => best_effort}).
 
 ### Operational
 
+- [Scale-Out Runbook](docs/runbooks/SCALE_OUT.md)
 - [Data Recovery Runbook](docs/runbooks/DATA_RECOVERY.md)
 - [Failover Runbook](docs/runbooks/FAILOVER.md)
 - [Test Determinism](docs/TEST_DETERMINISM.md)

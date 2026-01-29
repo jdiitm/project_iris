@@ -169,10 +169,11 @@ nuke_and_recreate_table(Table) ->
 3. No CI-mode tricks that change pass/fail behavior
 4. Docker as canonical execution environment
 
-**Test Counts** (as of 2026-01-24):
-- Unit tests: 220 (all passing)
-- Integration tests: Covered by Python suite
-- Total active tests: 50+ (see TEST_STATUS.md)
+**Test Counts** (as of 2026-01-29):
+- EUnit tests: 77 (all passing)
+- Integration tests: 21 (all passing)
+- Total tests: 86 (84 passing in smoke profile)
+- See [TEST_STATUS.md](TEST_STATUS.md) for current counts and detailed results
 
 ---
 
