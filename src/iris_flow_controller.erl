@@ -36,6 +36,11 @@
 -define(MEMORY_CRITICAL, 0.95).
 -define(CASCADE_FAILURE_THRESHOLD, 0.50).  %% 50% of cores failing
 
+%% AUDIT FIX (Finding #5): CPU thresholds for backpressure
+%% Prevents CPU starvation from small packet floods
+-define(CPU_WARNING, 0.70).    %% 70% - start throttling
+-define(CPU_CRITICAL, 0.90).   %% 90% - critical overload
+
 %% Intervals
 -define(CHECK_INTERVAL_MS, 1000).
 -define(DECAY_INTERVAL_MS, 5000).
@@ -212,6 +217,7 @@ handle_call(get_stats, _From, State) ->
     Stats = #{
         level => level_name(State#state.level),
         memory_percent => State#state.memory_percent,
+        cpu_percent => State#state.cpu_percent,  %% AUDIT FIX (Finding #5)
         cascade_detected => State#state.cascade_detected,
         admitted => TotalAdmitted,
         rejected => TotalRejected,
@@ -343,7 +349,47 @@ update_resource_metrics(State) ->
         _ -> Total / MaxMem
     end,
     
-    State#state{memory_percent = MemPercent}.
+    %% AUDIT FIX (Finding #5): CPU check
+    %% cpu_sup:util() returns percentage or {error, _} if not available
+    CpuPercent = get_cpu_percent(),
+    
+    State#state{memory_percent = MemPercent, cpu_percent = CpuPercent}.
+
+%% AUDIT FIX (Finding #5): Get CPU utilization percentage
+get_cpu_percent() ->
+    try
+        case cpu_sup:util() of
+            CpuUtil when is_number(CpuUtil) -> 
+                CpuUtil / 100.0;  %% Convert 0-100 to 0.0-1.0
+            {all, Busy, _NonBusy, _} -> 
+                Busy / 100.0;
+            _ -> 
+                0.0
+        end
+    catch
+        _:_ -> 
+            %% cpu_sup not available or not started
+            %% Fall back to scheduler utilization as proxy
+            get_scheduler_utilization()
+    end.
+
+%% Fallback: Use scheduler utilization as CPU proxy
+get_scheduler_utilization() ->
+    try
+        %% erlang:statistics(scheduler_wall_time) requires enabling
+        case erlang:statistics(scheduler_wall_time) of
+            undefined -> 0.0;
+            Times ->
+                TotalActive = lists:sum([A || {_, A, _} <- Times]),
+                TotalTime = lists:sum([T || {_, _, T} <- Times]),
+                case TotalTime of
+                    0 -> 0.0;
+                    _ -> TotalActive / TotalTime
+                end
+        end
+    catch
+        _:_ -> 0.0
+    end.
 
 get_max_memory() ->
     %% Get system memory limit or use 8GB default
@@ -361,11 +407,13 @@ get_max_memory() ->
             end
     end.
 
-calculate_level(#state{memory_percent = Mem, cascade_detected = Cascade}) ->
+%% AUDIT FIX (Finding #5): Include CPU in level calculation
+%% Prevents CPU starvation from small packet floods that don't consume memory
+calculate_level(#state{memory_percent = Mem, cpu_percent = Cpu, cascade_detected = Cascade}) ->
     if
-        Mem > ?MEMORY_CRITICAL -> ?LEVEL_CRITICAL;
+        Mem > ?MEMORY_CRITICAL orelse Cpu > ?CPU_CRITICAL -> ?LEVEL_CRITICAL;
         Cascade -> ?LEVEL_SHED;  %% Cascade failure detected
-        Mem > ?MEMORY_SHED -> ?LEVEL_SHED;
+        Mem > ?MEMORY_SHED orelse Cpu > ?CPU_WARNING -> ?LEVEL_SHED;
         Mem > ?MEMORY_WARNING -> ?LEVEL_SLOW;
         true -> ?LEVEL_NORMAL
     end.

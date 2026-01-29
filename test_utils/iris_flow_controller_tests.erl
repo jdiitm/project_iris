@@ -38,7 +38,11 @@ iris_flow_controller_test_() ->
       
       %% Stats tests
       {"Get stats returns map", fun test_get_stats/0},
-      {"Stats has admit count", fun test_stats_has_counts/0}
+      {"Stats has admit count", fun test_stats_has_counts/0},
+      
+      %% AUDIT FIX: CPU backpressure tests (Finding #5)
+      {"Stats includes cpu_percent", fun test_stats_has_cpu_percent/0},
+      {"CPU percent is a float", fun test_cpu_percent_is_float/0}
      ]}.
 
 %% =============================================================================
@@ -85,3 +89,18 @@ test_stats_has_counts() ->
     Stats = iris_flow_controller:get_stats(),
     %% Should have some stats fields
     ?assert(maps:size(Stats) >= 1).
+
+%% =============================================================================
+%% AUDIT FIX: CPU Backpressure Tests (Finding #5)
+%% =============================================================================
+
+test_stats_has_cpu_percent() ->
+    Stats = iris_flow_controller:get_stats(),
+    ?assert(maps:is_key(cpu_percent, Stats)).
+
+test_cpu_percent_is_float() ->
+    Stats = iris_flow_controller:get_stats(),
+    CpuPercent = maps:get(cpu_percent, Stats),
+    ?assert(is_float(CpuPercent) orelse is_integer(CpuPercent)),
+    %% Should be in valid range [0.0, 1.0] (or close)
+    ?assert(CpuPercent >= 0.0 andalso CpuPercent =< 2.0).

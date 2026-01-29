@@ -54,12 +54,19 @@ check_tls_policy(false) ->
 
 %% Start the actual listener
 start_listener(Port, HandlerMod, TlsEnabled) ->
+    %% AUDIT FIX (Finding #7): TCP tuning for planet-scale
+    %% - backlog: 65535 (was 4096) - handles thundering herd reconnects
+    %% - nodelay: true - disable Nagle's algorithm (~40ms latency reduction)
+    %% - send_timeout: prevent blocking sends from stalling acceptors
     BaseOpts = [
         binary,
         {packet, 0},
         {active, false},
         {reuseaddr, true},
-        {backlog, 4096}
+        {backlog, 65535},           %% Increased from 4096 for mass reconnect scenarios
+        {nodelay, true},            %% Disable Nagle's algorithm for low latency
+        {send_timeout, 30000},      %% 30s send timeout prevents blocking
+        {send_timeout_close, true}  %% Close socket on send timeout
     ],
     
     {ok, LSock} = case TlsEnabled of
