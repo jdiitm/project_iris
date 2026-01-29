@@ -494,67 +494,121 @@ mark_committed(Log, Pending) ->
     ok.
 
 %% =============================================================================
-%% Internal: Crash Recovery
+%% Internal: Crash Recovery (AUDIT FIX - Finding #4: Streaming Replay)
+%% =============================================================================
+%% 
+%% PROBLEM: Original implementation loaded entire WAL into memory (Map),
+%% causing OOM on restart after crash with large WAL (e.g., 5GB).
+%% 
+%% SOLUTION: Two-pass streaming replay:
+%% Pass 1: Scan WAL to collect committed SeqNos (just integers - O(entries) not O(data))
+%% Pass 2: Stream entries, skip committed, write to Mnesia in batches per chunk
+%% 
+%% Memory usage: O(committed_count * 8 bytes) instead of O(total_data_size)
 %% =============================================================================
 
 replay_uncommitted(State = #state{wal_log = undefined}) ->
     State;
 
 replay_uncommitted(State = #state{wal_log = Log, shard_id = ShardId}) ->
-    logger:info("Replaying WAL for shard ~p...", [ShardId]),
+    logger:info("Replaying WAL for shard ~p (streaming mode)...", [ShardId]),
     
-    %% Read all entries
-    {PendingMap, MaxSeqNo} = read_all_wal_entries(Log, #{}, 0),
+    %% PASS 1: Collect committed SeqNos (just integers, not data)
+    %% This is O(n) integers, not O(n) full messages
+    {CommittedSet, MaxSeqNo} = collect_committed_seqnos(Log),
+    CommittedCount = sets:size(CommittedSet),
+    logger:info("WAL shard ~p: found ~p committed entries", [ShardId, CommittedCount]),
     
-    %% Filter out committed entries
-    UncommittedEntries = maps:to_list(PendingMap),
+    %% PASS 2: Stream replay - process each chunk, write to Mnesia, discard
+    {ReplayedCount, FinalMaxSeq} = stream_replay_uncommitted(Log, CommittedSet, MaxSeqNo),
     
-    case UncommittedEntries of
-        [] ->
-            logger:info("WAL shard ~p: no uncommitted entries", [ShardId]),
-            %% Truncate WAL since all committed
-            disk_log:truncate(Log),
-            State#state{seq_no = MaxSeqNo};
+    case ReplayedCount of
+        0 ->
+            logger:info("WAL shard ~p: no uncommitted entries to replay", [ShardId]);
         _ ->
-            logger:info("WAL shard ~p: replaying ~p uncommitted entries", 
-                       [ShardId, length(UncommittedEntries)]),
-            
-            %% Replay to Mnesia
-            F = fun() ->
-                lists:foreach(fun({SeqNo, {Key, Timestamp, Msg}}) ->
-                    mnesia:write({offline_msg, Key, Timestamp, Msg})
-                end, UncommittedEntries)
-            end,
-            
-            case mnesia:activity(sync_transaction, F) of
-                ok -> ok;
-                {atomic, _} -> ok;
-                Error ->
-                    logger:error("WAL replay failed: ~p", [Error])
-            end,
-            
-            %% Truncate WAL after successful replay
-            disk_log:truncate(Log),
-            State#state{seq_no = MaxSeqNo}
-    end.
+            logger:info("WAL shard ~p: replayed ~p uncommitted entries (streaming)", 
+                       [ShardId, ReplayedCount])
+    end,
+    
+    %% Truncate WAL after successful replay
+    disk_log:truncate(Log),
+    State#state{seq_no = FinalMaxSeq}.
 
-read_all_wal_entries(Log, PendingMap, MaxSeq) ->
-    read_wal_chunk(Log, disk_log:chunk(Log, start), PendingMap, MaxSeq).
+%% PASS 1: Collect just the committed SeqNos (integers only, not message data)
+collect_committed_seqnos(Log) ->
+    collect_committed_chunk(Log, disk_log:chunk(Log, start), sets:new(), 0).
 
-read_wal_chunk(_Log, eof, PendingMap, MaxSeq) ->
-    {PendingMap, MaxSeq};
-read_wal_chunk(_Log, {error, _Reason}, PendingMap, MaxSeq) ->
-    {PendingMap, MaxSeq};
-read_wal_chunk(Log, {Cont, Terms}, PendingMap, MaxSeq) ->
-    {NewMap, NewMax} = lists:foldl(fun
-        ({pending, SeqNo, Key, Timestamp, Msg}, {Map, Max}) ->
-            {maps:put(SeqNo, {Key, Timestamp, Msg}, Map), max(SeqNo, Max)};
-        ({committed, SeqNo}, {Map, Max}) ->
-            {maps:remove(SeqNo, Map), max(SeqNo, Max)};
+collect_committed_chunk(_Log, eof, CommittedSet, MaxSeq) ->
+    {CommittedSet, MaxSeq};
+collect_committed_chunk(_Log, {error, _Reason}, CommittedSet, MaxSeq) ->
+    {CommittedSet, MaxSeq};
+collect_committed_chunk(Log, {Cont, Terms}, CommittedSet, MaxSeq) ->
+    {NewSet, NewMax} = lists:foldl(fun
+        ({committed, SeqNo}, {Set, Max}) ->
+            {sets:add_element(SeqNo, Set), max(SeqNo, Max)};
+        ({pending, SeqNo, _Key, _Timestamp, _Msg}, {Set, Max}) ->
+            %% Don't store the data, just track max SeqNo
+            {Set, max(SeqNo, Max)};
         (_Other, Acc) ->
             Acc
-    end, {PendingMap, MaxSeq}, Terms),
-    read_wal_chunk(Log, disk_log:chunk(Log, Cont), NewMap, NewMax).
+    end, {CommittedSet, MaxSeq}, Terms),
+    collect_committed_chunk(Log, disk_log:chunk(Log, Cont), NewSet, NewMax).
+
+%% PASS 2: Stream replay - read chunk, write uncommitted to Mnesia, discard chunk
+stream_replay_uncommitted(Log, CommittedSet, MaxSeqNo) ->
+    stream_replay_chunk(Log, disk_log:chunk(Log, start), CommittedSet, 0, MaxSeqNo).
+
+stream_replay_chunk(_Log, eof, _CommittedSet, ReplayedCount, MaxSeq) ->
+    {ReplayedCount, MaxSeq};
+stream_replay_chunk(_Log, {error, _Reason}, _CommittedSet, ReplayedCount, MaxSeq) ->
+    {ReplayedCount, MaxSeq};
+stream_replay_chunk(Log, {Cont, Terms}, CommittedSet, ReplayedCount, MaxSeq) ->
+    %% Extract uncommitted entries from THIS chunk only
+    {ToReplay, ChunkMax} = lists:foldl(fun
+        ({pending, SeqNo, Key, Timestamp, Msg}, {Acc, Max}) ->
+            case sets:is_element(SeqNo, CommittedSet) of
+                true -> 
+                    %% Already committed, skip
+                    {Acc, max(SeqNo, Max)};
+                false -> 
+                    %% Uncommitted, needs replay
+                    {[{Key, Timestamp, Msg} | Acc], max(SeqNo, Max)}
+            end;
+        ({committed, SeqNo}, {Acc, Max}) ->
+            {Acc, max(SeqNo, Max)};
+        (_Other, Acc) ->
+            Acc
+    end, {[], MaxSeq}, Terms),
+    
+    %% Write THIS chunk's uncommitted entries to Mnesia immediately
+    ChunkReplayed = case ToReplay of
+        [] -> 
+            0;
+        _ ->
+            write_replay_batch(ToReplay),
+            length(ToReplay)
+    end,
+    
+    %% Continue to next chunk (ToReplay is now garbage collected)
+    stream_replay_chunk(Log, disk_log:chunk(Log, Cont), CommittedSet, 
+                       ReplayedCount + ChunkReplayed, ChunkMax).
+
+%% Write a batch of entries to Mnesia (from single chunk)
+write_replay_batch([]) ->
+    ok;
+write_replay_batch(Entries) ->
+    F = fun() ->
+        lists:foreach(fun({Key, Timestamp, Msg}) ->
+            mnesia:write({offline_msg, Key, Timestamp, Msg})
+        end, Entries)
+    end,
+    case mnesia:activity(sync_transaction, F) of
+        ok -> ok;
+        {atomic, _} -> ok;
+        Error ->
+            logger:error("WAL replay batch failed: ~p", [Error]),
+            error
+    end.
 
 %% =============================================================================
 %% Internal: Helpers

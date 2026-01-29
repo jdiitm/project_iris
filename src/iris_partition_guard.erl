@@ -10,10 +10,20 @@
 %% - Reads are allowed (stale data is better than no data)
 %% - Warnings are logged continuously
 %%
+%% AUDIT FIX (Finding #3): Dynamic Membership Mode
+%% The guard now supports two membership modes:
+%% - static: Uses expected_cluster_nodes from config (original behavior)
+%% - dynamic: Uses pg group membership for auto-scaling compatibility
+%%
+%% Configure via iris_core.partition_guard_mode = static | dynamic
+%%
 %% RFC Compliance:
 %% - Supports hardened AP semantics with explicit partition handling
 %% - Prevents silent data divergence during split-brain
 %% =============================================================================
+
+%% pg group for dynamic membership discovery
+-define(PG_GROUP, iris_core_nodes).
 
 -export([start_link/0]).
 -export([is_safe_for_writes/0, get_status/0, force_unsafe_mode/1]).
@@ -25,6 +35,7 @@
 
 -record(state, {
     mode = normal :: normal | safe_mode | forced_unsafe,
+    membership_mode = static :: static | dynamic,  %% AUDIT FIX (Finding #3)
     expected_nodes = [] :: [node()],
     visible_nodes = [] :: [node()],
     last_quorum_loss :: integer() | undefined,
@@ -70,29 +81,45 @@ force_unsafe_mode(Enable) ->
 %% =============================================================================
 
 init([]) ->
-    %% Get expected cluster nodes from config
-    ExpectedNodes = get_expected_nodes(),
+    %% AUDIT FIX (Finding #3): Determine membership mode
+    MembershipMode = get_membership_mode(),
+    
+    %% In dynamic mode, register this node with pg for discovery
+    case MembershipMode of
+        dynamic ->
+            register_with_pg(),
+            logger:info("Partition Guard: Dynamic membership mode enabled (using pg)");
+        static ->
+            ok
+    end,
+    
+    %% Get expected cluster nodes from config or pg
+    ExpectedNodes = get_expected_nodes(MembershipMode),
     
     %% P1-H1 FIX: Warn if no expected nodes configured (permissive mode)
-    case ExpectedNodes of
-        [] ->
+    case {ExpectedNodes, MembershipMode} of
+        {[], static} ->
             logger:warning("======================================================="),
             logger:warning("PARTITION GUARD: No expected_cluster_nodes configured!"),
             logger:warning(""),
             logger:warning("Split-brain protection is DISABLED."),
             logger:warning("Configure iris_core.expected_cluster_nodes for production."),
-            logger:warning("Or set iris_core.partition_guard = disabled to silence."),
+            logger:warning("Or set iris_core.partition_guard_mode = dynamic for auto-scaling."),
             logger:warning("=======================================================");
+        {[], dynamic} ->
+            logger:info("Partition Guard: Dynamic mode - waiting for pg membership");
         _ ->
-            logger:info("Partition Guard enabled with ~p expected nodes", [length(ExpectedNodes)])
+            logger:info("Partition Guard enabled (~p mode) with ~p expected nodes", 
+                       [MembershipMode, length(ExpectedNodes)])
     end,
     
     %% Schedule periodic check
     Timer = erlang:send_after(?CHECK_INTERVAL_MS, self(), check_partition),
     
-    logger:info("Partition Guard started. Expected nodes: ~p", [ExpectedNodes]),
+    logger:info("Partition Guard started. Mode: ~p, Expected nodes: ~p", [MembershipMode, ExpectedNodes]),
     
     {ok, #state{
+        membership_mode = MembershipMode,
         expected_nodes = ExpectedNodes,
         visible_nodes = [node() | nodes()],
         check_timer = Timer
@@ -108,6 +135,7 @@ handle_call(is_safe_for_writes, _From, State = #state{mode = safe_mode}) ->
 handle_call(get_status, _From, State) ->
     Status = #{
         mode => State#state.mode,
+        membership_mode => State#state.membership_mode,  %% AUDIT FIX (Finding #3)
         safe_for_writes => State#state.mode =/= safe_mode,
         expected_nodes => State#state.expected_nodes,
         visible_nodes => State#state.visible_nodes,
@@ -159,7 +187,13 @@ terminate(_Reason, _State) ->
 %% Internal Functions
 %% =============================================================================
 
-do_partition_check(State = #state{expected_nodes = Expected, quorum_threshold = Threshold}) ->
+do_partition_check(State = #state{membership_mode = MembershipMode, quorum_threshold = Threshold}) ->
+    %% AUDIT FIX (Finding #3): In dynamic mode, refresh expected nodes from pg
+    Expected = case MembershipMode of
+        dynamic -> get_expected_nodes(dynamic);
+        static -> State#state.expected_nodes
+    end,
+    
     %% Get currently visible nodes
     VisibleNodes = [node() | nodes()],
     
@@ -181,15 +215,15 @@ do_partition_check(State = #state{expected_nodes = Expected, quorum_threshold = 
     case {HasQuorum, State#state.mode} of
         {true, safe_mode} ->
             %% Quorum restored - check if we should exit safe mode
-            maybe_exit_safe_mode(State#state{visible_nodes = AllVisible});
+            maybe_exit_safe_mode(State#state{expected_nodes = Expected, visible_nodes = AllVisible});
         
         {false, normal} ->
             %% Quorum lost - enter safe mode
-            enter_safe_mode(State#state{visible_nodes = AllVisible});
+            enter_safe_mode(State#state{expected_nodes = Expected, visible_nodes = AllVisible});
         
         {_, _} ->
             %% No change needed
-            State#state{visible_nodes = AllVisible}
+            State#state{expected_nodes = Expected, visible_nodes = AllVisible}
     end.
 
 enter_safe_mode(State) ->
@@ -228,8 +262,63 @@ maybe_exit_safe_mode(State = #state{last_quorum_loss = LastLoss}) ->
             State
     end.
 
-get_expected_nodes() ->
-    %% Get from config, or use empty list (permissive mode)
+%% =============================================================================
+%% AUDIT FIX (Finding #3): Dynamic Membership Support
+%% =============================================================================
+
+%% Get membership mode from config
+get_membership_mode() ->
+    case application:get_env(iris_core, partition_guard_mode) of
+        {ok, dynamic} -> dynamic;
+        {ok, static} -> static;
+        _ -> static  %% Default to static for backward compatibility
+    end.
+
+%% Register this node with pg for dynamic discovery
+register_with_pg() ->
+    %% Ensure pg is started
+    try
+        case pg:start_link(?PG_GROUP) of
+            {ok, _} -> ok;
+            {error, {already_started, _}} -> ok;
+            _ -> ok
+        end
+    catch
+        _:_ -> ok
+    end,
+    
+    %% Join the core nodes group
+    try
+        pg:join(?PG_GROUP, self())
+    catch
+        _:_ -> ok
+    end.
+
+%% Get expected nodes based on membership mode
+get_expected_nodes(dynamic) ->
+    %% AUDIT FIX: Use pg to discover current cluster members
+    %% This enables auto-scaling compatibility
+    try
+        case pg:get_members(?PG_GROUP) of
+            Pids when is_list(Pids), length(Pids) > 0 ->
+                %% Get unique nodes from pg members
+                lists:usort([node(P) || P <- Pids]);
+            _ ->
+                %% No pg members yet, fall back to connected nodes
+                get_connected_core_nodes()
+        end
+    catch
+        _:_ ->
+            %% pg not available, fall back
+            get_connected_core_nodes()
+    end;
+
+get_expected_nodes(static) ->
+    %% Original behavior: get from config
+    get_static_expected_nodes().
+
+%% Get static expected nodes from config
+get_static_expected_nodes() ->
     case application:get_env(iris_core, expected_cluster_nodes) of
         {ok, Nodes} when is_list(Nodes) -> Nodes;
         _ ->
@@ -239,3 +328,17 @@ get_expected_nodes() ->
                 _ -> []
             end
     end.
+
+%% Fallback: Get connected nodes that look like core nodes
+get_connected_core_nodes() ->
+    AllNodes = [node() | nodes()],
+    %% Filter for nodes that look like core nodes (naming convention)
+    [N || N <- AllNodes, is_core_node(N)].
+
+%% Check if a node name looks like a core node
+is_core_node(Node) ->
+    NodeStr = atom_to_list(Node),
+    lists:prefix("core", NodeStr) orelse 
+    lists:prefix("iris_core", NodeStr) orelse
+    %% In test environments, any node is considered core
+    application:get_env(iris_core, test_mode, false) =:= true.
