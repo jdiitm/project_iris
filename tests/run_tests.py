@@ -1205,10 +1205,10 @@ def run_suite(suite_name: str, run_dir: Path, require_cluster: bool = True) -> S
         # Reset cluster config so next suite will restart local cluster
         _current_cluster_config = None
     
-    # ALWAYS nuke cluster after integration tests to prevent flakiness
+    # ALWAYS nuke cluster after EVERY suite to prevent flakiness
     # This ensures clean state for subsequent test runs
-    if suite_name == "integration":
-        nuke_cluster()
+    # Extended from just "integration" to all suites per stabilization plan
+    nuke_cluster()
     
     duration = time.time() - start_time
     skipped = sum(1 for r in results if r.skipped)
@@ -1400,8 +1400,8 @@ Examples:
     os.environ["TEST_SEED"] = str(MASTER_SEED)
     os.environ["TEST_RUN_ID"] = TEST_RUN_ID
     
-    # Perform initial cleanup
-    cleanup_before_suite()
+    # Perform initial cleanup - use aggressive nuke to ensure clean state
+    nuke_cluster()
     
     # Determine cluster mode
     # --with-cluster: Explicitly use Docker cluster for cross-region tests

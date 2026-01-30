@@ -45,6 +45,8 @@ project_root = os.path.abspath(os.path.join(current_dir, "../../.."))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
+from tests.utilities.helpers import unique_user
+
 # Test configuration
 EDGE_HOST = os.environ.get("IRIS_EDGE_HOST", "localhost")
 EDGE_PORT = int(os.environ.get("IRIS_EDGE_PORT", "8085"))
@@ -207,8 +209,8 @@ def test_ordering_with_skew():
         receiver.connect()
         
         # Login
-        sender_name = f"sender_skew_{int(time.time())}"
-        receiver_name = f"receiver_skew_{int(time.time())}"
+        sender_name = unique_user("skew_snd")
+        receiver_name = unique_user("skew_rcv")
         
         if not sender.login(sender_name):
             log_test("Message ordering with skew", False, "Sender login failed")
@@ -294,8 +296,8 @@ def test_dedup_with_skew():
         sender.connect()
         receiver.connect()
         
-        sender_name = f"sender_dedup_{int(time.time())}"
-        receiver_name = f"receiver_dedup_{int(time.time())}"
+        sender_name = unique_user("dedup_snd")
+        receiver_name = unique_user("dedup_rcv")
         
         if not sender.login(sender_name):
             log_test("Deduplication with skew", False, "Sender login failed")
@@ -360,7 +362,7 @@ def test_presence_timestamp():
         
         # Login and track time
         login_time = time.time()
-        user_name = f"presence_test_{int(login_time)}"
+        user_name = unique_user("presence")
         
         if not client.login(user_name):
             log_test("Presence timestamp tolerance", False, "Login failed")
@@ -437,7 +439,7 @@ def test_rapid_reconnect():
     try:
         successful_reconnects = 0
         reconnect_errors = []
-        base_name = f"reconnect_test_{int(time.time())}"
+        base_name = unique_user("reconnect")
         
         for i in range(5):
             client = SimpleClient()

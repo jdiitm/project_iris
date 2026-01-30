@@ -29,6 +29,7 @@ import uuid
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
 from utilities.iris_client import IrisClient
+from utilities.helpers import unique_user
 
 
 def log(msg):
@@ -82,14 +83,17 @@ def test_pending_acks_saved_on_disconnect():
         sender = IrisClient(host, port)
         receiver = IrisClient(host, port)
         
-        sender.login("c1_sender")
-        receiver.login("c1_receiver")
+        sender_name = unique_user("c1_snd")
+        receiver_name = unique_user("c1_rcv")
+        
+        sender.login(sender_name)
+        receiver.login(receiver_name)
         
         log("PASS: Connected sender and receiver")
         
         # Send messages
         test_msg = f"c1_durability_test_{uuid.uuid4().hex[:8]}"
-        sender.send_msg("c1_receiver", test_msg)
+        sender.send_msg(receiver_name, test_msg)
         log(f"Sent test message: {test_msg}")
         
         # Immediately close receiver (simulates disconnect before ACK)
@@ -101,7 +105,7 @@ def test_pending_acks_saved_on_disconnect():
         
         # Reconnect receiver - message should be in offline storage
         receiver = IrisClient(host, port)
-        receiver.login("c1_receiver")
+        receiver.login(receiver_name)
         
         time.sleep(0.5)
         
