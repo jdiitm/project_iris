@@ -18,6 +18,7 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(_
 sys.path.insert(0, PROJECT_ROOT)
 
 from tests.utilities import IrisClient
+from tests.utilities.helpers import unique_user
 
 
 def test_local_revocation():
@@ -26,7 +27,7 @@ def test_local_revocation():
     
     # Login user
     client = IrisClient()
-    user = f"revoke_test_{int(time.time())}"
+    user = unique_user("revoke")
     
     try:
         client.login(user)

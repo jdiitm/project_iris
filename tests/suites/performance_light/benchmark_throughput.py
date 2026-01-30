@@ -24,6 +24,7 @@ sys.path.insert(0, PROJECT_ROOT)
 
 from tests.framework import TestLogger, ClusterManager, ResourceMonitor
 from tests.utilities import IrisClient
+from tests.utilities.helpers import unique_user
 
 
 def benchmark_single_connection():
@@ -34,13 +35,16 @@ def benchmark_single_connection():
             
             NUM_MESSAGES = 1000
             
+            sender_name = unique_user("bench_snd")
+            receiver_name = unique_user("bench_rcv")
+            
             sender = IrisClient()
-            sender.login("bench_sender")
-            log.connection_event("login", "bench_sender")
+            sender.login(sender_name)
+            log.connection_event("login", sender_name)
             
             receiver = IrisClient()
-            receiver.login("bench_receiver")
-            log.connection_event("login", "bench_receiver")
+            receiver.login(receiver_name)
+            log.connection_event("login", receiver_name)
             
             # Receive in background
             received = []
@@ -63,8 +67,8 @@ def benchmark_single_connection():
             start = time.monotonic()
             
             for i in range(NUM_MESSAGES):
-                sender.send_msg("bench_receiver", f"bench_{i}")
-                log.message_sent(f"bench_{i}", "bench_receiver")
+                sender.send_msg(receiver_name, f"bench_{i}")
+                log.message_sent(f"bench_{i}", receiver_name)
             
             send_duration = time.monotonic() - start
             send_rate = NUM_MESSAGES / send_duration
@@ -108,15 +112,20 @@ def benchmark_multi_connection():
             total_sent = 0
             lock = threading.Lock()
             
+            # Generate unique names for all pairs
+            pair_suffix = unique_user("pair")
+            sender_names = [f"snd_{pair_suffix}_{i}" for i in range(NUM_PAIRS)]
+            receiver_names = [f"rcv_{pair_suffix}_{i}" for i in range(NUM_PAIRS)]
+            
             def sender_worker(pair_id: int) -> int:
                 nonlocal total_sent
                 try:
                     sender = IrisClient()
-                    sender.login(f"multi_sender_{pair_id}")
+                    sender.login(sender_names[pair_id])
                     
                     sent = 0
                     for i in range(MSGS_PER_PAIR):
-                        sender.send_msg(f"multi_receiver_{pair_id}", f"msg_{pair_id}_{i}")
+                        sender.send_msg(receiver_names[pair_id], f"msg_{pair_id}_{i}")
                         sent += 1
                     
                     sender.close()
@@ -132,7 +141,7 @@ def benchmark_multi_connection():
             for i in range(NUM_PAIRS):
                 try:
                     r = IrisClient()
-                    r.login(f"multi_receiver_{i}")
+                    r.login(receiver_names[i])
                     receivers.append(r)
                 except Exception:
                     pass
@@ -181,11 +190,14 @@ def benchmark_latency():
         NUM_SAMPLES = 20  # Reduced from 100 - enough for P99 with less timeout risk
         MAX_FAILURES = 3   # Early exit if too many failures
         
+        sender_name = unique_user("lat_snd")
+        receiver_name = unique_user("lat_rcv")
+        
         sender = IrisClient()
-        sender.login("latency_sender")
+        sender.login(sender_name)
         
         receiver = IrisClient()
-        receiver.login("latency_receiver")
+        receiver.login(receiver_name)
         
         latencies = []
         failures = 0
@@ -198,7 +210,7 @@ def benchmark_latency():
                 break
                 
             start = time.monotonic()
-            sender.send_msg("latency_receiver", f"lat_{i}")
+            sender.send_msg(receiver_name, f"lat_{i}")
             
             try:
                 receiver.sock.settimeout(2.0)  # Reduced from 5.0

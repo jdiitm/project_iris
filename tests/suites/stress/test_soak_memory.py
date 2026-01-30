@@ -51,6 +51,14 @@ try:
 except ImportError:
     IrisClient = None
 
+try:
+    from utilities.helpers import unique_user
+except ImportError:
+    def unique_user(prefix):
+        import time
+        import uuid
+        return f"{prefix}_{int(time.time()*1000)}_{uuid.uuid4().hex[:6]}"
+
 
 def log(msg):
     timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -269,6 +277,8 @@ class LoadGenerator:
             'reconnects': 0
         }
         self.stats_lock = threading.Lock()
+        # Use unique prefix for this test run to avoid conflicts
+        self.user_prefix = unique_user("soak")
     
     def start(self):
         """Start load generation."""
@@ -304,7 +314,7 @@ class LoadGenerator:
     
     def _client_loop(self, client_id):
         """Single client load loop."""
-        username = f"soak_user_{client_id}"
+        username = f"{self.user_prefix}_{client_id}"
         msg_interval = 1.0 / self.config.msg_rate
         client = None
         
@@ -321,7 +331,7 @@ class LoadGenerator:
                         continue
                 
                 # Send a message
-                target = f"soak_user_{(client_id + 1) % self.config.connections}"
+                target = f"{self.user_prefix}_{(client_id + 1) % self.config.connections}"
                 client.send_msg(target, f"soak_msg_{time.time()}")
                 
                 with self.stats_lock:

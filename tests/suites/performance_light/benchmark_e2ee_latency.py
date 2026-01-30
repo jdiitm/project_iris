@@ -27,6 +27,7 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(o
 sys.path.insert(0, PROJECT_ROOT)
 
 from tests.utilities.iris_client import IrisClient
+from tests.utilities.helpers import unique_user
 
 # Configuration
 EDGE_HOST = os.environ.get("EDGE_HOST", "127.0.0.1")
@@ -272,17 +273,20 @@ def benchmark_e2e_latency_with_e2ee() -> LatencyResult:
     session_key = crypto.derive_key("e2e_session")
     samples = []
     
+    sender_name = unique_user("e2ee_snd")
+    receiver_name = unique_user("e2ee_rcv")
+    
     sender = IrisClient(host=EDGE_HOST, port=EDGE_PORT)
-    sender.login("e2ee_sender")
+    sender.login(sender_name)
     
     receiver = IrisClient(host=EDGE_HOST, port=EDGE_PORT)
-    receiver.login("e2ee_receiver")
+    receiver.login(receiver_name)
     
     # Warmup
     for i in range(WARMUP_MESSAGES):
         plaintext = f"warmup_{i}".encode()
         ciphertext = crypto.ratchet_encrypt(session_key, plaintext)
-        sender.send_msg("e2ee_receiver", f"E2EE:{ciphertext.hex()}")
+        sender.send_msg(receiver_name, f"E2EE:{ciphertext.hex()}")
         try:
             receiver.sock.settimeout(2.0)
             receiver.recv_msg(timeout=2.0)
@@ -301,7 +305,7 @@ def benchmark_e2e_latency_with_e2ee() -> LatencyResult:
         ciphertext = crypto.ratchet_encrypt(session_key, plaintext)
         
         # Send
-        sender.send_msg("e2ee_receiver", f"E2EE:{ciphertext.hex()}")
+        sender.send_msg(receiver_name, f"E2EE:{ciphertext.hex()}")
         
         try:
             # Receive
@@ -340,15 +344,18 @@ def benchmark_e2e_latency_plaintext() -> LatencyResult:
     
     samples = []
     
+    sender_name = unique_user("plain_snd")
+    receiver_name = unique_user("plain_rcv")
+    
     sender = IrisClient(host=EDGE_HOST, port=EDGE_PORT)
-    sender.login("plain_sender")
+    sender.login(sender_name)
     
     receiver = IrisClient(host=EDGE_HOST, port=EDGE_PORT)
-    receiver.login("plain_receiver")
+    receiver.login(receiver_name)
     
     # Warmup
     for i in range(WARMUP_MESSAGES):
-        sender.send_msg("plain_receiver", f"warmup_{i}")
+        sender.send_msg(receiver_name, f"warmup_{i}")
         try:
             receiver.sock.settimeout(2.0)
             receiver.recv_msg(timeout=2.0)
@@ -360,7 +367,7 @@ def benchmark_e2e_latency_plaintext() -> LatencyResult:
     for i in range(NUM_SAMPLES):
         start = time.perf_counter()
         
-        sender.send_msg("plain_receiver", f"benchmark_{i}")
+        sender.send_msg(receiver_name, f"benchmark_{i}")
         
         try:
             receiver.sock.settimeout(5.0)

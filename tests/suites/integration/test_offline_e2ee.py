@@ -27,6 +27,7 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(o
 sys.path.insert(0, PROJECT_ROOT)
 
 from tests.utilities.iris_client import IrisClient
+from tests.utilities.helpers import unique_user
 
 # Test configuration
 EDGE_HOST = os.environ.get("EDGE_HOST", "127.0.0.1")
@@ -263,13 +264,17 @@ def test_offline_e2ee_single_message():
     """
     log("=== Test: Single E2EE message to offline user ===")
     
-    alice = MockE2EESession("alice_offline_test")
-    bob = MockE2EESession("bob_offline_test")
+    # Use unique usernames for test isolation
+    alice_name = unique_user("alice_e2ee")
+    bob_name = unique_user("bob_e2ee")
+    
+    alice = MockE2EESession(alice_name)
+    bob = MockE2EESession(bob_name)
     
     # Step 1: Bob logs in then logs out (goes offline)
     log("Step 1: Bob logs in briefly then disconnects")
     bob_client = IrisClient(host=EDGE_HOST, port=EDGE_PORT)
-    bob_client.login("bob_offline_test")
+    bob_client.login(bob_name)
     time.sleep(0.5)
     bob_client.close()
     log("Bob is now offline")
@@ -277,16 +282,16 @@ def test_offline_e2ee_single_message():
     # Step 2: Alice sends E2EE message while Bob is offline
     log("Step 2: Alice sends E2EE message to offline Bob")
     alice_client = IrisClient(host=EDGE_HOST, port=EDGE_PORT)
-    alice_client.login("alice_offline_test")
+    alice_client.login(alice_name)
     
     # Create E2EE message
     plaintext = "Hello Bob! This is a secret message."
-    header, ciphertext = alice.create_initial_message("bob_offline_test", plaintext)
+    header, ciphertext = alice.create_initial_message(bob_name, plaintext)
     
     # Send using standard message format (E2EE is encrypted payload)
     # The server just sees opaque bytes, encryption is end-to-end
     message_content = f"E2EE:{header['msg_num']}:{ciphertext.hex()}"
-    alice_client.send_msg("bob_offline_test", message_content)
+    alice_client.send_msg(bob_name, message_content)
     log(f"Alice sent E2EE message ({len(message_content)} bytes)")
     
     alice_client.close()
@@ -297,7 +302,7 @@ def test_offline_e2ee_single_message():
     # Step 3: Bob comes back online
     log("Step 3: Bob comes back online")
     bob_client = IrisClient(host=EDGE_HOST, port=EDGE_PORT)
-    bob_client.login("bob_offline_test")
+    bob_client.login(bob_name)
     
     # Step 4: Bob receives the offline message
     log("Step 4: Bob receives offline E2EE message")
@@ -317,7 +322,7 @@ def test_offline_e2ee_single_message():
                 
                 # Mock decryption
                 decrypted = bob.decrypt_message(
-                    "alice_offline_test",
+                    alice_name,
                     {"msg_type": "initial", "msg_num": msg_num},
                     ciphertext_recv
                 )
@@ -355,24 +360,28 @@ def test_offline_e2ee_multiple_messages():
     """
     log("=== Test: Multiple E2EE messages to offline user ===")
     
-    alice = MockE2EESession("alice_multi")
+    # Use unique usernames for test isolation
+    alice_name = unique_user("alice_multi")
+    bob_name = unique_user("bob_multi")
+    
+    alice = MockE2EESession(alice_name)
     
     # Bob logs in briefly then disconnects
     bob_client = IrisClient(host=EDGE_HOST, port=EDGE_PORT)
-    bob_client.login("bob_multi")
+    bob_client.login(bob_name)
     time.sleep(0.3)
     bob_client.close()
     
     # Alice sends multiple messages
     alice_client = IrisClient(host=EDGE_HOST, port=EDGE_PORT)
-    alice_client.login("alice_multi")
+    alice_client.login(alice_name)
     
     messages_sent = []
     for i in range(MAX_OFFLINE_MESSAGES):
         plaintext = f"Secret message #{i}"
-        header, ciphertext = alice.create_ratchet_message("bob_multi", plaintext, i)
+        header, ciphertext = alice.create_ratchet_message(bob_name, plaintext, i)
         content = f"E2EE:{i}:{ciphertext.hex()}"
-        alice_client.send_msg("bob_multi", content)
+        alice_client.send_msg(bob_name, content)
         messages_sent.append(plaintext)
         log(f"Sent message #{i}")
     
@@ -381,7 +390,7 @@ def test_offline_e2ee_multiple_messages():
     
     # Bob comes back online
     bob_client = IrisClient(host=EDGE_HOST, port=EDGE_PORT)
-    bob_client.login("bob_multi")
+    bob_client.login(bob_name)
     
     messages_received = 0
     try:
@@ -421,20 +430,24 @@ def test_offline_e2ee_ordering():
     """
     log("=== Test: E2EE message ordering ===")
     
+    # Use unique usernames for test isolation
+    alice_name = unique_user("alice_order")
+    bob_name = unique_user("bob_order")
+    
     # Bob offline
     bob_client = IrisClient(host=EDGE_HOST, port=EDGE_PORT)
-    bob_client.login("bob_order")
+    bob_client.login(bob_name)
     time.sleep(0.3)
     bob_client.close()
     
     # Alice sends numbered messages
     alice_client = IrisClient(host=EDGE_HOST, port=EDGE_PORT)
-    alice_client.login("alice_order")
+    alice_client.login(alice_name)
     
     sequence = []
     for i in range(5):
         content = f"ORDER:{i}"
-        alice_client.send_msg("bob_order", content)
+        alice_client.send_msg(bob_name, content)
         sequence.append(i)
         time.sleep(0.1)  # Small delay to ensure ordering
     
@@ -443,7 +456,7 @@ def test_offline_e2ee_ordering():
     
     # Bob receives
     bob_client = IrisClient(host=EDGE_HOST, port=EDGE_PORT)
-    bob_client.login("bob_order")
+    bob_client.login(bob_name)
     
     received_order = []
     try:

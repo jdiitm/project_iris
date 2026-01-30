@@ -45,6 +45,8 @@ project_root = os.path.abspath(os.path.join(current_dir, "../../.."))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
+from tests.utilities.helpers import unique_user
+
 # Test configuration
 EDGE_HOST = os.environ.get("IRIS_EDGE_HOST", "localhost")
 EDGE_PORT = int(os.environ.get("IRIS_EDGE_PORT", "8085"))
@@ -239,9 +241,8 @@ def test_basic_ordering():
         sender.connect()
         receiver.connect()
         
-        ts = int(time.time())
-        sender_name = f"order_sender_{ts}"
-        receiver_name = f"order_receiver_{ts}"
+        sender_name = unique_user("order_snd")
+        receiver_name = unique_user("order_rcv")
         
         if not sender.login(sender_name):
             log_test("Basic ordering", False, "Sender login failed")
@@ -312,9 +313,8 @@ def test_ordering_during_edge_pause():
         sender.connect()
         receiver.connect()
         
-        ts = int(time.time())
-        sender_name = f"pause_sender_{ts}"
-        receiver_name = f"pause_receiver_{ts}"
+        sender_name = unique_user("pause_snd")
+        receiver_name = unique_user("pause_rcv")
         
         if not sender.login(sender_name):
             log_test("Ordering during edge pause", False, "Sender login failed")
@@ -388,9 +388,8 @@ def test_ordering_with_jitter():
         sender.connect()
         receiver.connect()
         
-        ts = int(time.time())
-        sender_name = f"jitter_sender_{ts}"
-        receiver_name = f"jitter_receiver_{ts}"
+        sender_name = unique_user("jitter_snd")
+        receiver_name = unique_user("jitter_rcv")
         
         if not sender.login(sender_name):
             log_test("Ordering with jitter", False, "Sender login failed")
@@ -447,9 +446,8 @@ def test_ordering_during_reconnect():
         receiver = SimpleClient()
         receiver.connect()
         
-        ts = int(time.time())
-        sender_name = f"reconnect_sender_{ts}"
-        receiver_name = f"reconnect_receiver_{ts}"
+        sender_name = unique_user("recon_snd")
+        receiver_name = unique_user("recon_rcv")
         
         if not receiver.login(receiver_name):
             log_test("Ordering during reconnect", False, "Receiver login failed")
@@ -522,8 +520,7 @@ def test_concurrent_senders():
         return
     
     try:
-        ts = int(time.time())
-        receiver_name = f"concurrent_receiver_{ts}"
+        receiver_name = unique_user("conc_rcv")
         
         receiver = SimpleClient()
         receiver.connect()
@@ -539,7 +536,7 @@ def test_concurrent_senders():
         for s in range(num_senders):
             sender = SimpleClient()
             sender.connect()
-            if sender.login(f"concurrent_sender_{ts}_{s}"):
+            if sender.login(unique_user(f"conc_snd_{s}")):
                 senders.append((s, sender))
         
         # Send from all senders concurrently (interleaved)

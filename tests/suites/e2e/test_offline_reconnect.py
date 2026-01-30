@@ -27,6 +27,7 @@ import uuid
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
 from utilities.iris_client import IrisClient
+from utilities.helpers import unique_user
 
 
 def log(msg):
@@ -55,16 +56,20 @@ def test_basic_offline_delivery():
     receiver = None
     
     try:
+        # Use unique usernames for test isolation
+        sender_name = unique_user("offline_snd")
+        receiver_name = unique_user("offline_rcv")
+        
         # Step 1: Only sender connects
         sender = IrisClient(host, port)
-        sender.login("offline_sender")
+        sender.login(sender_name)
         log("PASS: Step 1 - Sender connected (receiver offline)")
         
         # Step 2: Send messages to offline user
         sent_messages = []
         for i in range(5):
             msg = f"offline_msg_{i}_{uuid.uuid4().hex[:6]}"
-            sender.send_msg("offline_receiver", msg)
+            sender.send_msg(receiver_name, msg)
             sent_messages.append(msg)
         
         log(f"PASS: Step 2 - Sent 5 messages to offline user")
@@ -74,7 +79,7 @@ def test_basic_offline_delivery():
         
         # Step 3: Receiver comes online
         receiver = IrisClient(host, port)
-        receiver.login("offline_receiver")
+        receiver.login(receiver_name)
         log("PASS: Step 3 - Receiver connected")
         
         # Step 4: Wait for offline messages to be delivered
@@ -160,20 +165,24 @@ def test_offline_then_online_continuation():
     bob = None
     
     try:
+        # Use unique usernames for test isolation
+        alice_name = unique_user("cont_alice")
+        bob_name = unique_user("cont_bob")
+        
         # Alice connects, Bob offline
         alice = IrisClient(host, port)
-        alice.login("cont_alice")
+        alice.login(alice_name)
         
         # Send offline message
         offline_msg = f"offline_{uuid.uuid4().hex[:6]}"
-        alice.send_msg("cont_bob", offline_msg)
+        alice.send_msg(bob_name, offline_msg)
         log("Sent message to offline Bob")
         
         time.sleep(0.5)
         
         # Bob comes online
         bob = IrisClient(host, port)
-        bob.login("cont_bob")
+        bob.login(bob_name)
         log("PASS: Bob connected")
         
         time.sleep(1.0)
@@ -193,7 +202,7 @@ def test_offline_then_online_continuation():
         
         # Now continue normal conversation
         online_msg = f"online_{uuid.uuid4().hex[:6]}"
-        alice.send_msg("cont_bob", online_msg)
+        alice.send_msg(bob_name, online_msg)
         
         time.sleep(0.5)
         
@@ -259,14 +268,20 @@ def test_multiple_offline_senders():
     receiver = None
     
     try:
+        # Use unique usernames for test isolation
+        alice_name = unique_user("multi_alice")
+        bob_name = unique_user("multi_bob")
+        carol_name = unique_user("multi_carol")
+        receiver_name = unique_user("multi_recv")
+        
         # Three senders connect
         alice = IrisClient(host, port)
         bob = IrisClient(host, port)
         carol = IrisClient(host, port)
         
-        alice.login("multi_alice")
-        bob.login("multi_bob")
-        carol.login("multi_carol")
+        alice.login(alice_name)
+        bob.login(bob_name)
+        carol.login(carol_name)
         log("PASS: Three senders connected (receiver offline)")
         
         # Each sends to offline receiver
@@ -274,9 +289,9 @@ def test_multiple_offline_senders():
         msg_b = f"from_bob_{uuid.uuid4().hex[:6]}"
         msg_c = f"from_carol_{uuid.uuid4().hex[:6]}"
         
-        alice.send_msg("multi_receiver", msg_a)
-        bob.send_msg("multi_receiver", msg_b)
-        carol.send_msg("multi_receiver", msg_c)
+        alice.send_msg(receiver_name, msg_a)
+        bob.send_msg(receiver_name, msg_b)
+        carol.send_msg(receiver_name, msg_c)
         
         log("PASS: All three senders sent messages")
         
@@ -284,7 +299,7 @@ def test_multiple_offline_senders():
         
         # Receiver connects
         receiver = IrisClient(host, port)
-        receiver.login("multi_receiver")
+        receiver.login(receiver_name)
         log("PASS: Receiver connected")
         
         time.sleep(2.0)

@@ -25,6 +25,7 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(_
 sys.path.insert(0, PROJECT_ROOT)
 
 from tests.utilities import IrisClient
+from tests.utilities.helpers import unique_user
 
 
 def random_user():

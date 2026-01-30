@@ -40,6 +40,7 @@ if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
 from tests.framework.cluster import ClusterManager
+from tests.utilities.helpers import unique_user
 
 # Configuration
 SERVER_HOST = os.environ.get("IRIS_HOST", "localhost")
@@ -271,7 +272,7 @@ def run_fanout_test(test_name: str, num_recipients: int, target_rate: int,
     print(f"  Max loss: {max_loss*100:.1f}%")
     print()
     
-    test_id = f"{int(time.time())}"
+    test_id = unique_user("fanout")
     errors = []
     latencies = []
     
@@ -280,7 +281,8 @@ def run_fanout_test(test_name: str, num_recipients: int, target_rate: int,
     if not sender.connect():
         return False, FanOutResult(num_recipients, 0, 0, 0, [], ["Sender connection failed"])
     
-    if not sender.login(f"fanout_sender_{test_id}"):
+    sender_name = f"snd_{test_id}"
+    if not sender.login(sender_name):
         sender.close()
         return False, FanOutResult(num_recipients, 0, 0, 0, [], ["Sender login failed"])
     
@@ -294,7 +296,7 @@ def run_fanout_test(test_name: str, num_recipients: int, target_rate: int,
     
     def create_recipient(i: int) -> Optional[IrisClient]:
         client = IrisClient(SERVER_HOST, SERVER_PORT)
-        if client.connect() and client.login(f"fanout_recv_{test_id}_{i}"):
+        if client.connect() and client.login(f"rcv_{test_id}_{i}"):
             client.start_receiving()
             return client
         return None

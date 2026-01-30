@@ -17,6 +17,7 @@ import subprocess
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
 from utilities.iris_client import IrisClient
+from utilities.helpers import unique_user
 
 
 def create_jwt_token(user_id, secret="test_secret", expired=False):
@@ -65,7 +66,7 @@ def test_login_without_auth():
     
     try:
         client = IrisClient(host, port)
-        client.login("auth_test_user")
+        client.login(unique_user("auth_test"))
         print("✓ Login succeeded without token (auth disabled)")
         client.close()
         return True
@@ -94,14 +95,17 @@ def test_basic_messaging_works():
         sender = IrisClient(host, port)
         receiver = IrisClient(host, port)
         
-        sender.login("auth_sender")
-        receiver.login("auth_receiver")
+        sender_name = unique_user("auth_snd")
+        receiver_name = unique_user("auth_rcv")
+        
+        sender.login(sender_name)
+        receiver.login(receiver_name)
         
         print("✓ Both users logged in")
         
         # Send a message
         test_msg = f"auth_test_{int(time.time())}"
-        sender.send_msg("auth_receiver", test_msg)
+        sender.send_msg(receiver_name, test_msg)
         print("✓ Message sent")
         
         # Receive
@@ -143,11 +147,13 @@ def test_session_persistence():
     
     try:
         client = IrisClient(host, port)
-        client.login("session_test_user")
+        user_name = unique_user("session_test")
+        target_name = unique_user("some_target")
+        client.login(user_name)
         
         # Send multiple messages without re-login
         for i in range(5):
-            client.send_msg("some_target", f"msg_{i}")
+            client.send_msg(target_name, f"msg_{i}")
         
         print("✓ Sent 5 messages on same session")
         client.close()

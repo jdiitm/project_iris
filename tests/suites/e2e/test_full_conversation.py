@@ -29,6 +29,7 @@ import uuid
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
 from utilities.iris_client import IrisClient
+from utilities.helpers import unique_user
 
 
 def log(msg):
@@ -60,13 +61,16 @@ def test_simple_conversation():
         alice = IrisClient(host, port)
         bob = IrisClient(host, port)
         
-        alice.login("alice_conv")
-        bob.login("bob_conv")
+        alice_name = unique_user("alice_conv")
+        bob_name = unique_user("bob_conv")
+        
+        alice.login(alice_name)
+        bob.login(bob_name)
         log("PASS: Step 1 - Alice and Bob connected")
         
         # Step 2: Alice sends to Bob
         msg1 = f"Hello Bob! {uuid.uuid4().hex[:8]}"
-        alice.send_msg("bob_conv", msg1)
+        alice.send_msg(bob_name, msg1)
         log(f"PASS: Step 2 - Alice sent: '{msg1}'")
         
         time.sleep(0.5)
@@ -86,7 +90,7 @@ def test_simple_conversation():
         
         # Step 4: Bob replies
         msg2 = f"Hi Alice! {uuid.uuid4().hex[:8]}"
-        bob.send_msg("alice_conv", msg2)
+        bob.send_msg(alice_name, msg2)
         log(f"PASS: Step 4 - Bob replied: '{msg2}'")
         
         time.sleep(0.5)
@@ -148,15 +152,18 @@ def test_multi_message_conversation():
         alice = IrisClient(host, port)
         bob = IrisClient(host, port)
         
-        alice.login("alice_multi")
-        bob.login("bob_multi")
+        alice_name = unique_user("alice_multi")
+        bob_name = unique_user("bob_multi")
+        
+        alice.login(alice_name)
+        bob.login(bob_name)
         log("PASS: Both users connected")
         
         # Alice sends 5 messages
         alice_msgs = []
         for i in range(5):
             msg = f"alice_msg_{i}_{uuid.uuid4().hex[:6]}"
-            alice.send_msg("bob_multi", msg)
+            alice.send_msg(bob_name, msg)
             alice_msgs.append(msg)
         
         log(f"Alice sent 5 messages")
@@ -176,7 +183,7 @@ def test_multi_message_conversation():
                     
                     # Bob replies
                     reply = f"bob_reply_{i}_{uuid.uuid4().hex[:6]}"
-                    bob.send_msg("alice_multi", reply)
+                    bob.send_msg(alice_name, reply)
                     bob_msgs.append(reply)
             except socket.timeout:
                 log(f"  Bob recv {i}: timeout")
@@ -267,22 +274,26 @@ def test_three_party_conversation():
         bob = IrisClient(host, port)
         carol = IrisClient(host, port)
         
-        alice.login("alice_3p")
-        bob.login("bob_3p")
-        carol.login("carol_3p")
+        alice_name = unique_user("alice_3p")
+        bob_name = unique_user("bob_3p")
+        carol_name = unique_user("carol_3p")
+        
+        alice.login(alice_name)
+        bob.login(bob_name)
+        carol.login(carol_name)
         log("PASS: All three users connected")
         
         # Alice → Bob
         msg_ab = f"hi_bob_{uuid.uuid4().hex[:6]}"
-        alice.send_msg("bob_3p", msg_ab)
+        alice.send_msg(bob_name, msg_ab)
         
         # Bob → Carol
         msg_bc = f"hi_carol_{uuid.uuid4().hex[:6]}"
-        bob.send_msg("carol_3p", msg_bc)
+        bob.send_msg(carol_name, msg_bc)
         
         # Carol → Alice
         msg_ca = f"hi_alice_{uuid.uuid4().hex[:6]}"
-        carol.send_msg("alice_3p", msg_ca)
+        carol.send_msg(alice_name, msg_ca)
         
         log("PASS: All messages sent in triangle")
         
