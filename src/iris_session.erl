@@ -100,13 +100,12 @@ handle_packet({error, _}, User, _Pid, _Mod) ->
 
 complete_login(User, TransportPid) ->
     %% PHASE 1: LOCAL registration FIRST (sub-millisecond, never blocks)
-    ets:insert(local_presence_v2, {User, TransportPid}),
+    %% Single source of truth: direct ETS insert
+    %% All router shards read from the same public ETS table (local_presence_v2)
+    true = ets:insert(local_presence_v2, {User, TransportPid}),
     
-    %% Also register with new async router if available
-    case whereis(iris_async_router_1) of
-        undefined -> ok;
-        _ -> iris_async_router:register_local(User, TransportPid)
-    end,
+    %% REMOVED: Redundant iris_async_router:register_local call
+    %% Both would insert to same table anyway - the async router reads directly from local_presence_v2
     
     %% PHASE 2: Async Core registration (eventual consistency acceptable)
     %% Local ETS registration (Phase 1) handles immediate routing
@@ -203,6 +202,25 @@ terminate(User) ->
     case User of
         undefined -> ok;
         _ -> 
-            ets:delete(local_presence_v2, User),
-            rpc:cast(get_core_node(), iris_core, update_status, [User, offline])
+            %% FIXED: Only delete if THIS process owns the entry (lock-free check)
+            %% This prevents new logins from having their entry deleted by old connections
+            %% Race scenario without fix:
+            %%   T0: Conn1 login "alice" -> ETS: {alice, Pid1}
+            %%   T1: Conn1 close() scheduled
+            %%   T2: Conn2 login "alice" -> ETS: {alice, Pid2}
+            %%   T3: Conn1 terminate() -> ets:delete(alice) -> DELETES Pid2's entry!
+            %% With fix: T3 checks ownership and skips delete since Pid2 != Pid1
+            Self = self(),
+            case ets:lookup(local_presence_v2, User) of
+                [{User, Self}] ->
+                    %% We own it - safe to delete
+                    ets:delete(local_presence_v2, User),
+                    rpc:cast(get_core_node(), iris_core, update_status, [User, offline]);
+                [{User, _OtherPid}] ->
+                    %% Different process owns it (new login happened) - don't delete
+                    ok;
+                [] ->
+                    %% Already deleted - nothing to do
+                    ok
+            end
     end.

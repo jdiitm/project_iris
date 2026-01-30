@@ -31,6 +31,16 @@ def log(msg):
     print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
 
 
+def unique_user(prefix: str) -> str:
+    """Generate unique username for test isolation.
+    
+    Combines millisecond timestamp + random UUID suffix to guarantee uniqueness
+    even under rapid test execution. This prevents race conditions where old
+    connection terminate() calls delete new connection's ETS entries.
+    """
+    return f"{prefix}_{int(time.time()*1000)}_{uuid.uuid4().hex[:6]}"
+
+
 class DeduplicationTestClient(IrisClient):
     """Extended client for deduplication testing with message ID control."""
     
@@ -71,8 +81,12 @@ def test_unique_messages_delivered():
         sender = IrisClient(host, port)
         receiver = IrisClient(host, port)
         
-        sender.login("dedup_sender")
-        receiver.login("dedup_receiver")
+        # Use unique usernames to prevent ETS race conditions
+        sender_name = unique_user("dedup_snd")
+        receiver_name = unique_user("dedup_rcv")
+        
+        sender.login(sender_name)
+        receiver.login(receiver_name)
         
         log("PASS: Connected sender and receiver")
         
@@ -82,7 +96,7 @@ def test_unique_messages_delivered():
         
         for i in range(num_messages):
             msg = f"unique_{uuid.uuid4().hex[:8]}_{i}"
-            sender.send_msg("dedup_receiver", msg)
+            sender.send_msg(receiver_name, msg)
             sent_messages.append(msg)
         
         log(f"Sent {num_messages} unique messages")
@@ -172,15 +186,19 @@ def test_retry_storm_handling():
         sender = IrisClient(host, port)
         receiver = IrisClient(host, port)
         
-        sender.login("storm_sender")
-        receiver.login("storm_receiver")
+        # Use unique usernames to prevent ETS race conditions
+        sender_name = unique_user("storm_snd")
+        receiver_name = unique_user("storm_rcv")
+        
+        sender.login(sender_name)
+        receiver.login(receiver_name)
         
         log("PASS: Connected clients")
         
         # Send same content multiple times (simulating retries)
         storm_msg = f"storm_{int(time.time())}"
         for i in range(5):
-            sender.send_msg("storm_receiver", storm_msg)
+            sender.send_msg(receiver_name, storm_msg)
         
         log("Sent 5 'retry' messages with same content")
         
@@ -253,19 +271,23 @@ def test_dedup_across_reconnects():
     receiver2 = None
     
     try:
+        # Use unique usernames to prevent ETS race conditions
+        sender_name = unique_user("rcon_snd")
+        receiver_name = unique_user("rcon_rcv")
+        
         sender = IrisClient(host, port)
-        sender.login("reconnect_sender")
+        sender.login(sender_name)
         
         # Send message to offline user
         offline_msg = f"offline_{uuid.uuid4().hex[:8]}"
-        sender.send_msg("reconnect_receiver", offline_msg)
+        sender.send_msg(receiver_name, offline_msg)
         log("Sent message to offline user")
         
         time.sleep(0.5)
         
         # First connect - should get the message
         receiver1 = IrisClient(host, port)
-        receiver1.login("reconnect_receiver")
+        receiver1.login(receiver_name)
         
         time.sleep(0.5)
         
@@ -293,7 +315,7 @@ def test_dedup_across_reconnects():
         
         # Second connect - should NOT get duplicates
         receiver2 = IrisClient(host, port)
-        receiver2.login("reconnect_receiver")
+        receiver2.login(receiver_name)
         
         time.sleep(0.5)
         

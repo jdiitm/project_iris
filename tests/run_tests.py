@@ -872,6 +872,63 @@ def stop_cluster():
     except Exception:
         pass
 
+
+def nuke_cluster():
+    """Completely destroy all cluster processes and free ports.
+    
+    This is more aggressive than stop_cluster - it kills ALL beam processes,
+    epmd, and ensures ports are free. Use after test runs to prevent flakiness.
+    """
+    log_info("Nuking cluster (complete teardown)...")
+    
+    # 1. Try graceful stop first
+    try:
+        subprocess.run(
+            ["make", "stop"],
+            cwd=str(PROJECT_ROOT),
+            capture_output=True,
+            timeout=15
+        )
+    except Exception:
+        pass
+    
+    # 2. Kill all beam.smp processes (SIGKILL)
+    try:
+        subprocess.run(["killall", "-9", "beam.smp"], capture_output=True, timeout=5)
+    except Exception:
+        pass
+    
+    # 3. Kill epmd
+    try:
+        subprocess.run(["killall", "-9", "epmd"], capture_output=True, timeout=5)
+    except Exception:
+        pass
+    
+    # 4. Kill any process holding our ports (8085-8089)
+    for port in [8085, 8086, 8087, 8088, 8089]:
+        try:
+            subprocess.run(["fuser", "-k", f"{port}/tcp"], capture_output=True, timeout=5)
+        except Exception:
+            pass
+    
+    # 5. Clean up Mnesia directories and logs
+    try:
+        import shutil
+        for mnesia_dir in PROJECT_ROOT.glob("Mnesia.*"):
+            shutil.rmtree(mnesia_dir, ignore_errors=True)
+        for log_file in PROJECT_ROOT.glob("*.log"):
+            try:
+                os.remove(log_file)
+            except Exception:
+                pass
+    except Exception:
+        pass
+    
+    # 6. Wait for ports to be released
+    time.sleep(2)
+    
+    log_info("Cluster nuked - all processes killed and ports freed")
+
 def run_test(test: Dict, run_dir: Path, timeout: int = 120, stream_output: bool = True) -> TestResult:
     """Run a single test and return the result.
     
@@ -1147,6 +1204,11 @@ def run_suite(suite_name: str, run_dir: Path, require_cluster: bool = True) -> S
         stop_docker_cluster()
         # Reset cluster config so next suite will restart local cluster
         _current_cluster_config = None
+    
+    # ALWAYS nuke cluster after integration tests to prevent flakiness
+    # This ensures clean state for subsequent test runs
+    if suite_name == "integration":
+        nuke_cluster()
     
     duration = time.time() - start_time
     skipped = sum(1 for r in results if r.skipped)

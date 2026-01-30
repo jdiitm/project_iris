@@ -86,13 +86,54 @@ class ClusterManager:
             return False
     
     def wait_for_port(self, port: int, timeout: int = 30) -> bool:
-        """Wait for a port to become available."""
+        """Wait for a port to become available (open and accepting connections)."""
         start = time.time()
         while time.time() - start < timeout:
             if self.is_port_open(port):
                 return True
             time.sleep(0.5)
         return False
+    
+    def wait_for_port_free(self, port: int, timeout: int = 15) -> bool:
+        """Wait for a port to become free (not in use)."""
+        start = time.time()
+        while time.time() - start < timeout:
+            if not self.is_port_open(port):
+                return True
+            time.sleep(0.5)
+        return False
+    
+    def kill_port_holder(self, port: int) -> bool:
+        """Kill any process holding the specified port."""
+        try:
+            # Find PID holding the port using fuser
+            result = subprocess.run(
+                ["fuser", "-k", f"{port}/tcp"],
+                capture_output=True,
+                timeout=5
+            )
+            time.sleep(0.5)  # Give process time to die
+            return True
+        except Exception:
+            # Try lsof as fallback
+            try:
+                result = subprocess.run(
+                    ["lsof", "-ti", f"tcp:{port}"],
+                    capture_output=True,
+                    text=True,
+                    timeout=5
+                )
+                pids = result.stdout.strip().split('\n')
+                for pid in pids:
+                    if pid.strip():
+                        try:
+                            subprocess.run(["kill", "-9", pid.strip()], timeout=2)
+                        except Exception:
+                            pass
+                time.sleep(0.5)
+                return True
+            except Exception:
+                return False
     
     def build(self) -> bool:
         """Build the project."""
@@ -147,6 +188,15 @@ class ClusterManager:
         # Start edges
         for i in range(1, count + 1):
             port = 8085 + i - 1  # 8085, 8086, etc.
+            
+            # Ensure port is free before starting edge
+            if self.is_port_open(port):
+                print(f"[Cluster] Port {port} still in use, waiting...")
+                self.kill_port_holder(port)
+                if not self.wait_for_port_free(port, timeout=10):
+                    print(f"[Cluster] Port {port} still in use, cannot start edge {i}")
+                    return False
+            
             if not self.start_edge(port=port, edge_id=i):
                 print(f"[Cluster] Edge {i} failed to start")
                 return False
@@ -188,7 +238,7 @@ class ClusterManager:
         return self._run_make("stop", timeout=30)
     
     def force_stop(self):
-        """Force stop all Erlang processes."""
+        """Force stop all Erlang processes and ensure ports are free."""
         print("[Cluster] Force stopping all Erlang processes...")
         
         # Kill make stop first
@@ -197,7 +247,7 @@ class ClusterManager:
         # Kill any remaining beam.smp processes
         try:
             subprocess.run(
-                ["killall", "beam.smp"],
+                ["killall", "-9", "beam.smp"],
                 capture_output=True,
                 timeout=10
             )
@@ -207,12 +257,23 @@ class ClusterManager:
         # Kill epmd
         try:
             subprocess.run(
-                ["killall", "epmd"],
+                ["killall", "-9", "epmd"],
                 capture_output=True,
                 timeout=5
             )
         except Exception:
             pass
+        
+        # Ensure ports are actually free
+        for port in [8085, 8086, 8087]:
+            if self.is_port_open(port):
+                print(f"[Cluster] Port {port} still in use, killing holder...")
+                self.kill_port_holder(port)
+        
+        # Wait for ports to be free
+        for port in [8085, 8086]:
+            if not self.wait_for_port_free(port, timeout=10):
+                print(f"[Cluster] Warning: Port {port} still in use after force_stop")
         
         # Clean up Mnesia directory
         try:
