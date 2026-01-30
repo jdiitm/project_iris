@@ -45,6 +45,16 @@ def log(msg):
     print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
 
 
+def unique_user(prefix: str) -> str:
+    """Generate unique username for test isolation.
+    
+    Combines millisecond timestamp + random UUID suffix to guarantee uniqueness
+    even under rapid test execution. This prevents race conditions where old
+    connection terminate() calls delete new connection's ETS entries.
+    """
+    return f"{prefix}_{int(time.time()*1000)}_{uuid.uuid4().hex[:6]}"
+
+
 def generate_msg_id():
     """Generate a unique message ID."""
     return f"msg_{uuid.uuid4().hex[:16]}"
@@ -124,8 +134,12 @@ def test_same_msgid_once():
         sender = IdempotencyTestClient(host, port)
         receiver = IdempotencyTestClient(host, port)
         
-        sender.login("idemp_sender")
-        receiver.login("idemp_receiver")
+        # Use unique usernames to prevent ETS race conditions
+        sender_name = unique_user("idemp_snd")
+        receiver_name = unique_user("idemp_rcv")
+        
+        sender.login(sender_name)
+        receiver.login(receiver_name)
         
         log("PASS: Connected sender and receiver")
         
@@ -135,7 +149,7 @@ def test_same_msgid_once():
         
         # Send same message 10 times with same ID
         for i in range(num_sends):
-            sender.send_msg_with_id("idemp_receiver", f"test_content_{i}", msg_id)
+            sender.send_msg_with_id(receiver_name, f"test_content_{i}", msg_id)
             time.sleep(0.01)  # Small delay between sends
         
         log(f"Sent {num_sends} messages with msg_id marker: {msg_id}")
@@ -196,8 +210,12 @@ def test_retry_storm():
         sender = IdempotencyTestClient(host, port)
         receiver = IdempotencyTestClient(host, port)
         
-        sender.login("storm_sender")
-        receiver.login("storm_receiver")
+        # Use unique usernames to prevent ETS race conditions
+        sender_name = unique_user("storm_snd")
+        receiver_name = unique_user("storm_rcv")
+        
+        sender.login(sender_name)
+        receiver.login(receiver_name)
         
         log("PASS: Connected clients")
         
@@ -206,7 +224,7 @@ def test_retry_storm():
         
         # Rapid-fire same message
         for i in range(num_retries):
-            sender.send_msg_with_id("storm_receiver", "storm_content", msg_id)
+            sender.send_msg_with_id(receiver_name, "storm_content", msg_id)
         
         log(f"Sent {num_retries} messages rapidly")
         
@@ -261,8 +279,12 @@ def test_unique_ids_all_delivered():
         sender = IdempotencyTestClient(host, port)
         receiver = IdempotencyTestClient(host, port)
         
-        sender.login("unique_sender")
-        receiver.login("unique_receiver")
+        # Use unique usernames to prevent ETS race conditions
+        sender_name = unique_user("uniq_snd")
+        receiver_name = unique_user("uniq_rcv")
+        
+        sender.login(sender_name)
+        receiver.login(receiver_name)
         
         log("PASS: Connected clients")
         
@@ -273,7 +295,7 @@ def test_unique_ids_all_delivered():
         for i in range(num_messages):
             msg_id = generate_msg_id()
             sent_ids.append(msg_id)
-            sender.send_msg_with_id("unique_receiver", f"content_{i}", msg_id)
+            sender.send_msg_with_id(receiver_name, f"content_{i}", msg_id)
             time.sleep(0.05)
         
         log(f"Sent {num_messages} messages with unique IDs")
@@ -336,15 +358,19 @@ def test_idempotency_across_reconnect():
     receiver = None
     
     try:
+        # Use unique usernames to prevent ETS race conditions
+        sender_name = unique_user("rcon_snd")
+        receiver_name = unique_user("rcon_rcv")
+        
         receiver = IdempotencyTestClient(host, port)
-        receiver.login("reconnect_receiver")
+        receiver.login(receiver_name)
         
         msg_id = generate_msg_id()
         
         # First connection - send message
         sender1 = IdempotencyTestClient(host, port)
-        sender1.login("reconnect_sender")
-        sender1.send_msg_with_id("reconnect_receiver", "reconnect_test", msg_id)
+        sender1.login(sender_name)
+        sender1.send_msg_with_id(receiver_name, "reconnect_test", msg_id)
         log("Sent message from first connection")
         
         time.sleep(0.5)
@@ -358,8 +384,8 @@ def test_idempotency_across_reconnect():
         
         # Reconnect and send another message
         sender2 = IdempotencyTestClient(host, port)
-        sender2.login("reconnect_sender")
-        sender2.send_msg_with_id("reconnect_receiver", "reconnect_test", msg_id)
+        sender2.login(sender_name)
+        sender2.send_msg_with_id(receiver_name, "reconnect_test", msg_id)
         log("Sent message from second connection")
         
         time.sleep(1.0)
@@ -410,8 +436,13 @@ def test_concurrent_same_id():
     senders = []
     
     try:
+        # Use unique usernames to prevent ETS race conditions
+        # Generate a base suffix for this test run
+        test_suffix = f"{int(time.time()*1000)}_{uuid.uuid4().hex[:6]}"
+        receiver_name = f"conc_rcv_{test_suffix}"
+        
         receiver = IdempotencyTestClient(host, port)
-        receiver.login("concurrent_receiver")
+        receiver.login(receiver_name)
         
         msg_id = generate_msg_id()
         num_senders = 5
@@ -423,11 +454,12 @@ def test_concurrent_same_id():
         def sender_thread(thread_id):
             try:
                 sender = IdempotencyTestClient(host, port)
-                sender.login(f"concurrent_sender_{thread_id}")
+                sender_name = f"conc_snd_{thread_id}_{test_suffix}"
+                sender.login(sender_name)
                 senders.append(sender)
                 
                 for i in range(sends_per_sender):
-                    sender.send_msg_with_id("concurrent_receiver", f"concurrent_{thread_id}_{i}", msg_id)
+                    sender.send_msg_with_id(receiver_name, f"concurrent_{thread_id}_{i}", msg_id)
                     time.sleep(0.01)
                 
                 with results_lock:

@@ -138,14 +138,12 @@ aggregate_stats(StatsList) ->
 %% =============================================================================
 
 init([ShardId]) ->
-    %% Only Shard 1 creates the tables (race condition simple fix)
+    %% FIXED: Removed duplicate local_presence_v2 ETS table creation
+    %% The supervisor (iris_edge_sup) creates and owns local_presence_v2
+    %% This ensures the table survives worker crashes
+    
+    %% Only Shard 1 creates the metrics table
     if ShardId =:= 1 ->
-        case ets:info(?LOCAL_PRESENCE) of
-            undefined ->
-                ets:new(?LOCAL_PRESENCE, [set, named_table, public, {read_concurrency, true}, {write_concurrency, true}]);
-            _ -> ok
-        end,
-        %% AUDIT FIX: Create metrics table
         case ets:info(?METRICS_ETS) of
             undefined ->
                 ets:new(?METRICS_ETS, [set, named_table, public, {write_concurrency, true}]),
