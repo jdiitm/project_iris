@@ -1,124 +1,105 @@
-# Commit-Preparation Rules
+# Cursor Rules
 
-## When to Apply
-Apply these instructions **whenever you suggest code changes that are ready to be committed**, or when the user asks to prepare a commit.
-
----
-
-## SYSTEM-FIRST IMPLEMENTATION RULE
-
-Before editing any files:
-
-### Phase 1 — System Impact Scan (NO CODE)
-- Follow the System Impact Scan defined in `claude.md`
-- Do not modify files
-- Do not suggest commits
-- Output only analysis sections
-
-If more than **5 files** appear necessary:
-- Stop
-- Ask for confirmation before proceeding
+Guidelines to reduce common LLM coding mistakes. Bias toward caution over speed.
 
 ---
 
-### Phase 2 — Scoped Implementation
-Only after Phase 1 is acknowledged:
+## Core Principles
 
-- Modify **only the files identified**
-- Do NOT rescan the repository
-- Do NOT introduce unrelated refactors
-- Prefer completeness over minimal diff
-- If a missing file is discovered:
-  - Stop
-  - Report it
-  - Do not guess
+### 1. Think Before Coding
+- State assumptions explicitly. If uncertain, ask.
+- If multiple interpretations exist, present them—don't pick silently.
+- If a simpler approach exists, say so. Push back when warranted.
+- If something is unclear, stop. Name what's confusing. Ask.
 
----
+### 2. Simplicity First
+- No features beyond what was asked.
+- No abstractions for single-use code.
+- No "flexibility" that wasn't requested.
+- If you write 200 lines and it could be 50, rewrite it.
 
-## COST & SCOPE SAFETY
+### 3. Surgical Changes
+- Don't "improve" adjacent code, comments, or formatting.
+- Don't refactor things that aren't broken.
+- Match existing style, even if you'd do it differently.
+- Remove imports/variables YOUR changes made unused—not pre-existing dead code.
 
-- If total changes exceed ~300 lines, stop and summarize instead
-- Avoid broad “search-and-edit” operations unless explicitly requested
-- Do not rewrite files for stylistic reasons unless asked
+**Test:** Every changed line should trace directly to the user's request.
 
----
+### 4. Goal-Driven Execution
+Transform tasks into verifiable goals:
+- "Add validation" → Write tests for invalid inputs, then make them pass
+- "Fix the bug" → Write a test that reproduces it, then make it pass
 
-## COMPLETENESS CHECK (MANDATORY, NO CODE)
-
-Before stating work is complete, explicitly confirm:
-
-- Feature is reachable from a real entry point
-- Runtime configuration enables it
-- No dead or orphaned code paths remain
-- Tests reflect actual execution paths, not mocks only
-
-Respond with:
-✔ Confirmed  
-or  
-❌ Not confirmed (explain)
+For multi-step tasks:
+[Step] → verify: [check]
+[Step] → verify: [check]
 
 ---
 
-## Required Output Before Any Commit Suggestion
+## Pre-Implementation: System Impact Scan
 
-Before suggesting a commit message or finalizing changes, ALWAYS generate the following sections in Markdown:
+Before writing code, produce (no code edits in this phase):
+
+**A. Execution Path**
+- Entry point(s), key modules, exit points/side effects
+
+**B. Affected Layers**
+- API, Domain logic, Persistence, Configuration, Runtime wiring, Observability
+
+**C. Files Requiring Changes**
+- List with short justification
+- If only one file, justify why change is isolated
+
+**D. Completion Risks**
+- What could fail in production despite "working" locally
+- What tests would NOT catch
+
+⚠️ Stop if >5 files need changes—reconfirm scope first.
 
 ---
+
+## Pre-Commit: Required Output
+
+Generate these sections before any commit:
 
 ### 1. Summary of Changes
-- Brief, high-level description of what changed
-- Focus on behavior, not line-by-line edits
-
----
+- High-level behavior description (not line-by-line)
 
 ### 2. Architectural Impact
-- Explicitly state whether this change affects:
-  - System architecture
-  - Data flow
-  - APIs or contracts
-  - Performance characteristics
-  - Security or compliance
-- If **no architectural change**, state: `No architectural changes`
+- System architecture, data flow, APIs, performance, security
+- Or state: `No architectural changes`
 
----
+### 3. Bug/Issue RCA (if applicable)
+- Root cause, why it happened, why not caught earlier
 
-### 3. Bug / Issue RCA (if applicable)
-If the change fixes a bug or regression, include:
-- Root cause
-- Why it happened
-- Why it was not caught earlier
-- Whether similar issues may exist elsewhere
+### 4. Design Decisions
+- Why this solution, alternatives considered, trade-offs
 
----
+### 5. Risk Assessment
+- Risks introduced, rollback plan, areas to monitor
 
-### 4. Fix & Design Decisions
-Explain:
-- Why this solution was chosen
-- Alternatives considered (briefly)
-- Trade remembered (simplicity, performance, safety, scope)
-
----
-
-### 5. Reasoning Summary (No Hidden Chain-of-Thought)
-Provide a **concise, user-facing reasoning summary** that explains:
-- The key insights that led to the solution
-- Assumptions made
-- Constraints considered
-
----
-
-### 6. Risk Assessment
-- Potential risks introduced by the change
-- Rollback considerations
-- Areas to monitor after deployment
-
----
-
-### 7. Suggested Commit Message
-Follow this format:
-
+### 6. Commit Message
 <type>(<scope>): <short summary>
-
 <body - what and why>
-
 <footer - breaking changes, issues closed>
+
+---
+
+## Completeness Check (Mandatory)
+
+Before marking complete, confirm:
+- [ ] Feature reachable from real entry point
+- [ ] Runtime configuration enables it
+- [ ] No dead/orphaned code paths
+- [ ] Tests cover real execution, not just mocks
+
+Respond: ✔ Confirmed or ❌ Not confirmed (explain)
+
+---
+
+## Cost & Scope Limits
+
+- Stop if edits exceed ~300 lines—summarize instead
+- Stop if >5 files need changes—reconfirm scope
+- No broad search-and-edit unless explicitly requested
