@@ -38,8 +38,21 @@
 -define(MAX_BACKOFF_MS, 60000).
 -define(BATCH_SIZE, 100).
 
-%% Outbound message record
--record(outbound_msg, {
+%% Outbound message record - name MUST match table name for Mnesia writes
+-record(cross_region_outbound, {
+    id,              %% Unique message ID
+    target_region,   %% Destination region
+    user_id,         %% Target user
+    msg,             %% Message payload
+    status,          %% pending | in_flight | delivered | failed
+    attempts,        %% Delivery attempt count
+    created_at,      %% Timestamp when queued
+    next_retry_at,   %% Timestamp for next retry (0 = immediate)
+    last_error       %% Last error reason (if any)
+}).
+
+%% Dead letter record - name MUST match table name for Mnesia writes
+-record(cross_region_dead_letter, {
     id,              %% Unique message ID
     target_region,   %% Destination region
     user_id,         %% Target user
@@ -74,7 +87,7 @@ send_cross_region(TargetRegion, UserId, Msg, Opts) ->
     MsgId = maps:get(msg_id, Opts, generate_msg_id()),
     Now = erlang:system_time(millisecond),
     
-    Record = #outbound_msg{
+    Record = #cross_region_outbound{
         id = MsgId,
         target_region = TargetRegion,
         user_id = UserId,
@@ -108,7 +121,7 @@ get_queue_depth() ->
 get_queue_depth(Region) ->
     mnesia:activity(transaction, fun() ->
         length(mnesia:match_object(?OUTBOUND_TABLE, 
-            #outbound_msg{target_region = Region, status = pending, _ = '_'}, read))
+            #cross_region_outbound{target_region = Region, status = pending, _ = '_'}, read))
     end).
 
 %% @doc Get delivery statistics
@@ -126,7 +139,7 @@ drain_region(Region) ->
 init_tables() ->
     %% Outbound queue table
     case mnesia:create_table(?OUTBOUND_TABLE, [
-        {attributes, record_info(fields, outbound_msg)},
+        {attributes, record_info(fields, cross_region_outbound)},
         {disc_copies, [node()]},
         {type, set},
         {index, [target_region, status, next_retry_at]}
@@ -139,7 +152,7 @@ init_tables() ->
     
     %% Dead letter table for failed messages
     case mnesia:create_table(?DEAD_LETTER_TABLE, [
-        {attributes, record_info(fields, outbound_msg)},
+        {attributes, record_info(fields, cross_region_dead_letter)},
         {disc_copies, [node()]},
         {type, set}
     ]) of
@@ -236,8 +249,8 @@ do_drain(State) ->
     Messages = mnesia:activity(transaction, fun() ->
         %% Get pending messages where next_retry_at <= Now
         All = mnesia:match_object(?OUTBOUND_TABLE, 
-            #outbound_msg{status = pending, _ = '_'}, read),
-        [M || M <- All, M#outbound_msg.next_retry_at =< Now]
+            #cross_region_outbound{status = pending, _ = '_'}, read),
+        [M || M <- All, M#cross_region_outbound.next_retry_at =< Now]
     end),
     
     %% Process in batches
@@ -249,20 +262,20 @@ do_drain(State) ->
 do_drain_region(Region, State) ->
     Messages = mnesia:activity(transaction, fun() ->
         mnesia:match_object(?OUTBOUND_TABLE,
-            #outbound_msg{target_region = Region, status = pending, _ = '_'}, read)
+            #cross_region_outbound{target_region = Region, status = pending, _ = '_'}, read)
     end),
     
     lists:foldl(fun(Msg, AccState) ->
         deliver_message(Msg, AccState)
     end, State, Messages).
 
-deliver_message(Msg = #outbound_msg{id = MsgId, target_region = Region, 
+deliver_message(Msg = #cross_region_outbound{id = MsgId, target_region = Region, 
                                       user_id = UserId, msg = Payload,
                                       attempts = Attempts}, State) ->
     %% Mark as in-flight
     mnesia:activity(transaction, fun() ->
         mnesia:write(?OUTBOUND_TABLE, 
-            Msg#outbound_msg{status = in_flight}, write)
+            Msg#cross_region_outbound{status = in_flight}, write)
     end),
     
     %% Attempt delivery
@@ -284,7 +297,7 @@ deliver_message(Msg = #outbound_msg{id = MsgId, target_region = Region,
                     %% Max retries exceeded - move to dead letter
                     logger:error("Cross-region message ~p failed after ~p attempts: ~p",
                                 [MsgId, NewAttempts, Reason]),
-                    move_to_dead_letter(Msg#outbound_msg{
+                    move_to_dead_letter(Msg#cross_region_outbound{
                         attempts = NewAttempts,
                         last_error = Reason
                     }),
@@ -294,7 +307,7 @@ deliver_message(Msg = #outbound_msg{id = MsgId, target_region = Region,
                     BackoffMs = calculate_backoff(NewAttempts),
                     NextRetry = erlang:system_time(millisecond) + BackoffMs,
                     mnesia:activity(transaction, fun() ->
-                        mnesia:write(?OUTBOUND_TABLE, Msg#outbound_msg{
+                        mnesia:write(?OUTBOUND_TABLE, Msg#cross_region_outbound{
                             status = pending,
                             attempts = NewAttempts,
                             next_retry_at = NextRetry,
@@ -335,9 +348,21 @@ try_deliver(Region, UserId, Payload) ->
     end.
 
 move_to_dead_letter(Msg) ->
+    %% Convert outbound record to dead_letter record (same fields, different table)
+    DeadLetterMsg = #cross_region_dead_letter{
+        id = Msg#cross_region_outbound.id,
+        target_region = Msg#cross_region_outbound.target_region,
+        user_id = Msg#cross_region_outbound.user_id,
+        msg = Msg#cross_region_outbound.msg,
+        status = failed,
+        attempts = Msg#cross_region_outbound.attempts,
+        created_at = Msg#cross_region_outbound.created_at,
+        next_retry_at = Msg#cross_region_outbound.next_retry_at,
+        last_error = Msg#cross_region_outbound.last_error
+    },
     mnesia:activity(transaction, fun() ->
-        mnesia:delete(?OUTBOUND_TABLE, Msg#outbound_msg.id, write),
-        mnesia:write(?DEAD_LETTER_TABLE, Msg#outbound_msg{status = failed}, write)
+        mnesia:delete(?OUTBOUND_TABLE, Msg#cross_region_outbound.id, write),
+        mnesia:write(?DEAD_LETTER_TABLE, DeadLetterMsg, write)
     end).
 
 calculate_backoff(Attempt) ->

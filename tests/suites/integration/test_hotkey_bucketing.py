@@ -120,9 +120,11 @@ def test_hotkey_basic():
             for detail in all_error_details[:5]:
                 log.info("error", detail)
         
-        time.sleep(2)  # Allow messages to be stored
+        # Allow brief time for offline storage before VIP connects
+        # This is necessary because messages need to complete storage before delivery
+        time.sleep(0.5)
         
-        # VIP comes online
+        # VIP comes online (offline messages delivered on login)
         vip = IrisClient()
         vip.login(vip_user)
         log.connection_event("login", vip_user)

@@ -129,8 +129,8 @@ def test_burst_allowance():
         log(f"FAIL: Login failed - {e}")
         return False
     
-    # Wait for any previous rate state to clear
-    time.sleep(1)
+    # Brief wait for rate state isolation
+    time.sleep(0.3)
     
     # Send burst within typical burst limit (e.g., 50)
     burst_size = 30
@@ -207,8 +207,8 @@ def test_rate_recovery():
     
     log(f"Initial burst: {initial_success}/50 sent")
     
-    # Wait for recovery (typical window is 1 second)
-    time.sleep(2)
+    # Wait for rate limit window to reset
+    time.sleep(1.2)
     
     # Should be able to send again
     success = 0

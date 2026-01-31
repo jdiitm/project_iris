@@ -41,7 +41,7 @@ def login(sock, username):
     """Send login packet."""
     packet = bytes([0x01]) + username.encode()
     sock.sendall(packet)
-    time.sleep(0.1)
+    # Server handles login synchronously, no sleep needed
 
 
 def send_message(sock, target, message):
@@ -115,10 +115,7 @@ def test_message_ordering():
     sender_sock.close()
     print("   ✅ All messages sent")
     
-    print("\n3. Waiting for messages to be stored...")
-    time.sleep(2)
-    
-    print(f"\n4. Connecting as receiver: {receiver}")
+    print(f"\n3. Connecting as receiver: {receiver}")
     try:
         receiver_sock = connect()
         login(receiver_sock, receiver)
@@ -126,9 +123,8 @@ def test_message_ordering():
         print(f"  ❌ Connection failed: {e}")
         return None
     
-    print("\n5. Receiving offline messages...")
-    time.sleep(1)  # Wait for delivery
-    data = receive_all(receiver_sock)
+    print("\n4. Receiving offline messages (with 5s timeout)...")
+    data = receive_all(receiver_sock, timeout=5)
     receiver_sock.close()
     
     print(f"   Received {len(data)} bytes")

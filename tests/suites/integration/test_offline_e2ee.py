@@ -296,8 +296,8 @@ def test_offline_e2ee_single_message():
     
     alice_client.close()
     
-    # Wait for message to be stored
-    time.sleep(1.0)
+    # Wait for offline storage
+    time.sleep(0.5)
     
     # Step 3: Bob comes back online
     log("Step 3: Bob comes back online")
@@ -386,7 +386,8 @@ def test_offline_e2ee_multiple_messages():
         log(f"Sent message #{i}")
     
     alice_client.close()
-    time.sleep(1.0)
+    # Wait for offline storage
+    time.sleep(0.5)
     
     # Bob comes back online
     bob_client = IrisClient(host=EDGE_HOST, port=EDGE_PORT)
