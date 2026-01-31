@@ -101,12 +101,13 @@ def test_pending_acks_saved_on_disconnect():
         receiver = None
         log("Receiver disconnected (pending ACK scenario)")
         
-        # Wait for disconnect processing
-        time.sleep(0.5)
+        time.sleep(1.0)  # Allow terminate path to complete
         
         # Reconnect receiver - message should be in offline storage
         receiver = IrisClient(host, port)
         receiver.login(receiver_name)
+        
+        time.sleep(0.5)
         
         # Try to receive the message from offline storage
         received_msgs = []

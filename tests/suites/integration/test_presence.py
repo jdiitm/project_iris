@@ -69,7 +69,9 @@ def test_online_user_status():
         target.login(target_user)
         log.connection_event("login", target_user)
         
-        # Query status (polling loop handles wait)
+        time.sleep(2)  # Allow presence to propagate
+        
+        # Query status
         querier = IrisClient()
         querier.login(f"querier_{int(time.time())}")
         log.connection_event("login", "querier")
@@ -127,11 +129,12 @@ def test_offline_user_status():
         target = IrisClient()
         target.login(target_user)
         log.connection_event("login", target_user)
+        time.sleep(1)
         
         # Go offline
         target.close()
         log.connection_event("disconnect", target_user)
-        # Polling loop below handles wait for presence update
+        time.sleep(3)  # Allow presence to update
         
         # Query status from fresh client with retries
         querier = IrisClient()
@@ -184,6 +187,8 @@ def test_presence_cache():
         target = IrisClient()
         target.login(target_user)
         log.connection_event("login", target_user)
+        
+        time.sleep(1)
         
         # Query same user multiple times
         querier = IrisClient()
