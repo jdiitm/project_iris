@@ -27,6 +27,19 @@ from tests.framework import TestLogger, ClusterManager
 from tests.utilities import IrisClient
 
 
+def create_client_with_retry(max_retries: int = 3, retry_delay: float = 1.0) -> IrisClient:
+    """Create an IrisClient with retry logic for CI resilience."""
+    last_error = None
+    for attempt in range(max_retries):
+        try:
+            return IrisClient()
+        except ConnectionRefusedError as e:
+            last_error = e
+            if attempt < max_retries - 1:
+                time.sleep(retry_delay)
+    raise last_error
+
+
 def create_get_status_packet(target_user: str) -> bytes:
     """Create a get_status protocol packet."""
     # Protocol: 0x05 | TargetLen(16) | Target
@@ -65,14 +78,14 @@ def test_online_user_status():
         
         # Target user comes online
         target_user = f"status_target_{int(time.time())}"
-        target = IrisClient()
+        target = create_client_with_retry()
         target.login(target_user)
         log.connection_event("login", target_user)
         
         time.sleep(2)  # Allow presence to propagate
         
         # Query status
-        querier = IrisClient()
+        querier = create_client_with_retry()
         querier.login(f"querier_{int(time.time())}")
         log.connection_event("login", "querier")
         
@@ -126,7 +139,7 @@ def test_offline_user_status():
         
         # User comes online then goes offline
         target_user = f"offline_target_{int(time.time())}"
-        target = IrisClient()
+        target = create_client_with_retry()
         target.login(target_user)
         log.connection_event("login", target_user)
         time.sleep(1)
@@ -137,7 +150,7 @@ def test_offline_user_status():
         time.sleep(3)  # Allow presence to update
         
         # Query status from fresh client with retries
-        querier = IrisClient()
+        querier = create_client_with_retry()
         querier.login(f"querier_off_{int(time.time())}")
         
         result = False
@@ -184,14 +197,14 @@ def test_presence_cache():
     with TestLogger("test_presence_cache", "integration") as log:
         
         target_user = f"cache_target_{int(time.time())}"
-        target = IrisClient()
+        target = create_client_with_retry()
         target.login(target_user)
         log.connection_event("login", target_user)
         
         time.sleep(1)
         
         # Query same user multiple times
-        querier = IrisClient()
+        querier = create_client_with_retry()
         querier.login(f"cache_querier_{int(time.time())}")
         
         NUM_QUERIES = 5

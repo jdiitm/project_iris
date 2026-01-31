@@ -12,8 +12,8 @@
 %% This module provides HARDENED AP semantics:
 %% 
 %% WRITES:
-%%   - Durable after function returns (sync_transaction by default)
-%%   - Replicated to all disc_copies nodes
+%%   - Durable after function returns (quorum by default - W=2 of N=3)
+%%   - Replicated to majority of disc_copies nodes
 %%   - Blocked during detected partitions (safe mode)
 %%
 %% READS:
@@ -26,7 +26,7 @@
 %%   - Total cluster loss: Data recoverable from any node with disc_copies
 %% 
 %% API:
-%%   put(Table, Key, Value) -> ok | {error, Reason}           %% Guaranteed durable
+%%   put(Table, Key, Value) -> ok | {error, Reason}           %% Quorum durable (default)
 %%   put(Table, Key, Value, Opts) -> ok | {error, Reason}     %% With options
 %%   get(Table, Key) -> {ok, Value} | not_found | {error, Reason}
 %%   delete(Table, Key) -> ok | {error, Reason}
@@ -60,14 +60,19 @@ put(Table, Key, Value) ->
 
 %% @doc Store with options
 %% Options:
-%%   - durability: guaranteed (default) | best_effort | quorum
+%%   - durability: quorum (default) | guaranteed | best_effort
 %%   - timeout: milliseconds (default 5000)
+%%
+%% VIOLATION-3 FIX: Default changed from 'guaranteed' to 'quorum'.
+%% Rationale: 'guaranteed' uses sync_transaction which blocks on the slowest node,
+%% violating NFR-7 (Availability). Quorum writes (W=2 of N=3) tolerate one slow
+%% node while maintaining durability.
 -spec put(atom(), term(), term(), map()) -> ok | {error, term()}.
 put(Table, Key, Value, Opts) ->
     %% Check partition guard first
     case check_write_safety() of
         ok ->
-            Durability = maps:get(durability, Opts, guaranteed),
+            Durability = maps:get(durability, Opts, quorum),
             do_put(Durability, Table, Key, Value, Opts);
         {error, Reason} ->
             {error, Reason}
@@ -97,8 +102,15 @@ do_put(best_effort, Table, Key, Value, _Opts) ->
 do_put(quorum, Table, Key, Value, Opts) ->
     %% Quorum write: Majority of replicas must ACK
     %% Tolerates minority failures without blocking
-    Timeout = maps:get(timeout, Opts, 3000),
-    iris_quorum_write:write_durable(Table, Key, Value, #{timeout => Timeout}).
+    %% Falls back to guaranteed if quorum module not available
+    case whereis(iris_quorum_write) of
+        undefined ->
+            %% Quorum module not running - fall back to guaranteed
+            do_put(guaranteed, Table, Key, Value, Opts);
+        _ ->
+            Timeout = maps:get(timeout, Opts, 3000),
+            iris_quorum_write:write_durable(Table, Key, Value, #{timeout => Timeout})
+    end.
 
 %% =============================================================================
 %% API: Get (Read)
@@ -128,8 +140,15 @@ do_get(eventual, Table, Key, _Opts) ->
 
 do_get(quorum, Table, Key, Opts) ->
     %% Quorum read: Linearizable, reads from majority
-    Timeout = maps:get(timeout, Opts, 2000),
-    iris_quorum_write:read_quorum(Table, Key, #{timeout => Timeout}).
+    %% Falls back to eventual if quorum module not available
+    case whereis(iris_quorum_write) of
+        undefined ->
+            %% Quorum module not running - fall back to eventual
+            do_get(eventual, Table, Key, Opts);
+        _ ->
+            Timeout = maps:get(timeout, Opts, 2000),
+            iris_quorum_write:read_quorum(Table, Key, #{timeout => Timeout})
+    end.
 
 %% =============================================================================
 %% API: Delete

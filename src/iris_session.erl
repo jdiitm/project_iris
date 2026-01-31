@@ -60,9 +60,20 @@ handle_packet({login, LoginData}, _Current, TransportPid, _Mod) ->
             end
     end;
 
-handle_packet({send_message, Target, Msg}, User, _Pid, _Mod) ->
-    iris_router:route(Target, Msg),
-    {ok, User, []};
+handle_packet({send_message, Target, Msg}, User, _Pid, _Mod) when User =/= undefined ->
+    %% VIOLATION-4 FIX: Rate limit check on message send
+    case check_message_rate(User) of
+        allow ->
+            iris_router:route(Target, Msg),
+            {ok, User, []};
+        {deny, RetryAfter} ->
+            logger:warning("Message rate limited for ~p", [User]),
+            {ok, User, [{send, encode_rate_limited(RetryAfter)}]}
+    end;
+
+handle_packet({send_message, _Target, _Msg}, undefined, _Pid, _Mod) ->
+    %% Not logged in - reject
+    {ok, undefined, []};
 
 handle_packet({batch_send, Target, Blob}, User, _Pid, _Mod) ->
     Msgs = iris_proto:unpack_batch(Blob),
@@ -128,6 +139,219 @@ handle_packet({read_receipt, MsgId, OriginalSender}, User, _Pid, _Mod) when User
 
 handle_packet({read_receipt, _MsgId, _OriginalSender}, undefined, _Pid, _Mod) ->
     %% Not logged in - ignore
+    {ok, undefined, []};
+
+%% =============================================================================
+%% E2EE Key Bundle Operations (RFC-001-AMENDMENT-001, FR-13, FR-14)
+%% =============================================================================
+%% Server never has access to plaintext - only routes encrypted messages
+
+handle_packet({upload_prekeys, Bundle}, User, _Pid, _Mod) when User =/= undefined ->
+    %% Upload user's key bundle (identity key, signed prekey, one-time prekeys)
+    case whereis(iris_keys) of
+        undefined ->
+            %% Keys module not running
+            {ok, User, [{send, <<16#22, 0:32>>}]};  %% Empty response indicating error
+        _ ->
+            case iris_keys:upload_bundle(User, Bundle) of
+                ok ->
+                    Response = iris_proto:encode_prekey_response(#{status => <<"ok">>}),
+                    {ok, User, [{send, Response}]};
+                {error, Reason} ->
+                    logger:warning("E2EE key upload failed for ~p: ~p", [User, Reason]),
+                    Response = iris_proto:encode_prekey_response(#{status => <<"error">>, reason => atom_to_binary(Reason, utf8)}),
+                    {ok, User, [{send, Response}]}
+            end
+    end;
+
+handle_packet({upload_prekeys, _Bundle}, undefined, _Pid, _Mod) ->
+    %% Not logged in - reject
+    {ok, undefined, [{send, <<16#22, 0:32>>}]};
+
+handle_packet({fetch_prekeys, TargetUser}, User, _Pid, _Mod) when User =/= undefined ->
+    %% Fetch another user's key bundle for X3DH key exchange
+    case whereis(iris_keys) of
+        undefined ->
+            %% Keys module not running
+            {ok, User, [{send, <<16#22, 0:32>>}]};
+        _ ->
+            case iris_keys:fetch_bundle(TargetUser) of
+                {ok, Bundle} ->
+                    Response = iris_proto:encode_prekey_response(Bundle),
+                    {ok, User, [{send, Response}]};
+                {error, not_found} ->
+                    %% User has no keys registered
+                    Response = iris_proto:encode_prekey_response(#{status => <<"not_found">>}),
+                    {ok, User, [{send, Response}]};
+                {error, Reason} ->
+                    logger:warning("E2EE key fetch failed for ~p: ~p", [TargetUser, Reason]),
+                    Response = iris_proto:encode_prekey_response(#{status => <<"error">>}),
+                    {ok, User, [{send, Response}]}
+            end
+    end;
+
+handle_packet({fetch_prekeys, _TargetUser}, undefined, _Pid, _Mod) ->
+    %% Not logged in - reject
+    {ok, undefined, [{send, <<16#22, 0:32>>}]};
+
+handle_packet({e2ee_msg, Recipient, Ciphertext, Header}, User, _Pid, _Mod) when User =/= undefined ->
+    %% Route E2EE message to recipient (server never decrypts)
+    %% VIOLATION-4 FIX: Rate limit check on message send
+    case check_message_rate(User) of
+        allow ->
+            %% Encode delivery packet with sender info
+            DeliveryPacket = iris_proto:encode_e2ee_delivery(User, {Header, Ciphertext}),
+            %% Route to recipient using async router
+            iris_router:route(Recipient, DeliveryPacket),
+            {ok, User, []};
+        {deny, RetryAfter} ->
+            logger:warning("E2EE message rate limited for ~p", [User]),
+            {ok, User, [{send, encode_rate_limited(RetryAfter)}]}
+    end;
+
+handle_packet({e2ee_msg, _Recipient, _Ciphertext, _Header}, undefined, _Pid, _Mod) ->
+    %% Not logged in - reject
+    {ok, undefined, []};
+
+%% =============================================================================
+%% Group Messaging Operations (RFC-001-AMENDMENT-001, FR-17 to FR-23)
+%% =============================================================================
+
+handle_packet({group_create, GroupName}, User, _Pid, _Mod) when User =/= undefined ->
+    %% Create a new group with User as admin
+    case whereis(iris_group) of
+        undefined ->
+            %% Group module not running
+            {ok, User, [{send, encode_error(group_service_unavailable)}]};
+        _ ->
+            case iris_group:create_group(GroupName, User) of
+                {ok, GroupId} ->
+                    %% Send group_join notification back to creator
+                    JoinPacket = iris_proto:encode_group_join(GroupId, User),
+                    {ok, User, [{send, JoinPacket}]};
+                {error, Reason} ->
+                    logger:warning("Group creation failed for ~p: ~p", [User, Reason]),
+                    {ok, User, [{send, encode_error(Reason)}]}
+            end
+    end;
+
+handle_packet({group_create, _GroupName}, undefined, _Pid, _Mod) ->
+    {ok, undefined, []};
+
+handle_packet({group_leave, GroupId}, User, _Pid, _Mod) when User =/= undefined ->
+    %% Leave a group
+    case whereis(iris_group) of
+        undefined ->
+            {ok, User, [{send, encode_error(group_service_unavailable)}]};
+        _ ->
+            case iris_group:remove_member(GroupId, User, User) of
+                ok ->
+                    {ok, User, [{send, <<16#32, "OK">>}]};
+                {error, Reason} ->
+                    logger:warning("Group leave failed for ~p from ~p: ~p", [User, GroupId, Reason]),
+                    {ok, User, [{send, encode_error(Reason)}]}
+            end
+    end;
+
+handle_packet({group_leave, _GroupId}, undefined, _Pid, _Mod) ->
+    {ok, undefined, []};
+
+handle_packet({group_msg, GroupId, Ciphertext, Header}, User, _Pid, _Mod) when User =/= undefined ->
+    %% Route encrypted group message to all members
+    %% Rate limit check
+    case check_message_rate(User) of
+        allow ->
+            case whereis(iris_group) of
+                undefined ->
+                    {ok, User, [{send, encode_error(group_service_unavailable)}]};
+                _ ->
+                    case iris_group:is_member(GroupId, User) of
+                        false ->
+                            {ok, User, [{send, encode_error(not_member)}]};
+                        true ->
+                            %% Fan out to all group members
+                            case iris_group:get_members(GroupId) of
+                                {ok, Members} ->
+                                    %% Encode the message once
+                                    DeliveryPacket = iris_proto:encode_group_msg(GroupId, 
+                                        maps:put(<<"sender">>, User, Header), Ciphertext),
+                                    %% Send to all members except sender
+                                    lists:foreach(fun(#{user_id := MemberId}) ->
+                                        if MemberId =/= User ->
+                                            iris_router:route(MemberId, DeliveryPacket);
+                                        true -> ok
+                                        end
+                                    end, Members),
+                                    {ok, User, []};
+                                {error, _Reason} ->
+                                    {ok, User, [{send, encode_error(group_not_found)}]}
+                            end
+                    end
+            end;
+        {deny, RetryAfter} ->
+            logger:warning("Group message rate limited for ~p", [User]),
+            {ok, User, [{send, encode_rate_limited(RetryAfter)}]}
+    end;
+
+handle_packet({group_msg, _GroupId, _Ciphertext, _Header}, undefined, _Pid, _Mod) ->
+    {ok, undefined, []};
+
+handle_packet({group_roster, GroupId}, User, _Pid, _Mod) when User =/= undefined ->
+    %% Request group roster (member list)
+    case whereis(iris_group) of
+        undefined ->
+            {ok, User, [{send, encode_error(group_service_unavailable)}]};
+        _ ->
+            case iris_group:is_member(GroupId, User) of
+                false ->
+                    {ok, User, [{send, encode_error(not_member)}]};
+                true ->
+                    case iris_group:get_members(GroupId) of
+                        {ok, Members} ->
+                            MemberIds = [M || #{user_id := M} <- Members],
+                            Response = iris_proto:encode_group_roster_response(GroupId, MemberIds),
+                            {ok, User, [{send, Response}]};
+                        {error, Reason} ->
+                            {ok, User, [{send, encode_error(Reason)}]}
+                    end
+            end
+    end;
+
+handle_packet({group_roster, _GroupId}, undefined, _Pid, _Mod) ->
+    {ok, undefined, []};
+
+handle_packet({sender_key_dist, GroupId, KeyData}, User, _Pid, _Mod) when User =/= undefined ->
+    %% Distribute sender key to group
+    case whereis(iris_group) of
+        undefined ->
+            {ok, User, [{send, encode_error(group_service_unavailable)}]};
+        _ ->
+            case iris_group:is_member(GroupId, User) of
+                false ->
+                    {ok, User, [{send, encode_error(not_member)}]};
+                true ->
+                    %% Store sender key and broadcast to members
+                    KeyId = crypto:strong_rand_bytes(8),
+                    KeyIdHex = binary_to_list(base16_encode(KeyId)),
+                    ok = iris_group:store_sender_key(GroupId, User, list_to_binary(KeyIdHex), KeyData),
+                    
+                    %% Notify all other members of the new sender key
+                    case iris_group:get_members(GroupId) of
+                        {ok, Members} ->
+                            DistPacket = iris_proto:encode_sender_key_dist(GroupId, KeyData),
+                            lists:foreach(fun(#{user_id := MemberId}) ->
+                                if MemberId =/= User ->
+                                    iris_router:route(MemberId, DistPacket);
+                                true -> ok
+                                end
+                            end, Members);
+                        _ -> ok
+                    end,
+                    {ok, User, []}
+            end
+    end;
+
+handle_packet({sender_key_dist, _GroupId, _KeyData}, undefined, _Pid, _Mod) ->
     {ok, undefined, []};
 
 handle_packet({error, _}, User, _Pid, _Mod) ->
@@ -236,6 +460,36 @@ fetch_and_cache(TargetUser, Now) ->
     {S, T} = Result,
     ets:insert(presence_cache, {TargetUser, S, T, Now}),
     Result.
+
+%% =============================================================================
+%% Internal: Rate Limiting (VIOLATION-4 FIX)
+%% =============================================================================
+%% Rate limit on message sending, not just login
+
+check_message_rate(User) ->
+    case whereis(iris_rate_limiter) of
+        undefined -> allow;
+        _ -> iris_rate_limiter:check(User)
+    end.
+
+encode_rate_limited(RetryAfter) ->
+    %% Error response with retry-after hint
+    <<16#FF, RetryAfter:32>>.
+
+encode_error(Reason) when is_atom(Reason) ->
+    ReasonBin = atom_to_binary(Reason, utf8),
+    <<16#FE, (byte_size(ReasonBin)):16, ReasonBin/binary>>;
+encode_error(Reason) when is_binary(Reason) ->
+    <<16#FE, (byte_size(Reason)):16, Reason/binary>>;
+encode_error(_Reason) ->
+    <<16#FE, 5:16, "error">>.
+
+%% Simple base16 encoding (hex)
+base16_encode(<<>>) -> <<>>;
+base16_encode(<<N:4, Rest/bitstring>>) ->
+    Char = if N < 10 -> $0 + N; true -> $a + N - 10 end,
+    RestEncoded = base16_encode(Rest),
+    <<Char, RestEncoded/binary>>.
 
 %% =============================================================================
 %% Internal: Typing indicator relay (RFC FR-8)
