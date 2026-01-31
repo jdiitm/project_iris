@@ -55,17 +55,28 @@ def send_message(sock, target, message):
 
 
 def receive_all(sock, timeout=5):
-    """Receive all available data."""
+    """Receive all available data until timeout or connection closes."""
     sock.settimeout(timeout)
     data = b""
-    try:
-        while True:
+    while True:
+        try:
             chunk = sock.recv(4096)
             if not chunk:
                 break
             data += chunk
-    except socket.timeout:
-        pass
+        except socket.timeout:
+            # Normal termination - no more data within timeout
+            break
+        except ConnectionResetError:
+            # Server closed connection - return what we collected
+            print(f"   Connection reset after receiving {len(data)} bytes")
+            break
+        except BrokenPipeError:
+            print(f"   Broken pipe after receiving {len(data)} bytes")
+            break
+        except OSError as e:
+            print(f"   OS error ({e}) after receiving {len(data)} bytes")
+            break
     return data
 
 
