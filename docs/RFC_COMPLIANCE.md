@@ -124,6 +124,43 @@ The following critical security issues were identified in adversarial audit and 
 - **Memory Kill Switch**: `mas_heap_size` enforcement on `iris_session` (800KB) and `iris_edge_conn` (400KB).
 - **Validation**: `test_resource_limits.py` confirmed process termination on abuse.
 
+### Phase 5: RFC Compliance Mitigation (2026-01-31)
+
+The following changes address items identified in the RFC-001 v3.0 compliance audit:
+
+#### 5.1 Typing Indicators (RFC FR-8)
+- **`iris_proto.erl`**: Added opcodes 0x30 (TYPING_START) and 0x31 (TYPING_STOP)
+- **`iris_session.erl`**: Relay typing indicators to recipients (best-effort)
+- **`iris_edge_conn.erl`**: Handle typing delivery messages
+- **Behavior**: Fire-and-forget, no durability (transient state)
+
+#### 5.2 Read Receipts (RFC FR-4 - Optional)
+- **`iris_read_receipts.erl`**: New module for read receipt tracking (NEW)
+- **`iris_proto.erl`**: Added opcodes 0x40 (READ_RECEIPT) and 0x41 (READ_RECEIPT_RELAY)
+- **Configuration**: Enable with `{iris_core, [{read_receipts_enabled, true}]}`
+- **TTL**: Configurable receipt retention (default: 24h)
+
+#### 5.3 Failover Timeout Configuration (RFC NFR-9)
+- **`iris_circuit_breaker.erl`**: Added configurable `failover_timeout_ms`
+- **Default**: 30000ms (30 seconds per RFC requirement)
+- **Configuration**: `{iris_core, [{failover_timeout_ms, 30000}]}`
+- **API**: `iris_circuit_breaker:get_failover_timeout()` for inspection
+
+#### 5.4 Durability Metrics (RFC NFR-6/NFR-8)
+- **`iris_metrics.erl`**: Added counters for durability tracking
+  - `iris_msg_acked_total`: Messages with confirmed ACK
+  - `iris_msg_lost_total`: Messages lost (MUST be 0)
+- **API**: `iris_metrics:get_durability_metrics()` returns percentage
+- **Alert**: `msg_lost/0` logs EMERGENCY on any loss (RPO=0 violation)
+
+#### 5.5 Test Quality Improvements
+- **`tests/utilities/helpers.py`**: Added seeded random utilities
+  - `seed_random(seed)`: Initialize deterministic RNG
+  - `test_randint(a, b)`, `test_choice(seq)`, etc.
+- **`tests/framework/wait.py`**: Event-driven wait utilities (existing)
+  - `wait_for()`: Poll-based condition waiting
+  - Replaces arbitrary `time.sleep()` for determinism
+
 
 ---
 
@@ -135,6 +172,8 @@ The following critical security issues were identified in adversarial audit and 
 | Scale | 5B users | Regional Mnesia 50-node limit | Sharded Mnesia with 20 regions |
 | Section 9.1 | Protocol version negotiation | Breaking change | Client migration plan |
 | Section 5.2 | UUIDv7 message IDs | Requires protocol change | 3-5 days when prioritized |
+| TST-1 | Remove all time.sleep() | 298 occurrences in 64 files | Framework in place (`wait.py`), needs systematic replacement |
+| TST-3 | Seeded random everywhere | 20 occurrences in 11 files | Utilities added, needs gradual migration |
 
 ---
 
@@ -175,17 +214,22 @@ All RFC requirements have corresponding tests:
 
 | Category | Tests | Status |
 |----------|-------|--------|
-| Unit | 60+ | ✅ 100% |
+| Unit | 85+ | ✅ 100% |
 | Integration | 15+ | ✅ 100% |
 | Durability | `test_ack_durability.py` | ✅ (active) |
 | Cross-Region | `test_cross_region_latency.py` | ✅ (active) |
 | Multimaster | `test_multimaster_durability.py` | ✅ (active) |
 | Failover | `test_failover_time.py` | ✅ |
 | Ordering | `test_cross_node_ordering.py` | ✅ |
-| E2EE Keys | `test_key_bundle_durability.py` | ✅ (NEW) |
-| OPK | `test_opk_exhaustion.py` | ✅ (NEW) |
-| Flow Scale | `test_flow_controller_scale.py` | ✅ (NEW) |
-| Silent Loss | `test_no_silent_loss.py` | ✅ (NEW) |
-| Key Sync | `test_sender_key_sync.py` | ✅ (NEW) |
+| E2EE Keys | `test_key_bundle_durability.py` | ✅ |
+| OPK | `test_opk_exhaustion.py` | ✅ |
+| Flow Scale | `test_flow_controller_scale.py` | ✅ |
+| Silent Loss | `test_no_silent_loss.py` | ✅ |
+| Key Sync | `test_sender_key_sync.py` | ✅ |
+| HLC | `iris_hlc_tests.erl` | ✅ (NEW) |
+| Limits | `iris_limits_tests.erl` | ✅ (NEW) |
+| Tracing | `iris_trace_tests.erl` | ✅ (NEW) |
+| NFR Metrics | `iris_metrics_nfr_tests.erl` | ✅ (NEW) |
+| Fanout Rate | `iris_fanout_rate_tests.erl` | ✅ (NEW) |
 
 See [TEST_STATUS.md](TEST_STATUS.md) for full details.

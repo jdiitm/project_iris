@@ -17,6 +17,7 @@
 -export([call/4, call_with_fallback/5]).
 -export([record_success/1, record_failure/1]).
 -export([get_status/1, get_all_status/0]).
+-export([get_failover_timeout/0]).  %% RFC NFR-9: Configurable failover timeout
 
 %% Gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
@@ -24,9 +25,14 @@
 -define(SERVER, ?MODULE).
 -define(FAILURE_THRESHOLD, 5).
 -define(SUCCESS_THRESHOLD, 3).        %% Successes needed in half-open to close
--define(RESET_TIMEOUT_MS, 30000).     %% Initial reset timeout
+-define(DEFAULT_FAILOVER_TIMEOUT_MS, 30000).  %% RFC NFR-9: ≤30s failover time
 -define(MAX_RESET_TIMEOUT_MS, 300000). %% Max 5 minutes
 -define(CALL_TIMEOUT_MS, 5000).
+
+%% @doc Get the failover timeout from configuration (RFC NFR-9: ≤30s).
+%% Configurable via application env: {iris_core, [{failover_timeout_ms, 30000}]}
+get_failover_timeout() ->
+    application:get_env(iris_core, failover_timeout_ms, ?DEFAULT_FAILOVER_TIMEOUT_MS).
 
 %% AUDIT2 FIX: ETS table for lockfree circuit checks
 -define(BREAKER_ETS, iris_circuit_breaker_ets).
@@ -37,7 +43,7 @@
     successes = 0 :: integer(),      %% Successes in half-open state
     last_failure :: integer() | undefined,
     last_success :: integer() | undefined,
-    reset_timeout = ?RESET_TIMEOUT_MS :: integer(),
+    reset_timeout = ?DEFAULT_FAILOVER_TIMEOUT_MS :: integer(),
     avg_latency = 0.0 :: float(),
     total_calls = 0 :: integer()
 }).
@@ -306,7 +312,7 @@ handle_success(Breaker = #breaker{status = closed, total_calls = Total}, Timesta
         failures = 0,
         avg_latency = NewLatency,
         total_calls = Total + 1,
-        reset_timeout = ?RESET_TIMEOUT_MS  %% Reset timeout on success
+        reset_timeout = get_failover_timeout()  %% RFC NFR-9: Reset to configured timeout
     };
 
 handle_success(Breaker = #breaker{status = half_open, successes = S, total_calls = Total}, Timestamp, Latency) ->
@@ -323,7 +329,7 @@ handle_success(Breaker = #breaker{status = half_open, successes = S, total_calls
                 last_success = Timestamp,
                 avg_latency = NewLatency,
                 total_calls = Total + 1,
-                reset_timeout = ?RESET_TIMEOUT_MS
+                reset_timeout = get_failover_timeout()  %% RFC NFR-9: Reset to configured timeout
             };
         false ->
             Breaker#breaker{

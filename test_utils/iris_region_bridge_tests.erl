@@ -7,12 +7,33 @@
 
 %% Test setup/teardown
 setup() ->
-    application:ensure_all_started(mnesia),
-    mnesia:create_schema([node()]),
-    mnesia:start(),
-    iris_region_bridge:init_tables(),
-    ok.
+    %% Stop mnesia if running and delete schema to get clean state
+    catch mnesia:stop(),
+    timer:sleep(100),  %% Allow cleanup to complete
+    %% Use unique temp directory for this test run
+    TmpDir = "/tmp/eunit_mnesia_bridge_" ++ integer_to_list(erlang:system_time(microsecond)),
+    %% Ensure clean directory
+    os:cmd("rm -rf " ++ TmpDir),
+    application:set_env(mnesia, dir, TmpDir),
+    catch mnesia:delete_schema([node()]),
+    ok = mnesia:create_schema([node()]),
+    ok = mnesia:start(),
+    %% Delete tables if they exist (e.g., from failed previous test)
+    catch mnesia:delete_table(cross_region_outbound),
+    catch mnesia:delete_table(cross_region_dead_letter),
+    %% Use the module's init_tables which properly defines records
+    ok = iris_region_bridge:init_tables(),
+    {ok, TmpDir}.
 
+cleanup({ok, TmpDir}) ->
+    %% Clean up tables and stop mnesia
+    catch mnesia:delete_table(cross_region_outbound),
+    catch mnesia:delete_table(cross_region_dead_letter),
+    mnesia:stop(),
+    catch mnesia:delete_schema([node()]),
+    %% Remove temp directory
+    os:cmd("rm -rf " ++ TmpDir),
+    ok;
 cleanup(_) ->
     mnesia:stop(),
     ok.

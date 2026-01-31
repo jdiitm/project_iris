@@ -91,6 +91,45 @@ handle_packet({get_status, TargetUser}, User, _Pid, _Mod) ->
 handle_packet({ack, MsgId}, User, _Pid, _Mod) ->
     {ok, User, [{ack_received, MsgId}]};
 
+%% =============================================================================
+%% Typing Indicators (RFC FR-8: Real-time, best-effort)
+%% =============================================================================
+%% Fire-and-forget: relay to recipient if online, discard if offline.
+%% No durability required - typing is transient state.
+
+handle_packet({typing_start, Target}, User, _Pid, _Mod) when User =/= undefined ->
+    %% Relay typing indicator to target if they're online
+    relay_typing_indicator(Target, User, true),
+    {ok, User, []};
+
+handle_packet({typing_stop, Target}, User, _Pid, _Mod) when User =/= undefined ->
+    %% Relay typing stop to target if they're online
+    relay_typing_indicator(Target, User, false),
+    {ok, User, []};
+
+handle_packet({typing_start, _Target}, undefined, _Pid, _Mod) ->
+    %% Not logged in - ignore
+    {ok, undefined, []};
+
+handle_packet({typing_stop, _Target}, undefined, _Pid, _Mod) ->
+    %% Not logged in - ignore
+    {ok, undefined, []};
+
+%% =============================================================================
+%% Read Receipts (RFC FR-4: Optional, real-time)
+%% =============================================================================
+%% Best-effort: relay to original sender if online, discard if offline.
+%% No durability required - read status is non-critical metadata.
+
+handle_packet({read_receipt, MsgId, OriginalSender}, User, _Pid, _Mod) when User =/= undefined ->
+    %% Relay read receipt to original sender
+    iris_read_receipts:relay_read_receipt(MsgId, User, OriginalSender),
+    {ok, User, []};
+
+handle_packet({read_receipt, _MsgId, _OriginalSender}, undefined, _Pid, _Mod) ->
+    %% Not logged in - ignore
+    {ok, undefined, []};
+
 handle_packet({error, _}, User, _Pid, _Mod) ->
      {ok, User, []}.
 
@@ -197,6 +236,37 @@ fetch_and_cache(TargetUser, Now) ->
     {S, T} = Result,
     ets:insert(presence_cache, {TargetUser, S, T, Now}),
     Result.
+
+%% =============================================================================
+%% Internal: Typing indicator relay (RFC FR-8)
+%% =============================================================================
+%% Best-effort relay: send to recipient if online, discard if offline.
+%% No durability required - typing state is transient.
+
+relay_typing_indicator(Target, Sender, IsTyping) ->
+    %% Look up target in local presence first (fast path)
+    case ets:lookup(local_presence_v2, Target) of
+        [{Target, Pid}] when is_pid(Pid) ->
+            %% Target is on this node - send directly
+            TypingPacket = iris_proto:encode_typing_relay(Sender, IsTyping),
+            Pid ! {deliver_typing, TypingPacket},
+            ok;
+        [] ->
+            %% Target not on this node - check Core for remote routing
+            %% Fire-and-forget: don't wait for result
+            spawn(fun() ->
+                case rpc:call(get_core_node(), iris_core, lookup_user, [Target], 1000) of
+                    {online, TargetNode, TargetPid} when is_pid(TargetPid) ->
+                        %% Send to remote node
+                        TypingPacket = iris_proto:encode_typing_relay(Sender, IsTyping),
+                        catch rpc:cast(TargetNode, erlang, send, [TargetPid, {deliver_typing, TypingPacket}]);
+                    _ ->
+                        %% Target offline - discard typing indicator (expected behavior)
+                        ok
+                end
+            end),
+            ok
+    end.
 
 terminate(User) ->
     case User of

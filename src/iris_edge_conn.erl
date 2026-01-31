@@ -138,6 +138,22 @@ connected(info, {deliver_msg, Msg}, Data = #data{socket = Socket, user = User, p
             end
     end;
 
+%% RFC FR-8: Typing indicator relay (best-effort, fire-and-forget)
+%% No durability required - if send fails, silently discard
+connected(info, {deliver_typing, Packet}, Data = #data{socket = Socket}) ->
+    Now = os:system_time(millisecond),
+    %% Best-effort send - no retry, no ACK tracking
+    _ = gen_tcp:send(Socket, Packet),
+    {keep_state, Data#data{last_activity = Now}};
+
+%% RFC FR-4: Read receipt relay (best-effort, fire-and-forget)
+%% No durability required - if send fails, silently discard
+connected(info, {deliver_read_receipt, Packet}, Data = #data{socket = Socket}) ->
+    Now = os:system_time(millisecond),
+    %% Best-effort send - no retry, no ACK tracking
+    _ = gen_tcp:send(Socket, Packet),
+    {keep_state, Data#data{last_activity = Now}};
+
 connected(info, check_acks, Data = #data{pending_acks = Pending, user = User, retry_timer = OldTimer, last_activity = LastActivity}) ->
     erlang:cancel_timer(OldTimer),
     Now = os:system_time(seconds),

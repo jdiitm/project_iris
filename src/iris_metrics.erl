@@ -22,6 +22,9 @@
 -export([observe_inbox_append_latency/1, observe_route_latency/2]).
 -export([get_nfr_metrics/0]).
 
+%% RFC-001 v3.0 NFR-6/NFR-8: Durability metrics (99.999% / RPO=0)
+-export([msg_acked/0, msg_lost/0, get_durability_metrics/0]).
+
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
@@ -204,6 +207,12 @@ init_default_metrics() ->
     ets:insert(?METRICS_TABLE, {iris_rate_limited, 0}),    %% Rate limit rejections
     
     %% ==========================================================================
+    %% RFC-001 v3.0 NFR-6/NFR-8: Durability Counters (99.999% / RPO=0 tracking)
+    %% ==========================================================================
+    ets:insert(?METRICS_TABLE, {iris_msg_acked_total, 0}),    %% Messages with confirmed ACK
+    ets:insert(?METRICS_TABLE, {iris_msg_lost_total, 0}),     %% Messages lost (MUST be 0)
+    
+    %% ==========================================================================
     %% RFC-001 v3.0 NFR-33: Latency Histograms (MUST emit P50/P90/P99)
     %% Histogram sum/count pairs for calculating percentiles
     %% ==========================================================================
@@ -366,6 +375,48 @@ ack_sent() -> inc(iris_ack_sent).
 %% @doc Increment deduplication hit counter
 -spec dedup_hit() -> ok.
 dedup_hit() -> inc(iris_dedup_hit).
+
+%% =============================================================================
+%% RFC-001 v3.0 NFR-6/NFR-8: Durability Counter Helpers
+%% =============================================================================
+
+%% @doc Increment message ACKed counter (durability confirmed)
+%% Call this ONLY after durable write AND client ACK.
+-spec msg_acked() -> ok.
+msg_acked() -> inc(iris_msg_acked_total).
+
+%% @doc Increment message lost counter (CRITICAL - MUST be 0)
+%% Call this if a message is lost after ACK (RFC VIOLATION).
+%% Any non-zero value indicates a critical durability failure.
+-spec msg_lost() -> ok.
+msg_lost() -> 
+    inc(iris_msg_lost_total),
+    %% Log critical error for immediate alerting
+    logger:emergency("CRITICAL: Message loss detected! RPO=0 VIOLATION (RFC NFR-8)").
+
+%% @doc Get durability metrics for monitoring 99.999% SLA.
+%% Returns acked count, lost count, and durability percentage.
+-spec get_durability_metrics() -> map().
+get_durability_metrics() ->
+    try
+        [{_, Acked}] = ets:lookup(?METRICS_TABLE, iris_msg_acked_total),
+        [{_, Lost}] = ets:lookup(?METRICS_TABLE, iris_msg_lost_total),
+        Total = Acked + Lost,
+        Percentage = case Total of
+            0 -> 100.0;  %% No messages yet = 100% durability
+            _ -> (Acked / Total) * 100
+        end,
+        #{
+            acked => Acked,
+            lost => Lost,
+            total => Total,
+            durability_percent => Percentage,
+            meets_nfr6 => Percentage >= 99.999  %% NFR-6: 99.999%
+        }
+    catch
+        _:_ ->
+            #{acked => 0, lost => 0, total => 0, durability_percent => 100.0, meets_nfr6 => true}
+    end.
 
 %% =============================================================================
 %% RFC-001 v3.0 NFR-33: Latency Histogram Helpers

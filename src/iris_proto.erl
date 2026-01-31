@@ -11,6 +11,12 @@
 -export([encode_upload_prekeys/1, encode_fetch_prekeys/1]).
 -export([encode_prekey_response/1, encode_e2ee_msg/2, encode_e2ee_delivery/2]).
 
+%% Typing Indicators (RFC FR-8, Opcodes 0x30-0x31)
+-export([encode_typing_start/1, encode_typing_stop/1, encode_typing_relay/2]).
+
+%% Read Receipts (RFC FR-4, Opcodes 0x40-0x41)
+-export([encode_read_receipt/2, encode_read_receipt_relay/3]).
+
 -type packet() :: {login, binary()}
                 | {send_message, binary(), binary()}
                 | {cbor_msg, binary(), map()}  %% CBOR extensible message
@@ -18,6 +24,9 @@
                 | {fetch_prekeys, binary()}    %% E2EE: Request keys for user
                 | {prekey_response, map()}     %% E2EE: Key bundle response
                 | {e2ee_msg, binary(), binary(), map()}  %% E2EE: Encrypted message
+                | {typing_start, binary()}     %% RFC FR-8: Typing indicator start
+                | {typing_stop, binary()}      %% RFC FR-8: Typing indicator stop
+                | {read_receipt, binary(), binary()}  %% RFC FR-4: Read receipt (MsgId, From)
                 | {ack, binary()}
                 | {error, term()}.
 
@@ -276,6 +285,56 @@ decode(<<16#24, SenderLen:16, Rest/binary>>) ->
         _ ->
             {more, <<16#24, SenderLen:16, Rest/binary>>}
     end;
+
+%% =============================================================================
+%% Typing Indicators (RFC FR-8: Best-effort, real-time)
+%% =============================================================================
+%% 0x30 | TargetLen(16) | Target -> {typing_start, Target}
+%%       Client starts typing to recipient
+%% 0x31 | TargetLen(16) | Target -> {typing_stop, Target}
+%%       Client stops typing to recipient
+%% Note: These are fire-and-forget, no durability required
+
+decode(<<16#30, TargetLen:16, Rest/binary>>) when TargetLen =< ?MAX_TARGET_LEN ->
+    case Rest of
+        <<Target:TargetLen/binary, Rem/binary>> ->
+            { {typing_start, Target}, Rem };
+        _ ->
+            {more, <<16#30, TargetLen:16, Rest/binary>>}
+    end;
+
+decode(<<16#30, TargetLen:16, _/binary>>) when TargetLen > ?MAX_TARGET_LEN ->
+    { {error, target_too_long}, <<>> };
+
+decode(<<16#31, TargetLen:16, Rest/binary>>) when TargetLen =< ?MAX_TARGET_LEN ->
+    case Rest of
+        <<Target:TargetLen/binary, Rem/binary>> ->
+            { {typing_stop, Target}, Rem };
+        _ ->
+            {more, <<16#31, TargetLen:16, Rest/binary>>}
+    end;
+
+decode(<<16#31, TargetLen:16, _/binary>>) when TargetLen > ?MAX_TARGET_LEN ->
+    { {error, target_too_long}, <<>> };
+
+%% =============================================================================
+%% Read Receipts (RFC FR-4: Optional, real-time)
+%% =============================================================================
+%% 0x40 | MsgIdLen(16) | MsgId | SenderLen(16) | Sender -> {read_receipt, MsgId, Sender}
+%%       Client sends read receipt for a message
+%% Note: Like typing indicators, these are best-effort, fire-and-forget
+
+decode(<<16#40, MsgIdLen:16, Rest/binary>>) when MsgIdLen =< ?MAX_MSGID_LEN ->
+    case Rest of
+        <<MsgId:MsgIdLen/binary, SenderLen:16, Sender:SenderLen/binary, Rem/binary>> 
+          when SenderLen =< ?MAX_TARGET_LEN ->
+            { {read_receipt, MsgId, Sender}, Rem };
+        _ ->
+            {more, <<16#40, MsgIdLen:16, Rest/binary>>}
+    end;
+
+decode(<<16#40, MsgIdLen:16, _/binary>>) when MsgIdLen > ?MAX_MSGID_LEN ->
+    { {error, msgid_too_long}, <<>> };
 
 decode(<<>>) -> {more, <<>>};
 decode(_Bin) -> { {error, unknown_packet}, <<>> }.
@@ -581,3 +640,57 @@ decode_half_float(Half) ->
         _ ->
             math:pow(-1, Sign) * math:pow(2, Exp - 15) * (1 + Mant / 1024)
     end.
+
+%% =============================================================================
+%% Typing Indicator Encoding (RFC FR-8)
+%% =============================================================================
+%% These are best-effort, fire-and-forget indicators.
+%% No durability required - if recipient is offline, indicator is discarded.
+
+%% @doc Encode typing start indicator from client to server
+%% Format: 0x30 | TargetLen(16) | Target
+-spec encode_typing_start(binary()) -> binary().
+encode_typing_start(Target) when is_binary(Target) ->
+    TLen = byte_size(Target),
+    <<16#30, TLen:16, Target/binary>>.
+
+%% @doc Encode typing stop indicator from client to server
+%% Format: 0x31 | TargetLen(16) | Target
+-spec encode_typing_stop(binary()) -> binary().
+encode_typing_stop(Target) when is_binary(Target) ->
+    TLen = byte_size(Target),
+    <<16#31, TLen:16, Target/binary>>.
+
+%% @doc Encode typing relay from server to recipient
+%% Used to relay typing status to the target user
+%% Format: 0x32 | SenderLen(16) | Sender | TypingStatus(8)
+%%         where TypingStatus: 1 = typing, 0 = stopped
+-spec encode_typing_relay(binary(), boolean()) -> binary().
+encode_typing_relay(Sender, IsTyping) when is_binary(Sender) ->
+    SLen = byte_size(Sender),
+    Status = case IsTyping of true -> 1; false -> 0 end,
+    <<16#32, SLen:16, Sender/binary, Status:8>>.
+
+%% =============================================================================
+%% Read Receipt Encoding (RFC FR-4)
+%% =============================================================================
+%% Read receipts are optional (per RFC) and best-effort.
+%% If recipient is offline, receipt is discarded.
+
+%% @doc Encode read receipt from client to server
+%% Format: 0x40 | MsgIdLen(16) | MsgId | SenderLen(16) | Sender
+%% Sender is the original message sender (not the reader)
+-spec encode_read_receipt(binary(), binary()) -> binary().
+encode_read_receipt(MsgId, OriginalSender) when is_binary(MsgId), is_binary(OriginalSender) ->
+    MsgIdLen = byte_size(MsgId),
+    SenderLen = byte_size(OriginalSender),
+    <<16#40, MsgIdLen:16, MsgId/binary, SenderLen:16, OriginalSender/binary>>.
+
+%% @doc Encode read receipt relay from server to original sender
+%% Format: 0x41 | MsgIdLen(16) | MsgId | ReaderLen(16) | Reader
+%% Tells the original sender that Reader has read the message
+-spec encode_read_receipt_relay(binary(), binary(), integer()) -> binary().
+encode_read_receipt_relay(MsgId, Reader, Timestamp) when is_binary(MsgId), is_binary(Reader) ->
+    MsgIdLen = byte_size(MsgId),
+    ReaderLen = byte_size(Reader),
+    <<16#41, MsgIdLen:16, MsgId/binary, ReaderLen:16, Reader/binary, Timestamp:64>>.
