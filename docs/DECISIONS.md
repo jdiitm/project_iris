@@ -1,13 +1,19 @@
 # Architectural Decisions & Design Rationale
 
-**Last Updated**: 2026-01-24  
-**Status**: Current
+**Last Updated**: 2026-01-30  
+**Status**: Current (RFC-001 v3.0 Aligned)
 
 ---
 
 ## Executive Summary
 
 Project Iris is a global-scale messaging platform implementing **Hardened AP** semantics with optional **CP mode** for critical data. This document records key architectural decisions and their rationale.
+
+**Key Architectural Principles (RFC-001 v3.0)**:
+- **Server as Log**: The server is an append-only, ordered Inbox Log per user
+- **Client as Oracle**: Encryption, decryption, and view state live on client
+- **Sync over Push**: Synchronization is the primary primitive; push is optimization
+- **User ID Partitioning**: All data partitioned by User ID (not Conversation ID)
 
 ---
 
@@ -108,7 +114,131 @@ iris_store:put(Table, Key, Value, #{durability => best_effort}) %% async
 
 ---
 
-## 4. Router Pool Auto-Tuning
+## 4. Partitioning Strategy (RFC-001 v3.0 Section 5.2)
+
+### Decision: User ID Partitioning with Jump Consistent Hash + Vnodes
+
+**Primary Decision**: Partition all user data by **User ID**, not Conversation ID.
+
+**Rationale - Why User ID, not Conversation ID?**
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                        OPERATION FREQUENCY ANALYSIS                          │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ Operation              │ Frequency │ Partition by User │ Partition by Conv  │
+├────────────────────────┼───────────┼───────────────────┼────────────────────┤
+│ Sync my inbox          │ 90%       │ Single shard ✓    │ N shards (scatter) │
+│ Send message           │ 8%        │ 2 shards (async)  │ Single shard ✓     │
+│ Fetch conversation     │ 2%        │ Single shard ✓    │ Single shard ✓     │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+Key insight: **"Sync my inbox"** is the dominant operation at 90% of all traffic.
+- User ID partitioning makes inbox sync a single-shard query (fast, local)
+- Conversation partitioning would require scatter-gather across N shards (slow, expensive)
+
+**Hash Function: Jump Consistent Hash**
+
+```erlang
+%% Jump Consistent Hash implementation in iris_shard.erl
+%% Properties:
+%% - O(ln(N)) time complexity
+%% - Only 1/N keys move when adding new shard (vs 100% for naive modulo)
+%% - No external dependencies
+jump_consistent_hash(Key, NumBuckets) ->
+    Hash = erlang:phash2(Key, 16#100000000),
+    jump_consistent_hash_loop(Hash, NumBuckets, -1, 0).
+```
+
+**Why Jump Consistent Hash over alternatives?**
+
+| Algorithm | Data Movement on Scale | Memory | Complexity |
+|-----------|------------------------|--------|------------|
+| Modulo `hash(k) % N` | 100% (catastrophic) | O(1) | Trivial |
+| Consistent Hash Ring | ~1/N | O(N) | Moderate |
+| **Jump Consistent Hash** | ~1/N | O(1) | Moderate |
+| Rendezvous Hash | ~1/N | O(N) | Higher |
+
+**Virtual Nodes (Vnodes)**
+
+**Recommendation**: 256-1024 vnodes per physical node cluster.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         VNODE DISTRIBUTION                                   │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  Physical Node 1        Physical Node 2        Physical Node 3              │
+│  ┌─────────────┐        ┌─────────────┐        ┌─────────────┐              │
+│  │ vnode 0-85  │        │ vnode 86-170│        │ vnode 171-255│             │
+│  │ (86 vnodes) │        │ (85 vnodes) │        │ (85 vnodes)  │             │
+│  └─────────────┘        └─────────────┘        └─────────────┘              │
+│                                                                              │
+│  Adding Node 4: Only ~64 vnodes move (25%), not 100%                        │
+│  ┌─────────────┐        ┌─────────────┐        ┌─────────────┐              │
+│  │ vnode 0-63  │        │ vnode 64-127│        │ vnode 128-191│             │
+│  └─────────────┘        └─────────────┘        └─────────────┘              │
+│                         ┌─────────────┐                                      │
+│                         │vnode 192-255│  (New Node 4)                        │
+│                         └─────────────┘                                      │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+**Benefits of Vnodes**:
+1. **Smooth distribution**: Even with heterogeneous node capacity
+2. **Minimal rebalancing**: Adding a node moves 1/(N+1) of data
+3. **Failure handling**: Vnodes from failed node spread across all remaining nodes
+4. **Capacity planning**: Can assign more vnodes to larger machines
+
+**Vnode Sizing Recommendations**:
+
+| Cluster Size | Vnodes/Cluster | Vnodes/Node | Rationale |
+|--------------|----------------|-------------|-----------|
+| 3-10 nodes | 256 | 26-85 | Minimum for smooth distribution |
+| 10-50 nodes | 512 | 10-51 | Standard production |
+| 50-100 nodes | 1024 | 10-20 | Large clusters |
+| 100+ nodes | 2048+ | 20+ | Hyperscale |
+
+**Configuration**:
+
+```erlang
+{iris_core, [
+    %% Number of virtual nodes (vnodes) in the hash ring
+    {vnode_count, 256},
+    
+    %% Replication factor (how many nodes store each vnode)
+    {replication_factor, 3},
+    
+    %% Partitioning algorithm
+    {partition_algorithm, jump_consistent_hash}  %% Options: modulo, consistent_ring, jump_consistent_hash
+]}
+```
+
+### Rebalancing During Scale Operations
+
+**Principle**: Rebalancing must NEVER impact live traffic.
+
+**Strategy**: Background, throttled vnode migration
+
+```erlang
+%% iris_shard.erl - Rebalancing configuration
+-define(REBALANCE_BATCH_SIZE, 100).      %% Keys per batch
+-define(REBALANCE_DELAY_MS, 10).         %% Delay between batches
+-define(REBALANCE_MAX_RATE, 10000).      %% Max keys/second
+```
+
+**Process**:
+1. Calculate new vnode assignment
+2. Mark affected vnodes as "migrating"
+3. Copy data in background batches
+4. Dual-write during migration (old + new location)
+5. Switch reads to new location
+6. Clean up old copies
+
+---
+
+## 5. Router Pool Auto-Tuning
 
 ### Decision: Dynamic Pool Size Based on Scheduler Count
 
@@ -132,7 +262,7 @@ get_pool_size() ->
 
 ---
 
-## 5. Data Safety
+## 6. Data Safety
 
 ### Decision: Safe Table Recovery with `allow_table_nuke` Gate
 
@@ -159,7 +289,7 @@ nuke_and_recreate_table(Table) ->
 
 ---
 
-## 6. Test Infrastructure
+## 7. Test Infrastructure
 
 ### Decision: Deterministic Test Execution
 
@@ -182,7 +312,7 @@ nuke_and_recreate_table(Table) ->
 
 ---
 
-## 7. Deferred Work
+## 8. Deferred Work
 
 ### P0 (Blocked)
 
@@ -207,7 +337,7 @@ nuke_and_recreate_table(Table) ->
 
 ---
 
-## 8. Module Overview
+## 9. Module Overview
 
 ### New Modules (2026-01-24)
 
@@ -229,7 +359,7 @@ nuke_and_recreate_table(Table) ->
 
 ---
 
-## 9. Deferred Architectural Work (Forensic Audit 2026-01-29)
+## 10. Deferred Architectural Work (Forensic Audit 2026-01-29)
 
 The Chief Architect forensic audit identified several items requiring separate RFCs or infrastructure work. These are tracked here for future implementation.
 

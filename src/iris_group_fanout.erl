@@ -29,6 +29,10 @@
 -define(BATCH_SIZE, 25).
 -define(PARALLEL_WORKERS, 4).
 
+%% RFC-001 v3.0 Section 8: Fan-out rate limit (1000 Inboxes/sec/worker)
+-define(FANOUT_RATE_LIMIT, 1000).
+-define(FANOUT_INTERVAL_MS, 1).  %% Minimum ms between deliveries for rate limiting
+
 -record(fanout_stats, {
     group_id       :: binary(),
     total_members  :: integer(),
@@ -134,20 +138,42 @@ get_delivery_stats(GroupId) ->
 %% Fan-out Strategies
 %% =============================================================================
 
-%% @doc Serial delivery for small groups.
+%% @doc Serial delivery for small groups with rate limiting.
+%% RFC-001 v3.0 Section 8: Max 1000 Inboxes/sec/worker
 fanout_serial(Recipients, SenderId, Message) ->
-    lists:foldl(
-        fun(Member, {D, O, F}) ->
-            UserId = maps:get(user_id, Member),
-            case deliver_to_user(UserId, SenderId, Message) of
-                {delivered, _} -> {D + 1, O, F};
-                {offline_stored, _} -> {D, O + 1, F};
-                {error, _} -> {D, O, F + 1}
-            end
-        end,
-        {0, 0, 0},
-        Recipients
-    ).
+    fanout_serial(Recipients, SenderId, Message, {0, 0, 0}, erlang:monotonic_time(millisecond), 0).
+
+fanout_serial([], _SenderId, _Message, Acc, _LastTime, _Count) ->
+    Acc;
+fanout_serial([Member | Rest], SenderId, Message, {D, O, F}, LastTime, Count) ->
+    %% Rate limiting: after FANOUT_RATE_LIMIT deliveries per second, throttle
+    {NewLastTime, NewCount} = case Count >= ?FANOUT_RATE_LIMIT of
+        true ->
+            %% Check if a second has passed
+            Now = erlang:monotonic_time(millisecond),
+            Elapsed = Now - LastTime,
+            case Elapsed < 1000 of
+                true ->
+                    %% Throttle - sleep for remaining time
+                    timer:sleep(1000 - Elapsed),
+                    {erlang:monotonic_time(millisecond), 0};
+                false ->
+                    %% Second passed, reset counter
+                    {Now, 0}
+            end;
+        false ->
+            {LastTime, Count}
+    end,
+    
+    UserId = maps:get(user_id, Member),
+    case deliver_to_user(UserId, SenderId, Message) of
+        {delivered, _} -> 
+            fanout_serial(Rest, SenderId, Message, {D + 1, O, F}, NewLastTime, NewCount + 1);
+        {offline_stored, _} -> 
+            fanout_serial(Rest, SenderId, Message, {D, O + 1, F}, NewLastTime, NewCount + 1);
+        {error, _} -> 
+            fanout_serial(Rest, SenderId, Message, {D, O, F + 1}, NewLastTime, NewCount + 1)
+    end.
 
 %% @doc Parallel batch delivery for medium groups.
 fanout_parallel_batches(Recipients, SenderId, Message) ->

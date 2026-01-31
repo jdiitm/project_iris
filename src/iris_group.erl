@@ -45,14 +45,20 @@
     %% AUDIT FIX: Member reconnect and key sync
     handle_member_reconnect/2,  %% (GroupId, UserId) -> {ok, [KeyUpdate]} | {error, Reason}
     get_sender_keys_since/2,    %% (GroupId, Since) -> [{UserId, KeyId, SenderKey}]
-    update_member_last_seen/2   %% (GroupId, UserId) -> ok
+    update_member_last_seen/2,  %% (GroupId, UserId) -> ok
+    
+    %% RFC-001 v3.0: E2EE group detection
+    has_sender_keys/1           %% (GroupId) -> boolean()
 ]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
 -define(SERVER, ?MODULE).
--define(MAX_GROUP_MEMBERS, 1000).
+%% Use centralized limits from iris_limits module (RFC-001 v3.0 Section 8)
+%% Legacy defines kept for backward compatibility but actual limits come from iris_limits
+-define(MAX_GROUP_MEMBERS, 1000).         %% Broadcast groups (see iris_limits:max_broadcast_group_members())
+-define(MAX_E2EE_GROUP_MEMBERS, 256).     %% E2EE groups (see iris_limits:max_e2ee_group_members())
 -define(MAX_GROUP_NAME_LEN, 256).
 -define(MAX_GROUPS_PER_USER, 100).
 
@@ -495,38 +501,69 @@ do_add_member(GroupId, UserId, AddedBy) ->
                 true -> {error, already_member};
                 false ->
                     %% Check member limit
+                    %% RFC-001 v3.0 Section 8: Hard limits for group sizes
+                    %% - E2EE groups: 256 members (N² complexity for Sender Key distribution)
+                    %% - Broadcast groups: 10,000 members (server-side fan-out, no E2EE)
                     case get_group(GroupId) of
                         {error, not_found} -> {error, group_not_found};
-                        {ok, #{member_count := Count}} when Count >= ?MAX_GROUP_MEMBERS ->
-                            {error, group_full};
-                        {ok, _} ->
-                            Now = erlang:system_time(second),
-                            F = fun() ->
-                                %% Add member with last_seen initialized
-                                Member = #group_member{
-                                    key = {GroupId, UserId},
-                                    role = member,
-                                    joined_at = Now,
-                                    added_by = AddedBy,
-                                    last_seen = Now  %% AUDIT FIX: Initialize last_seen
-                                },
-                                mnesia:write(group_member, Member, write),
-                                
-                                %% Update member count
-                                [Group] = mnesia:read(group, GroupId, write),
-                                UpdatedGroup = Group#group{
-                                    member_count = Group#group.member_count + 1
-                                },
-                                mnesia:write(group, UpdatedGroup, write),
-                                ok
+                        {ok, #{member_count := Count}} ->
+                            %% Determine group type and apply appropriate limit
+                            %% Check if group has E2EE sender keys to determine type
+                            IsE2EE = has_sender_keys(GroupId),
+                            Limit = case IsE2EE of
+                                true -> ?MAX_E2EE_GROUP_MEMBERS;
+                                false -> ?MAX_GROUP_MEMBERS
                             end,
-                            
-                            case mnesia:transaction(F) of
-                                {atomic, ok} -> ok;
-                                {aborted, Reason} -> {error, Reason}
+                            case Count >= Limit of
+                                true -> 
+                                    {error, {group_full, #{
+                                        type => case IsE2EE of true -> e2ee; false -> broadcast end, 
+                                        limit => Limit, 
+                                        current => Count
+                                    }}};
+                                false ->
+                                    Now = erlang:system_time(second),
+                                    F = fun() ->
+                                        %% Add member with last_seen initialized
+                                        Member = #group_member{
+                                            key = {GroupId, UserId},
+                                            role = member,
+                                            joined_at = Now,
+                                            added_by = AddedBy,
+                                            last_seen = Now  %% AUDIT FIX: Initialize last_seen
+                                        },
+                                        mnesia:write(group_member, Member, write),
+                                        
+                                        %% Update member count
+                                        [Group] = mnesia:read(group, GroupId, write),
+                                        UpdatedGroup = Group#group{
+                                            member_count = Group#group.member_count + 1
+                                        },
+                                        mnesia:write(group, UpdatedGroup, write),
+                                        ok
+                                    end,
+                                    
+                                    case mnesia:transaction(F) of
+                                        {atomic, ok} -> ok;
+                                        {aborted, Reason} -> {error, Reason}
+                                    end
                             end
                     end
             end
+    end.
+
+%% @doc Check if a group has sender keys (indicating E2EE usage)
+-spec has_sender_keys(binary()) -> boolean().
+has_sender_keys(GroupId) ->
+    %% Check if any sender keys exist for this group
+    MatchSpec = [{
+        #group_sender_key{key = {GroupId, '_', '_'}, _ = '_'},
+        [],
+        [true]
+    }],
+    case mnesia:dirty_select(group_sender_key, MatchSpec) of
+        [_|_] -> true;
+        [] -> false
     end.
 
 do_remove_member(GroupId, UserId, RemovedBy) ->
