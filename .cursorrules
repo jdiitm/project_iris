@@ -5,6 +5,60 @@ Apply these instructions **whenever you suggest code changes that are ready to b
 
 ---
 
+## SYSTEM-FIRST IMPLEMENTATION RULE
+
+Before editing any files:
+
+### Phase 1 — System Impact Scan (NO CODE)
+- Follow the System Impact Scan defined in `claude.md`
+- Do not modify files
+- Do not suggest commits
+- Output only analysis sections
+
+If more than **5 files** appear necessary:
+- Stop
+- Ask for confirmation before proceeding
+
+---
+
+### Phase 2 — Scoped Implementation
+Only after Phase 1 is acknowledged:
+
+- Modify **only the files identified**
+- Do NOT rescan the repository
+- Do NOT introduce unrelated refactors
+- Prefer completeness over minimal diff
+- If a missing file is discovered:
+  - Stop
+  - Report it
+  - Do not guess
+
+---
+
+## COST & SCOPE SAFETY
+
+- If total changes exceed ~300 lines, stop and summarize instead
+- Avoid broad “search-and-edit” operations unless explicitly requested
+- Do not rewrite files for stylistic reasons unless asked
+
+---
+
+## COMPLETENESS CHECK (MANDATORY, NO CODE)
+
+Before stating work is complete, explicitly confirm:
+
+- Feature is reachable from a real entry point
+- Runtime configuration enables it
+- No dead or orphaned code paths remain
+- Tests reflect actual execution paths, not mocks only
+
+Respond with:
+✔ Confirmed  
+or  
+❌ Not confirmed (explain)
+
+---
+
 ## Required Output Before Any Commit Suggestion
 
 Before suggesting a commit message or finalizing changes, ALWAYS generate the following sections in Markdown:
@@ -51,9 +105,6 @@ Provide a **concise, user-facing reasoning summary** that explains:
 - Assumptions made
 - Constraints considered
 
-⚠️ Do NOT expose internal chain-of-thought.
-⚠️ Keep this as a clean, high-level explanation suitable for documentation or PR review.
-
 ---
 
 ### 6. Risk Assessment
@@ -66,3 +117,8 @@ Provide a **concise, user-facing reasoning summary** that explains:
 ### 7. Suggested Commit Message
 Follow this format:
 
+<type>(<scope>): <short summary>
+
+<body - what and why>
+
+<footer - breaking changes, issues closed>
