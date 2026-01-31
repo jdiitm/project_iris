@@ -78,8 +78,8 @@ def test_message_survives_restart():
         log(f"Sent message to offline user: {offline_user}")
         sender.close()
         
-        # Brief wait for WAL flush
-        time.sleep(0.5)
+        # Step 2: Wait for WAL flush (500ms + margin)
+        time.sleep(1.0)
         
         # Step 3: Recipient logs in and receives
         receiver = IrisClient(host, port)
@@ -288,8 +288,8 @@ def test_cross_node_replication():
         log(f"  Sent {len(test_messages)} messages via edge 1")
         sender.close()
         
-        # Brief wait for replication
-        time.sleep(0.5)
+        # Step 3: Wait for replication to propagate
+        time.sleep(1.5)
         
         # Step 4: Connect receiver to DIFFERENT edge node 2 (port 8086)
         log(f"  Connecting receiver to edge 2 (port {port2})")

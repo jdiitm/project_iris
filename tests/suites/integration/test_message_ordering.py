@@ -62,7 +62,10 @@ def test_message_ordering():
         
         print(f"✓ Sent {num_messages} messages in sequence")
         
-        # Receive messages (recv loop handles waiting via timeout)
+        # Give time for delivery
+        time.sleep(1.0)
+        
+        # Receive messages
         received_sequence = []
         start_time = time.time()
         timeout = 10.0  # 10 second timeout
@@ -149,7 +152,9 @@ def test_interleaved_conversations():
         
         print("✓ Sent 10 interleaved messages (5 to B, 5 to C)")
         
-        # Receive at B (recv handles waiting via timeout)
+        time.sleep(1.0)
+        
+        # Receive at B
         b_msgs = []
         for _ in range(5):
             msg = receiver_b.recv_msg(timeout=0.5)

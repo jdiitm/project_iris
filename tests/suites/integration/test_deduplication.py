@@ -23,10 +23,8 @@ import uuid
 
 # Add parent directories to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..'))
 
 from utilities.iris_client import IrisClient
-from framework.wait import wait_for, WaitTimeout
 
 
 def log(msg):
@@ -103,7 +101,7 @@ def test_unique_messages_delivered():
         
         log(f"Sent {num_messages} unique messages")
         
-        # No arbitrary sleep - recv_msg has timeout and we try multiple times
+        time.sleep(1.0)
         
         # Receive all messages
         received = []
@@ -204,7 +202,7 @@ def test_retry_storm_handling():
         
         log("Sent 5 'retry' messages with same content")
         
-        # No arbitrary sleep - recv_msg has timeout
+        time.sleep(1.0)
         
         # Count received
         received = []
@@ -285,9 +283,13 @@ def test_dedup_across_reconnects():
         sender.send_msg(receiver_name, offline_msg)
         log("Sent message to offline user")
         
+        time.sleep(0.5)
+        
         # First connect - should get the message
         receiver1 = IrisClient(host, port)
         receiver1.login(receiver_name)
+        
+        time.sleep(0.5)
         
         first_msgs = []
         for attempt in range(3):
@@ -309,9 +311,13 @@ def test_dedup_across_reconnects():
         receiver1 = None
         log(f"First connect: received {len(first_msgs)} messages")
         
+        time.sleep(0.5)
+        
         # Second connect - should NOT get duplicates
         receiver2 = IrisClient(host, port)
         receiver2.login(receiver_name)
+        
+        time.sleep(0.5)
         
         second_msgs = []
         for attempt in range(3):

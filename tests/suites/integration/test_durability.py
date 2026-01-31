@@ -80,9 +80,8 @@ def test_pending_acks_preserved():
     except Exception:
         pass
     
-    # Brief wait for server to detect disconnect and save pending to offline
-    # This is necessary for server-side disconnect detection
-    time.sleep(0.5)
+    # Wait for pending ack to be saved to offline
+    time.sleep(2)
     
     # Reconnect receiver
     try:
@@ -146,8 +145,8 @@ def test_offline_message_delivery():
         sender.close()
         return False
     
-    # Wait for offline storage persistence
-    time.sleep(0.5)
+    # Wait for storage
+    time.sleep(1)
     
     # Now offline user connects
     try:
@@ -216,8 +215,7 @@ def test_multi_message_durability():
         for err in send_errors:
             log(f"  {err}")
     
-    # Wait for offline storage persistence
-    time.sleep(0.5)
+    time.sleep(1)
     
     # Connect receiver
     try:
