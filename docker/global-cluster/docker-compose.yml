@@ -17,6 +17,9 @@ x-core-defaults: &core-defaults
   working_dir: /app
   environment:
     - IRIS_COOKIE=${IRIS_COOKIE:-iris_secret}
+  # NET_ADMIN capability required for iptables partition testing
+  cap_add:
+    - NET_ADMIN
 
 x-edge-defaults: &edge-defaults
   image: erlang:25-alpine
@@ -324,6 +327,40 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     command: netem --duration 8h --delay 100ms:10ms edge-saopaulo
+
+  # ==========================================================================
+  # PARTITION CHAOS (Network Partitions)
+  # ==========================================================================
+  # Use: docker compose --profile chaos-partition up pumba-partition-west
+  
+  # Partition West region from backbone (creates minority partition)
+  pumba-partition-west:
+    image: gaiaadm/pumba
+    container_name: pumba-partition-west
+    profiles: ["chaos-partition"]
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    # 100% packet loss for 30 seconds
+    command: netem --duration 30s loss --percent 100 core-west-1 core-west-2
+
+  # Partition EU region from backbone (cross-region chaos)
+  pumba-partition-eu:
+    image: gaiaadm/pumba
+    container_name: pumba-partition-eu
+    profiles: ["chaos-partition"]
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    command: netem --duration 30s loss --percent 100 core-eu-1 core-eu-2
+
+  # Flapping backbone (intermittent connectivity)
+  pumba-backbone-flap:
+    image: gaiaadm/pumba
+    container_name: pumba-backbone-flap
+    profiles: ["chaos-flap"]
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    # 50% packet loss to simulate flapping link
+    command: netem --duration 60s loss --percent 50 --correlation 25 core-east-1 core-west-1 core-eu-1
 
 networks:
   iris_east:
