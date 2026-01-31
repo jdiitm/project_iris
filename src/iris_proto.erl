@@ -11,11 +11,17 @@
 -export([encode_upload_prekeys/1, encode_fetch_prekeys/1]).
 -export([encode_prekey_response/1, encode_e2ee_msg/2, encode_e2ee_delivery/2]).
 
-%% Typing Indicators (RFC FR-8, Opcodes 0x30-0x31)
+%% Typing Indicators (Best-effort features, Opcodes 0x70-0x72)
 -export([encode_typing_start/1, encode_typing_stop/1, encode_typing_relay/2]).
 
-%% Read Receipts (RFC FR-4, Opcodes 0x40-0x41)
+%% Read Receipts (Best-effort features, Opcodes 0x74-0x75)
 -export([encode_read_receipt/2, encode_read_receipt_relay/3]).
+
+%% Group Messaging (RFC-001-AMENDMENT-001, Opcodes 0x30-0x36)
+-export([encode_group_create/1, encode_group_join/2]).
+-export([encode_group_leave/1, encode_group_msg/3]).
+-export([encode_group_roster_request/1, encode_group_roster_response/2]).
+-export([encode_sender_key_dist/2]).
 
 -type packet() :: {login, binary()}
                 | {send_message, binary(), binary()}
@@ -24,9 +30,15 @@
                 | {fetch_prekeys, binary()}    %% E2EE: Request keys for user
                 | {prekey_response, map()}     %% E2EE: Key bundle response
                 | {e2ee_msg, binary(), binary(), map()}  %% E2EE: Encrypted message
-                | {typing_start, binary()}     %% RFC FR-8: Typing indicator start
-                | {typing_stop, binary()}      %% RFC FR-8: Typing indicator stop
-                | {read_receipt, binary(), binary()}  %% RFC FR-4: Read receipt (MsgId, From)
+                | {group_create, binary()}     %% Group: Create group (0x30)
+                | {group_join, binary(), binary()} %% Group: Join notification (0x31)
+                | {group_leave, binary()}      %% Group: Leave group (0x32)
+                | {group_msg, binary(), binary(), map()} %% Group: Encrypted message (0x33)
+                | {group_roster, binary()}     %% Group: Request roster (0x35)
+                | {sender_key_dist, binary(), binary()} %% Group: Sender key distribution (0x36)
+                | {typing_start, binary()}     %% Typing indicator start (0x70)
+                | {typing_stop, binary()}      %% Typing indicator stop (0x71)
+                | {read_receipt, binary(), binary()}  %% Read receipt (0x74)
                 | {ack, binary()}
                 | {error, term()}.
 
@@ -287,53 +299,157 @@ decode(<<16#24, SenderLen:16, Rest/binary>>) ->
     end;
 
 %% =============================================================================
-%% Typing Indicators (RFC FR-8: Best-effort, real-time)
+%% Group Messaging (RFC-001-AMENDMENT-001, Opcodes 0x30-0x36)
 %% =============================================================================
-%% 0x30 | TargetLen(16) | Target -> {typing_start, Target}
+%% 0x30 | NameLen(16) | GroupName -> {group_create, GroupName}
+%%       Client requests to create a new group
+%% 0x31 | GroupIdLen(16) | GroupId | UserLen(16) | User -> {group_join, GroupId, User}
+%%       Server notification: User joined group
+%% 0x32 | GroupIdLen(16) | GroupId -> {group_leave, GroupId}
+%%       Client leaves a group
+%% 0x33 | GroupIdLen(16) | GroupId | HeaderLen(16) | Header(CBOR) | CipherLen(32) | Ciphertext
+%%       -> {group_msg, GroupId, Ciphertext, Header}
+%% 0x35 | GroupIdLen(16) | GroupId -> {group_roster, GroupId}
+%%       Client requests group roster
+%% 0x36 | GroupIdLen(16) | GroupId | KeyDataLen(32) | KeyData(CBOR)
+%%       -> {sender_key_dist, GroupId, KeyData}
+
+%% 0x30: Group Create
+decode(<<16#30, NameLen:16, Rest/binary>>) when NameLen =< ?MAX_TARGET_LEN ->
+    case Rest of
+        <<GroupName:NameLen/binary, Rem/binary>> ->
+            { {group_create, GroupName}, Rem };
+        _ ->
+            {more, <<16#30, NameLen:16, Rest/binary>>}
+    end;
+
+decode(<<16#30, NameLen:16, _/binary>>) when NameLen > ?MAX_TARGET_LEN ->
+    { {error, group_name_too_long}, <<>> };
+
+%% 0x31: Group Join (Server -> Client notification)
+decode(<<16#31, GroupIdLen:16, Rest/binary>>) when GroupIdLen =< ?MAX_TARGET_LEN ->
+    case Rest of
+        <<GroupId:GroupIdLen/binary, UserLen:16, User:UserLen/binary, Rem/binary>> 
+          when UserLen =< ?MAX_USERNAME_LEN ->
+            { {group_join, GroupId, User}, Rem };
+        _ ->
+            {more, <<16#31, GroupIdLen:16, Rest/binary>>}
+    end;
+
+decode(<<16#31, GroupIdLen:16, _/binary>>) when GroupIdLen > ?MAX_TARGET_LEN ->
+    { {error, group_id_too_long}, <<>> };
+
+%% 0x32: Group Leave
+decode(<<16#32, GroupIdLen:16, Rest/binary>>) when GroupIdLen =< ?MAX_TARGET_LEN ->
+    case Rest of
+        <<GroupId:GroupIdLen/binary, Rem/binary>> ->
+            { {group_leave, GroupId}, Rem };
+        _ ->
+            {more, <<16#32, GroupIdLen:16, Rest/binary>>}
+    end;
+
+decode(<<16#32, GroupIdLen:16, _/binary>>) when GroupIdLen > ?MAX_TARGET_LEN ->
+    { {error, group_id_too_long}, <<>> };
+
+%% 0x33: Group Message (Encrypted)
+decode(<<16#33, GroupIdLen:16, Rest/binary>>) when GroupIdLen =< ?MAX_TARGET_LEN ->
+    case Rest of
+        <<GroupId:GroupIdLen/binary, HeaderLen:16, _/binary>> 
+          when HeaderLen > ?MAX_E2EE_HEADER_LEN ->
+            { {error, group_header_too_large}, <<>> };
+        <<GroupId:GroupIdLen/binary, HeaderLen:16, HeaderBytes:HeaderLen/binary,
+          CipherLen:32, _/binary>> when CipherLen > ?MAX_E2EE_CIPHER_LEN ->
+            { {error, group_ciphertext_too_large}, <<>> };
+        <<GroupId:GroupIdLen/binary, HeaderLen:16, HeaderBytes:HeaderLen/binary,
+          CipherLen:32, Ciphertext:CipherLen/binary, Rem/binary>> ->
+            case cbor_decode(HeaderBytes) of
+                {ok, Header} when is_map(Header) ->
+                    { {group_msg, GroupId, Ciphertext, Header}, Rem };
+                _ ->
+                    { {error, invalid_group_header}, <<>> }
+            end;
+        _ ->
+            {more, <<16#33, GroupIdLen:16, Rest/binary>>}
+    end;
+
+decode(<<16#33, GroupIdLen:16, _/binary>>) when GroupIdLen > ?MAX_TARGET_LEN ->
+    { {error, group_id_too_long}, <<>> };
+
+%% 0x35: Group Roster Request
+decode(<<16#35, GroupIdLen:16, Rest/binary>>) when GroupIdLen =< ?MAX_TARGET_LEN ->
+    case Rest of
+        <<GroupId:GroupIdLen/binary, Rem/binary>> ->
+            { {group_roster, GroupId}, Rem };
+        _ ->
+            {more, <<16#35, GroupIdLen:16, Rest/binary>>}
+    end;
+
+decode(<<16#35, GroupIdLen:16, _/binary>>) when GroupIdLen > ?MAX_TARGET_LEN ->
+    { {error, group_id_too_long}, <<>> };
+
+%% 0x36: Sender Key Distribution
+decode(<<16#36, GroupIdLen:16, Rest/binary>>) when GroupIdLen =< ?MAX_TARGET_LEN ->
+    case Rest of
+        <<GroupId:GroupIdLen/binary, KeyDataLen:32, _/binary>> 
+          when KeyDataLen > ?MAX_KEYBUNDLE_LEN ->
+            { {error, sender_key_too_large}, <<>> };
+        <<GroupId:GroupIdLen/binary, KeyDataLen:32, KeyData:KeyDataLen/binary, Rem/binary>> ->
+            { {sender_key_dist, GroupId, KeyData}, Rem };
+        _ ->
+            {more, <<16#36, GroupIdLen:16, Rest/binary>>}
+    end;
+
+decode(<<16#36, GroupIdLen:16, _/binary>>) when GroupIdLen > ?MAX_TARGET_LEN ->
+    { {error, group_id_too_long}, <<>> };
+
+%% =============================================================================
+%% Typing Indicators (Best-effort, Opcodes 0x70-0x72)
+%% =============================================================================
+%% 0x70 | TargetLen(16) | Target -> {typing_start, Target}
 %%       Client starts typing to recipient
-%% 0x31 | TargetLen(16) | Target -> {typing_stop, Target}
+%% 0x71 | TargetLen(16) | Target -> {typing_stop, Target}
 %%       Client stops typing to recipient
 %% Note: These are fire-and-forget, no durability required
 
-decode(<<16#30, TargetLen:16, Rest/binary>>) when TargetLen =< ?MAX_TARGET_LEN ->
+decode(<<16#70, TargetLen:16, Rest/binary>>) when TargetLen =< ?MAX_TARGET_LEN ->
     case Rest of
         <<Target:TargetLen/binary, Rem/binary>> ->
             { {typing_start, Target}, Rem };
         _ ->
-            {more, <<16#30, TargetLen:16, Rest/binary>>}
+            {more, <<16#70, TargetLen:16, Rest/binary>>}
     end;
 
-decode(<<16#30, TargetLen:16, _/binary>>) when TargetLen > ?MAX_TARGET_LEN ->
+decode(<<16#70, TargetLen:16, _/binary>>) when TargetLen > ?MAX_TARGET_LEN ->
     { {error, target_too_long}, <<>> };
 
-decode(<<16#31, TargetLen:16, Rest/binary>>) when TargetLen =< ?MAX_TARGET_LEN ->
+decode(<<16#71, TargetLen:16, Rest/binary>>) when TargetLen =< ?MAX_TARGET_LEN ->
     case Rest of
         <<Target:TargetLen/binary, Rem/binary>> ->
             { {typing_stop, Target}, Rem };
         _ ->
-            {more, <<16#31, TargetLen:16, Rest/binary>>}
+            {more, <<16#71, TargetLen:16, Rest/binary>>}
     end;
 
-decode(<<16#31, TargetLen:16, _/binary>>) when TargetLen > ?MAX_TARGET_LEN ->
+decode(<<16#71, TargetLen:16, _/binary>>) when TargetLen > ?MAX_TARGET_LEN ->
     { {error, target_too_long}, <<>> };
 
 %% =============================================================================
-%% Read Receipts (RFC FR-4: Optional, real-time)
+%% Read Receipts (Best-effort, Opcodes 0x74-0x75)
 %% =============================================================================
-%% 0x40 | MsgIdLen(16) | MsgId | SenderLen(16) | Sender -> {read_receipt, MsgId, Sender}
+%% 0x74 | MsgIdLen(16) | MsgId | SenderLen(16) | Sender -> {read_receipt, MsgId, Sender}
 %%       Client sends read receipt for a message
 %% Note: Like typing indicators, these are best-effort, fire-and-forget
 
-decode(<<16#40, MsgIdLen:16, Rest/binary>>) when MsgIdLen =< ?MAX_MSGID_LEN ->
+decode(<<16#74, MsgIdLen:16, Rest/binary>>) when MsgIdLen =< ?MAX_MSGID_LEN ->
     case Rest of
         <<MsgId:MsgIdLen/binary, SenderLen:16, Sender:SenderLen/binary, Rem/binary>> 
           when SenderLen =< ?MAX_TARGET_LEN ->
             { {read_receipt, MsgId, Sender}, Rem };
         _ ->
-            {more, <<16#40, MsgIdLen:16, Rest/binary>>}
+            {more, <<16#74, MsgIdLen:16, Rest/binary>>}
     end;
 
-decode(<<16#40, MsgIdLen:16, _/binary>>) when MsgIdLen > ?MAX_MSGID_LEN ->
+decode(<<16#74, MsgIdLen:16, _/binary>>) when MsgIdLen > ?MAX_MSGID_LEN ->
     { {error, msgid_too_long}, <<>> };
 
 decode(<<>>) -> {more, <<>>};
@@ -642,55 +758,117 @@ decode_half_float(Half) ->
     end.
 
 %% =============================================================================
-%% Typing Indicator Encoding (RFC FR-8)
+%% Group Messaging Encoding (RFC-001-AMENDMENT-001, Opcodes 0x30-0x36)
+%% =============================================================================
+
+%% @doc Encode group create request (0x30)
+%% Format: 0x30 | NameLen(16) | GroupName
+-spec encode_group_create(binary()) -> binary().
+encode_group_create(GroupName) when is_binary(GroupName) ->
+    NameLen = byte_size(GroupName),
+    <<16#30, NameLen:16, GroupName/binary>>.
+
+%% @doc Encode group join notification (0x31) - Server to Client
+%% Format: 0x31 | GroupIdLen(16) | GroupId | UserLen(16) | User
+-spec encode_group_join(binary(), binary()) -> binary().
+encode_group_join(GroupId, User) when is_binary(GroupId), is_binary(User) ->
+    GroupIdLen = byte_size(GroupId),
+    UserLen = byte_size(User),
+    <<16#31, GroupIdLen:16, GroupId/binary, UserLen:16, User/binary>>.
+
+%% @doc Encode group leave request (0x32)
+%% Format: 0x32 | GroupIdLen(16) | GroupId
+-spec encode_group_leave(binary()) -> binary().
+encode_group_leave(GroupId) when is_binary(GroupId) ->
+    GroupIdLen = byte_size(GroupId),
+    <<16#32, GroupIdLen:16, GroupId/binary>>.
+
+%% @doc Encode group message (0x33)
+%% Format: 0x33 | GroupIdLen(16) | GroupId | HeaderLen(16) | Header (CBOR) | CipherLen(32) | Ciphertext
+-spec encode_group_msg(binary(), map(), binary()) -> binary().
+encode_group_msg(GroupId, Header, Ciphertext) when is_binary(GroupId), is_map(Header), is_binary(Ciphertext) ->
+    GroupIdLen = byte_size(GroupId),
+    HeaderBytes = cbor_encode(Header),
+    HeaderLen = byte_size(HeaderBytes),
+    CipherLen = byte_size(Ciphertext),
+    <<16#33, GroupIdLen:16, GroupId/binary, 
+      HeaderLen:16, HeaderBytes/binary,
+      CipherLen:32, Ciphertext/binary>>.
+
+%% @doc Encode group roster request (0x35)
+%% Format: 0x35 | GroupIdLen(16) | GroupId
+-spec encode_group_roster_request(binary()) -> binary().
+encode_group_roster_request(GroupId) when is_binary(GroupId) ->
+    GroupIdLen = byte_size(GroupId),
+    <<16#35, GroupIdLen:16, GroupId/binary>>.
+
+%% @doc Encode group roster response (0x35 response) - CBOR-encoded member list
+%% Format: 0x35 | GroupIdLen(16) | GroupId | RosterLen(32) | Roster (CBOR array of members)
+-spec encode_group_roster_response(binary(), [binary()]) -> binary().
+encode_group_roster_response(GroupId, Members) when is_binary(GroupId), is_list(Members) ->
+    GroupIdLen = byte_size(GroupId),
+    RosterCbor = cbor_encode(Members),
+    RosterLen = byte_size(RosterCbor),
+    <<16#35, GroupIdLen:16, GroupId/binary, RosterLen:32, RosterCbor/binary>>.
+
+%% @doc Encode sender key distribution (0x36)
+%% Format: 0x36 | GroupIdLen(16) | GroupId | KeyDataLen(32) | KeyData
+-spec encode_sender_key_dist(binary(), binary()) -> binary().
+encode_sender_key_dist(GroupId, KeyData) when is_binary(GroupId), is_binary(KeyData) ->
+    GroupIdLen = byte_size(GroupId),
+    KeyDataLen = byte_size(KeyData),
+    <<16#36, GroupIdLen:16, GroupId/binary, KeyDataLen:32, KeyData/binary>>.
+
+%% =============================================================================
+%% Typing Indicator Encoding (Best-effort, Opcodes 0x70-0x72)
 %% =============================================================================
 %% These are best-effort, fire-and-forget indicators.
 %% No durability required - if recipient is offline, indicator is discarded.
 
 %% @doc Encode typing start indicator from client to server
-%% Format: 0x30 | TargetLen(16) | Target
+%% Format: 0x70 | TargetLen(16) | Target
 -spec encode_typing_start(binary()) -> binary().
 encode_typing_start(Target) when is_binary(Target) ->
     TLen = byte_size(Target),
-    <<16#30, TLen:16, Target/binary>>.
+    <<16#70, TLen:16, Target/binary>>.
 
 %% @doc Encode typing stop indicator from client to server
-%% Format: 0x31 | TargetLen(16) | Target
+%% Format: 0x71 | TargetLen(16) | Target
 -spec encode_typing_stop(binary()) -> binary().
 encode_typing_stop(Target) when is_binary(Target) ->
     TLen = byte_size(Target),
-    <<16#31, TLen:16, Target/binary>>.
+    <<16#71, TLen:16, Target/binary>>.
 
 %% @doc Encode typing relay from server to recipient
 %% Used to relay typing status to the target user
-%% Format: 0x32 | SenderLen(16) | Sender | TypingStatus(8)
+%% Format: 0x72 | SenderLen(16) | Sender | TypingStatus(8)
 %%         where TypingStatus: 1 = typing, 0 = stopped
 -spec encode_typing_relay(binary(), boolean()) -> binary().
 encode_typing_relay(Sender, IsTyping) when is_binary(Sender) ->
     SLen = byte_size(Sender),
     Status = case IsTyping of true -> 1; false -> 0 end,
-    <<16#32, SLen:16, Sender/binary, Status:8>>.
+    <<16#72, SLen:16, Sender/binary, Status:8>>.
 
 %% =============================================================================
-%% Read Receipt Encoding (RFC FR-4)
+%% Read Receipt Encoding (Best-effort, Opcodes 0x74-0x75)
 %% =============================================================================
-%% Read receipts are optional (per RFC) and best-effort.
+%% Read receipts are optional and best-effort.
 %% If recipient is offline, receipt is discarded.
 
 %% @doc Encode read receipt from client to server
-%% Format: 0x40 | MsgIdLen(16) | MsgId | SenderLen(16) | Sender
+%% Format: 0x74 | MsgIdLen(16) | MsgId | SenderLen(16) | Sender
 %% Sender is the original message sender (not the reader)
 -spec encode_read_receipt(binary(), binary()) -> binary().
 encode_read_receipt(MsgId, OriginalSender) when is_binary(MsgId), is_binary(OriginalSender) ->
     MsgIdLen = byte_size(MsgId),
     SenderLen = byte_size(OriginalSender),
-    <<16#40, MsgIdLen:16, MsgId/binary, SenderLen:16, OriginalSender/binary>>.
+    <<16#74, MsgIdLen:16, MsgId/binary, SenderLen:16, OriginalSender/binary>>.
 
 %% @doc Encode read receipt relay from server to original sender
-%% Format: 0x41 | MsgIdLen(16) | MsgId | ReaderLen(16) | Reader
+%% Format: 0x75 | MsgIdLen(16) | MsgId | ReaderLen(16) | Reader
 %% Tells the original sender that Reader has read the message
 -spec encode_read_receipt_relay(binary(), binary(), integer()) -> binary().
 encode_read_receipt_relay(MsgId, Reader, Timestamp) when is_binary(MsgId), is_binary(Reader) ->
     MsgIdLen = byte_size(MsgId),
     ReaderLen = byte_size(Reader),
-    <<16#41, MsgIdLen:16, MsgId/binary, ReaderLen:16, Reader/binary, Timestamp:64>>.
+    <<16#75, MsgIdLen:16, MsgId/binary, ReaderLen:16, Reader/binary, Timestamp:64>>.
