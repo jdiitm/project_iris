@@ -148,7 +148,7 @@
 
 ## Related Documents
 
-- [Architectural Decisions](DECISIONS.md)
-- [Principal Audit Report](PRINCIPAL_AUDIT_REPORT.md)
-- [Test Status](TEST_STATUS.md)
+- [Architecture Decisions](DECISIONS.md)
+- [Testing Guide](TESTING.md)
+- [Operations Guide](OPERATIONS.md)
 - [RFC-001 System Requirements](rfc/RFC-001-SYSTEM-REQUIREMENTS.md)

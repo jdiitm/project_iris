@@ -60,10 +60,15 @@ class ClusterManager:
             return "localhost"
     
     def _run_make(self, target: str, timeout: int = 60) -> bool:
-        """Run a make target."""
+        """Run a make target with NODE_SUFFIX if set in environment."""
         try:
+            suffix = os.environ.get("IRIS_NODE_SUFFIX", "")
+            cmd = ["make", target]
+            if suffix:
+                cmd.append(f"NODE_SUFFIX={suffix}")
+            
             result = subprocess.run(
-                ["make", target],
+                cmd,
                 cwd=str(self.project_root),
                 capture_output=True,
                 text=True,

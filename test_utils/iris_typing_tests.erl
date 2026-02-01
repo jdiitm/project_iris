@@ -5,10 +5,13 @@
 %% Tests for Typing Indicators (RFC FR-8)
 %% =============================================================================
 %% Tests cover:
-%% - Protocol encoding/decoding for TYPING_START (0x30)
-%% - Protocol encoding/decoding for TYPING_STOP (0x31)
-%% - Protocol encoding for TYPING_RELAY (0x32)
+%% - Protocol encoding/decoding for TYPING_START (0x70)
+%% - Protocol encoding/decoding for TYPING_STOP (0x71)
+%% - Protocol encoding for TYPING_RELAY (0x72)
 %% - Edge cases: empty targets, max length targets, invalid lengths
+%%
+%% NOTE: Opcodes were moved from 0x30-0x32 to 0x70-0x72 to avoid conflict
+%% with Group Messaging opcodes (RFC-001 Amendment-001).
 %% =============================================================================
 
 %% ---------------------------------------------------------------------------
@@ -18,34 +21,34 @@
 encode_typing_start_test() ->
     Target = <<"alice">>,
     Encoded = iris_proto:encode_typing_start(Target),
-    %% Format: 0x30 | TargetLen(16) | Target
-    Expected = <<16#30, 5:16, "alice">>,
+    %% Format: 0x70 | TargetLen(16) | Target
+    Expected = <<16#70, 5:16, "alice">>,
     ?assertEqual(Expected, Encoded).
 
 encode_typing_stop_test() ->
     Target = <<"bob">>,
     Encoded = iris_proto:encode_typing_stop(Target),
-    %% Format: 0x31 | TargetLen(16) | Target
-    Expected = <<16#31, 3:16, "bob">>,
+    %% Format: 0x71 | TargetLen(16) | Target
+    Expected = <<16#71, 3:16, "bob">>,
     ?assertEqual(Expected, Encoded).
 
 encode_typing_relay_start_test() ->
     Sender = <<"charlie">>,
     Encoded = iris_proto:encode_typing_relay(Sender, true),
-    %% Format: 0x32 | SenderLen(16) | Sender | Status(8)
-    Expected = <<16#32, 7:16, "charlie", 1>>,
+    %% Format: 0x72 | SenderLen(16) | Sender | Status(8)
+    Expected = <<16#72, 7:16, "charlie", 1>>,
     ?assertEqual(Expected, Encoded).
 
 encode_typing_relay_stop_test() ->
     Sender = <<"dave">>,
     Encoded = iris_proto:encode_typing_relay(Sender, false),
-    Expected = <<16#32, 4:16, "dave", 0>>,
+    Expected = <<16#72, 4:16, "dave", 0>>,
     ?assertEqual(Expected, Encoded).
 
 encode_empty_target_test() ->
     %% Empty target should still encode correctly
     Encoded = iris_proto:encode_typing_start(<<>>),
-    Expected = <<16#30, 0:16>>,
+    Expected = <<16#70, 0:16>>,
     ?assertEqual(Expected, Encoded).
 
 encode_unicode_target_test() ->
@@ -53,7 +56,7 @@ encode_unicode_target_test() ->
     Target = <<"用户"/utf8>>,
     Encoded = iris_proto:encode_typing_start(Target),
     TargetLen = byte_size(Target),
-    Expected = <<16#30, TargetLen:16, Target/binary>>,
+    Expected = <<16#70, TargetLen:16, Target/binary>>,
     ?assertEqual(Expected, Encoded).
 
 %% ---------------------------------------------------------------------------
@@ -61,33 +64,33 @@ encode_unicode_target_test() ->
 %% ---------------------------------------------------------------------------
 
 decode_typing_start_test() ->
-    Packet = <<16#30, 5:16, "alice">>,
+    Packet = <<16#70, 5:16, "alice">>,
     {Result, Rest} = iris_proto:decode(Packet),
     ?assertEqual({typing_start, <<"alice">>}, Result),
     ?assertEqual(<<>>, Rest).
 
 decode_typing_stop_test() ->
-    Packet = <<16#31, 3:16, "bob">>,
+    Packet = <<16#71, 3:16, "bob">>,
     {Result, Rest} = iris_proto:decode(Packet),
     ?assertEqual({typing_stop, <<"bob">>}, Result),
     ?assertEqual(<<>>, Rest).
 
 decode_typing_with_remainder_test() ->
     %% Packet with extra data at the end
-    Packet = <<16#30, 5:16, "alice", "extra">>,
+    Packet = <<16#70, 5:16, "alice", "extra">>,
     {Result, Rest} = iris_proto:decode(Packet),
     ?assertEqual({typing_start, <<"alice">>}, Result),
     ?assertEqual(<<"extra">>, Rest).
 
 decode_typing_partial_test() ->
     %% Incomplete packet - should return {more, Bin}
-    Packet = <<16#30, 5:16, "ali">>,  %% Only 3 bytes of 5-byte target
+    Packet = <<16#70, 5:16, "ali">>,  %% Only 3 bytes of 5-byte target
     Result = iris_proto:decode(Packet),
     ?assertMatch({more, _}, Result).
 
 decode_typing_target_too_long_test() ->
     %% Target length exceeds MAX_TARGET_LEN (256)
-    Packet = <<16#30, 257:16, (binary:copy(<<"x">>, 257))/binary>>,
+    Packet = <<16#70, 257:16, (binary:copy(<<"x">>, 257))/binary>>,
     {Result, _} = iris_proto:decode(Packet),
     ?assertEqual({error, target_too_long}, Result).
 

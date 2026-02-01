@@ -1,0 +1,295 @@
+# Deployment Guide
+
+**Last Updated**: 2026-02-01
+
+## Architecture
+
+```
+                    ┌─────────────────┐
+                    │   Load Balancer │
+                    └────────┬────────┘
+                             │
+        ┌────────────────────┼────────────────────┐
+        │                    │                    │
+   ┌────▼────┐          ┌────▼────┐          ┌────▼────┐
+   │  Edge   │          │  Edge   │          │  Edge   │
+   │ (Cloud) │          │ (Cloud) │          │ (Cloud) │
+   └────┬────┘          └────┬────┘          └────┬────┘
+        │                    │                    │
+        └────────────────────┼────────────────────┘
+                             │
+        ┌────────────────────┼────────────────────┐
+        │                    │                    │
+   ┌────▼────┐          ┌────▼────┐          ┌────▼────┐
+   │  Core   │◄────────►│  Core   │◄────────►│  Core   │
+   │(Primary)│  Mnesia  │(Replica)│  Mnesia  │(Replica)│
+   └─────────┘          └─────────┘          └─────────┘
+```
+
+## Hardware Requirements
+
+| Role | CPU | RAM | Disk | Network |
+|------|-----|-----|------|---------|
+| Core | 4+ cores | 16GB+ | 100GB SSD | 1Gbps |
+| Edge | 2+ cores | 4GB+ | 20GB | 1Gbps |
+
+### Critical: Mnesia Memory
+
+**WARNING**: Mnesia `disc_copies` loads ALL data into RAM on startup.
+
+| Data Size | Required RAM |
+|-----------|--------------|
+| < 8 GB | 16 GB |
+| 8-32 GB | 64 GB |
+| > 32 GB | Multi-region sharding |
+
+---
+
+## Quick Start (Docker)
+
+```bash
+# Start 5-region cluster (6 cores, 11 edges)
+make cluster-up
+
+# Run tests
+python3 tests/run_tests.py --all
+
+# Stop
+make cluster-down
+```
+
+### Docker Cluster Layout
+
+| Region | Cores | Edges | Ports |
+|--------|-------|-------|-------|
+| East | core-east-1, core-east-2 | edge-east-1, edge-east-2 | 8085, 8086 |
+| West | core-west-1, core-west-2 | edge-west-1, edge-west-2 | 8087, 8088 |
+| EU | core-eu-1, core-eu-2 | edge-eu-1, edge-eu-2 | 8089, 8094 |
+| Sydney | - | edge-sydney-1, edge-sydney-2 | 8090, 8091 |
+| Sao Paulo | - | edge-saopaulo | 8092 |
+
+---
+
+## Bare Metal Setup
+
+### Prerequisites
+
+- Erlang OTP 25+
+- Same cookie across cluster: `echo "iris_secret" > ~/.erlang.cookie && chmod 400 ~/.erlang.cookie`
+
+### OS Configuration
+
+```bash
+# /etc/sysctl.conf
+net.core.somaxconn = 65535
+net.ipv4.tcp_max_syn_backlog = 65535
+
+# /etc/security/limits.conf
+* soft nofile 1048576
+* hard nofile 1048576
+
+sysctl -p
+```
+
+### Start Primary Core
+
+```bash
+erl -name iris_core@$(hostname -I | awk '{print $1}') \
+    -setcookie $IRIS_COOKIE \
+    -pa ebin \
+    -mnesia dir '"/var/lib/iris/mnesia"' \
+    +P 2000000 +Q 2000000 +K true \
+    -eval "application:ensure_all_started(mnesia), iris_core:init_db(), application:ensure_all_started(iris_core)."
+```
+
+### Join Secondary Cores
+
+```bash
+erl -name iris_core@$(hostname -I | awk '{print $1}') \
+    -setcookie $IRIS_COOKIE \
+    -pa ebin \
+    -mnesia dir '"/var/lib/iris/mnesia"' \
+    +P 2000000 +Q 2000000 +K true \
+    -eval "application:ensure_all_started(mnesia), iris_core:init_db(), application:ensure_all_started(iris_core), timer:sleep(5000), iris_core:join_cluster('iris_core@PRIMARY_IP')."
+```
+
+### Start Edge Nodes
+
+```bash
+erl -name iris_edge@$(hostname -I | awk '{print $1}') \
+    -setcookie $IRIS_COOKIE \
+    -hidden \
+    -pa ebin \
+    -iris_edge port 8085 \
+    +P 1000000 +K true \
+    -eval "application:ensure_all_started(iris_edge), net_adm:ping('iris_core@CORE_IP')."
+```
+
+---
+
+## Configuration
+
+### Application Environment
+
+```erlang
+%% config/prod.config
+[
+    {iris_core, [
+        %% Data safety (NEVER enable in prod without operator)
+        {allow_table_nuke, false},
+        
+        %% Replication
+        {replication_factor, 3},
+        
+        %% Split-brain protection (REQUIRED)
+        {expected_cluster_nodes, ['core1@host1', 'core2@host2', 'core3@host3']},
+        
+        %% WAL directory (MUST be persistent storage, NOT tmpfs)
+        {wal_directory, "/var/lib/iris/wal"},
+        
+        %% Regional routing (optional)
+        {region_id, <<"us-east-1">>},
+        {regions, [<<"us-east-1">>, <<"eu-west-1">>]},
+        {region_endpoints, #{
+            <<"us-east-1">> => ['core@us-east-1.example.com'],
+            <<"eu-west-1">> => ['core@eu-west-1.example.com']
+        }},
+        
+        %% Consistency: ap | hardened_ap | cp (cp is EXPERIMENTAL)
+        {consistency_mode, hardened_ap}
+    ]},
+    
+    {iris_edge, [
+        %% JWT secret (REQUIRED, 32+ bytes, identical across all nodes)
+        {jwt_secret, <<"CHANGE_ME_TO_32_BYTES_OR_MORE!!!">>},
+        {auth_enabled, true}
+    ]}
+].
+```
+
+### Critical Configuration
+
+| Setting | Requirement |
+|---------|-------------|
+| `jwt_secret` | 32+ bytes, identical across all nodes |
+| `expected_cluster_nodes` | List all cores for partition guard |
+| `wal_directory` | Persistent storage, NOT tmpfs |
+| `allow_table_nuke` | `false` in production |
+
+---
+
+## Multi-Region Setup
+
+### Region Routing
+
+Messages route based on user's home region (deterministic hash):
+
+```erlang
+%% Automatic routing
+iris_region_router:route_to_user(UserId, Msg).
+
+%% Get user's home region
+iris_region_router:get_home_region(UserId).
+%% <<"us-east-1">>
+```
+
+### Cross-Region Communication
+
+- **Direct RPC**: Low latency, requires connectivity
+- **Bridge Mode**: Async, for high-latency regions
+
+```erlang
+%% Force bridge strategy
+iris_region_router:route_to_user(UserId, Msg, #{strategy => bridge}).
+```
+
+---
+
+## Storage Durability
+
+```erlang
+%% Guaranteed (default): sync_transaction to all replicas
+iris_store:put(Table, Key, Value, #{durability => guaranteed}).
+
+%% Quorum: Majority ACK, tolerates minority failures
+iris_store:put(Table, Key, Value, #{durability => quorum}).
+
+%% Best effort: Async, for non-critical data
+iris_store:put(Table, Key, Value, #{durability => best_effort}).
+```
+
+---
+
+## Verification
+
+```erlang
+%% Cluster nodes
+mnesia:system_info(running_db_nodes).
+nodes(connected).
+
+%% Routing
+iris_async_router:get_stats().
+
+%% Regional config
+iris_region_router:get_current_region().
+
+%% Replication
+iris_quorum_write:get_replicas(<<"test_key">>).
+
+%% Partition status
+iris_partition_guard:is_safe_for_writes().
+```
+
+---
+
+## Failover Behavior
+
+| Scenario | Data Loss | Recovery |
+|----------|-----------|----------|
+| Single edge | None | Auto (stateless) |
+| Single core (quorum) | None | Auto |
+| Single core (no quorum) | Possible | Verify data |
+| Network partition | None (blocked) | Auto on heal |
+
+### Partition Handling
+
+1. `iris_partition_guard` detects partition
+2. Writes blocked on minority side
+3. Reads continue (may be stale)
+4. Auto-recovery when network heals
+
+---
+
+## Security Checklist
+
+### Required
+
+- [ ] JWT secret: 32+ bytes, identical across nodes
+- [ ] Expected cluster nodes: Listed for partition guard
+- [ ] WAL directory: Persistent storage, not tmpfs
+- [ ] TLS certificates: Client connections
+- [ ] Erlang cookie: Secured (`chmod 400`)
+- [ ] `allow_table_nuke`: Set to `false`
+
+### Recommended
+
+- [ ] mTLS for inter-node communication
+- [ ] Firewall: 4369 (epmd), 9000-9010 (distribution)
+- [ ] Monitoring for partition events
+
+---
+
+## Troubleshooting
+
+**Edge can't reach Core**: Hidden nodes don't auto-reconnect.
+```erlang
+net_adm:ping('core_node').
+```
+
+**Data lost after restart**: Ensure `-mnesia dir` points to persistent storage.
+
+**Tables missing**: Check `mnesia:system_info(directory)` matches config.
+
+**Quorum not reached**: Check nodes available with `iris_quorum_write:get_replicas/1`.
+
+**Cross-region routing fails**: Verify `region_endpoints` config and network.
