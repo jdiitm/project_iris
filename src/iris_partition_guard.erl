@@ -10,12 +10,13 @@
 %% - Reads are allowed (stale data is better than no data)
 %% - Warnings are logged continuously
 %%
-%% AUDIT FIX (Finding #3): Dynamic Membership Mode
-%% The guard now supports two membership modes:
-%% - static: Uses expected_cluster_nodes from config (original behavior)
-%% - dynamic: Uses pg group membership for auto-scaling compatibility
+%% CRITICAL: Dynamic mode is DEPRECATED (CB-1 Audit Finding)
+%% ---------------------------------------------------------
+%% Dynamic mode uses pg for membership discovery, which shrinks during
+%% partitions. This defeats split-brain protection because both sides
+%% of a partition see 100% of their (reduced) expected nodes.
 %%
-%% Configure via iris_core.partition_guard_mode = static | dynamic
+%% ALWAYS use static mode with explicit expected_cluster_nodes in production.
 %%
 %% RFC Compliance:
 %% - Supports hardened AP semantics with explicit partition handling
@@ -81,45 +82,65 @@ force_unsafe_mode(Enable) ->
 %% =============================================================================
 
 init([]) ->
-    %% AUDIT FIX (Finding #3): Determine membership mode
+    %% Determine membership mode (with deprecation check)
     MembershipMode = get_membership_mode(),
     
-    %% In dynamic mode, register this node with pg for discovery
+    %% CB-1 AUDIT FIX: Emit CRITICAL warning for dynamic mode
     case MembershipMode of
         dynamic ->
-            register_with_pg(),
-            logger:info("Partition Guard: Dynamic membership mode enabled (using pg)");
+            logger:critical("======================================================="),
+            logger:critical("PARTITION GUARD: DYNAMIC MODE IS DEPRECATED (CB-1)"),
+            logger:critical(""),
+            logger:critical("Dynamic mode uses pg for membership discovery, which"),
+            logger:critical("SHRINKS during network partitions. This defeats"),
+            logger:critical("split-brain protection - BOTH sides of a partition"),
+            logger:critical("will see 100% quorum and accept writes!"),
+            logger:critical(""),
+            logger:critical("ACTION REQUIRED: Configure expected_cluster_nodes"),
+            logger:critical("and set partition_guard_mode = static (or remove it)."),
+            logger:critical("======================================================="),
+            %% Still register with pg for node discovery hints (not quorum)
+            register_with_pg();
         static ->
             ok
     end,
     
-    %% Get expected cluster nodes from config or pg
-    ExpectedNodes = get_expected_nodes(MembershipMode),
+    %% Get expected cluster nodes from config
+    %% CB-1 FIX: In dynamic mode, still use static config for quorum checks
+    ExpectedNodes = get_static_expected_nodes(),
     
-    %% P1-H1 FIX: Warn if no expected nodes configured (permissive mode)
-    case {ExpectedNodes, MembershipMode} of
-        {[], static} ->
+    %% Check production safety
+    IsProduction = is_production_env(),
+    
+    %% Warn if no expected nodes configured
+    case {ExpectedNodes, IsProduction} of
+        {[], true} ->
+            logger:critical("======================================================="),
+            logger:critical("PARTITION GUARD: PRODUCTION WITHOUT SPLIT-BRAIN PROTECTION"),
+            logger:critical(""),
+            logger:critical("IRIS_ENV=prod but no expected_cluster_nodes configured!"),
+            logger:critical("This cluster is VULNERABLE to split-brain data corruption."),
+            logger:critical(""),
+            logger:critical("Configure iris_core.expected_cluster_nodes immediately."),
+            logger:critical("=======================================================");
+        {[], false} ->
             logger:warning("======================================================="),
-            logger:warning("PARTITION GUARD: No expected_cluster_nodes configured!"),
-            logger:warning(""),
-            logger:warning("Split-brain protection is DISABLED."),
+            logger:warning("PARTITION GUARD: No expected_cluster_nodes configured"),
+            logger:warning("Split-brain protection is DISABLED (permissive mode)."),
             logger:warning("Configure iris_core.expected_cluster_nodes for production."),
-            logger:warning("Or set iris_core.partition_guard_mode = dynamic for auto-scaling."),
             logger:warning("=======================================================");
-        {[], dynamic} ->
-            logger:info("Partition Guard: Dynamic mode - waiting for pg membership");
         _ ->
-            logger:info("Partition Guard enabled (~p mode) with ~p expected nodes", 
-                       [MembershipMode, length(ExpectedNodes)])
+            logger:info("Partition Guard enabled with ~p expected nodes", 
+                       [length(ExpectedNodes)])
     end,
     
     %% Schedule periodic check
     Timer = erlang:send_after(?CHECK_INTERVAL_MS, self(), check_partition),
     
-    logger:info("Partition Guard started. Mode: ~p, Expected nodes: ~p", [MembershipMode, ExpectedNodes]),
+    logger:info("Partition Guard started. Expected nodes: ~p", [ExpectedNodes]),
     
     {ok, #state{
-        membership_mode = MembershipMode,
+        membership_mode = static,  %% CB-1 FIX: Always use static for quorum checks
         expected_nodes = ExpectedNodes,
         visible_nodes = [node() | nodes()],
         check_timer = Timer
@@ -187,12 +208,10 @@ terminate(_Reason, _State) ->
 %% Internal Functions
 %% =============================================================================
 
-do_partition_check(State = #state{membership_mode = MembershipMode, quorum_threshold = Threshold}) ->
-    %% AUDIT FIX (Finding #3): In dynamic mode, refresh expected nodes from pg
-    Expected = case MembershipMode of
-        dynamic -> get_expected_nodes(dynamic);
-        static -> State#state.expected_nodes
-    end,
+do_partition_check(State = #state{quorum_threshold = Threshold}) ->
+    %% CB-1 FIX: Always use static expected nodes for quorum checks
+    %% Dynamic pg membership shrinks during partitions, defeating protection
+    Expected = State#state.expected_nodes,
     
     %% Get currently visible nodes
     VisibleNodes = [node() | nodes()],
@@ -263,15 +282,28 @@ maybe_exit_safe_mode(State = #state{last_quorum_loss = LastLoss}) ->
     end.
 
 %% =============================================================================
-%% AUDIT FIX (Finding #3): Dynamic Membership Support
+%% Configuration and Environment Checks
 %% =============================================================================
 
-%% Get membership mode from config
+%% Check if running in production environment
+is_production_env() ->
+    case os:getenv("IRIS_ENV") of
+        "prod" -> true;
+        "production" -> true;
+        _ ->
+            case application:get_env(iris_core, environment) of
+                {ok, prod} -> true;
+                {ok, production} -> true;
+                _ -> false
+            end
+    end.
+
+%% Get membership mode from config (with deprecation warning)
 get_membership_mode() ->
     case application:get_env(iris_core, partition_guard_mode) of
-        {ok, dynamic} -> dynamic;
+        {ok, dynamic} -> dynamic;  %% Deprecated, warning emitted in init
         {ok, static} -> static;
-        _ -> static  %% Default to static for backward compatibility
+        _ -> static  %% Default to static (safe)
     end.
 
 %% Register this node with pg for dynamic discovery
@@ -294,30 +326,10 @@ register_with_pg() ->
         _:_ -> ok
     end.
 
-%% Get expected nodes based on membership mode
-get_expected_nodes(dynamic) ->
-    %% AUDIT FIX: Use pg to discover current cluster members
-    %% This enables auto-scaling compatibility
-    try
-        case pg:get_members(?PG_GROUP) of
-            Pids when is_list(Pids), length(Pids) > 0 ->
-                %% Get unique nodes from pg members
-                lists:usort([node(P) || P <- Pids]);
-            _ ->
-                %% No pg members yet, fall back to connected nodes
-                get_connected_core_nodes()
-        end
-    catch
-        _:_ ->
-            %% pg not available, fall back
-            get_connected_core_nodes()
-    end;
-
-get_expected_nodes(static) ->
-    %% Original behavior: get from config
-    get_static_expected_nodes().
-
 %% Get static expected nodes from config
+%% CB-1 FIX: This is now the ONLY method for determining expected nodes.
+%% Dynamic pg-based discovery is deprecated because pg membership shrinks
+%% during partitions, defeating split-brain protection.
 get_static_expected_nodes() ->
     case application:get_env(iris_core, expected_cluster_nodes) of
         {ok, Nodes} when is_list(Nodes) -> Nodes;
@@ -328,17 +340,3 @@ get_static_expected_nodes() ->
                 _ -> []
             end
     end.
-
-%% Fallback: Get connected nodes that look like core nodes
-get_connected_core_nodes() ->
-    AllNodes = [node() | nodes()],
-    %% Filter for nodes that look like core nodes (naming convention)
-    [N || N <- AllNodes, is_core_node(N)].
-
-%% Check if a node name looks like a core node
-is_core_node(Node) ->
-    NodeStr = atom_to_list(Node),
-    lists:prefix("core", NodeStr) orelse 
-    lists:prefix("iris_core", NodeStr) orelse
-    %% In test environments, any node is considered core
-    application:get_env(iris_core, test_mode, false) =:= true.

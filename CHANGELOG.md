@@ -4,6 +4,30 @@ All notable changes to Iris Messaging System.
 
 ## [Unreleased]
 
+### Security
+
+#### Release Audit Fixes (2026-02-01)
+
+**CB-1 (CRITICAL): Deprecated Dynamic Partition Guard Mode**
+
+The `dynamic` partition guard mode used pg (Process Groups) for membership discovery,
+which shrinks during network partitions. This defeated split-brain protection because
+both sides of a partition would see 100% of their (reduced) expected nodes.
+
+- **`iris_partition_guard.erl`**: 
+  - Deprecated `dynamic` mode with CRITICAL warning at startup
+  - Quorum checks now always use static `expected_cluster_nodes` config
+  - Added production environment check (`IRIS_ENV=prod`)
+  - Emits CRITICAL warning if running in production without `expected_cluster_nodes`
+
+**HS-1 (HIGH): Added Safeguards to Destructive Operations**
+
+- **`docker/global-cluster/cluster.sh`**:
+  - Added `check_production_safety()` - blocks destructive ops when `IRIS_ENV=prod`
+  - Added `confirm_destructive_operation()` - requires typing 'DELETE' to confirm
+  - Added `--force` flag for CI/automation to bypass interactive confirmation
+  - Protected commands: `setup-replication`, `clean`
+
 ### Fixed
 
 #### Test Suite Stabilization (2026-02-01)
