@@ -58,42 +58,63 @@ NODES = {
         "capacity": 60000,
     },
     
-    # Tokyo (existing AWS instances)
+    # AWS instances (launched and on Tailscale)
+    "ip-172-31-18-141": {
+        "ip": "100.98.79.95",
+        "user": "ubuntu",
+        "role": "probe",
+        "location": "AWS",
+        "capacity": 5000,
+    },
+    "ip-172-31-20-113": {
+        "ip": "100.75.184.26",
+        "user": "ubuntu",
+        "role": "probe",
+        "location": "AWS",
+        "capacity": 5000,
+    },
     "ip-172-31-21-200": {
         "ip": "100.103.138.120",
         "user": "ubuntu",
         "role": "probe",
-        "location": "Tokyo",
-        "latency_expected": 115,
+        "location": "AWS",
         "capacity": 5000,
     },
-    "ip-172-31-2-79": {
-        "ip": "100.82.212.50",
+    "ip-172-31-27-129": {
+        "ip": "100.118.183.108",
         "user": "ubuntu",
         "role": "probe",
-        "location": "Tokyo",
-        "latency_expected": 115,
+        "location": "AWS",
         "capacity": 5000,
     },
-    "ip-172-31-8-77": {
-        "ip": "100.121.225.60",
+    "ip-172-31-29-249": {
+        "ip": "100.89.216.118",
         "user": "ubuntu",
         "role": "probe",
-        "location": "Tokyo",
-        "latency_expected": 115,
+        "location": "AWS",
         "capacity": 5000,
     },
-    
-    # New AWS regions (to be launched)
-    "iris-mumbai": {"ip": None, "user": "ec2-user", "role": "probe", "location": "Mumbai", "latency_expected": 25, "capacity": 5000},
-    "iris-singapore": {"ip": None, "user": "ec2-user", "role": "probe", "location": "Singapore", "latency_expected": 60, "capacity": 5000},
-    "iris-sydney": {"ip": None, "user": "ec2-user", "role": "probe", "location": "Sydney", "latency_expected": 165, "capacity": 5000},
-    "iris-frankfurt": {"ip": None, "user": "ec2-user", "role": "probe", "location": "Frankfurt", "latency_expected": 135, "capacity": 5000},
-    "iris-dublin": {"ip": None, "user": "ec2-user", "role": "probe", "location": "Dublin", "latency_expected": 155, "capacity": 5000},
-    "iris-virginia": {"ip": None, "user": "ec2-user", "role": "probe", "location": "Virginia", "latency_expected": 225, "capacity": 5000},
-    "iris-oregon": {"ip": None, "user": "ec2-user", "role": "probe", "location": "Oregon", "latency_expected": 275, "capacity": 5000},
-    "iris-saopaulo": {"ip": None, "user": "ec2-user", "role": "probe", "location": "São Paulo", "latency_expected": 325, "capacity": 5000},
-    # Note: Cape Town (af-south-1) excluded - region not enabled on account
+    "ip-172-31-39-163": {
+        "ip": "100.86.53.70",
+        "user": "ubuntu",
+        "role": "probe",
+        "location": "AWS",
+        "capacity": 5000,
+    },
+    "ip-172-31-39-188": {
+        "ip": "100.78.82.22",
+        "user": "ubuntu",
+        "role": "probe",
+        "location": "AWS",
+        "capacity": 5000,
+    },
+    "ip-172-31-43-76": {
+        "ip": "100.69.114.66",
+        "user": "ubuntu",
+        "role": "probe",
+        "location": "AWS",
+        "capacity": 5000,
+    },
 }
 
 # Test configuration
