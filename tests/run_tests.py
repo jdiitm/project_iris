@@ -52,7 +52,7 @@ SUITES_DIR = TESTS_ROOT / "suites"
 
 # Test tier definitions
 TIER_0_SUITES = ["unit", "integration"]  # Required on every merge
-TIER_1_SUITES = ["resilience", "performance_light", "chaos_controlled"]  # Nightly/manual
+TIER_1_SUITES = ["resilience", "performance_light", "chaos_controlled", "contract"]  # Nightly/manual
 
 # Tests that require TLS-enabled cluster (use config/test_tls.config)
 TLS_REQUIRED_TESTS = ["test_tls_mandatory"]

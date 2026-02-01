@@ -137,33 +137,84 @@ drain_region(Region) ->
 %% @doc Initialize Mnesia tables for cross-region messaging
 -spec init_tables() -> ok.
 init_tables() ->
-    %% Outbound queue table
+    %% Get all core nodes for multi-node replication (survives single node failure)
+    CoreNodes = get_core_nodes(),
+    logger:info("Initializing cross-region bridge tables with disc_copies on: ~p", [CoreNodes]),
+    
+    %% Outbound queue table - replicated to all core nodes for durability
     case mnesia:create_table(?OUTBOUND_TABLE, [
         {attributes, record_info(fields, cross_region_outbound)},
-        {disc_copies, [node()]},
+        {disc_copies, CoreNodes},
         {type, set},
         {index, [target_region, status, next_retry_at]}
     ]) of
         {atomic, ok} -> ok;
-        {aborted, {already_exists, ?OUTBOUND_TABLE}} -> ok;
+        {aborted, {already_exists, ?OUTBOUND_TABLE}} -> 
+            %% Table exists, ensure schema is replicated to all core nodes
+            ensure_disc_copies(?OUTBOUND_TABLE, CoreNodes),
+            ok;
         {aborted, Reason1} ->
             logger:warning("Failed to create outbound table: ~p", [Reason1])
     end,
     
-    %% Dead letter table for failed messages
+    %% Dead letter table for failed messages - also replicated for durability
     case mnesia:create_table(?DEAD_LETTER_TABLE, [
         {attributes, record_info(fields, cross_region_dead_letter)},
-        {disc_copies, [node()]},
+        {disc_copies, CoreNodes},
         {type, set}
     ]) of
         {atomic, ok} -> ok;
-        {aborted, {already_exists, ?DEAD_LETTER_TABLE}} -> ok;
+        {aborted, {already_exists, ?DEAD_LETTER_TABLE}} -> 
+            ensure_disc_copies(?DEAD_LETTER_TABLE, CoreNodes),
+            ok;
         {aborted, Reason2} ->
             logger:warning("Failed to create dead letter table: ~p", [Reason2])
     end,
     
     %% Wait for tables
     mnesia:wait_for_tables([?OUTBOUND_TABLE, ?DEAD_LETTER_TABLE], 10000),
+    ok.
+
+%% @doc Get all core nodes for Mnesia replication
+%% Returns at least the current node, plus any connected core nodes
+-spec get_core_nodes() -> [node()].
+get_core_nodes() ->
+    AllNodes = [node() | nodes()],
+    CoreNodes = [N || N <- AllNodes, is_core_node(N)],
+    case CoreNodes of
+        [] -> 
+            %% Fallback to current node if no core nodes detected
+            %% (e.g., single-node dev setup or test environment)
+            [node()];
+        _ -> 
+            CoreNodes
+    end.
+
+%% @doc Check if a node is a core node based on naming convention
+-spec is_core_node(node()) -> boolean().
+is_core_node(Node) ->
+    NodeStr = atom_to_list(Node),
+    lists:prefix("core", NodeStr) orelse 
+    lists:prefix("iris_core", NodeStr) orelse
+    lists:prefix("iris@core", NodeStr).
+
+%% @doc Ensure disc_copies exist on all specified nodes
+%% Used when table already exists but may need replication added
+-spec ensure_disc_copies(atom(), [node()]) -> ok.
+ensure_disc_copies(Table, Nodes) ->
+    CurrentCopies = mnesia:table_info(Table, disc_copies),
+    MissingNodes = Nodes -- CurrentCopies,
+    lists:foreach(fun(Node) ->
+        case mnesia:add_table_copy(Table, Node, disc_copies) of
+            {atomic, ok} ->
+                logger:info("Added disc_copy of ~p to ~p", [Table, Node]);
+            {aborted, {already_exists, _, _}} ->
+                ok;
+            {aborted, Reason} ->
+                logger:warning("Failed to add disc_copy of ~p to ~p: ~p", 
+                             [Table, Node, Reason])
+        end
+    end, MissingNodes),
     ok.
 
 %% =============================================================================
