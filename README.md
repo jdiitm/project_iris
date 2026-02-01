@@ -3,9 +3,9 @@
 [![Tests](https://img.shields.io/badge/tests-113%20total%20|%2093%20smoke%20passing-brightgreen)](tests/run_tests.py)
 [![Erlang](https://img.shields.io/badge/Erlang-OTP%2025%2B-blue)](https://www.erlang.org/)
 
-> **Current Status**: Production-validated for **1M+ concurrent users per region**.  
-> Planet-scale architecture (2B+ users) requires multi-region deployment.  
-> See [Architecture Decisions](docs/DECISIONS.md) for scaling roadmap.
+> **Current Status**: Development. Tested at **10K concurrent connections** locally.  
+> Architecture designed for 1M+ users per region (see [Scalability Analysis](docs/SCALABILITY_ANALYSIS.md)).  
+> Planet-scale deployment (2B+ users) requires multi-region infrastructure.
 
 ## Overview
 
@@ -13,15 +13,15 @@ Project Iris is a high-performance distributed messaging system built in **Erlan
 
 ### Key Capabilities
 
-| Metric | Validated | Architectural Target |
-|--------|-----------|---------------------|
-| Concurrent Users | 1M+ per region | 2B+ (20 regions) |
-| Nodes per Region | Up to 50 (Mnesia limit) | 50 |
-| Memory per User | ~10 KB | ~10 KB |
-| P99 Latency | < 25ms | < 50ms cross-region |
+| Metric | Tested | Designed For |
+|--------|--------|--------------|
+| Concurrent Users | 10K (local) | 1M+ per region |
+| Throughput | 8K msg/s | 100K+ msg/s |
+| Memory per User | ~12 KB | ~10-15 KB |
+| P99 Latency | < 25ms (local) | < 50ms cross-region |
 | Message Durability | Zero loss (guaranteed mode)* | Zero loss |
 
-*Durability guarantee applies to `durability => guaranteed` writes. `best_effort` is async, `quorum` tolerates minority failures.*
+*Durability guarantee applies to `durability => guaranteed` writes. See [Scalability Analysis](docs/SCALABILITY_ANALYSIS.md) for methodology.*
 
 ## Architecture
 

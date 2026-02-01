@@ -8,16 +8,17 @@
 
 ## Current State Assessment
 
-**Readiness Level**: 3/10 (was 2/10 before forensic audit fixes)
+**Readiness Level**: 4/10 (improved from 3/10 after GA audit fixes)
 
 | Capability | Status | Notes |
 |------------|--------|-------|
 | Core Messaging | ✅ Working | Happy path validated |
 | Cluster Mode | ✅ Working | Multi-node tested |
 | E2EE | ✅ Working | Signal Protocol implemented |
-| Cross-Region | ⚠️ Partial | Requires manual setup |
-| Scalability | ❌ Blocked | Architectural fixes in progress |
-| Production Ready | ❌ No | Pre-alpha |
+| Cross-Region | ✅ Hardened | Multi-node disc_copies for durability |
+| Scalability (10K) | ✅ Validated | Local testing with metrics |
+| Scalability (1M) | ⚠️ Designed | Architecture supports, not yet tested |
+| Production Ready | ❌ No | Development/Pre-alpha |
 
 ---
 
@@ -68,22 +69,37 @@
 
 ---
 
-## Phase 3: Validation at Scale (Future)
+## Phase 3: Validation at Scale
 
-**Goal**: Prove 5B DAU readiness.
+**Goal**: Validate scalability claims with measured data.
+
+### Scalability Validation Milestones
+
+| Scale | Status | Environment | Notes |
+|-------|--------|-------------|-------|
+| 100 connections | ✅ Done | Local dev | smoke profile |
+| 10,000 connections | ✅ Done | Local dev | full profile |
+| 100,000 connections | ❌ Pending | 8GB+ RAM | Requires staging infra |
+| 1,000,000 connections | ❌ Pending | 64GB+ RAM | Requires production infra |
+
+See [Scalability Analysis](SCALABILITY_ANALYSIS.md) for measured metrics and extrapolation methodology.
+
+### Stress Test Status
 
 | Test | Status | Description |
 |------|--------|-------------|
-| "Messi Test" | ❌ Pending | 1M messages to single user |
+| VIP Fan-in (100 senders) | ✅ Done | Batch message coalescing works |
+| VIP Fan-in (10K senders) | ✅ Done | Linear scaling confirmed |
+| "Messi Test" (1M senders) | ❌ Pending | Requires 64GB+ RAM infrastructure |
 | Network partition drill | ❌ Pending | 10-minute US-EU partition |
-| 24h soak test | ⚠️ Partial | 100k concurrent at steady state |
-| Cross-region latency | ❌ Pending | P99 < 50ms |
+| 24h soak test | ❌ Pending | 100k concurrent at steady state |
 
 ### Infrastructure Required
 
+- [ ] Staging environment (8GB+ RAM) for 100K tests
+- [ ] Production-scale infra (64GB+ RAM) for 1M tests
 - [ ] `pumba` or `tc` integration for network chaos
 - [ ] Prometheus/Grafana dashboards for soak tests
-- [ ] Automated CI pipeline for multi-region testing
 
 ---
 
@@ -140,7 +156,11 @@
 - [ ] Cross-region Mnesia auto-initializes
 
 ### Phase 3
-- [ ] "Messi Test" passes: 1M msgs to single user, no crash
+- [x] 10K connections validated locally
+- [x] Linear scaling confirmed (smoke → full profile)
+- [x] Per-connection overhead measured (~12KB)
+- [ ] 100K connections validated (requires staging infra)
+- [ ] "Messi Test" passes: 1M msgs to single user (requires 64GB+ RAM)
 - [ ] 10-minute partition: 0 message loss, auto-recovery
 - [ ] 24h soak: <1% memory growth, stable latency
 
@@ -148,6 +168,7 @@
 
 ## Related Documents
 
+- [Scalability Analysis](SCALABILITY_ANALYSIS.md) - Measured metrics and extrapolation
 - [Architecture Decisions](DECISIONS.md)
 - [Testing Guide](TESTING.md)
 - [Operations Guide](OPERATIONS.md)
