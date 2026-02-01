@@ -1,12 +1,13 @@
 # RFCs
 
-This directory contains formal requirements and design documents for Project Iris.
+Formal requirements and design documents for Project Iris.
 
 ## Active RFCs
 
-| RFC | Title | Version | Status |
-|-----|-------|---------|--------|
-| [RFC-001](RFC-001-SYSTEM-REQUIREMENTS.md) | System Requirements | 2.0 | Draft |
+| RFC | Title | Status |
+|-----|-------|--------|
+| [RFC-001](RFC-001-SYSTEM-REQUIREMENTS.md) | System Requirements | Draft |
+| [RFC-001-AMENDMENT-001](RFC-001-AMENDMENT-001.md) | E2EE + Groups | Approved |
 
 ## RFC-001 Contents
 
@@ -27,7 +28,8 @@ This directory contains formal requirements and design documents for Project Iri
 
 | Document | Purpose |
 |----------|---------|
-| [RFC-001-TEST-DEVIATIONS.md](RFC-001-TEST-DEVIATIONS.md) | Known test failures and accepted deviations |
+| [TESTING.md](../TESTING.md) | Test status, coverage, deviations |
+| [RFC_COMPLIANCE.md](../RFC_COMPLIANCE.md) | Implementation status |
 
 ## RFC Process
 
@@ -35,7 +37,3 @@ This directory contains formal requirements and design documents for Project Iri
 2. **Review** — Stakeholder review
 3. **Approved** — Authoritative
 4. **Superseded** — Replaced
-
-## Purpose
-
-RFCs are the **single source of truth** for system requirements and architecture decisions.

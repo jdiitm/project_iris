@@ -1,6 +1,6 @@
 # Project Iris: WhatsApp-Class Messaging Engine
 
-[![Tests](https://img.shields.io/badge/tests-99%20passing-brightgreen)](tests/run_tests.py)
+[![Tests](https://img.shields.io/badge/tests-113%20total%20|%2093%20smoke%20passing-brightgreen)](tests/run_tests.py)
 [![Erlang](https://img.shields.io/badge/Erlang-OTP%2025%2B-blue)](https://www.erlang.org/)
 
 > **Current Status**: Production-validated for **1M+ concurrent users per region**.  
@@ -105,36 +105,31 @@ python3 tests/run_tests.py --all
 
 ## Testing
 
+**Status**: 113/113 pass (100%) | **Smoke**: 93 tests (~15 min)
+
 ```bash
-# All tests (86 tests, 84 passing in smoke profile)
-python3 tests/run_tests.py --all
+# Tier 0 (63 tests, ~3 min)
+python3 tests/run_tests.py --tier 0
 
-# Specific suite
-python3 tests/run_tests.py --suite integration
-python3 tests/run_tests.py --suite unit
-python3 tests/run_tests.py --suite stress
+# Full smoke (93 tests, ~15 min)
+python3 tests/run_tests.py --tier 0 && \
+python3 tests/run_tests.py --suite resilience && \
+python3 tests/run_tests.py --suite security && \
+python3 tests/run_tests.py --suite stress && \
+python3 tests/run_tests.py --suite performance_light
 
-# Unit tests only (fast)
-make test-unit
+# All tests (113 tests, ~53 min)
+python3 tests/run_tests.py --all --with-cluster
 ```
 
-### Test Suites
+| Suite | Tests | Pass | Suite | Tests | Pass |
+|-------|-------|------|-------|-------|------|
+| unit | 41 | 100% | security | 7 | 100% |
+| integration | 22 | 100% | performance_light | 6 | 100% |
+| stress | 14 | 100% | e2e | 5 | 100% |
+| chaos_dist | 11 | 100% | resilience | 3 | 100% |
 
-| Suite | Tests | Purpose |
-|-------|-------|---------|
-| unit | 21 | Erlang module unit tests (EUnit: 77 tests) |
-| integration | 21 | Python integration tests |
-| stress | 13 | Load and scale testing |
-| chaos_dist | 9 | Distributed failure tests |
-| security | 7 | Auth, TLS, injection tests |
-| performance_light | 6 | Performance benchmarks |
-| e2e | 5 | End-to-end flows |
-| resilience | 3 | Recovery and failover |
-| chaos_controlled | 2 | Controlled chaos scenarios |
-| contract | 1 | Protocol contract tests |
-| compatibility | 1 | Version compatibility |
-
-See [TEST_STATUS.md](docs/TEST_STATUS.md) for detailed test results and current pass rates.
+See [TESTING.md](docs/TESTING.md) for details.
 
 ## Configuration
 
@@ -183,18 +178,13 @@ iris_store:put(Table, Key, Value, #{durability => best_effort}).
 
 ## Documentation
 
-- [Deployment Guide](docs/DEPLOYMENT_GUIDE.md)
-- [Cluster Setup](docs/CLUSTER_SETUP.md)
-- [Architecture Decisions](docs/DECISIONS.md)
-- [RFC-001 System Requirements](docs/rfc/RFC-001-SYSTEM-REQUIREMENTS.md)
-- [RFC-001 Amendment (E2EE + Groups)](docs/rfc/RFC-001-AMENDMENT-001.md)
-
-### Operational
-
-- [Scale-Out Runbook](docs/runbooks/SCALE_OUT.md)
-- [Data Recovery Runbook](docs/runbooks/DATA_RECOVERY.md)
-- [Failover Runbook](docs/runbooks/FAILOVER.md)
-- [Test Determinism](docs/TEST_DETERMINISM.md)
+| Guide | Description |
+|-------|-------------|
+| [DEPLOYMENT.md](docs/DEPLOYMENT.md) | Setup, configuration, cluster management |
+| [OPERATIONS.md](docs/OPERATIONS.md) | Incident response, failover, scaling |
+| [TESTING.md](docs/TESTING.md) | Test suite, determinism, coverage |
+| [DECISIONS.md](docs/DECISIONS.md) | Architecture decisions |
+| [RFC-001](docs/rfc/RFC-001-SYSTEM-REQUIREMENTS.md) | System requirements spec |
 
 ## Project Structure
 
