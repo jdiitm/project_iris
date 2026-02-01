@@ -93,7 +93,7 @@ NODES = {
     "iris-virginia": {"ip": None, "user": "ec2-user", "role": "probe", "location": "Virginia", "latency_expected": 225, "capacity": 5000},
     "iris-oregon": {"ip": None, "user": "ec2-user", "role": "probe", "location": "Oregon", "latency_expected": 275, "capacity": 5000},
     "iris-saopaulo": {"ip": None, "user": "ec2-user", "role": "probe", "location": "São Paulo", "latency_expected": 325, "capacity": 5000},
-    "iris-capetown": {"ip": None, "user": "ec2-user", "role": "probe", "location": "Cape Town", "latency_expected": 225, "capacity": 5000},
+    # Note: Cape Town (af-south-1) excluded - region not enabled on account
 }
 
 # Test configuration
