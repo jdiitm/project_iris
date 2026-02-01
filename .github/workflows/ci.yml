@@ -79,6 +79,13 @@ jobs:
           echo "  TEST_SEED=${{ env.TEST_SEED }} make test-docker"
           echo "=========================================="
       
+      - name: RFC Compliance Check
+        run: |
+          python3 scripts/rfc_watchdog.py --check
+          if [ "${{ github.event_name }}" == "pull_request" ]; then
+            python3 scripts/rfc_watchdog.py --diff origin/${{ github.base_ref }} || true
+          fi
+      
       - name: Setup Erlang
         uses: erlef/setup-beam@v1
         with:
@@ -185,6 +192,11 @@ jobs:
         env:
           TEST_SEED: ${{ env.TEST_SEED }}
       
+      - name: Run Contract Tests
+        run: python3 tests/run_tests.py --suite contract
+        env:
+          TEST_SEED: ${{ env.TEST_SEED }}
+      
       - name: Stop Server
         if: always()
         run: make stop
@@ -266,7 +278,6 @@ jobs:
         run: python3 tests/run_tests.py --suite chaos_dist
         env:
           TEST_SEED: ${{ env.TEST_SEED }}
-        continue-on-error: true  # Known failing tests - Phase 2
       
       - name: Stop Docker Cluster
         if: always()
@@ -320,7 +331,6 @@ jobs:
         run: python3 tests/run_tests.py --suite stress
         env:
           TEST_SEED: ${{ env.TEST_SEED }}
-        continue-on-error: true  # Known failing tests - Phase 2
       
       - name: Run Soak Test (6 hour)
         run: |
@@ -369,3 +379,34 @@ jobs:
       
       - name: Quality Gate Passed
         run: echo "All required quality gates passed"
+
+  # ===========================================================================
+  # Release Gate (Tier 3 Full Validation)
+  # ===========================================================================
+  release-gate:
+    name: Release Gate
+    runs-on: ubuntu-latest
+    needs: [tier0, tier1, tier2, tier3]
+    if: github.event.inputs.tier == '3'
+    
+    steps:
+      - name: Verify All Tiers Passed
+        run: |
+          echo "Checking tier results..."
+          if [ "${{ needs.tier0.result }}" != "success" ]; then
+            echo "::error::Tier 0 failed - release blocked"
+            exit 1
+          fi
+          if [ "${{ needs.tier1.result }}" != "success" ]; then
+            echo "::error::Tier 1 failed - release blocked"
+            exit 1
+          fi
+          if [ "${{ needs.tier2.result }}" != "success" ]; then
+            echo "::error::Tier 2 failed - release blocked"
+            exit 1
+          fi
+          if [ "${{ needs.tier3.result }}" != "success" ]; then
+            echo "::error::Tier 3 failed - release blocked"
+            exit 1
+          fi
+          echo "All tiers passed - release approved"
