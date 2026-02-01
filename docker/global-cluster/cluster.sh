@@ -10,6 +10,65 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 COMPOSE_FILE="$SCRIPT_DIR/docker-compose.yml"
 COMPOSE_MTLS="$SCRIPT_DIR/docker-compose.mtls.yml"
 
+# HS-1 AUDIT FIX: Safety checks for destructive operations
+check_production_safety() {
+    local operation="$1"
+    
+    # Check IRIS_ENV
+    if [ "$IRIS_ENV" = "prod" ] || [ "$IRIS_ENV" = "production" ]; then
+        echo ""
+        echo "============================================================"
+        echo "ERROR: DESTRUCTIVE OPERATION BLOCKED IN PRODUCTION"
+        echo "============================================================"
+        echo ""
+        echo "IRIS_ENV is set to '$IRIS_ENV'"
+        echo "Operation '$operation' would destroy data."
+        echo ""
+        echo "If you REALLY need to do this in production:"
+        echo "  1. Unset IRIS_ENV: unset IRIS_ENV"
+        echo "  2. Use --force flag: $0 $operation --force"
+        echo ""
+        echo "============================================================"
+        exit 1
+    fi
+}
+
+confirm_destructive_operation() {
+    local operation="$1"
+    local force_flag="$2"
+    
+    # Check production safety first
+    check_production_safety "$operation"
+    
+    # If --force flag provided, skip confirmation
+    if [ "$force_flag" = "--force" ]; then
+        echo "[WARN] --force flag provided, skipping confirmation"
+        return 0
+    fi
+    
+    # Interactive confirmation
+    echo ""
+    echo "============================================================"
+    echo "WARNING: DESTRUCTIVE OPERATION"
+    echo "============================================================"
+    echo ""
+    echo "This operation will DELETE Mnesia data from secondary cores."
+    echo "All messages and state on those nodes will be PERMANENTLY LOST."
+    echo ""
+    echo "Type 'DELETE' to confirm, or Ctrl+C to cancel:"
+    echo ""
+    read -r confirmation
+    
+    if [ "$confirmation" != "DELETE" ]; then
+        echo ""
+        echo "Operation cancelled (expected 'DELETE', got '$confirmation')"
+        exit 1
+    fi
+    
+    echo ""
+    echo "[OK] Confirmation received, proceeding..."
+}
+
 # Function to generate certificates if missing
 ensure_certs() {
     if [ ! -f "$PROJECT_ROOT/certs/ca.pem" ]; then
@@ -154,6 +213,10 @@ case "${1:-help}" in
         ;;
     
     setup-replication)
+        # HS-1 AUDIT FIX: Add safety check for destructive operation
+        FORCE_FLAG="${2:-}"
+        confirm_destructive_operation "setup-replication" "$FORCE_FLAG"
+        
         echo "=== Setting up Cross-Region Mnesia Replication ==="
         echo "This will repair/rebuild the Mnesia cluster and replicate tables."
         echo ""
@@ -173,7 +236,10 @@ case "${1:-help}" in
         echo ""
         echo "  Clearing Mnesia data on secondaries..."
         for core in $SECONDARY_CORES; do
-            docker exec "$core" rm -rf /data/mnesia/* 2>/dev/null || true
+            # HS-1 FIX: Only delete if container is running/exists
+            if docker inspect "$core" > /dev/null 2>&1; then
+                docker exec "$core" rm -rf /data/mnesia/* 2>/dev/null || true
+            fi
         done
         
         echo ""
@@ -245,6 +311,10 @@ case "${1:-help}" in
         ;;
     
     clean)
+        # HS-1 AUDIT FIX: Add safety check for destructive operation
+        FORCE_FLAG="${2:-}"
+        confirm_destructive_operation "clean" "$FORCE_FLAG"
+        
         echo "=== Cleaning up all Iris containers and volumes ==="
         docker compose -f "$COMPOSE_FILE" --profile chaos down -v --remove-orphans
         docker volume ls | grep mnesia | awk '{print $2}' | xargs -r docker volume rm
@@ -269,8 +339,12 @@ case "${1:-help}" in
         echo "  erl [container] [node]  Connect Erlang remote shell"
         echo "  partition [container]   Disconnect container from backbone"
         echo "  reconnect [container]   Reconnect container to backbone"
-        echo "  setup-replication       Enable cross-region Mnesia table replication"
+        echo "  setup-replication [--force]  Enable cross-region Mnesia replication (DESTRUCTIVE)"
         echo "  kill-core [container]   Kill a core node for failover test"
-        echo "  clean           Remove all containers and volumes"
+        echo "  clean [--force]         Remove all containers and volumes (DESTRUCTIVE)"
+        echo ""
+        echo "Safety:"
+        echo "  Destructive commands require confirmation or --force flag."
+        echo "  Commands are blocked when IRIS_ENV=prod or IRIS_ENV=production."
         ;;
 esac
