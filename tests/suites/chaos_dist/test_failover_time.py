@@ -297,42 +297,40 @@ def test_failover_time():
 
 
 def restore_cluster_state():
-    """Re-initialize cluster after test that restarts containers.
+    """Restore killed container after failover test.
     
-    IMPORTANT: After killing Mnesia nodes, their state becomes stale.
-    We must do a FULL cluster restart to ensure clean state.
+    Instead of a full cluster rebuild (which takes 5+ minutes),
+    just restart the killed container and wait for it to rejoin.
     """
+    print(f"[cleanup] Restarting killed container: {CONTAINER_NAME}")
     try:
-        # Import from shared utility
-        import sys
-        sys.path.insert(0, str(PROJECT_ROOT / "tests" / "utilities"))
-        try:
-            from cluster_utils import restore_cluster_state as _restore
-            _restore()
-        except ImportError:
-            # Fallback if utility not available
-            print("[cleanup] Restoring cluster state (inline fallback)...")
-            docker_dir = PROJECT_ROOT / "docker" / "global-cluster"
-            compose_file = docker_dir / "docker-compose.yml"
+        # Just restart the specific container we killed
+        result = subprocess.run(
+            ["docker", "start", CONTAINER_NAME],
+            capture_output=True,
+            timeout=30
+        )
+        
+        if result.returncode == 0:
+            print(f"[cleanup] Container {CONTAINER_NAME} restarted")
+            # Give it time to rejoin the cluster
+            print("[cleanup] Waiting for container to stabilize (15s)...")
+            time.sleep(15)
             
-            subprocess.run(
-                ["docker", "compose", "-f", str(compose_file), "down", "--remove-orphans", "-v"],
-                cwd=str(docker_dir), capture_output=True, timeout=60
+            # Verify it's running
+            check = subprocess.run(
+                ["docker", "inspect", "-f", "{{.State.Running}}", CONTAINER_NAME],
+                capture_output=True, text=True, timeout=10
             )
-            time.sleep(5)
-            subprocess.run(
-                ["docker", "compose", "-f", str(compose_file), "up", "-d"],
-                cwd=str(docker_dir), capture_output=True, timeout=180
-            )
-            time.sleep(60)
+            if "true" in check.stdout.lower():
+                print(f"[cleanup] Container {CONTAINER_NAME} is running")
+            else:
+                print(f"[cleanup] Warning: Container may not be fully healthy")
+        else:
+            print(f"[cleanup] Warning: Could not restart container: {result.stderr.decode()}")
             
-            init_script = docker_dir / "init_cluster.sh"
-            if init_script.exists():
-                subprocess.run(
-                    ["bash", str(init_script)],
-                    cwd=str(docker_dir), capture_output=True, timeout=300
-                )
-            print("[cleanup] Cluster state restored")
+    except subprocess.TimeoutExpired:
+        print("[cleanup] Warning: Container restart timed out")
     except Exception as e:
         print(f"[cleanup] Warning: Could not restore cluster state: {e}")
 
