@@ -74,7 +74,7 @@ make cluster-down
 
 ### Prerequisites
 
-- Erlang OTP 25+
+- Erlang OTP 26+
 - Same cookie across cluster: `echo "iris_secret" > ~/.erlang.cookie && chmod 400 ~/.erlang.cookie`
 
 ### OS Configuration

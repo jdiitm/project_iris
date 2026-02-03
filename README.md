@@ -1,11 +1,11 @@
 # Project Iris: WhatsApp-Class Messaging Engine
 
-[![Tests](https://img.shields.io/badge/tests-115%2B%20|%20100%25%20passing-brightgreen)](tests/run_tests.py)
+[![Tests](https://img.shields.io/badge/tests-75%20|%20100%25%20passing-brightgreen)](tests/run_tests.py)
 [![TLS](https://img.shields.io/badge/TLS-enforced-green)](docs/DEPLOYMENT.md)
-[![Erlang](https://img.shields.io/badge/Erlang-OTP%2025%2B-blue)](https://www.erlang.org/)
+[![Erlang](https://img.shields.io/badge/Erlang-OTP%2026%2B-blue)](https://www.erlang.org/)
 
 > **Current Status**: Development. Tested at **10K concurrent connections** locally.  
-> Full test suite (115+ tests) passing with TLS enforced.  
+> Full test suite (75 tests) passing with TLS enforced.  
 > Architecture designed for 1M+ users per region (see [Scalability Analysis](docs/SCALABILITY_ANALYSIS.md)).  
 > Planet-scale deployment (2B+ users) requires multi-region infrastructure.
 
@@ -74,8 +74,8 @@ Project Iris is a high-performance distributed messaging system built in **Erlan
 
 ### Prerequisites
 
-- **Runtime**: Erlang/OTP 25+
-- **Python**: 3.9+ (for tests)
+- **Runtime**: Erlang/OTP 26+
+- **Python**: 3.11+ (for tests)
 - **Docker**: For cluster simulation (optional)
 
 ### Build & Run
@@ -107,33 +107,37 @@ python3 tests/run_tests.py --all
 
 ## Testing
 
-**Status**: 115+ tests pass (100%) | **Last Verified**: 2026-02-03
+**Status**: 75 tests pass (100%) | **Last Verified**: 2026-02-03
+
+The test runner uses phase-based execution for efficient server lifecycle management:
 
 ```bash
-# Prerequisites: TLS is enforced - server must start with TLS config
-erl -pa ebin -config config/test_tls -eval "application:ensure_all_started(iris_core), application:ensure_all_started(iris_edge)."
+# Run all tests (handles server lifecycle automatically)
+python3 tests/run_tests.py --all
 
-# Tier 0 (63 tests, ~3 min)
-python3 tests/run_tests.py --tier 0
+# Run all tests, skip Docker chaos tests (faster)
+python3 tests/run_tests.py --all --skip-docker
 
-# Full smoke (93 tests, ~15 min)
-python3 tests/run_tests.py --tier 0 && \
-python3 tests/run_tests.py --suite resilience && \
-python3 tests/run_tests.py --suite security && \
-python3 tests/run_tests.py --suite stress && \
-python3 tests/run_tests.py --suite performance_light
+# CI Tiers (independent, no overlap)
+python3 tests/run_tests.py --tier 0   # unit, integration (~3 min)
+python3 tests/run_tests.py --tier 1   # e2e, security, resilience (~5 min)
+python3 tests/run_tests.py --tier 2   # performance, stress (~10 min)
 
-# All tests including chaos (115+ tests, ~60 min)
-python3 tests/run_tests.py --all --with-cluster
+# Run specific suite
+python3 tests/run_tests.py --suite integration
+
+# List all tests
+python3 tests/run_tests.py --list
 ```
 
-| Suite | Tests | Pass | Suite | Tests | Pass |
-|-------|-------|------|-------|-------|------|
-| unit | 2 | 100% | security | 7 | 100% |
-| integration | 22 | 100% | performance_light | 1 | 100% |
-| stress | 9 | 100% | e2e | 5 | 100% |
-| chaos_dist | 12 | 100% | resilience | 3 | 100% |
-| compatibility | 1 (6 sub) | 100% | contract | 1 | 100% |
+| Suite | Tests | Suite | Tests |
+|-------|-------|-------|-------|
+| unit | 2 | security | 7 |
+| integration | 22 | performance_light | 6 |
+| stress | 14 | e2e | 5 |
+| chaos_dist | 12 | resilience | 3 |
+| compatibility | 1 | contract | 1 |
+| chaos_controlled | 2 | **TOTAL** | **75** |
 
 See [TESTING.md](docs/TESTING.md) for details.
 

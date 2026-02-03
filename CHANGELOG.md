@@ -4,6 +4,38 @@ All notable changes to Iris Messaging System.
 
 ## [Unreleased]
 
+### Changed
+
+#### Test Runner Refactor (2026-02-03)
+
+**Phase-based test execution for efficient server lifecycle management.**
+
+- **Refactored `run_tests.py`** (1860→660 lines):
+  - Phase 1: Unit tests (no server needed)
+  - Phase 2: Standalone server tests (shared TLS server started once)
+  - Phase 3: ClusterManager tests (self-managed per test)
+  - Phase 4: Docker chaos tests (Docker global cluster)
+
+- **CI Tiers now independent** (no duplicate test runs):
+  - Tier 0: unit, integration
+  - Tier 1: e2e, contract, compatibility, security, resilience
+  - Tier 2: performance_light, stress, chaos_controlled
+
+- **New flags**:
+  - `--skip-docker`: Skip Docker chaos tests for faster runs
+  - `--nuke`: Kill all processes (cleanup)
+
+- **CI Workflow simplified** (413→263 lines):
+  - Single `--tier N` call per job instead of multiple `--suite` calls
+  - Server lifecycle managed internally by test runner
+  - Separate `tier2-docker` job for chaos_dist tests
+
+- **Updated Erlang version**: 25 → 26
+
+**Results**: 75 tests across 11 suites, 100% pass rate
+
+---
+
 ### Security
 
 #### TLS Enforcement & Test Suite Stabilization (2026-02-03)

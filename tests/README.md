@@ -1,40 +1,50 @@
 # Test Suite
 
-**Status**: 115+ tests pass (100%) | **TLS Enforced** | [Full Documentation](../docs/TESTING.md)
+**Status**: 75 tests pass (100%) | **TLS Enforced** | [Full Documentation](../docs/TESTING.md)
 
 ## Quick Start
 
 ```bash
-# Clean slate
-pkill -9 -f beam.smp; rm -rf /tmp/iris_* /tmp/mnesia*
+# Run all tests (server lifecycle managed automatically)
+python3 tests/run_tests.py --all
 
-# Start TLS-enabled server (REQUIRED)
-erl -pa ebin -noshell -sname iris_test -setcookie iris_secret \
-    -config config/test_tls \
-    -eval "application:ensure_all_started(iris_core), application:ensure_all_started(iris_edge)."
+# Run all tests, skip Docker (faster)
+python3 tests/run_tests.py --all --skip-docker
 
-# Tier 0 - CI gate (~3 min)
-python3 tests/run_tests.py --tier 0
+# CI Tiers (independent, no overlap between tiers)
+python3 tests/run_tests.py --tier 0   # unit, integration
+python3 tests/run_tests.py --tier 1   # e2e, security, resilience
+python3 tests/run_tests.py --tier 2   # performance, stress, chaos_controlled
 
-# Full smoke (~15 min)
-python3 tests/run_tests.py --tier 0 && \
-python3 tests/run_tests.py --suite resilience && \
-python3 tests/run_tests.py --suite security && \
-python3 tests/run_tests.py --suite stress && \
-python3 tests/run_tests.py --suite performance_light
+# Run specific suite
+python3 tests/run_tests.py --suite integration
 
-# All tests including chaos_dist (~60 min, Docker required)
-python3 tests/run_tests.py --all --with-cluster
-
-# List tests
+# List all tests
 python3 tests/run_tests.py --list
+
+# Kill all processes (cleanup)
+python3 tests/run_tests.py --nuke
 ```
+
+## Phase-Based Execution
+
+The test runner organizes tests into phases based on infrastructure requirements:
+
+| Phase | Tests | Server Management |
+|-------|-------|-------------------|
+| Phase 1 | Unit tests (2) | No server needed |
+| Phase 2 | Integration, E2E, Security, etc. | Shared TLS server |
+| Phase 3 | ClusterManager tests (14) | Self-managed per test |
+| Phase 4 | Docker chaos_dist (12) | Docker global cluster |
+
+This eliminates redundant server restarts and ensures proper test isolation.
 
 ## Structure
 
 ```
 tests/
-├── run_tests.py        # Unified test runner
+├── run_tests.py        # Unified test runner (phase-based)
+├── run_all_tests.sh    # Shell script alternative
 ├── framework/          # ClusterManager, assertions
 ├── suites/
 │   ├── unit/           # Property-based tests (2 files)
@@ -42,15 +52,26 @@ tests/
 │   ├── e2e/            # End-to-end scenarios (5 tests)
 │   ├── security/       # TLS, auth, rate limiting (7 tests)
 │   ├── resilience/     # Fault tolerance (3 tests)
-│   ├── stress/         # Load testing (9 tests)
+│   ├── stress/         # Load testing (14 tests)
+│   ├── performance_light/  # Benchmarks (6 tests)
 │   ├── chaos_dist/     # Docker-based chaos (12 tests)
-│   ├── compatibility/  # Protocol versions (6 sub-tests)
-│   ├── contract/       # Edge-core contract (1 test)
-│   └── performance_light/  # CPU utilization (1 test)
+│   ├── chaos_controlled/   # Controlled chaos (2 tests)
+│   ├── compatibility/  # Protocol versions (1 test)
+│   └── contract/       # Edge-core contract (1 test)
 └── utilities/
     ├── iris_client.py  # TLS-enabled client (default)
     └── tls_connection.py  # TLS helpers
 ```
+
+## CI Tiers
+
+Each tier runs **only** its own suites (no overlap):
+
+| Tier | Suites | Trigger |
+|------|--------|---------|
+| 0 | unit, integration | Every commit |
+| 1 | e2e, contract, compatibility, security, resilience | Every PR |
+| 2 | performance_light, stress, chaos_controlled | Nightly |
 
 ## Writing Tests
 
