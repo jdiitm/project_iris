@@ -1,61 +1,37 @@
 #!/usr/bin/env python3
 """
-Project Iris - Unified Test Runner (Stabilized)
+Project Iris - Unified Test Runner
 
-A rigorous, zero-tolerance test orchestrator with TLS enforcement and strict log analysis.
-No errors masked, no tests skipped without explicit reason, all logs persisted and analyzed.
+A streamlined test runner following the proven structure from run_all_tests.sh.
+Tests are organized into phases based on infrastructure requirements.
 
-Key Features:
-- TLS enforced on all client connections (NFR-14 compliant)
-- Deterministic test ordering (lexicographic by suite, then by test name)
-- Comprehensive cluster nuke before test runs
-- Line-by-line log analysis for errors, failures, and skips
-- Real-time output streaming with failure detection
-
-Test Suites (115+ tests):
-- unit: Property-based tests (2 files)
-- integration: Core message flow (22 tests)
-- e2e: End-to-end scenarios (5 tests)
-- security: TLS, auth, rate limiting (7 tests)
-- resilience: Fault tolerance (3 tests)
-- stress: Load testing (9 tests)
-- chaos_dist: Docker-based chaos (12 tests)
-- compatibility: Protocol versions (6 sub-tests)
-- contract: Edge-core contract (1 test)
-- performance_light: CPU utilization (1 test)
+Phases:
+  Phase 1: Unit tests (no server needed)
+  Phase 2: Standalone server tests (pre-started TLS server)
+  Phase 3: ClusterManager tests (self-managed cluster per test)
+  Phase 4: Docker chaos tests (Docker global cluster)
 
 Usage:
-    ./tests/run_tests.py --suite unit              # Run unit tests only
-    ./tests/run_tests.py --suite integration       # Run integration tests
-    ./tests/run_tests.py --tier 0                  # CI Tier 0 (unit + integration)
-    ./tests/run_tests.py --tier 1                  # CI Tier 1 (resilience + performance)
-    ./tests/run_tests.py --list                    # List all available tests
-    ./tests/run_tests.py --all                     # Run all tests sequentially
-    ./tests/run_tests.py --all --with-cluster     # Run all including chaos_dist (Docker)
-    ./tests/run_tests.py --strict                  # Strict mode: fail on any warning/error
-
-Environment Variables:
-    TEST_SEED: Master seed for deterministic random (default: 42)
-    TEST_PROFILE: Test intensity profile (smoke/full)
-    IRIS_STRICT_MODE: When set, enables zero-tolerance error detection
+    ./tests/run_tests.py --all                    # Run all tests
+    ./tests/run_tests.py --all --skip-docker      # Skip Docker tests (faster)
+    ./tests/run_tests.py --suite unit             # Run specific suite
+    ./tests/run_tests.py --tier 0                 # CI Tier 0 (unit + integration)
+    ./tests/run_tests.py --list                   # List all available tests
 """
 
-# Force unbuffered output for real-time visibility
 import os
 os.environ['PYTHONUNBUFFERED'] = '1'
 
 import argparse
-import json
-import os
 import subprocess
 import sys
 import time
-from dataclasses import dataclass, field, asdict
+import socket
+import shutil
 from datetime import datetime
 from pathlib import Path
-from typing import List, Dict, Optional, Any
-import shutil
-import glob as glob_module
+from dataclasses import dataclass, field
+from typing import List, Dict, Optional
 
 # ============================================================================
 # Configuration
@@ -63,81 +39,108 @@ import glob as glob_module
 
 TESTS_ROOT = Path(__file__).parent.absolute()
 PROJECT_ROOT = TESTS_ROOT.parent
-ARTIFACTS_DIR = TESTS_ROOT / "artifacts"
 SUITES_DIR = TESTS_ROOT / "suites"
+ARTIFACTS_DIR = TESTS_ROOT / "artifacts"
 
-# Test tier definitions
-TIER_0_SUITES = ["unit", "integration"]  # Required on every merge
-TIER_1_SUITES = ["resilience", "performance_light", "contract", "compatibility"]  # Nightly/manual
-TIER_2_SUITES = ["stress", "security", "e2e"]  # Extended testing
+# Test timeouts (seconds)
+TIMEOUTS = {
+    "unit": 60,
+    "integration": 180,
+    "e2e": 180,
+    "contract": 180,
+    "compatibility": 180,
+    "security": 180,
+    "resilience": 300,
+    "performance_light": 300,
+    "stress": 300,
+    "chaos_controlled": 300,
+    "chaos_dist": 300,
+}
 
-# TLS is now ENFORCED by default (NFR-14 compliant)
-# All tests use config/test_tls.config unless explicitly disabled
-DEFAULT_CONFIG = "config/test_tls"
+# CI Tiers
+TIER_0_SUITES = ["unit", "integration"]
+TIER_1_SUITES = ["e2e", "contract", "compatibility", "security", "resilience"]
+TIER_2_SUITES = ["performance_light", "stress", "chaos_controlled"]
 
-# Tests that explicitly need non-TLS config (legacy/specific testing)
-NON_TLS_TESTS = []  # All tests now use TLS
-
-# Check if Erlang has SSL support (required for TLS tests)
-def check_erlang_ssl_available() -> bool:
-    """Check if Erlang was compiled with SSL support."""
-    try:
-        result = subprocess.run(
-            ["erl", "-noshell", "-eval", 
-             "case code:ensure_loaded(ssl) of {module,_}->io:format(\"yes\");_->io:format(\"no\") end, init:stop()."],
-            capture_output=True, text=True, timeout=10
-        )
-        return "yes" in result.stdout
-    except Exception:
-        return False
-
-ERLANG_SSL_AVAILABLE = check_erlang_ssl_available()
-
-# Known failing tests - excluded from determinism requirements (Phase 2)
-KNOWN_FAILING_TESTS = []  # All tests should pass after hardening
-
-# Suites that require Docker global cluster
-DOCKER_REQUIRED_SUITES = ["chaos_dist"]
-# Tests in other suites that require Docker
-DOCKER_REQUIRED_TESTS = ["test_failover_time", "test_multimaster_durability"]
-# Tests that kill/restart containers or modify network and may corrupt cluster state
-# After these tests, cluster needs FULL restart (with volume removal) to clear Mnesia state
-CLUSTER_CORRUPTING_TESTS = [
-    "test_ack_durability",       # Kills core-east-1
-    "test_cascade_failure",      # Kills core-eu-2
-    "test_dist_failover",        # Kills multiple containers
-    "test_failover_time",        # Kills core-east-1
-    "test_multimaster_durability",  # Kills core-east-1 with SIGKILL
-    "test_split_brain",          # Disconnects/reconnects network
+# Tests that use "with ClusterManager(...)" - they manage their own cluster
+CLUSTER_MANAGER_TESTS = [
+    # Resilience
+    "test_resilience",
+    # Performance
+    "benchmark_memory",
+    "measure_dials",
+    "test_cpu_utilization",
+    # Stress
+    "stress_geo_scale",
+    "stress_global_fan_in",
+    "stress_hotspot",
+    "stress_presence",
+    "test_backpressure_collapse",
+    "test_churn",
+    "test_connection_scale",
+    "test_fanout",
+    "test_hot_shard",
+    "test_limits",
+    # Chaos controlled
+    "chaos_combined",
+    "ultimate_chaos",
 ]
 
-# Docker cluster paths
-DOCKER_CLUSTER_DIR = PROJECT_ROOT / "docker" / "global-cluster"
-DOCKER_COMPOSE_FILE = DOCKER_CLUSTER_DIR / "docker-compose.yml"
-DOCKER_INIT_SCRIPT = DOCKER_CLUSTER_DIR / "init_cluster.sh"
+# Standalone stress tests (need pre-started server)
+STANDALONE_STRESS = [
+    "stress_offline_delete",
+    "test_flow_controller_scale",
+    "test_group_fanout",
+    "test_soak_memory",
+]
+
+# Standalone performance tests (need pre-started server)
+STANDALONE_PERF = [
+    "benchmark_e2ee_latency",
+    "benchmark_throughput",
+    "benchmark_unit_cost",
+]
+
+# Standalone resilience tests
+STANDALONE_RESILIENCE = [
+    "test_clock_skew",
+    "test_hard_kill",
+]
 
 # ============================================================================
-# Determinism Configuration
+# Colors
 # ============================================================================
 
-# Import determinism utilities if available
-try:
-    from tests.conftest import (
-        get_determinism_info,
-        reset_all_determinism,
-        MASTER_SEED,
-        TEST_RUN_ID,
-    )
-    DETERMINISM_AVAILABLE = True
-except ImportError:
-    # Fallback if conftest not available
-    DETERMINISM_AVAILABLE = False
-    MASTER_SEED = int(os.environ.get("TEST_SEED", "42"))
-    TEST_RUN_ID = f"run_{MASTER_SEED}"
-    def get_determinism_info():
-        return {"seed": MASTER_SEED, "run_id": TEST_RUN_ID}
-    def reset_all_determinism():
-        pass
+class Colors:
+    RED = '\033[0;31m'
+    GREEN = '\033[0;32m'
+    YELLOW = '\033[1;33m'
+    BLUE = '\033[0;34m'
+    BOLD = '\033[1m'
+    END = '\033[0m'
+
+def colored(text: str, color: str) -> str:
+    if sys.stdout.isatty():
+        return f"{color}{text}{Colors.END}"
+    return text
+
+def log(msg: str):
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}", flush=True)
+
+def log_header(msg: str):
+    print(f"\n{'='*60}\n{msg}\n{'='*60}", flush=True)
+
+def log_pass(msg: str):
+    print(colored(f"  {msg}", Colors.GREEN), flush=True)
+
+def log_fail(msg: str):
+    print(colored(f"  {msg}", Colors.RED), flush=True)
+
+def log_warn(msg: str):
+    print(colored(f"  {msg}", Colors.YELLOW), flush=True)
+
+def log_info(msg: str):
+    print(f"  {msg}", flush=True)
 
 # ============================================================================
 # Data Classes
@@ -148,619 +151,181 @@ class TestResult:
     name: str
     suite: str
     passed: bool
-    duration_seconds: float
-    output: str = ""
-    error: str = ""
-    artifacts: List[str] = field(default_factory=list)
-    skipped: bool = False  # Per TEST_CONTRACT.md: exit(2) = SKIP
-    skip_reason: str = ""
+    duration: float
+    skipped: bool = False
+    timeout: bool = False
 
 @dataclass
-class SuiteResult:
-    name: str
-    tests_run: int
-    tests_passed: int
-    tests_failed: int
-    tests_skipped: int = 0  # Per TEST_CONTRACT.md: exit(2) = SKIP
-    duration_seconds: float = 0.0
+class RunSummary:
+    total_pass: int = 0
+    total_fail: int = 0
+    total_skip: int = 0
+    failed_tests: List[str] = field(default_factory=list)
     results: List[TestResult] = field(default_factory=list)
 
-@dataclass 
-class ResourceSnapshot:
-    timestamp: str
-    cpu_percent: float = 0.0
-    memory_mb: float = 0.0
-    disk_free_gb: float = 0.0
-
 # ============================================================================
-# Logging & Output
+# Cleanup Functions
 # ============================================================================
 
-class Colors:
-    HEADER = '\033[95m'
-    BLUE = '\033[94m'
-    CYAN = '\033[96m'
-    GREEN = '\033[92m'
-    YELLOW = '\033[93m'
-    RED = '\033[91m'
-    BOLD = '\033[1m'
-    END = '\033[0m'
-
-def log(msg: str, color: str = ""):
-    timestamp = datetime.now().strftime("%H:%M:%S")
-    if color and sys.stdout.isatty():
-        print(f"{color}[{timestamp}] {msg}{Colors.END}", flush=True)
-    else:
-        print(f"[{timestamp}] {msg}", flush=True)
-
-def log_header(msg: str):
-    log(f"\n{'='*60}\n {msg}\n{'='*60}", Colors.HEADER)
-
-def log_pass(msg: str):
-    log(f"✓ {msg}", Colors.GREEN)
-
-def log_fail(msg: str):
-    log(f"✗ {msg}", Colors.RED)
-
-def log_info(msg: str):
-    log(msg, Colors.CYAN)
-
-def log_warn(msg: str):
-    log(f"⚠ {msg}", Colors.YELLOW)
-
-# ============================================================================
-# Resource Monitoring
-# ============================================================================
-
-def get_resource_snapshot() -> ResourceSnapshot:
-    """Capture current system resource usage."""
-    snapshot = ResourceSnapshot(timestamp=datetime.now().isoformat())
+def cleanup():
+    """Stop all processes and clean up state."""
+    log("Cleanup: stopping all processes...")
     
-    try:
-        # CPU - use ps on macOS/Linux
-        result = subprocess.run(
-            ["ps", "-A", "-o", "%cpu"],
-            capture_output=True, text=True, timeout=5
-        )
-        if result.returncode == 0:
-            cpu_values = [float(x) for x in result.stdout.strip().split('\n')[1:] if x.strip()]
-            snapshot.cpu_percent = sum(cpu_values)
-    except Exception:
-        pass
+    # Kill Erlang processes
+    subprocess.run(["pkill", "-9", "beam.smp"], capture_output=True)
+    subprocess.run(["pkill", "-9", "epmd"], capture_output=True)
     
-    try:
-        # Memory - platform specific
-        if sys.platform == "darwin":
-            result = subprocess.run(
-                ["vm_stat"],
-                capture_output=True, text=True, timeout=5
-            )
-            if result.returncode == 0:
-                lines = result.stdout.split('\n')
-                page_size = 4096  # Default macOS page size
-                free_pages = 0
-                for line in lines:
-                    if "Pages free" in line:
-                        free_pages = int(line.split(':')[1].strip().rstrip('.'))
-                        break
-                snapshot.memory_mb = (free_pages * page_size) / (1024 * 1024)
-        else:
-            with open('/proc/meminfo', 'r') as f:
-                for line in f:
-                    if line.startswith('MemAvailable:'):
-                        snapshot.memory_mb = int(line.split()[1]) / 1024
-                        break
-    except Exception:
-        pass
-    
-    try:
-        # Disk
-        statvfs = os.statvfs(str(PROJECT_ROOT))
-        snapshot.disk_free_gb = (statvfs.f_frsize * statvfs.f_bavail) / (1024**3)
-    except Exception:
-        pass
-    
-    return snapshot
-
-# ============================================================================
-# Streaming Subprocess Execution
-# ============================================================================
-
-def run_with_streaming(cmd, cwd, timeout, prefix="", shell=False):
-    """Run command with real-time output streaming.
-    
-    Args:
-        cmd: Command to run (list or string)
-        cwd: Working directory
-        timeout: Timeout in seconds
-        prefix: Prefix for each output line
-        shell: Whether to use shell execution
-        
-    Returns:
-        tuple: (return_code, output_string)
-    """
-    proc = subprocess.Popen(
-        cmd,
-        shell=shell or isinstance(cmd, str),
-        cwd=cwd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        bufsize=1  # Line-buffered
-    )
-    
-    output_lines = []
-    start = time.time()
-    
-    while True:
-        if proc.poll() is not None:
-            break
-        if time.time() - start > timeout:
-            proc.kill()
-            proc.wait()
-            raise subprocess.TimeoutExpired(cmd, timeout)
-        
-        # Non-blocking read with select
-        import select
-        if select.select([proc.stdout], [], [], 0.1)[0]:
-            line = proc.stdout.readline()
-            if line:
-                output_lines.append(line)
-                print(f"{prefix}{line}", end='', flush=True)
-    
-    # Drain remaining output
-    for line in proc.stdout:
-        output_lines.append(line)
-        print(f"{prefix}{line}", end='', flush=True)
-    
-    return proc.returncode, ''.join(output_lines)
-
-
-def run_with_heartbeat(cmd, cwd, timeout, heartbeat_interval=10, shell=False):
-    """Run command with periodic 'still running...' heartbeat.
-    
-    Args:
-        cmd: Command to run (list or string)
-        cwd: Working directory
-        timeout: Timeout in seconds
-        heartbeat_interval: Seconds between heartbeat messages
-        shell: Whether to use shell execution
-        
-    Returns:
-        tuple: (return_code, stdout, stderr)
-    """
-    proc = subprocess.Popen(
-        cmd,
-        shell=shell or isinstance(cmd, str),
-        cwd=cwd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True
-    )
-    
-    start = time.time()
-    last_heartbeat = start
-    
-    while proc.poll() is None:
-        time.sleep(0.5)
-        elapsed = time.time() - start
-        
-        if elapsed > timeout:
-            proc.kill()
-            proc.wait()
-            raise subprocess.TimeoutExpired(cmd, timeout)
-        
-        if time.time() - last_heartbeat > heartbeat_interval:
-            print(f"  ... still running ({elapsed:.0f}s)", flush=True)
-            last_heartbeat = time.time()
-    
-    stdout, stderr = proc.communicate()
-    return proc.returncode, stdout, stderr
-
-# ============================================================================
-# Pre-Suite Cleanup (Determinism)
-# ============================================================================
-
-def cleanup_before_suite():
-    """
-    Clean up all state before running a test suite.
-    
-    This ensures deterministic execution by removing:
-    - Orphaned Erlang processes
-    - Stale Mnesia directories
-    - Log files from previous runs
-    """
-    log_info("Performing pre-suite cleanup...")
-    
-    # Kill all beam.smp processes
-    try:
+    # Stop Docker cluster
+    docker_compose = PROJECT_ROOT / "docker" / "global-cluster" / "docker-compose.yml"
+    if docker_compose.exists():
         subprocess.run(
-            ["pkill", "-9", "beam.smp"],
-            capture_output=True,
-            timeout=10
+            ["docker", "compose", "-f", str(docker_compose), "down", "-v"],
+            capture_output=True, timeout=60
         )
-    except Exception:
-        pass
     
-    # Kill epmd (Erlang Port Mapper Daemon)
-    try:
-        subprocess.run(
-            ["pkill", "-9", "epmd"],
-            capture_output=True,
-            timeout=5
-        )
-    except Exception:
-        pass
+    # Clean Mnesia directories
+    for pattern in ["Mnesia.*"]:
+        for path in PROJECT_ROOT.glob(pattern):
+            shutil.rmtree(path, ignore_errors=True)
+        for path in Path("/tmp").glob(pattern):
+            shutil.rmtree(path, ignore_errors=True)
     
-    # Remove Mnesia directories from project root
-    for mnesia_dir in PROJECT_ROOT.glob("Mnesia.*"):
-        try:
-            shutil.rmtree(mnesia_dir, ignore_errors=True)
-        except Exception:
-            pass
+    # Clean log files
+    for log_file in ["core.log", "edge1.log", "edge2.log", "erl_crash.dump"]:
+        (PROJECT_ROOT / log_file).unlink(missing_ok=True)
     
-    # Remove Mnesia directories from /tmp
-    for mnesia_dir in Path("/tmp").glob("Mnesia.*"):
-        try:
-            shutil.rmtree(mnesia_dir, ignore_errors=True)
-        except Exception:
-            pass
-    
-    # Remove log files from project root
-    for log_file in PROJECT_ROOT.glob("*.log"):
-        try:
-            log_file.unlink()
-        except Exception:
-            pass
-    
-    # Wait for ports to be released
     time.sleep(2)
-    
-    log_info("Cleanup complete")
 
+def wait_for_port(port: int, timeout: int = 30) -> bool:
+    """Wait for a port to be available."""
+    start = time.time()
+    while time.time() - start < timeout:
+        try:
+            with socket.create_connection(("localhost", port), timeout=1):
+                return True
+        except (OSError, ConnectionRefusedError):
+            time.sleep(1)
+    return False
+
+# ============================================================================
+# Server Management
+# ============================================================================
+
+def start_server(log_dir: Path) -> bool:
+    """Start local TLS server."""
+    log("Starting local TLS server...")
+    
+    log_file = log_dir / "server_start.log"
+    with open(log_file, "w") as f:
+        subprocess.run(
+            ["make", "start"],
+            cwd=str(PROJECT_ROOT),
+            env={**os.environ, "CONFIG": "config/test_tls"},
+            stdout=f, stderr=f, timeout=60
+        )
+    
+    time.sleep(5)
+    
+    # Wait for server
+    for attempt in range(6):
+        if wait_for_port(8085, timeout=5):
+            log_pass("Server running on port 8085")
+            return True
+        log_info(f"Waiting for server (attempt {attempt+1}/6)...")
+    
+    log_fail("Server failed to start")
+    return False
+
+def stop_server():
+    """Stop local server."""
+    subprocess.run(["pkill", "-9", "beam.smp"], capture_output=True)
+    time.sleep(2)
 
 # ============================================================================
 # Docker Cluster Management
 # ============================================================================
 
-_docker_cluster_running = False
-
-def is_docker_available() -> bool:
-    """Check if Docker is available and running."""
-    try:
+def start_docker_cluster(log_dir: Path) -> bool:
+    """Start Docker global cluster."""
+    log("Starting Docker global cluster...")
+    
+    docker_dir = PROJECT_ROOT / "docker" / "global-cluster"
+    compose_file = docker_dir / "docker-compose.yml"
+    
+    if not compose_file.exists():
+        log_warn("Docker compose file not found")
+        return False
+    
+    # Stop any existing cluster
+    subprocess.run(
+        ["docker", "compose", "-f", str(compose_file), "down", "-v"],
+        capture_output=True, timeout=60
+    )
+    
+    # Start fresh cluster
+    log_file = log_dir / "docker_start.log"
+    with open(log_file, "w") as f:
         result = subprocess.run(
-            ["docker", "info"],
-            capture_output=True,
-            timeout=10
+            ["docker", "compose", "-f", str(compose_file), "up", "-d"],
+            cwd=str(docker_dir),
+            stdout=f, stderr=f, timeout=180
         )
-        return result.returncode == 0
-    except Exception:
-        return False
-
-
-def wait_for_mnesia_cluster(timeout: int = 120) -> bool:
-    """
-    Wait for Mnesia cluster to form with all nodes joined.
     
-    This checks that db_nodes on core-east-1 includes multiple nodes,
-    indicating the cluster has formed.
-    """
-    import random
-    
-    start_time = time.time()
-    attempt = 0
-    
-    while time.time() - start_time < timeout:
-        attempt += 1
-        try:
-            # Query Mnesia db_nodes via RPC to the actual running node
-            probe_name = f"probe_{random.randint(10000, 99999)}"
-            result = subprocess.run(
-                ["docker", "exec", "core-east-1", "sh", "-c",
-                 f"erl -noshell -sname {probe_name} -setcookie iris_secret -eval '"
-                 "case net_adm:ping(core_east_1@coreeast1) of "
-                 "pong -> "
-                 "  DbNodes = rpc:call(core_east_1@coreeast1, mnesia, system_info, [db_nodes], 5000), "
-                 "  case DbNodes of "
-                 "    L when is_list(L), length(L) >= 2 -> io:format(\"READY:~p\", [length(L)]); "
-                 "    _ -> io:format(\"WAITING\") "
-                 "  end; "
-                 "pang -> io:format(\"NOCONN\") "
-                 "end, halt().'"],
-                capture_output=True,
-                text=True,
-                timeout=15
-            )
-            
-            output = result.stdout.strip()
-            
-            if "READY:" in output:
-                # Extract node count
-                try:
-                    count = int(output.split("READY:")[1])
-                    log_info(f"  Mnesia cluster has {count} nodes")
-                    return True
-                except:
-                    pass
-            
-            if attempt % 5 == 0:
-                log_info(f"  Still waiting for Mnesia cluster... ({int(time.time() - start_time)}s)")
-            
-        except subprocess.TimeoutExpired:
-            pass
-        except Exception as e:
-            if attempt % 10 == 0:
-                log_warn(f"  Error checking Mnesia: {e}")
-        
-        time.sleep(3)
-    
-    return False
-
-def start_docker_cluster() -> bool:
-    """
-    Start the Docker global cluster for cross-region tests.
-    
-    Returns True if cluster started successfully, False otherwise.
-    """
-    global _docker_cluster_running
-    
-    if not is_docker_available():
-        log_warn("Docker not available - Docker-dependent tests will skip")
+    if result.returncode != 0:
+        log_fail("Docker cluster failed to start")
         return False
     
-    if not DOCKER_COMPOSE_FILE.exists():
-        log_warn(f"Docker compose file not found: {DOCKER_COMPOSE_FILE}")
-        return False
+    log_info("Waiting for cluster to stabilize (60s)...")
+    time.sleep(60)
     
-    log_info("Starting Docker global cluster...")
+    log_pass("Docker cluster started")
+    return True
+
+def stop_docker_cluster(log_dir: Path):
+    """Stop Docker global cluster."""
+    log("Stopping Docker cluster...")
     
-    try:
-        # Stop any existing cluster first
-        log_info("  Phase 1: Stopping existing Docker cluster...")
+    docker_dir = PROJECT_ROOT / "docker" / "global-cluster"
+    compose_file = docker_dir / "docker-compose.yml"
+    
+    log_file = log_dir / "docker_stop.log"
+    with open(log_file, "w") as f:
         subprocess.run(
-            ["docker", "compose", "-f", str(DOCKER_COMPOSE_FILE), "down", "--remove-orphans", "-v", "--timeout", "30"],
-            cwd=str(DOCKER_CLUSTER_DIR),
-            capture_output=True,
-            timeout=120
+            ["docker", "compose", "-f", str(compose_file), "down", "-v"],
+            cwd=str(docker_dir),
+            stdout=f, stderr=f, timeout=60
         )
-        
-        # Force remove any containers that might be orphaned (belt and suspenders)
-        container_names = (
-            [f"core-east-{i}" for i in [1,2]] +
-            [f"core-west-{i}" for i in [1,2]] +
-            [f"core-eu-{i}" for i in [1,2]] +
-            [f"edge-east-{i}" for i in [1,2]] +
-            [f"edge-west-{i}" for i in [1,2]] +
-            [f"edge-eu-{i}" for i in [1,2]] +
-            ["edge-sydney-1", "edge-sydney-2", "edge-saopaulo", "loadgen-east", "loadgen-west"]
-        )
-        subprocess.run(
-            ["docker", "rm", "-f"] + container_names,
-            capture_output=True,
-            timeout=30
-        )
-        
-        # Wait for Docker to fully release resources
-        time.sleep(3)
-        
-        # Start fresh cluster
-        log_info("  Phase 2: Starting Docker cluster (this may take 1-2 minutes)...")
-        result = subprocess.run(
-            ["docker", "compose", "-f", str(DOCKER_COMPOSE_FILE), "up", "-d"],
-            cwd=str(DOCKER_CLUSTER_DIR),
-            capture_output=True,
-            text=True,
-            timeout=300
-        )
-        
-        if result.returncode != 0:
-            log_warn(f"Docker cluster start failed: {result.stderr}")
-            return False
-        
-        # Wait for services to be healthy - increased for 6-node cluster
-        log_info("  Phase 3: Waiting for containers to start (30s)...")
-        time.sleep(30)
-        
-        # Phase 4: Wait for Mnesia cluster to form (all nodes join)
-        log_info("  Phase 4: Waiting for Mnesia cluster to form...")
-        mnesia_ready = wait_for_mnesia_cluster(timeout=120)
-        if not mnesia_ready:
-            log_warn("  Mnesia cluster did not form completely - continuing anyway")
-        else:
-            log_info("  Mnesia cluster formed successfully")
-        
-        # Initialize Mnesia replication with retry
-        # The init_cluster.sh script now has its own retry logic and verification
-        if DOCKER_INIT_SCRIPT.exists():
-            log_info("  Phase 5: Initializing cross-region replication...")
-            result = subprocess.run(
-                ["bash", str(DOCKER_INIT_SCRIPT)],
-                cwd=str(DOCKER_CLUSTER_DIR),
-                capture_output=True,
-                text=True,
-                timeout=300  # Increased timeout - init script now does more verification
-            )
-            
-            if result.returncode != 0:
-                log_warn(f"Mnesia replication init returned non-zero: {result.returncode}")
-                # Log last few lines of output for debugging
-                output_lines = (result.stdout + result.stderr).strip().split('\n')
-                for line in output_lines[-10:]:
-                    log_warn(f"    {line}")
-                # Continue anyway - tests will skip if replication not working
-            else:
-                log_info("  Replication initialization completed successfully")
-                # Log success output
-                for line in result.stdout.strip().split('\n')[-5:]:
-                    log_info(f"    {line}")
-        
-        # Wait for replication to settle after init
-        log_info("  Phase 6: Waiting for replication to settle (15s)...")
-        time.sleep(15)
-        
-        # Phase 7: Run verification script for comprehensive check
-        verify_script = PROJECT_ROOT / "scripts" / "verify_cluster_ready.py"
-        if verify_script.exists():
-            log_info("  Phase 7: Running cluster verification script...")
-            # Try verification with retry
-            for verify_attempt in range(2):
-                verify_result = subprocess.run(
-                    ["python3", str(verify_script), "--quick"],
-                    capture_output=True,
-                    text=True,
-                    timeout=90
-                )
-                if verify_result.returncode == 0:
-                    log_info("  Cluster verification: PASSED")
-                    break
-                else:
-                    if verify_attempt == 0:
-                        log_warn("  Cluster verification: FAILED - retrying in 10s...")
-                        time.sleep(10)
-                    else:
-                        log_warn("  Cluster verification: WARNINGS (see output)")
-                        # Print last few lines of verification output
-                        lines = verify_result.stdout.strip().split('\n')
-                        for line in lines[-5:]:
-                            log_warn(f"    {line}")
-        
-        _docker_cluster_running = True
-        log_info("Docker cluster started successfully")
-        return True
-        
-    except subprocess.TimeoutExpired:
-        log_warn("Docker cluster startup timed out")
-        return False
-    except Exception as e:
-        log_warn(f"Docker cluster startup failed: {e}")
-        return False
-
-def stop_docker_cluster(remove_volumes: bool = False):
-    """Stop the Docker global cluster.
-    
-    Args:
-        remove_volumes: If True, also remove Docker volumes (Mnesia data).
-                       Use this after tests that corrupt cluster state.
-    """
-    global _docker_cluster_running
-    
-    if not _docker_cluster_running:
-        return
-    
-    log_info("Stopping Docker cluster...")
-    
-    try:
-        cmd = ["docker", "compose", "-f", str(DOCKER_COMPOSE_FILE), "down", "--remove-orphans"]
-        if remove_volumes:
-            cmd.append("-v")  # Remove volumes to clear Mnesia state
-            log_info("  (removing volumes to clear Mnesia state)")
-        
-        subprocess.run(
-            cmd,
-            cwd=str(DOCKER_CLUSTER_DIR),
-            capture_output=True,
-            timeout=120  # Increased timeout for volume removal
-        )
-        _docker_cluster_running = False
-        log_info("Docker cluster stopped")
-    except Exception as e:
-        log_warn(f"Error stopping Docker cluster: {e}")
-
-def suite_requires_docker(suite_name: str) -> bool:
-    """Check if a suite requires Docker cluster."""
-    return suite_name in DOCKER_REQUIRED_SUITES
-
-def test_requires_docker(test_name: str) -> bool:
-    """Check if a specific test requires Docker cluster."""
-    return test_name in DOCKER_REQUIRED_TESTS
-
 
 # ============================================================================
 # Test Discovery
 # ============================================================================
 
-def discover_tests(suite: str) -> List[Dict[str, Any]]:
-    """
-    Discover all tests in a suite directory.
-    
-    Tests are returned in LEXICOGRAPHIC ORDER by name for deterministic execution.
-    """
+def discover_tests(suite: str) -> List[Dict]:
+    """Discover all tests in a suite."""
     tests = []
     suite_dir = SUITES_DIR / suite
     
     if not suite_dir.exists():
         return tests
     
-    # Track already-added files to avoid duplicates
-    added_files = set()
-    
-    # Python tests - pick up ALL .py files (they are all tests)
-    # Sort by filename for deterministic ordering
-    python_files = sorted(suite_dir.glob("*.py"), key=lambda p: p.name)
-    for test_file in python_files:
-        if test_file.name.startswith("__"):  # Skip __init__.py etc
+    for test_file in sorted(suite_dir.glob("*.py")):
+        # Skip __init__.py, utils.py, helpers.py etc
+        if test_file.name.startswith("__"):
             continue
-        if test_file in added_files:
+        if test_file.stem in ["utils", "helpers", "conftest", "fixtures"]:
             continue
-        added_files.add(test_file)
         tests.append({
             "name": test_file.stem,
             "suite": suite,
-            "type": "python",
             "path": str(test_file),
-            "command": f"python3 {test_file}"
         })
-    
-    # Erlang tests (EUnit modules) from suite dir
-    # Find erl binary - don't hardcode path
-    erl_binary = shutil.which("erl") or "erl"
-    
-    # Sort Erlang test files for deterministic ordering
-    erlang_files = sorted(suite_dir.glob("*_tests.erl"), key=lambda p: p.name)
-    for test_file in erlang_files:
-        module = test_file.stem
-        tests.append({
-            "name": module,
-            "suite": suite,
-            "type": "erlang",
-            "path": str(test_file),
-            "command": f"{erl_binary} -pa {PROJECT_ROOT}/ebin -pa {suite_dir} -noshell -eval \"eunit:test({module}, []), init:stop().\""
-        })
-    
-    # P0-1 FIX: Also discover EUnit tests from test_utils directory for 'unit' suite
-    if suite == "unit":
-        test_utils_dir = PROJECT_ROOT / "test_utils"
-        if test_utils_dir.exists():
-            # Sort for deterministic ordering
-            test_utils_files = sorted(test_utils_dir.glob("*_tests.erl"), key=lambda p: p.name)
-            for test_file in test_utils_files:
-                module = test_file.stem
-                # Skip if already added from suite_dir
-                if any(t["name"] == module for t in tests):
-                    continue
-                tests.append({
-                    "name": f"test_utils/{module}",
-                    "suite": suite,
-                    "type": "erlang",
-                    "path": str(test_file),
-                    "command": f"{erl_binary} -pa {PROJECT_ROOT}/ebin -pa {test_utils_dir} -noshell -eval \"eunit:test({module}, []), init:stop().\""
-                })
-    
-    # Final sort by name for deterministic ordering
-    tests.sort(key=lambda t: t["name"])
     
     return tests
 
 def list_all_tests() -> Dict[str, List[Dict]]:
-    """
-    List all available tests grouped by suite.
-    
-    Suites are returned in LEXICOGRAPHIC ORDER for deterministic execution.
-    """
+    """List all available tests grouped by suite."""
     all_tests = {}
-    # Sort suite directories by name for deterministic ordering
-    suite_dirs = sorted(SUITES_DIR.iterdir(), key=lambda p: p.name)
-    for suite_dir in suite_dirs:
+    for suite_dir in sorted(SUITES_DIR.iterdir()):
         if suite_dir.is_dir():
             tests = discover_tests(suite_dir.name)
             if tests:
@@ -771,1089 +336,325 @@ def list_all_tests() -> Dict[str, List[Dict]]:
 # Test Execution
 # ============================================================================
 
-def mesh_cluster(suffix: str):
-    """Force mesh the cluster nodes."""
-    log_info("Meshing cluster nodes...")
-    try:
-        # Match Makefile's $(shell hostname -s)
-        hostname = subprocess.check_output(["hostname", "-s"], text=True).strip()
-        core = f"iris_core{suffix}@{hostname}"
-        edge = f"iris_edge1{suffix}@{hostname}"
-        
-        # RPC call to force mesh
-        cmd = [
-            "erl", "-noshell", "-sname", f"mesher_{int(time.time())}", 
-            "-setcookie", "iris_secret",
-            "-eval", f"io:format('Ping: ~p~n', [rpc:call('{edge}', net_adm, ping, ['{core}'])]), init:stop()."
-        ]
-        
-        res = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
-        if "pong" not in res.stdout:
-            log_warn(f"Mesh might have failed: {res.stdout}")
-        else:
-            log_info("Cluster meshed successfully")
-            
-    except Exception as e:
-        log_warn(f"Mesh error: {e}")
-
-def ensure_cluster_running(config: str = "config/test") -> bool:
-    """Ensure the Iris cluster is running with specified config.
+def run_test(test: Dict, log_dir: Path, timeout: int = 180) -> TestResult:
+    """Run a single test."""
+    name = test["name"]
+    suite = test["suite"]
+    path = test["path"]
     
-    Args:
-        config: Config file path without .config extension (default: config/test)
-    """
-    log_info(f"Ensuring cluster is running (config={config})...")
+    start = time.time()
+    result = TestResult(name=name, suite=suite, passed=False, duration=0)
+    
+    # Print test name (no newline yet)
+    print(f"  {name:<50}", end="", flush=True)
+    
+    log_file = log_dir / f"{name}.log"
     
     try:
-        # Get suffix for this run
-        suffix = os.environ.get("IRIS_NODE_SUFFIX", "")
-        make_args = [f"NODE_SUFFIX={suffix}", f"CONFIG={config}"] if suffix else [f"CONFIG={config}"]
-        
-        # Phase 1: Stop existing cluster
-        log_info("Phase 1/5: Stopping existing cluster...")
-        stop_cluster()
-        time.sleep(2)
-
-        # Phase 2: Build project (can take time on CI)
-        log_info("Phase 2/5: Building project (this may take a few minutes)...")
-        try:
-            returncode, output = run_with_streaming(
-                ["make", "all"] + make_args,
-                cwd=str(PROJECT_ROOT),
-                timeout=300,  # 5 minutes for compilation
-                prefix="  [build] "
-            )
-            if returncode != 0:
-                log_warn(f"Build failed with exit code {returncode}")
-                return False
-        except subprocess.TimeoutExpired:
-            log_warn("Build timed out after 5 minutes")
-            return False
-
-        # Phase 3: Start Core node
-        log_info("Phase 3/5: Starting Core node...")
-        try:
-            returncode, stdout, stderr = run_with_heartbeat(
-                ["make", "start_core"] + make_args,
-                cwd=str(PROJECT_ROOT),
-                timeout=60,
-                heartbeat_interval=10
-            )
-        except subprocess.TimeoutExpired:
-            log_warn("Core node startup timed out")
-            return False
-        time.sleep(3)  # Give Mnesia time to initialize
-        
-        # Phase 4: Start Edge node
-        log_info("Phase 4/5: Starting Edge node...")
-        try:
-            returncode, stdout, stderr = run_with_heartbeat(
-                ["make", "start_edge1"] + make_args,
-                cwd=str(PROJECT_ROOT),
-                timeout=60,
-                heartbeat_interval=10
-            )
-        except subprocess.TimeoutExpired:
-            log_warn("Edge node startup timed out")
-            return False
-        
-        # Phase 5: Wait for Edge port
-        log_info("Phase 5/5: Waiting for Edge Node (8085)...")
-        if not wait_for_port(8085, timeout=30):
-            log_warn("Edge node port 8085 did not open in time.")
-            return False
-            
-        # Mesh the cluster
-        mesh_cluster(suffix)
-        log_info("Cluster is ready!")
-            
-        return True
-    except Exception as e:
-        log_warn(f"Could not start cluster: {e}")
-        return False
-
-
-# Track what config the cluster is currently running with
-_current_cluster_config = None
-
-def ensure_cluster_with_config(config: str = "config/test") -> bool:
-    """Ensure cluster is running with the specified config, restarting if needed."""
-    global _current_cluster_config
-    
-    if _current_cluster_config == config:
-        # Verify cluster is still actually running
-        if wait_for_port(8085, timeout=2):
-            log_info(f"Cluster already running with {config}")
-            return True
-        else:
-            log_warn("Cluster config matches but port 8085 not responding - restarting")
-            _current_cluster_config = None
-    
-    if _current_cluster_config is not None:
-        log_info(f"Switching cluster config from {_current_cluster_config} to {config}")
-    
-    result = ensure_cluster_running(config=config)
-    if result:
-        _current_cluster_config = config
-    return result
-
-def wait_for_port(port: int, timeout: int = 30) -> bool:
-    """Wait for a TCP port to open."""
-    import socket
-    start_time = time.time()
-    while time.time() - start_time < timeout:
-        try:
-            with socket.create_connection(("localhost", port), timeout=1):
-                return True
-        except (OSError, ConnectionRefusedError):
-            time.sleep(0.5)
-    return False
-
-def stop_cluster():
-    """Stop the Iris cluster."""
-    log_info("Stopping cluster...")
-    try:
-        subprocess.run(
-            ["make", "stop"],
-            cwd=str(PROJECT_ROOT),
-            capture_output=True,
-            timeout=30
-        )
-        subprocess.run(
-            ["killall", "beam.smp"],
-            capture_output=True,
-            timeout=10
-        )
-    except Exception:
-        pass
-
-
-def nuke_cluster(verbose: bool = True):
-    """Completely destroy all cluster processes, Docker containers, and free ports.
-    
-    This is the DEFINITIVE cleanup function - kills EVERYTHING:
-    - All beam.smp processes (Erlang VMs)
-    - All epmd processes (Erlang Port Mapper Daemon)
-    - All Docker containers in global-cluster
-    - All processes on ports 4369, 8085-8094
-    - All Mnesia directories
-    - All stale log files in project root
-    
-    Use this before EVERY test run to ensure clean slate.
-    """
-    if verbose:
-        log_info("=" * 60)
-        log_info("NUKE CLUSTER: Complete teardown starting...")
-        log_info("=" * 60)
-    
-    # 0. CRITICAL: Stop Docker cluster FIRST to avoid stale container references
-    if verbose:
-        log_info("  [1/7] Stopping Docker cluster...")
-    try:
-        docker_compose_file = PROJECT_ROOT / "docker" / "global-cluster" / "docker-compose.yml"
-        if docker_compose_file.exists():
-            subprocess.run(
-                ["docker", "compose", "-f", str(docker_compose_file), "down", "--remove-orphans", "-v", "--timeout", "10"],
-                capture_output=True,
-                timeout=60
-            )
-    except Exception:
-        pass
-    
-    # Force remove any containers that might be orphaned
-    if verbose:
-        log_info("  [2/7] Force removing Docker containers...")
-    container_names = (
-        [f"core-east-{i}" for i in [1,2]] +
-        [f"core-west-{i}" for i in [1,2]] +
-        [f"core-eu-{i}" for i in [1,2]] +
-        [f"edge-east-{i}" for i in [1,2]] +
-        [f"edge-west-{i}" for i in [1,2]] +
-        [f"edge-eu-{i}" for i in [1,2]] +
-        ["edge-sydney-1", "edge-sydney-2", "edge-saopaulo", "loadgen-east", "loadgen-west"]
-    )
-    try:
-        subprocess.run(
-            ["docker", "rm", "-f"] + container_names,
-            capture_output=True,
-            timeout=30
-        )
-    except Exception:
-        pass
-    
-    # 1. Try graceful stop first
-    if verbose:
-        log_info("  [3/7] Graceful cluster stop...")
-    try:
-        subprocess.run(
-            ["make", "stop"],
-            cwd=str(PROJECT_ROOT),
-            capture_output=True,
-            timeout=15
-        )
-    except Exception:
-        pass
-    
-    # 2. Kill all beam.smp processes (SIGKILL)
-    if verbose:
-        log_info("  [4/7] Killing all beam.smp processes...")
-    try:
-        subprocess.run(["pkill", "-9", "-f", "beam.smp"], capture_output=True, timeout=5)
-    except Exception:
-        pass
-    try:
-        subprocess.run(["killall", "-9", "beam.smp"], capture_output=True, timeout=5)
-    except Exception:
-        pass
-    
-    # 3. Kill epmd
-    if verbose:
-        log_info("  [5/7] Killing epmd...")
-    try:
-        subprocess.run(["pkill", "-9", "epmd"], capture_output=True, timeout=5)
-    except Exception:
-        pass
-    try:
-        subprocess.run(["killall", "-9", "epmd"], capture_output=True, timeout=5)
-    except Exception:
-        pass
-    
-    # 4. Kill any process holding our ports
-    if verbose:
-        log_info("  [6/7] Freeing ports 4369, 8085-8094...")
-    ports_to_free = [4369] + list(range(8085, 8095))
-    for port in ports_to_free:
-        try:
-            subprocess.run(["fuser", "-k", f"{port}/tcp"], capture_output=True, timeout=5)
-        except Exception:
-            pass
-    
-    # 5. Clean up Mnesia directories and logs
-    if verbose:
-        log_info("  [7/7] Cleaning Mnesia directories and logs...")
-    try:
-        # Project root Mnesia
-        for mnesia_dir in PROJECT_ROOT.glob("Mnesia.*"):
-            shutil.rmtree(mnesia_dir, ignore_errors=True)
-        # /tmp Mnesia
-        for mnesia_dir in Path("/tmp").glob("Mnesia.*"):
-            shutil.rmtree(mnesia_dir, ignore_errors=True)
-        for mnesia_dir in Path("/tmp").glob("mnesia_*"):
-            shutil.rmtree(mnesia_dir, ignore_errors=True)
-        # Project root logs (but not artifacts)
-        for log_file in PROJECT_ROOT.glob("*.log"):
-            try:
-                os.remove(log_file)
-            except Exception:
-                pass
-    except Exception:
-        pass
-    
-    # 6. Wait for ports to be released
-    time.sleep(3)
-    
-    if verbose:
-        log_info("=" * 60)
-        log_info("NUKE COMPLETE: All processes killed, ports freed, state cleared")
-        log_info("=" * 60)
-
-
-def get_nuke_command() -> str:
-    """Return a one-liner nuke command for manual use."""
-    return (
-        "sudo pkill -9 -f beam.smp; "
-        "sudo pkill -9 epmd; "
-        "sudo docker kill $(docker ps -q) 2>/dev/null; "
-        "sudo docker compose -f docker/global-cluster/docker-compose.yml down --remove-orphans --volumes 2>/dev/null; "
-        "for p in 4369 8085 8086 8087 8088 8089 8090 8091 8092 8093 8094; do sudo fuser -k $p/tcp 2>/dev/null; done; "
-        "sudo rm -rf /tmp/mnesia_* /tmp/Mnesia.* Mnesia.*"
-    )
-
-def run_test(test: Dict, run_dir: Path, timeout: int = 120, stream_output: bool = True) -> TestResult:
-    """Run a single test and return the result.
-    
-    Args:
-        test: Test configuration dict
-        run_dir: Directory for artifacts
-        timeout: Timeout in seconds
-        stream_output: If True, stream output in real-time; if False, capture silently
-    """
-    start_time = time.time()
-    
-    result = TestResult(
-        name=test["name"],
-        suite=test["suite"],
-        passed=False,
-        duration_seconds=0.0
-    )
-    
-    # Create test-specific artifact directory
-    test_artifact_dir = run_dir / test["suite"] / test["name"]
-    test_artifact_dir.mkdir(parents=True, exist_ok=True)
-    
-    log_file = test_artifact_dir / "output.log"
-    
-    try:
-        log_info(f"Running: {test['name']} ({test['type']})")
-        
-        # Set up environment
         env = os.environ.copy()
-        env["IRIS_TEST_ARTIFACTS"] = str(test_artifact_dir)
-        env["IRIS_PROJECT_ROOT"] = str(PROJECT_ROOT)
-        env["PYTHONUNBUFFERED"] = "1"  # Force unbuffered output for child processes
-        env["IRIS_TEST_RUNNER"] = "1"  # Signal that test runner is managing cluster
+        env["PYTHONUNBUFFERED"] = "1"
+        env["IRIS_TEST_RUNNER"] = "1"
         
-        # Pass determinism configuration to child processes
-        env["TEST_SEED"] = str(MASTER_SEED)
-        env["TEST_RUN_ID"] = TEST_RUN_ID
-        
-        # Pass TEST_PROFILE for proper scaling (no CI-based tricks)
-        if "TEST_PROFILE" not in env:
-            env["TEST_PROFILE"] = os.environ.get("TEST_PROFILE", "smoke")
-        
-        # Add project root to PYTHONPATH so tests can import from tests.framework
-        existing_pythonpath = env.get("PYTHONPATH", "")
-        env["PYTHONPATH"] = f"{PROJECT_ROOT}:{existing_pythonpath}" if existing_pythonpath else str(PROJECT_ROOT)
-        
-        if stream_output:
-            # Stream output in real-time with heartbeat for long tests
-            proc = subprocess.Popen(
-                test["command"],
-                shell=True,
-                cwd=str(PROJECT_ROOT),
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                bufsize=1,
-                env=env
-            )
-            
-            output_lines = []
-            last_heartbeat = time.time()
-            heartbeat_interval = 15  # Show heartbeat every 15s if no output
-            
-            while True:
-                if proc.poll() is not None:
-                    break
-                elapsed = time.time() - start_time
-                if elapsed > timeout:
-                    proc.kill()
-                    proc.wait()
-                    raise subprocess.TimeoutExpired(test["command"], timeout)
-                
-                # Non-blocking read
-                import select
-                if select.select([proc.stdout], [], [], 0.5)[0]:
-                    line = proc.stdout.readline()
-                    if line:
-                        output_lines.append(line)
-                        print(f"  | {line}", end='', flush=True)
-                        last_heartbeat = time.time()
-                elif time.time() - last_heartbeat > heartbeat_interval:
-                    print(f"  ... running ({elapsed:.0f}s)", flush=True)
-                    last_heartbeat = time.time()
-            
-            # Drain remaining output
-            for line in proc.stdout:
-                output_lines.append(line)
-                print(f"  | {line}", end='', flush=True)
-            
-            result.output = ''.join(output_lines)
-            result.error = ""
-            # Per TEST_CONTRACT.md: exit(0)=pass, exit(1)=fail, exit(2)=skip
-            if proc.returncode == 0:
-                result.passed = True
-            elif proc.returncode == 2:
-                result.passed = True  # Skips don't count as failures
-                result.skipped = True
-                # Extract skip reason from output (look for "SKIP:" prefix)
-                for line in output_lines:
-                    if "SKIP:" in line:
-                        result.skip_reason = line.strip()
-                        break
-            else:
-                result.passed = False
-        else:
-            # Original behavior: capture silently
+        with open(log_file, "w") as f:
             proc = subprocess.run(
-                test["command"],
-                shell=True,
+                ["python3", "-u", path],
                 cwd=str(PROJECT_ROOT),
-                capture_output=True,
-                text=True,
+                stdout=f, stderr=subprocess.STDOUT,
                 timeout=timeout,
                 env=env
             )
+        
+        if proc.returncode == 0:
+            result.passed = True
+            print(colored("PASS", Colors.GREEN), flush=True)
+        elif proc.returncode == 2:
+            result.passed = True
+            result.skipped = True
+            print(colored("SKIP", Colors.YELLOW), flush=True)
+        else:
+            print(colored("FAIL", Colors.RED), flush=True)
             
-            result.output = proc.stdout
-            result.error = proc.stderr
-            # Per TEST_CONTRACT.md: exit(0)=pass, exit(1)=fail, exit(2)=skip
-            if proc.returncode == 0:
-                result.passed = True
-            elif proc.returncode == 2:
-                result.passed = True  # Skips don't count as failures
-                result.skipped = True
-                for line in proc.stdout.split('\n'):
-                    if "SKIP:" in line:
-                        result.skip_reason = line.strip()
-                        break
-            else:
-                result.passed = False
-        
-        # Write log
-        with open(log_file, "w") as f:
-            f.write(f"=== STDOUT ===\n{result.output}\n")
-            f.write(f"=== STDERR ===\n{result.error}\n")
-            f.write(f"=== EXIT CODE: {proc.returncode if hasattr(proc, 'returncode') else 'N/A'} ===\n")
-        
-        result.artifacts.append(str(log_file))
-        
     except subprocess.TimeoutExpired:
-        result.error = f"Test timed out after {timeout}s"
-        result.passed = False
-        log_fail(f"TIMEOUT: {test['name']}")
-        
+        result.timeout = True
+        print(colored("TIMEOUT", Colors.RED), flush=True)
     except Exception as e:
-        result.error = str(e)
-        result.passed = False
-        log_fail(f"ERROR: {test['name']} - {e}")
+        print(colored(f"ERROR: {e}", Colors.RED), flush=True)
     
-    result.duration_seconds = time.time() - start_time
-    
-    if result.skipped:
-        log_warn(f"SKIP: {test['name']} ({result.duration_seconds:.1f}s) - {result.skip_reason}")
-    elif result.passed:
-        log_pass(f"PASS: {test['name']} ({result.duration_seconds:.1f}s)")
-    else:
-        log_fail(f"FAIL: {test['name']} ({result.duration_seconds:.1f}s)")
-    
+    result.duration = time.time() - start
     return result
 
-def run_suite(suite_name: str, run_dir: Path, require_cluster: bool = True) -> SuiteResult:
-    """
-    Run all tests in a suite.
-    
-    Tests are executed in deterministic (lexicographic) order.
-    Pre-suite cleanup ensures no state pollution from previous runs.
-    """
-    global _current_cluster_config
-    
-    log_header(f"Suite: {suite_name}")
-    
-    # Reset determinism state for this suite
-    reset_all_determinism()
-    
-    start_time = time.time()
-    tests = discover_tests(suite_name)
-    
-    if not tests:
-        log_warn(f"No tests found in suite: {suite_name}")
-        return SuiteResult(
-            name=suite_name,
-            tests_run=0,
-            tests_passed=0,
-            tests_failed=0,
-            duration_seconds=0.0
-        )
-    
-    log_info(f"Found {len(tests)} tests (sorted lexicographically)")
-    
-    # Suite-specific timeouts (seconds)
-    suite_timeouts = {
-        "integration": 120,
-        "resilience": 600,       # 10 min for resilience
-        "chaos_controlled": 600, # 10 min for chaos
-        "stress": 600,           # 10 min for stress
-        "performance_light": 300,# 5 min for performance
-        "unit": 60,
-        "security": 120,
-    }
-    timeout = suite_timeouts.get(suite_name, 300)  # Default 5 min
-
-    # Separate tests by config requirement
-    normal_tests = []
-    tls_tests = []
+def run_tests_batch(tests: List[Dict], log_dir: Path, summary: RunSummary, 
+                    timeout: int = 180, cleanup_between: bool = False):
+    """Run a batch of tests."""
     for test in tests:
-        if test["name"] in TLS_REQUIRED_TESTS:
-            tls_tests.append(test)
+        if cleanup_between:
+            stop_server()
+            time.sleep(2)
+        
+        result = run_test(test, log_dir, timeout)
+        summary.results.append(result)
+        
+        if result.skipped:
+            summary.total_skip += 1
+        elif result.passed:
+            summary.total_pass += 1
         else:
-            normal_tests.append(test)
+            summary.total_fail += 1
+            summary.failed_tests.append(f"{test['name']}" + (" (timeout)" if result.timeout else ""))
+
+# ============================================================================
+# Phase Execution
+# ============================================================================
+
+def run_phase_unit(log_dir: Path, summary: RunSummary):
+    """Phase 1: Unit tests (no server needed)."""
+    log_header("Phase 1: Unit Tests")
     
-    results = []
-    
-    # Check if this suite requires Docker cluster
-    needs_docker = suite_requires_docker(suite_name)
-    docker_started = False
-    
-    # Reorder tests: put cluster-corrupting tests LAST to minimize restarts
-    if needs_docker:
-        def test_sort_key(test):
-            # Tests are dictionaries with "name" key
-            test_name = test.get("name", "") if isinstance(test, dict) else str(test)
-            # Tests that corrupt cluster go last (return 1), others first (return 0)
-            is_corrupting = test_name in CLUSTER_CORRUPTING_TESTS
-            return (1 if is_corrupting else 0, test_name)  # Secondary sort by name for stability
-        
-        original_order = [t.get("name", "?") for t in normal_tests]
-        normal_tests = sorted(normal_tests, key=test_sort_key)
-        new_order = [t.get("name", "?") for t in normal_tests]
-        log_info(f"Reordered tests: {original_order} -> {new_order}")
-    
-    if needs_docker:
-        # Stop local cluster before starting Docker
-        log_info("Suite requires Docker cluster - stopping local cluster...")
-        stop_cluster()
-        
-        # Start Docker cluster
-        docker_started = start_docker_cluster()
-        if not docker_started:
-            log_warn(f"Docker cluster unavailable - tests in {suite_name} may skip")
-    else:
-        # Run normal tests first (with TLS-enabled config - NFR-14 compliant)
-        if normal_tests and require_cluster and suite_name not in ["unit"]:
-            ensure_cluster_with_config(DEFAULT_CONFIG)  # Uses config/test_tls
-    
-    for test in normal_tests:
-        result = run_test(test, run_dir, timeout=timeout)
-        results.append(result)
-        
-        # If this test corrupts the cluster, do a FULL restart (with volume removal)
-        # This ensures clean Mnesia state for subsequent tests
-        test_name = test.get("name", "") if isinstance(test, dict) else str(test)
-        if needs_docker and test_name in CLUSTER_CORRUPTING_TESTS:
-            log_info(f"Test {test_name} corrupted cluster - full restart with volume cleanup...")
-            stop_docker_cluster(remove_volumes=True)  # CRITICAL: remove volumes!
-            time.sleep(10)  # Allow time for cleanup
-            if not start_docker_cluster():
-                log_warn("Failed to restart Docker cluster after corrupting test")
-    
-    # Run TLS-required tests with TLS config
-    if tls_tests and require_cluster:
-        log_info("Switching to TLS-enforcing config for TLS tests...")
-        ensure_cluster_with_config("config/test_tls")
-        
-        for test in tls_tests:
-            result = run_test(test, run_dir, timeout=timeout)
-            results.append(result)
-        
-        # Switch back to normal config for subsequent suites
-        _current_cluster_config = None  # Force restart on next suite
-    
-    # Clean up Docker cluster if we started it
-    if docker_started:
-        stop_docker_cluster()
-        # Reset cluster config so next suite will restart local cluster
-        _current_cluster_config = None
-    
-    # ALWAYS nuke cluster after EVERY suite to prevent flakiness
-    # This ensures clean state for subsequent test runs
-    # Extended from just "integration" to all suites per stabilization plan
-    nuke_cluster()
-    
-    duration = time.time() - start_time
-    skipped = sum(1 for r in results if r.skipped)
-    passed = sum(1 for r in results if r.passed and not r.skipped)
-    failed = sum(1 for r in results if not r.passed)
-    
-    return SuiteResult(
-        name=suite_name,
-        tests_run=len(results),
-        tests_skipped=skipped,
-        tests_passed=passed,
-        tests_failed=failed,
-        duration_seconds=duration,
-        results=results
+    # Compile first
+    log("Compiling...")
+    result = subprocess.run(
+        ["make", "all"],
+        cwd=str(PROJECT_ROOT),
+        capture_output=True, timeout=300
     )
+    if result.returncode != 0:
+        log_fail("Compilation failed!")
+        return
+    log_pass("Compilation successful")
+    
+    tests = discover_tests("unit")
+    if tests:
+        run_tests_batch(tests, log_dir, summary, timeout=TIMEOUTS["unit"])
 
+def run_phase_standalone(log_dir: Path, summary: RunSummary, suites: List[str]):
+    """Phase 2: Standalone server tests."""
+    log_header("Phase 2: Standalone Server Tests")
+    
+    if not start_server(log_dir):
+        log_fail("Cannot run standalone tests without server")
+        return
+    
+    # Integration tests
+    if "integration" in suites:
+        print("\n--- Integration ---", flush=True)
+        tests = discover_tests("integration")
+        run_tests_batch(tests, log_dir, summary, timeout=TIMEOUTS["integration"])
+    
+    # E2E tests
+    if "e2e" in suites:
+        print("\n--- E2E ---", flush=True)
+        tests = discover_tests("e2e")
+        run_tests_batch(tests, log_dir, summary, timeout=TIMEOUTS["e2e"])
+    
+    # Contract tests
+    if "contract" in suites:
+        print("\n--- Contract ---", flush=True)
+        tests = discover_tests("contract")
+        run_tests_batch(tests, log_dir, summary, timeout=TIMEOUTS["contract"])
+    
+    # Compatibility tests
+    if "compatibility" in suites:
+        print("\n--- Compatibility ---", flush=True)
+        tests = discover_tests("compatibility")
+        run_tests_batch(tests, log_dir, summary, timeout=TIMEOUTS["compatibility"])
+    
+    # Security tests
+    if "security" in suites:
+        print("\n--- Security ---", flush=True)
+        tests = discover_tests("security")
+        run_tests_batch(tests, log_dir, summary, timeout=TIMEOUTS["security"])
+    
+    # Standalone resilience tests
+    if "resilience" in suites:
+        print("\n--- Resilience (standalone) ---", flush=True)
+        tests = [t for t in discover_tests("resilience") if t["name"] in STANDALONE_RESILIENCE]
+        run_tests_batch(tests, log_dir, summary, timeout=TIMEOUTS["resilience"])
+    
+    # Standalone performance tests
+    if "performance_light" in suites:
+        print("\n--- Performance (standalone) ---", flush=True)
+        tests = [t for t in discover_tests("performance_light") if t["name"] in STANDALONE_PERF]
+        run_tests_batch(tests, log_dir, summary, timeout=TIMEOUTS["performance_light"])
+    
+    # Standalone stress tests
+    if "stress" in suites:
+        print("\n--- Stress (standalone) ---", flush=True)
+        tests = [t for t in discover_tests("stress") if t["name"] in STANDALONE_STRESS]
+        run_tests_batch(tests, log_dir, summary, timeout=TIMEOUTS["stress"])
+    
+    stop_server()
+
+def run_phase_cluster_manager(log_dir: Path, summary: RunSummary, suites: List[str]):
+    """Phase 3: ClusterManager tests (self-managed)."""
+    log_header("Phase 3: ClusterManager Tests")
+    
+    # Resilience tests using ClusterManager
+    if "resilience" in suites:
+        print("\n--- Resilience (ClusterManager) ---", flush=True)
+        tests = [t for t in discover_tests("resilience") if t["name"] not in STANDALONE_RESILIENCE]
+        run_tests_batch(tests, log_dir, summary, timeout=TIMEOUTS["resilience"], cleanup_between=True)
+    
+    # Performance tests using ClusterManager
+    if "performance_light" in suites:
+        print("\n--- Performance (ClusterManager) ---", flush=True)
+        tests = [t for t in discover_tests("performance_light") if t["name"] not in STANDALONE_PERF]
+        run_tests_batch(tests, log_dir, summary, timeout=TIMEOUTS["performance_light"], cleanup_between=True)
+    
+    # Stress tests using ClusterManager
+    if "stress" in suites:
+        print("\n--- Stress (ClusterManager) ---", flush=True)
+        tests = [t for t in discover_tests("stress") if t["name"] not in STANDALONE_STRESS]
+        run_tests_batch(tests, log_dir, summary, timeout=TIMEOUTS["stress"], cleanup_between=True)
+    
+    # Chaos controlled tests
+    if "chaos_controlled" in suites:
+        print("\n--- Chaos Controlled ---", flush=True)
+        tests = discover_tests("chaos_controlled")
+        run_tests_batch(tests, log_dir, summary, timeout=TIMEOUTS["chaos_controlled"], cleanup_between=True)
+    
+    stop_server()
+
+def run_phase_docker(log_dir: Path, summary: RunSummary):
+    """Phase 4: Docker chaos tests."""
+    log_header("Phase 4: Docker Chaos Tests")
+    
+    stop_server()
+    
+    if not start_docker_cluster(log_dir):
+        log_warn("Docker cluster not available - skipping chaos_dist tests")
+        return
+    
+    tests = discover_tests("chaos_dist")
+    run_tests_batch(tests, log_dir, summary, timeout=TIMEOUTS["chaos_dist"])
+    
+    stop_docker_cluster(log_dir)
 
 # ============================================================================
-# Strict Log Analysis (Zero-Tolerance)
+# Main
 # ============================================================================
 
-# Error patterns that should ALWAYS be flagged
-ERROR_PATTERNS = [
-    r"FAIL",
-    r"ERROR",
-    r"Exception",
-    r"Traceback",
-    r"crash",
-    r"timeout",
-    r"TIMEOUT",
-    r"badrpc",
-    r"noproc",
-    r"badarg",
-    r"Connection refused",
-    r"BrokenPipe",
-    r"SSLError",
-    r"ssl\.SSLError",
-    r"ConnectionResetError",
-    r"0\.0% delivery",
-    r"0/\d+ messages",
-    r"Message NOT found",
-]
-
-# Warning patterns that should be reported
-WARNING_PATTERNS = [
-    r"SKIP",
-    r"⚠",
-    r"WARN",
-    r"Warning",
-    r"deprecated",
-    r"not found",
-    r"missing",
-    r"timed out",
-]
-
-# Patterns indicating success (for validation)
-SUCCESS_PATTERNS = [
-    r"✓ PASS",
-    r"PASS:",
-    r"\[PASS\]",
-    r"ALL TESTS PASSED",
-    r"100% delivery",
-]
-
-import re
-
-def analyze_log_strict(log_content: str, log_file: Path = None) -> Dict[str, Any]:
-    """
-    Analyze log content line-by-line with zero-tolerance for errors.
+def print_summary(summary: RunSummary, log_dir: Path):
+    """Print final summary."""
+    print(f"\n{'='*60}", flush=True)
+    print("                    FINAL RESULTS", flush=True)
+    print(f"{'='*60}", flush=True)
+    print(colored(f"  PASSED:  {summary.total_pass}", Colors.GREEN), flush=True)
+    print(colored(f"  FAILED:  {summary.total_fail}", Colors.RED), flush=True)
+    print(colored(f"  SKIPPED: {summary.total_skip}", Colors.YELLOW), flush=True)
+    print(f"\n  TOTAL:   {summary.total_pass + summary.total_fail + summary.total_skip} tests", flush=True)
     
-    Returns a detailed report of all issues found.
-    """
-    analysis = {
-        "errors": [],
-        "warnings": [],
-        "passes": [],
-        "skips": [],
-        "swallowed_errors": [],  # Errors that didn't cause test failure
-        "line_count": 0,
-        "summary": "",
-    }
+    if summary.failed_tests:
+        print(f"\n  Failed tests:", flush=True)
+        for t in summary.failed_tests:
+            print(colored(f"    ✗ {t}", Colors.RED), flush=True)
     
-    lines = log_content.split('\n')
-    analysis["line_count"] = len(lines)
+    print(f"\n  Log directory: {log_dir}", flush=True)
+    print(f"{'='*60}", flush=True)
     
-    for i, line in enumerate(lines, 1):
-        line_stripped = line.strip()
-        if not line_stripped:
-            continue
-        
-        # Check for errors
-        for pattern in ERROR_PATTERNS:
-            if re.search(pattern, line, re.IGNORECASE):
-                analysis["errors"].append({
-                    "line": i,
-                    "content": line_stripped[:200],
-                    "pattern": pattern
-                })
-                break
-        
-        # Check for warnings
-        for pattern in WARNING_PATTERNS:
-            if re.search(pattern, line, re.IGNORECASE):
-                # Don't double-count errors
-                if not any(e["line"] == i for e in analysis["errors"]):
-                    analysis["warnings"].append({
-                        "line": i,
-                        "content": line_stripped[:200],
-                        "pattern": pattern
-                    })
-                break
-        
-        # Check for successes
-        for pattern in SUCCESS_PATTERNS:
-            if re.search(pattern, line, re.IGNORECASE):
-                analysis["passes"].append({
-                    "line": i,
-                    "content": line_stripped[:100]
-                })
-                break
-        
-        # Check for explicit skips
-        if "SKIP:" in line or "exit(2)" in line:
-            analysis["skips"].append({
-                "line": i,
-                "content": line_stripped[:200]
-            })
-    
-    # Generate summary
-    analysis["summary"] = (
-        f"Lines: {analysis['line_count']}, "
-        f"Errors: {len(analysis['errors'])}, "
-        f"Warnings: {len(analysis['warnings'])}, "
-        f"Passes: {len(analysis['passes'])}, "
-        f"Skips: {len(analysis['skips'])}"
-    )
-    
-    return analysis
-
-
-def print_log_analysis(analysis: Dict[str, Any], verbose: bool = False):
-    """Print a human-readable log analysis report."""
-    log_header("LOG ANALYSIS REPORT")
-    
-    print(f"\n{analysis['summary']}\n", flush=True)
-    
-    if analysis["errors"]:
-        log_fail(f"ERRORS FOUND ({len(analysis['errors'])}):")
-        for err in analysis["errors"][:20]:  # Limit to first 20
-            print(f"  Line {err['line']}: {err['content'][:100]}", flush=True)
-        if len(analysis["errors"]) > 20:
-            print(f"  ... and {len(analysis['errors']) - 20} more errors", flush=True)
-    
-    if analysis["warnings"]:
-        log_warn(f"WARNINGS ({len(analysis['warnings'])}):")
-        for warn in analysis["warnings"][:10]:  # Limit to first 10
-            print(f"  Line {warn['line']}: {warn['content'][:100]}", flush=True)
-        if len(analysis["warnings"]) > 10:
-            print(f"  ... and {len(analysis['warnings']) - 10} more warnings", flush=True)
-    
-    if analysis["skips"]:
-        log_warn(f"SKIPS ({len(analysis['skips'])}):")
-        for skip in analysis["skips"]:
-            print(f"  Line {skip['line']}: {skip['content'][:100]}", flush=True)
-    
-    if verbose and analysis["passes"]:
-        log_pass(f"PASSES ({len(analysis['passes'])}):")
-        for p in analysis["passes"][:10]:
-            print(f"  {p['content']}", flush=True)
-    
-    # Final verdict
-    if not analysis["errors"] and not analysis["skips"]:
-        log_pass("LOG ANALYSIS: CLEAN - No errors or skips detected")
-        return True
-    elif analysis["errors"]:
-        log_fail(f"LOG ANALYSIS: FAILED - {len(analysis['errors'])} errors detected")
-        return False
+    if summary.total_fail == 0:
+        print(colored("  ✅ ALL TESTS PASSED", Colors.GREEN), flush=True)
     else:
-        log_warn(f"LOG ANALYSIS: WARNING - {len(analysis['skips'])} skips detected")
-        return True
-
-
-def analyze_log_file(log_file: Path, verbose: bool = False) -> bool:
-    """Read and analyze a log file with strict error detection."""
-    if not log_file.exists():
-        log_warn(f"Log file not found: {log_file}")
-        return False
-    
-    log_info(f"Analyzing log file: {log_file}")
-    
-    try:
-        with open(log_file, 'r', errors='replace') as f:
-            content = f.read()
-        
-        analysis = analyze_log_strict(content, log_file)
-        return print_log_analysis(analysis, verbose)
-    except Exception as e:
-        log_fail(f"Failed to analyze log: {e}")
-        return False
-
-
-# ============================================================================
-# Artifact Management
-# ============================================================================
-
-def create_run_directory() -> Path:
-    """Create a new run directory with timestamp."""
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    run_dir = ARTIFACTS_DIR / "runs" / timestamp
-    run_dir.mkdir(parents=True, exist_ok=True)
-    return run_dir
-
-def write_summary(run_dir: Path, suite_results: List[SuiteResult], 
-                  start_snapshot: ResourceSnapshot, end_snapshot: ResourceSnapshot):
-    """Write a JSON summary of the test run."""
-    summary = {
-        "timestamp": datetime.now().isoformat(),
-        "run_directory": str(run_dir),
-        "determinism": get_determinism_info(),
-        "resource_snapshots": {
-            "start": asdict(start_snapshot),
-            "end": asdict(end_snapshot)
-        },
-        "suites": [],
-        "totals": {
-            "tests_run": 0,
-            "tests_passed": 0,
-            "tests_failed": 0,
-            "tests_skipped": 0,
-            "duration_seconds": 0.0
-        }
-    }
-    
-    for sr in suite_results:
-        suite_summary = {
-            "name": sr.name,
-            "tests_run": sr.tests_run,
-            "tests_passed": sr.tests_passed,
-            "tests_failed": sr.tests_failed,
-            "tests_skipped": sr.tests_skipped,
-            "duration_seconds": sr.duration_seconds,
-            "tests": [asdict(r) for r in sr.results]
-        }
-        summary["suites"].append(suite_summary)
-        summary["totals"]["tests_run"] += sr.tests_run
-        summary["totals"]["tests_passed"] += sr.tests_passed
-        summary["totals"]["tests_failed"] += sr.tests_failed
-        summary["totals"]["tests_skipped"] += sr.tests_skipped
-        summary["totals"]["duration_seconds"] += sr.duration_seconds
-    
-    summary_file = run_dir / "summary.json"
-    with open(summary_file, "w") as f:
-        json.dump(summary, f, indent=2)
-    
-    log_info(f"Summary written to: {summary_file}")
-    return summary
-
-def print_final_summary(summary: Dict):
-    """Print a human-readable summary."""
-    log_header("TEST RUN COMPLETE")
-    
-    totals = summary["totals"]
-    passed = totals["tests_passed"]
-    failed = totals["tests_failed"]
-    skipped = totals.get("tests_skipped", 0)
-    total = totals["tests_run"]
-    duration = totals["duration_seconds"]
-    
-    print(f"\n{'Suite':<25} {'Passed':<10} {'Failed':<10} {'Skipped':<10} {'Duration':<10}", flush=True)
-    print("-" * 65, flush=True)
-    
-    for suite in summary["suites"]:
-        skipped_count = suite.get("tests_skipped", 0)
-        print(f"{suite['name']:<25} {suite['tests_passed']:<10} {suite['tests_failed']:<10} {skipped_count:<10} {suite['duration_seconds']:.1f}s", flush=True)
-    
-    print("-" * 65, flush=True)
-    print(f"{'TOTAL':<25} {passed:<10} {failed:<10} {skipped:<10} {duration:.1f}s", flush=True)
-    print(flush=True)
-    
-    if failed == 0:
-        if skipped > 0:
-            log_warn(f"All {total} tests completed: {passed} passed, {skipped} skipped")
-        else:
-            log_pass(f"All {total} tests passed!")
-    else:
-        log_fail(f"{failed}/{total} tests failed ({skipped} skipped)")
-
-# ============================================================================
-# Main Entry Point
-# ============================================================================
+        print(colored("  ❌ SOME TESTS FAILED", Colors.RED), flush=True)
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Project Iris - Unified Test Runner (TLS Enforced, Zero-Tolerance)",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  %(prog)s --suite unit              Run unit tests only
-  %(prog)s --suite integration       Run integration tests
-  %(prog)s --tier 0                  Run CI Tier 0 (unit + integration)
-  %(prog)s --tier 1                  Run CI Tier 1 (resilience + performance)
-  %(prog)s --list                    List all available tests
-  %(prog)s --all                     Run all tests (115+)
-  %(prog)s --all --with-cluster      Run all tests including chaos_dist (Docker)
-  %(prog)s --suite chaos_dist        Run chaos_dist tests (starts Docker automatically)
-  %(prog)s --strict                  Strict mode: fail on any warning/error in logs
-  %(prog)s --analyze-log FILE        Analyze a log file for errors/warnings
-  %(prog)s --nuke                    Print the comprehensive nuke command
-
-TLS is ENFORCED by default. All tests use config/test_tls.config.
-        """
-    )
-    
+    parser = argparse.ArgumentParser(description="Project Iris Test Runner")
     parser.add_argument("--suite", type=str, help="Run specific suite")
-    parser.add_argument("--tier", type=int, choices=[0, 1, 2], help="Run CI tier (0=core, 1=extended, 2=stress)")
-    parser.add_argument("--all", action="store_true", help="Run all tests (115+)")
+    parser.add_argument("--tier", type=int, choices=[0, 1, 2], help="Run CI tier")
+    parser.add_argument("--all", action="store_true", help="Run all tests")
     parser.add_argument("--list", action="store_true", help="List all tests")
-    parser.add_argument("--ci", action="store_true", help="CI mode (stricter failure handling)")
-    parser.add_argument("--strict", action="store_true", help="Strict mode: fail on any warning/skip")
-    parser.add_argument("--no-cluster", action="store_true", help="Don't manage cluster lifecycle")
-    parser.add_argument("--with-cluster", action="store_true", 
-                        help="Use Docker global cluster for cross-region tests (auto-starts if needed)")
-    parser.add_argument("--timeout", type=int, default=120, help="Per-test timeout in seconds")
-    parser.add_argument("--analyze-log", type=str, metavar="FILE", help="Analyze a log file for errors")
-    parser.add_argument("--nuke", action="store_true", help="Print the comprehensive nuke command")
+    parser.add_argument("--skip-docker", action="store_true", help="Skip Docker tests")
+    parser.add_argument("--with-cluster", action="store_true", help="Include Docker cluster tests")
+    parser.add_argument("--no-cluster", action="store_true", help="Don't manage cluster")
+    parser.add_argument("--nuke", action="store_true", help="Kill all processes and exit")
     
     args = parser.parse_args()
     
-    # Handle --nuke (print command and exit)
+    # Handle --nuke
     if args.nuke:
-        print("\n" + "=" * 60)
-        print("COMPREHENSIVE NUKE COMMAND")
-        print("=" * 60)
-        print("\nRun this command with sudo to completely clear all state:\n")
-        print(get_nuke_command())
-        print("\n" + "=" * 60)
+        cleanup()
+        print("All processes killed.", flush=True)
         return 0
-    
-    # Handle --analyze-log
-    if args.analyze_log:
-        log_file = Path(args.analyze_log)
-        success = analyze_log_file(log_file, verbose=True)
-        return 0 if success else 1
     
     # Handle --list
     if args.list:
         all_tests = list_all_tests()
-        print("\nAvailable Tests (TLS Enforced):", flush=True)
+        print("\nAvailable Tests:", flush=True)
         print("=" * 60, flush=True)
-        total_count = 0
+        total = 0
         for suite, tests in sorted(all_tests.items()):
             print(f"\n{Colors.BOLD}{suite}{Colors.END} ({len(tests)} tests)", flush=True)
             for test in tests:
-                print(f"  - {test['name']} ({test['type']})", flush=True)
-            total_count += len(tests)
-        print(f"\n{'=' * 60}")
-        print(f"TOTAL: {total_count} tests across {len(all_tests)} suites")
-        print(f"TLS: ENFORCED (config/test_tls.config)")
+                print(f"  - {test['name']}", flush=True)
+            total += len(tests)
+        print(f"\n{'='*60}", flush=True)
+        print(f"TOTAL: {total} tests", flush=True)
         return 0
     
-    # Determine which suites to run
-    suites_to_run = []
-    
+    # Determine suites to run
+    suites = []
     if args.suite:
-        suites_to_run = [args.suite]
+        suites = [args.suite]
     elif args.tier == 0:
-        suites_to_run = TIER_0_SUITES
+        suites = TIER_0_SUITES
     elif args.tier == 1:
-        suites_to_run = TIER_1_SUITES
+        suites = TIER_0_SUITES + TIER_1_SUITES
     elif args.tier == 2:
-        suites_to_run = TIER_2_SUITES
+        suites = TIER_0_SUITES + TIER_1_SUITES + TIER_2_SUITES
     elif args.all:
         all_tests = list_all_tests()
-        suites_to_run = list(all_tests.keys())
+        suites = list(all_tests.keys())
     else:
         parser.print_help()
         return 1
     
-    # Set strict mode from args or environment
-    strict_mode = args.strict or os.environ.get("IRIS_STRICT_MODE", "") == "1"
-    if strict_mode:
-        log_warn("STRICT MODE ENABLED: Will fail on any warning or skip")
+    # Create log directory
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_dir = ARTIFACTS_DIR / f"run_{timestamp}"
+    log_dir.mkdir(parents=True, exist_ok=True)
     
-    # Create run directory
-    run_dir = create_run_directory()
-    log_header("Project Iris Test Runner")
-    log_info(f"Run directory: {run_dir}")
-    log_info(f"Suites: {', '.join(sorted(suites_to_run))}")  # Sort for determinism
+    # Print header
+    print("=" * 60, flush=True)
+    print("                 IRIS TEST RUNNER", flush=True)
+    print("=" * 60, flush=True)
+    print(f"Log directory: {log_dir}", flush=True)
+    print(f"Suites: {', '.join(suites)}", flush=True)
+    print()
     
-    # Log determinism information
-    det_info = get_determinism_info()
-    log_info(f"Determinism: seed={det_info['seed']}, run_id={det_info['run_id']}")
-    if DETERMINISM_AVAILABLE:
-        log_info("Determinism utilities: LOADED")
-    else:
-        log_warn("Determinism utilities: FALLBACK (conftest.py not found)")
+    summary = RunSummary()
     
-    # Capture start resources
-    start_snapshot = get_resource_snapshot()
-    log_info(f"Initial resources - CPU: {start_snapshot.cpu_percent:.1f}%, Disk: {start_snapshot.disk_free_gb:.1f}GB")
+    # Initial cleanup
+    cleanup()
     
-    # Generate unique suffix for this run based on seed for reproducibility
-    # Use seed + timestamp to ensure uniqueness while maintaining reproducibility
-    run_suffix = f"_{MASTER_SEED}_{int(time.time())}"
-    os.environ["IRIS_NODE_SUFFIX"] = run_suffix
-    log_info(f"Using node suffix: {run_suffix}")
+    # Phase 1: Unit tests
+    if "unit" in suites:
+        run_phase_unit(log_dir, summary)
     
-    # Pass seed to child processes
-    os.environ["TEST_SEED"] = str(MASTER_SEED)
-    os.environ["TEST_RUN_ID"] = TEST_RUN_ID
+    # Phase 2: Standalone server tests
+    standalone_suites = [s for s in suites if s in 
+                        ["integration", "e2e", "contract", "compatibility", "security",
+                         "resilience", "performance_light", "stress"]]
+    if standalone_suites:
+        run_phase_standalone(log_dir, summary, standalone_suites)
     
-    # Perform initial cleanup - use aggressive nuke to ensure clean state
-    nuke_cluster()
+    # Phase 3: ClusterManager tests
+    cm_suites = [s for s in suites if s in 
+                 ["resilience", "performance_light", "stress", "chaos_controlled"]]
+    if cm_suites:
+        run_phase_cluster_manager(log_dir, summary, cm_suites)
     
-    # Determine cluster mode
-    # --with-cluster: Explicitly use Docker cluster for cross-region tests
-    # --no-cluster: Don't manage any cluster (tests handle their own)
-    use_docker_cluster = args.with_cluster
-    manage_cluster = not args.no_cluster
+    # Phase 4: Docker tests
+    if "chaos_dist" in suites and not args.skip_docker:
+        run_phase_docker(log_dir, summary)
+    elif "chaos_dist" in suites:
+        print(colored("\n[Phase 4] Docker tests SKIPPED (--skip-docker)", Colors.YELLOW), flush=True)
     
-    if use_docker_cluster:
-        log_info("Docker cluster mode: ENABLED (--with-cluster)")
+    # Final cleanup
+    cleanup()
     
-    # Run suites
-    suite_results = []
-    docker_cluster_started = False
+    # Print summary
+    print_summary(summary, log_dir)
     
-    for suite in suites_to_run:
-        # Check if this suite needs Docker cluster
-        needs_docker = suite_requires_docker(suite) or (use_docker_cluster and suite in TIER_1_SUITES)
-        
-        # Start Docker cluster if needed and not already running
-        if needs_docker and use_docker_cluster and not docker_cluster_started:
-            log_info("Starting Docker global cluster for cross-region tests...")
-            docker_cluster_started = start_docker_cluster()
-            if not docker_cluster_started:
-                log_warn("Docker cluster unavailable - some tests may skip")
-        
-        result = run_suite(suite, run_dir, require_cluster=manage_cluster)
-        suite_results.append(result)
-    
-    # Cleanup Docker cluster if we started it
-    if docker_cluster_started:
-        log_info("Stopping Docker global cluster...")
-        stop_docker_cluster()
-    
-    # Cleanup local cluster
-    if manage_cluster and not use_docker_cluster:
-        stop_cluster()
-    
-    # Capture end resources
-    end_snapshot = get_resource_snapshot()
-    
-    # Write summary
-    summary = write_summary(run_dir, suite_results, start_snapshot, end_snapshot)
-    print_final_summary(summary)
-    
-    # Analyze all logs for the run
-    log_header("COMPREHENSIVE LOG ANALYSIS")
-    log_info(f"Analyzing all logs in: {run_dir}")
-    
-    all_clean = True
-    for log_file in run_dir.rglob("*.log"):
-        log_info(f"\nAnalyzing: {log_file.relative_to(run_dir)}")
-        try:
-            with open(log_file, 'r', errors='replace') as f:
-                content = f.read()
-            analysis = analyze_log_strict(content, log_file)
-            
-            # Report issues
-            if analysis["errors"]:
-                log_fail(f"  ERRORS: {len(analysis['errors'])}")
-                all_clean = False
-            if analysis["skips"]:
-                log_warn(f"  SKIPS: {len(analysis['skips'])}")
-                if strict_mode:
-                    all_clean = False
-            if not analysis["errors"] and not analysis["skips"]:
-                log_pass(f"  CLEAN")
-        except Exception as e:
-            log_warn(f"  Could not analyze: {e}")
-    
-    if all_clean:
-        log_pass("\nALL LOGS CLEAN: No errors or unexpected skips")
-    else:
-        log_fail("\nLOG ANALYSIS: Issues detected - review logs above")
-    
-    # Return appropriate exit code
-    total_failed = sum(sr.tests_failed for sr in suite_results)
-    total_skipped = sum(sr.tests_skipped for sr in suite_results)
-    
-    if total_failed > 0:
-        if args.ci:
-            log_fail("CI mode: Exiting with failure status")
-        return 1
-    
-    if strict_mode and total_skipped > 0:
-        log_fail(f"STRICT MODE: {total_skipped} tests skipped - failing")
-        return 1
-    
-    if strict_mode and not all_clean:
-        log_fail("STRICT MODE: Log analysis found issues - failing")
-        return 1
-    
-    return 0
+    return 1 if summary.total_fail > 0 else 0
 
 if __name__ == "__main__":
     sys.exit(main())
