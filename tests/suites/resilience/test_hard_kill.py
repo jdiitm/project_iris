@@ -151,11 +151,10 @@ def main():
     # Check cluster - may be unavailable if test_resilience killed it
     print("\n[Pre-check] Waiting for cluster...")
     if not wait_for_port(8085, timeout=10):
-        # Cluster not available - likely killed by previous test in suite
-        # Skip gracefully rather than fail (this is a known limitation)
-        print("  ⚠ Cluster not available - SKIPPING test")
-        print("  (Run test independently: python3 tests/suites/resilience/test_hard_kill.py)")
-        return 0  # Skip is OK, not a failure
+        # Cluster not available - this is a test failure
+        print("  ❌ FAIL: Cluster not available")
+        print("  Ensure cluster is running before test: make cluster-up")
+        return 1  # No skips - cluster must be available
     
     print("  ✓ Cluster is running")
     

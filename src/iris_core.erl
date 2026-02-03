@@ -113,6 +113,12 @@ init([]) ->
         #{id => iris_status_batcher_sup,
           start => {iris_status_batcher_sup, start_link, [100]},
           type => supervisor,
+          restart => permanent},
+          
+        %% Group Messaging Service: Handles group creation, membership, and message fanout
+        #{id => iris_group,
+          start => {iris_group, start_link, []},
+          type => worker,
           restart => permanent}
     ],
 

@@ -365,9 +365,7 @@ openssl verify -CAfile certs/ca.pem certs/edge-east-1.pem
 net_adm:ping('core_node').
 ```
 
-**Data lost after restart**: Ensure `-mnesia dir` points to persistent storage.
-
-**Tables missing**: Check `mnesia:system_info(directory)` matches config.
+**Data lost after restart**: Ensure `-mnesia dir` points to persistent storage.**Tables missing**: Check `mnesia:system_info(directory)` matches config.
 
 **Quorum not reached**: Check nodes available with `iris_quorum_write:get_replicas/1`.
 

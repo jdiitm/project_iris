@@ -292,12 +292,12 @@ def test_split_brain_detection():
     
     # Prerequisites
     if not check_docker_available():
-        print("SKIP:INFRA - Docker not available")
-        sys.exit(2)
+        print("FAIL: Docker not available - required for split-brain test")
+        sys.exit(1)
     
     if not check_cluster_running():
-        print("SKIP:INFRA - Cluster not running. Start with: make cluster-up")
-        sys.exit(2)
+        print("FAIL: Cluster not running. Start with: make cluster-up")
+        sys.exit(1)
     
     test_id = str(int(time.time()))
     tracker = WriteTracker()
@@ -600,7 +600,7 @@ def main():
     elif result is False:
         return 1
     else:
-        return 2  # SKIP
+        return 1  # No skips - failures only
 
 
 if __name__ == "__main__":

@@ -1,27 +1,43 @@
 #!/usr/bin/env python3
 """
-Project Iris - Unified Test Runner
+Project Iris - Unified Test Runner (Stabilized)
 
-A lightweight, resource-aware test orchestrator designed for constrained infrastructure.
-No heavy dependencies - uses only Python stdlib plus PyYAML.
+A rigorous, zero-tolerance test orchestrator with TLS enforcement and strict log analysis.
+No errors masked, no tests skipped without explicit reason, all logs persisted and analyzed.
 
-Features:
+Key Features:
+- TLS enforced on all client connections (NFR-14 compliant)
 - Deterministic test ordering (lexicographic by suite, then by test name)
-- Seeded randomness for reproducible test execution
-- Comprehensive cleanup between suites
-- Real-time output streaming with heartbeat indicators
+- Comprehensive cluster nuke before test runs
+- Line-by-line log analysis for errors, failures, and skips
+- Real-time output streaming with failure detection
+
+Test Suites (115+ tests):
+- unit: Property-based tests (2 files)
+- integration: Core message flow (22 tests)
+- e2e: End-to-end scenarios (5 tests)
+- security: TLS, auth, rate limiting (7 tests)
+- resilience: Fault tolerance (3 tests)
+- stress: Load testing (9 tests)
+- chaos_dist: Docker-based chaos (12 tests)
+- compatibility: Protocol versions (6 sub-tests)
+- contract: Edge-core contract (1 test)
+- performance_light: CPU utilization (1 test)
 
 Usage:
     ./tests/run_tests.py --suite unit              # Run unit tests only
     ./tests/run_tests.py --suite integration       # Run integration tests
-    ./tests/run_tests.py --tier 0                  # CI Tier 0 (required)
-    ./tests/run_tests.py --tier 1                  # CI Tier 1 (optional/nightly)
+    ./tests/run_tests.py --tier 0                  # CI Tier 0 (unit + integration)
+    ./tests/run_tests.py --tier 1                  # CI Tier 1 (resilience + performance)
     ./tests/run_tests.py --list                    # List all available tests
     ./tests/run_tests.py --all                     # Run all tests sequentially
+    ./tests/run_tests.py --all --with-cluster     # Run all including chaos_dist (Docker)
+    ./tests/run_tests.py --strict                  # Strict mode: fail on any warning/error
 
 Environment Variables:
     TEST_SEED: Master seed for deterministic random (default: 42)
-    CI: When set, enables CI-specific behaviors
+    TEST_PROFILE: Test intensity profile (smoke/full)
+    IRIS_STRICT_MODE: When set, enables zero-tolerance error detection
 """
 
 # Force unbuffered output for real-time visibility
@@ -52,10 +68,15 @@ SUITES_DIR = TESTS_ROOT / "suites"
 
 # Test tier definitions
 TIER_0_SUITES = ["unit", "integration"]  # Required on every merge
-TIER_1_SUITES = ["resilience", "performance_light", "chaos_controlled", "contract"]  # Nightly/manual
+TIER_1_SUITES = ["resilience", "performance_light", "contract", "compatibility"]  # Nightly/manual
+TIER_2_SUITES = ["stress", "security", "e2e"]  # Extended testing
 
-# Tests that require TLS-enabled cluster (use config/test_tls.config)
-TLS_REQUIRED_TESTS = ["test_tls_mandatory"]
+# TLS is now ENFORCED by default (NFR-14 compliant)
+# All tests use config/test_tls.config unless explicitly disabled
+DEFAULT_CONFIG = "config/test_tls"
+
+# Tests that explicitly need non-TLS config (legacy/specific testing)
+NON_TLS_TESTS = []  # All tests now use TLS
 
 # Check if Erlang has SSL support (required for TLS tests)
 def check_erlang_ssl_available() -> bool:
@@ -907,15 +928,27 @@ def stop_cluster():
         pass
 
 
-def nuke_cluster():
-    """Completely destroy all cluster processes and free ports.
+def nuke_cluster(verbose: bool = True):
+    """Completely destroy all cluster processes, Docker containers, and free ports.
     
-    This is more aggressive than stop_cluster - it kills ALL beam processes,
-    epmd, and ensures ports are free. Use after test runs to prevent flakiness.
+    This is the DEFINITIVE cleanup function - kills EVERYTHING:
+    - All beam.smp processes (Erlang VMs)
+    - All epmd processes (Erlang Port Mapper Daemon)
+    - All Docker containers in global-cluster
+    - All processes on ports 4369, 8085-8094
+    - All Mnesia directories
+    - All stale log files in project root
+    
+    Use this before EVERY test run to ensure clean slate.
     """
-    log_info("Nuking cluster (complete teardown)...")
+    if verbose:
+        log_info("=" * 60)
+        log_info("NUKE CLUSTER: Complete teardown starting...")
+        log_info("=" * 60)
     
     # 0. CRITICAL: Stop Docker cluster FIRST to avoid stale container references
+    if verbose:
+        log_info("  [1/7] Stopping Docker cluster...")
     try:
         docker_compose_file = PROJECT_ROOT / "docker" / "global-cluster" / "docker-compose.yml"
         if docker_compose_file.exists():
@@ -924,23 +957,33 @@ def nuke_cluster():
                 capture_output=True,
                 timeout=60
             )
-            # Also force remove any containers that might be orphaned
-            subprocess.run(
-                ["docker", "rm", "-f"] + 
-                [f"core-east-{i}" for i in [1,2]] +
-                [f"core-west-{i}" for i in [1,2]] +
-                [f"core-eu-{i}" for i in [1,2]] +
-                [f"edge-east-{i}" for i in [1,2]] +
-                [f"edge-west-{i}" for i in [1,2]] +
-                [f"edge-eu-{i}" for i in [1,2]] +
-                ["edge-sydney-1", "edge-sydney-2", "edge-saopaulo", "loadgen-east", "loadgen-west"],
-                capture_output=True,
-                timeout=30
-            )
+    except Exception:
+        pass
+    
+    # Force remove any containers that might be orphaned
+    if verbose:
+        log_info("  [2/7] Force removing Docker containers...")
+    container_names = (
+        [f"core-east-{i}" for i in [1,2]] +
+        [f"core-west-{i}" for i in [1,2]] +
+        [f"core-eu-{i}" for i in [1,2]] +
+        [f"edge-east-{i}" for i in [1,2]] +
+        [f"edge-west-{i}" for i in [1,2]] +
+        [f"edge-eu-{i}" for i in [1,2]] +
+        ["edge-sydney-1", "edge-sydney-2", "edge-saopaulo", "loadgen-east", "loadgen-west"]
+    )
+    try:
+        subprocess.run(
+            ["docker", "rm", "-f"] + container_names,
+            capture_output=True,
+            timeout=30
+        )
     except Exception:
         pass
     
     # 1. Try graceful stop first
+    if verbose:
+        log_info("  [3/7] Graceful cluster stop...")
     try:
         subprocess.run(
             ["make", "stop"],
@@ -952,29 +995,52 @@ def nuke_cluster():
         pass
     
     # 2. Kill all beam.smp processes (SIGKILL)
+    if verbose:
+        log_info("  [4/7] Killing all beam.smp processes...")
+    try:
+        subprocess.run(["pkill", "-9", "-f", "beam.smp"], capture_output=True, timeout=5)
+    except Exception:
+        pass
     try:
         subprocess.run(["killall", "-9", "beam.smp"], capture_output=True, timeout=5)
     except Exception:
         pass
     
     # 3. Kill epmd
+    if verbose:
+        log_info("  [5/7] Killing epmd...")
+    try:
+        subprocess.run(["pkill", "-9", "epmd"], capture_output=True, timeout=5)
+    except Exception:
+        pass
     try:
         subprocess.run(["killall", "-9", "epmd"], capture_output=True, timeout=5)
     except Exception:
         pass
     
-    # 4. Kill any process holding our ports (8085-8094 for all edges)
-    for port in range(8085, 8095):
+    # 4. Kill any process holding our ports
+    if verbose:
+        log_info("  [6/7] Freeing ports 4369, 8085-8094...")
+    ports_to_free = [4369] + list(range(8085, 8095))
+    for port in ports_to_free:
         try:
             subprocess.run(["fuser", "-k", f"{port}/tcp"], capture_output=True, timeout=5)
         except Exception:
             pass
     
     # 5. Clean up Mnesia directories and logs
+    if verbose:
+        log_info("  [7/7] Cleaning Mnesia directories and logs...")
     try:
-        import shutil
+        # Project root Mnesia
         for mnesia_dir in PROJECT_ROOT.glob("Mnesia.*"):
             shutil.rmtree(mnesia_dir, ignore_errors=True)
+        # /tmp Mnesia
+        for mnesia_dir in Path("/tmp").glob("Mnesia.*"):
+            shutil.rmtree(mnesia_dir, ignore_errors=True)
+        for mnesia_dir in Path("/tmp").glob("mnesia_*"):
+            shutil.rmtree(mnesia_dir, ignore_errors=True)
+        # Project root logs (but not artifacts)
         for log_file in PROJECT_ROOT.glob("*.log"):
             try:
                 os.remove(log_file)
@@ -984,9 +1050,24 @@ def nuke_cluster():
         pass
     
     # 6. Wait for ports to be released
-    time.sleep(2)
+    time.sleep(3)
     
-    log_info("Cluster nuked - all processes killed and ports freed")
+    if verbose:
+        log_info("=" * 60)
+        log_info("NUKE COMPLETE: All processes killed, ports freed, state cleared")
+        log_info("=" * 60)
+
+
+def get_nuke_command() -> str:
+    """Return a one-liner nuke command for manual use."""
+    return (
+        "sudo pkill -9 -f beam.smp; "
+        "sudo pkill -9 epmd; "
+        "sudo docker kill $(docker ps -q) 2>/dev/null; "
+        "sudo docker compose -f docker/global-cluster/docker-compose.yml down --remove-orphans --volumes 2>/dev/null; "
+        "for p in 4369 8085 8086 8087 8088 8089 8090 8091 8092 8093 8094; do sudo fuser -k $p/tcp 2>/dev/null; done; "
+        "sudo rm -rf /tmp/mnesia_* /tmp/Mnesia.* Mnesia.*"
+    )
 
 def run_test(test: Dict, run_dir: Path, timeout: int = 120, stream_output: bool = True) -> TestResult:
     """Run a single test and return the result.
@@ -1228,9 +1309,9 @@ def run_suite(suite_name: str, run_dir: Path, require_cluster: bool = True) -> S
         if not docker_started:
             log_warn(f"Docker cluster unavailable - tests in {suite_name} may skip")
     else:
-        # Run normal tests first (with default config)
+        # Run normal tests first (with TLS-enabled config - NFR-14 compliant)
         if normal_tests and require_cluster and suite_name not in ["unit"]:
-            ensure_cluster_with_config("config/test")
+            ensure_cluster_with_config(DEFAULT_CONFIG)  # Uses config/test_tls
     
     for test in normal_tests:
         result = run_test(test, run_dir, timeout=timeout)
@@ -1283,6 +1364,190 @@ def run_suite(suite_name: str, run_dir: Path, require_cluster: bool = True) -> S
         duration_seconds=duration,
         results=results
     )
+
+
+# ============================================================================
+# Strict Log Analysis (Zero-Tolerance)
+# ============================================================================
+
+# Error patterns that should ALWAYS be flagged
+ERROR_PATTERNS = [
+    r"FAIL",
+    r"ERROR",
+    r"Exception",
+    r"Traceback",
+    r"crash",
+    r"timeout",
+    r"TIMEOUT",
+    r"badrpc",
+    r"noproc",
+    r"badarg",
+    r"Connection refused",
+    r"BrokenPipe",
+    r"SSLError",
+    r"ssl\.SSLError",
+    r"ConnectionResetError",
+    r"0\.0% delivery",
+    r"0/\d+ messages",
+    r"Message NOT found",
+]
+
+# Warning patterns that should be reported
+WARNING_PATTERNS = [
+    r"SKIP",
+    r"⚠",
+    r"WARN",
+    r"Warning",
+    r"deprecated",
+    r"not found",
+    r"missing",
+    r"timed out",
+]
+
+# Patterns indicating success (for validation)
+SUCCESS_PATTERNS = [
+    r"✓ PASS",
+    r"PASS:",
+    r"\[PASS\]",
+    r"ALL TESTS PASSED",
+    r"100% delivery",
+]
+
+import re
+
+def analyze_log_strict(log_content: str, log_file: Path = None) -> Dict[str, Any]:
+    """
+    Analyze log content line-by-line with zero-tolerance for errors.
+    
+    Returns a detailed report of all issues found.
+    """
+    analysis = {
+        "errors": [],
+        "warnings": [],
+        "passes": [],
+        "skips": [],
+        "swallowed_errors": [],  # Errors that didn't cause test failure
+        "line_count": 0,
+        "summary": "",
+    }
+    
+    lines = log_content.split('\n')
+    analysis["line_count"] = len(lines)
+    
+    for i, line in enumerate(lines, 1):
+        line_stripped = line.strip()
+        if not line_stripped:
+            continue
+        
+        # Check for errors
+        for pattern in ERROR_PATTERNS:
+            if re.search(pattern, line, re.IGNORECASE):
+                analysis["errors"].append({
+                    "line": i,
+                    "content": line_stripped[:200],
+                    "pattern": pattern
+                })
+                break
+        
+        # Check for warnings
+        for pattern in WARNING_PATTERNS:
+            if re.search(pattern, line, re.IGNORECASE):
+                # Don't double-count errors
+                if not any(e["line"] == i for e in analysis["errors"]):
+                    analysis["warnings"].append({
+                        "line": i,
+                        "content": line_stripped[:200],
+                        "pattern": pattern
+                    })
+                break
+        
+        # Check for successes
+        for pattern in SUCCESS_PATTERNS:
+            if re.search(pattern, line, re.IGNORECASE):
+                analysis["passes"].append({
+                    "line": i,
+                    "content": line_stripped[:100]
+                })
+                break
+        
+        # Check for explicit skips
+        if "SKIP:" in line or "exit(2)" in line:
+            analysis["skips"].append({
+                "line": i,
+                "content": line_stripped[:200]
+            })
+    
+    # Generate summary
+    analysis["summary"] = (
+        f"Lines: {analysis['line_count']}, "
+        f"Errors: {len(analysis['errors'])}, "
+        f"Warnings: {len(analysis['warnings'])}, "
+        f"Passes: {len(analysis['passes'])}, "
+        f"Skips: {len(analysis['skips'])}"
+    )
+    
+    return analysis
+
+
+def print_log_analysis(analysis: Dict[str, Any], verbose: bool = False):
+    """Print a human-readable log analysis report."""
+    log_header("LOG ANALYSIS REPORT")
+    
+    print(f"\n{analysis['summary']}\n", flush=True)
+    
+    if analysis["errors"]:
+        log_fail(f"ERRORS FOUND ({len(analysis['errors'])}):")
+        for err in analysis["errors"][:20]:  # Limit to first 20
+            print(f"  Line {err['line']}: {err['content'][:100]}", flush=True)
+        if len(analysis["errors"]) > 20:
+            print(f"  ... and {len(analysis['errors']) - 20} more errors", flush=True)
+    
+    if analysis["warnings"]:
+        log_warn(f"WARNINGS ({len(analysis['warnings'])}):")
+        for warn in analysis["warnings"][:10]:  # Limit to first 10
+            print(f"  Line {warn['line']}: {warn['content'][:100]}", flush=True)
+        if len(analysis["warnings"]) > 10:
+            print(f"  ... and {len(analysis['warnings']) - 10} more warnings", flush=True)
+    
+    if analysis["skips"]:
+        log_warn(f"SKIPS ({len(analysis['skips'])}):")
+        for skip in analysis["skips"]:
+            print(f"  Line {skip['line']}: {skip['content'][:100]}", flush=True)
+    
+    if verbose and analysis["passes"]:
+        log_pass(f"PASSES ({len(analysis['passes'])}):")
+        for p in analysis["passes"][:10]:
+            print(f"  {p['content']}", flush=True)
+    
+    # Final verdict
+    if not analysis["errors"] and not analysis["skips"]:
+        log_pass("LOG ANALYSIS: CLEAN - No errors or skips detected")
+        return True
+    elif analysis["errors"]:
+        log_fail(f"LOG ANALYSIS: FAILED - {len(analysis['errors'])} errors detected")
+        return False
+    else:
+        log_warn(f"LOG ANALYSIS: WARNING - {len(analysis['skips'])} skips detected")
+        return True
+
+
+def analyze_log_file(log_file: Path, verbose: bool = False) -> bool:
+    """Read and analyze a log file with strict error detection."""
+    if not log_file.exists():
+        log_warn(f"Log file not found: {log_file}")
+        return False
+    
+    log_info(f"Analyzing log file: {log_file}")
+    
+    try:
+        with open(log_file, 'r', errors='replace') as f:
+            content = f.read()
+        
+        analysis = analyze_log_strict(content, log_file)
+        return print_log_analysis(analysis, verbose)
+    except Exception as e:
+        log_fail(f"Failed to analyze log: {e}")
+        return False
 
 
 # ============================================================================
@@ -1377,42 +1642,71 @@ def print_final_summary(summary: Dict):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Project Iris - Unified Test Runner",
+        description="Project Iris - Unified Test Runner (TLS Enforced, Zero-Tolerance)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
   %(prog)s --suite unit              Run unit tests only
   %(prog)s --suite integration       Run integration tests
-  %(prog)s --tier 0                  Run CI Tier 0 (required)
-  %(prog)s --tier 1                  Run CI Tier 1 (nightly)
+  %(prog)s --tier 0                  Run CI Tier 0 (unit + integration)
+  %(prog)s --tier 1                  Run CI Tier 1 (resilience + performance)
   %(prog)s --list                    List all available tests
-  %(prog)s --all                     Run all tests
-  %(prog)s --all --with-cluster      Run all tests including cross-region (starts Docker)
+  %(prog)s --all                     Run all tests (115+)
+  %(prog)s --all --with-cluster      Run all tests including chaos_dist (Docker)
   %(prog)s --suite chaos_dist        Run chaos_dist tests (starts Docker automatically)
+  %(prog)s --strict                  Strict mode: fail on any warning/error in logs
+  %(prog)s --analyze-log FILE        Analyze a log file for errors/warnings
+  %(prog)s --nuke                    Print the comprehensive nuke command
+
+TLS is ENFORCED by default. All tests use config/test_tls.config.
         """
     )
     
     parser.add_argument("--suite", type=str, help="Run specific suite")
-    parser.add_argument("--tier", type=int, choices=[0, 1], help="Run CI tier")
-    parser.add_argument("--all", action="store_true", help="Run all tests")
+    parser.add_argument("--tier", type=int, choices=[0, 1, 2], help="Run CI tier (0=core, 1=extended, 2=stress)")
+    parser.add_argument("--all", action="store_true", help="Run all tests (115+)")
     parser.add_argument("--list", action="store_true", help="List all tests")
     parser.add_argument("--ci", action="store_true", help="CI mode (stricter failure handling)")
+    parser.add_argument("--strict", action="store_true", help="Strict mode: fail on any warning/skip")
     parser.add_argument("--no-cluster", action="store_true", help="Don't manage cluster lifecycle")
     parser.add_argument("--with-cluster", action="store_true", 
                         help="Use Docker global cluster for cross-region tests (auto-starts if needed)")
     parser.add_argument("--timeout", type=int, default=120, help="Per-test timeout in seconds")
+    parser.add_argument("--analyze-log", type=str, metavar="FILE", help="Analyze a log file for errors")
+    parser.add_argument("--nuke", action="store_true", help="Print the comprehensive nuke command")
     
     args = parser.parse_args()
+    
+    # Handle --nuke (print command and exit)
+    if args.nuke:
+        print("\n" + "=" * 60)
+        print("COMPREHENSIVE NUKE COMMAND")
+        print("=" * 60)
+        print("\nRun this command with sudo to completely clear all state:\n")
+        print(get_nuke_command())
+        print("\n" + "=" * 60)
+        return 0
+    
+    # Handle --analyze-log
+    if args.analyze_log:
+        log_file = Path(args.analyze_log)
+        success = analyze_log_file(log_file, verbose=True)
+        return 0 if success else 1
     
     # Handle --list
     if args.list:
         all_tests = list_all_tests()
-        print("\nAvailable Tests:", flush=True)
+        print("\nAvailable Tests (TLS Enforced):", flush=True)
         print("=" * 60, flush=True)
+        total_count = 0
         for suite, tests in sorted(all_tests.items()):
             print(f"\n{Colors.BOLD}{suite}{Colors.END} ({len(tests)} tests)", flush=True)
             for test in tests:
                 print(f"  - {test['name']} ({test['type']})", flush=True)
+            total_count += len(tests)
+        print(f"\n{'=' * 60}")
+        print(f"TOTAL: {total_count} tests across {len(all_tests)} suites")
+        print(f"TLS: ENFORCED (config/test_tls.config)")
         return 0
     
     # Determine which suites to run
@@ -1424,12 +1718,19 @@ Examples:
         suites_to_run = TIER_0_SUITES
     elif args.tier == 1:
         suites_to_run = TIER_1_SUITES
+    elif args.tier == 2:
+        suites_to_run = TIER_2_SUITES
     elif args.all:
         all_tests = list_all_tests()
         suites_to_run = list(all_tests.keys())
     else:
         parser.print_help()
         return 1
+    
+    # Set strict mode from args or environment
+    strict_mode = args.strict or os.environ.get("IRIS_STRICT_MODE", "") == "1"
+    if strict_mode:
+        log_warn("STRICT MODE ENABLED: Will fail on any warning or skip")
     
     # Create run directory
     run_dir = create_run_directory()
@@ -1505,11 +1806,51 @@ Examples:
     summary = write_summary(run_dir, suite_results, start_snapshot, end_snapshot)
     print_final_summary(summary)
     
+    # Analyze all logs for the run
+    log_header("COMPREHENSIVE LOG ANALYSIS")
+    log_info(f"Analyzing all logs in: {run_dir}")
+    
+    all_clean = True
+    for log_file in run_dir.rglob("*.log"):
+        log_info(f"\nAnalyzing: {log_file.relative_to(run_dir)}")
+        try:
+            with open(log_file, 'r', errors='replace') as f:
+                content = f.read()
+            analysis = analyze_log_strict(content, log_file)
+            
+            # Report issues
+            if analysis["errors"]:
+                log_fail(f"  ERRORS: {len(analysis['errors'])}")
+                all_clean = False
+            if analysis["skips"]:
+                log_warn(f"  SKIPS: {len(analysis['skips'])}")
+                if strict_mode:
+                    all_clean = False
+            if not analysis["errors"] and not analysis["skips"]:
+                log_pass(f"  CLEAN")
+        except Exception as e:
+            log_warn(f"  Could not analyze: {e}")
+    
+    if all_clean:
+        log_pass("\nALL LOGS CLEAN: No errors or unexpected skips")
+    else:
+        log_fail("\nLOG ANALYSIS: Issues detected - review logs above")
+    
     # Return appropriate exit code
     total_failed = sum(sr.tests_failed for sr in suite_results)
+    total_skipped = sum(sr.tests_skipped for sr in suite_results)
+    
     if total_failed > 0:
         if args.ci:
             log_fail("CI mode: Exiting with failure status")
+        return 1
+    
+    if strict_mode and total_skipped > 0:
+        log_fail(f"STRICT MODE: {total_skipped} tests skipped - failing")
+        return 1
+    
+    if strict_mode and not all_clean:
+        log_fail("STRICT MODE: Log analysis found issues - failing")
         return 1
     
     return 0

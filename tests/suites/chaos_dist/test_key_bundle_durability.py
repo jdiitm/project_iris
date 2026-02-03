@@ -250,9 +250,9 @@ def main():
     
     # Check prerequisites
     if not check_iris_keys_available():
-        print("\n[SKIP] iris_keys module not available")
-        print("       Compile with: erlc -o ebin src/iris_keys.erl")
-        sys.exit(0)  # Graceful skip
+        print("\nFAIL: iris_keys module not available")
+        print("      Compile with: erlc -o ebin src/iris_keys.erl")
+        sys.exit(1)  # No skips - module must be compiled
     
     print("[Check] iris_keys module available ✓")
     

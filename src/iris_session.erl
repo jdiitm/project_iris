@@ -39,6 +39,38 @@ legacy_core_node() ->
              end
     end.
 
+%% Check if iris_group service is available (on core node or locally)
+is_group_service_available() ->
+    %% First check local (for single-node/test setups)
+    case whereis(iris_group) of
+        Pid when is_pid(Pid) -> true;
+        undefined ->
+            %% Try core node via RPC
+            CoreNode = get_core_node(),
+            case rpc:call(CoreNode, erlang, whereis, [iris_group], 2000) of
+                Pid when is_pid(Pid) -> true;
+                _ -> false
+            end
+    end.
+
+%% Call iris_group function, routing to core node if needed
+call_iris_group(Function, Args) ->
+    %% First try local (for single-node/test setups)
+    case whereis(iris_group) of
+        Pid when is_pid(Pid) ->
+            apply(iris_group, Function, Args);
+        undefined ->
+            %% Route to core node
+            CoreNode = get_core_node(),
+            case rpc:call(CoreNode, iris_group, Function, Args, 5000) of
+                {badrpc, Reason} ->
+                    logger:warning("Group RPC failed: ~p", [Reason]),
+                    {error, group_service_unavailable};
+                Result ->
+                    Result
+            end
+    end.
+
 %% handle_packet(Packet, User, TransportPid, TransportMod) -> {ok, NewUser, Actions}
 %% Actions = [ {send, Bin} | {send_batch, [Bin]} | close ]
 handle_packet({login, LoginData}, _Current, TransportPid, _Mod) ->
@@ -267,12 +299,12 @@ handle_packet({e2ee_msg, _Recipient, _Ciphertext, _Header}, undefined, _Pid, _Mo
 
 handle_packet({group_create, GroupName}, User, _Pid, _Mod) when User =/= undefined ->
     %% Create a new group with User as admin
-    case whereis(iris_group) of
-        undefined ->
+    case is_group_service_available() of
+        false ->
             %% Group module not running
             {ok, User, [{send, encode_error(group_service_unavailable)}]};
-        _ ->
-            case iris_group:create_group(GroupName, User) of
+        true ->
+            case call_iris_group(create_group, [GroupName, User]) of
                 {ok, GroupId} ->
                     %% Send group_join notification back to creator
                     JoinPacket = iris_proto:encode_group_join(GroupId, User),
@@ -288,11 +320,11 @@ handle_packet({group_create, _GroupName}, undefined, _Pid, _Mod) ->
 
 handle_packet({group_leave, GroupId}, User, _Pid, _Mod) when User =/= undefined ->
     %% Leave a group
-    case whereis(iris_group) of
-        undefined ->
+    case is_group_service_available() of
+        false ->
             {ok, User, [{send, encode_error(group_service_unavailable)}]};
-        _ ->
-            case iris_group:remove_member(GroupId, User, User) of
+        true ->
+            case call_iris_group(remove_member, [GroupId, User, User]) of
                 ok ->
                     {ok, User, [{send, <<16#32, "OK">>}]};
                 {error, Reason} ->
@@ -309,16 +341,16 @@ handle_packet({group_msg, GroupId, Ciphertext, Header}, User, _Pid, _Mod) when U
     %% Rate limit check
     case check_message_rate(User) of
         allow ->
-            case whereis(iris_group) of
-                undefined ->
+            case is_group_service_available() of
+                false ->
                     {ok, User, [{send, encode_error(group_service_unavailable)}]};
-                _ ->
-                    case iris_group:is_member(GroupId, User) of
+                true ->
+                    case call_iris_group(is_member, [GroupId, User]) of
                         false ->
                             {ok, User, [{send, encode_error(not_member)}]};
                         true ->
                             %% Fan out to all group members
-                            case iris_group:get_members(GroupId) of
+                            case call_iris_group(get_members, [GroupId]) of
                                 {ok, Members} ->
                                     %% Encode the message once
                                     DeliveryPacket = iris_proto:encode_group_msg(GroupId, 
@@ -333,7 +365,9 @@ handle_packet({group_msg, GroupId, Ciphertext, Header}, User, _Pid, _Mod) when U
                                     {ok, User, []};
                                 {error, _Reason} ->
                                     {ok, User, [{send, encode_error(group_not_found)}]}
-                            end
+                            end;
+                        {error, _} ->
+                            {ok, User, [{send, encode_error(group_service_unavailable)}]}
                     end
             end;
         {deny, RetryAfter} ->
@@ -346,22 +380,24 @@ handle_packet({group_msg, _GroupId, _Ciphertext, _Header}, undefined, _Pid, _Mod
 
 handle_packet({group_roster, GroupId}, User, _Pid, _Mod) when User =/= undefined ->
     %% Request group roster (member list)
-    case whereis(iris_group) of
-        undefined ->
+    case is_group_service_available() of
+        false ->
             {ok, User, [{send, encode_error(group_service_unavailable)}]};
-        _ ->
-            case iris_group:is_member(GroupId, User) of
+        true ->
+            case call_iris_group(is_member, [GroupId, User]) of
                 false ->
                     {ok, User, [{send, encode_error(not_member)}]};
                 true ->
-                    case iris_group:get_members(GroupId) of
+                    case call_iris_group(get_members, [GroupId]) of
                         {ok, Members} ->
                             MemberIds = [M || #{user_id := M} <- Members],
                             Response = iris_proto:encode_group_roster_response(GroupId, MemberIds),
                             {ok, User, [{send, Response}]};
                         {error, Reason} ->
                             {ok, User, [{send, encode_error(Reason)}]}
-                    end
+                    end;
+                {error, _} ->
+                    {ok, User, [{send, encode_error(group_service_unavailable)}]}
             end
     end;
 
@@ -370,21 +406,21 @@ handle_packet({group_roster, _GroupId}, undefined, _Pid, _Mod) ->
 
 handle_packet({sender_key_dist, GroupId, KeyData}, User, _Pid, _Mod) when User =/= undefined ->
     %% Distribute sender key to group
-    case whereis(iris_group) of
-        undefined ->
+    case is_group_service_available() of
+        false ->
             {ok, User, [{send, encode_error(group_service_unavailable)}]};
-        _ ->
-            case iris_group:is_member(GroupId, User) of
+        true ->
+            case call_iris_group(is_member, [GroupId, User]) of
                 false ->
                     {ok, User, [{send, encode_error(not_member)}]};
                 true ->
                     %% Store sender key and broadcast to members
                     KeyId = crypto:strong_rand_bytes(8),
                     KeyIdHex = binary_to_list(base16_encode(KeyId)),
-                    ok = iris_group:store_sender_key(GroupId, User, list_to_binary(KeyIdHex), KeyData),
+                    call_iris_group(store_sender_key, [GroupId, User, list_to_binary(KeyIdHex), KeyData]),
                     
                     %% Notify all other members of the new sender key
-                    case iris_group:get_members(GroupId) of
+                    case call_iris_group(get_members, [GroupId]) of
                         {ok, Members} ->
                             DistPacket = iris_proto:encode_sender_key_dist(GroupId, KeyData),
                             lists:foreach(fun(#{user_id := MemberId}) ->
@@ -395,7 +431,9 @@ handle_packet({sender_key_dist, GroupId, KeyData}, User, _Pid, _Mod) when User =
                             end, Members);
                         _ -> ok
                     end,
-                    {ok, User, []}
+                    {ok, User, []};
+                {error, _} ->
+                    {ok, User, [{send, encode_error(group_service_unavailable)}]}
             end
     end;
 

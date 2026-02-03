@@ -357,10 +357,20 @@ terminate(_Reason, _State) ->
 %% =============================================================================
 
 init_tables() ->
+    %% Ensure Mnesia is running
+    case mnesia:system_info(is_running) of
+        no -> 
+            logger:info("iris_group: Starting Mnesia"),
+            mnesia:start();
+        _ -> ok
+    end,
+    
     %% Determine storage type: disc_copies if schema supports it, else ram_copies
-    StorageType = case mnesia:table_info(schema, disc_copies) of
+    StorageType = try mnesia:table_info(schema, disc_copies) of
         [] -> ram_copies;  %% No disc schema, use ram
         _ -> disc_copies   %% Disc schema exists
+    catch
+        _:_ -> ram_copies  %% Mnesia not ready, use ram
     end,
     
     %% Create group table

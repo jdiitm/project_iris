@@ -502,8 +502,8 @@ def main():
     with ClusterManager(project_root=project_root) as cluster:
         # Check prerequisites
         if not check_server_available():
-            print(f"\nSKIP:INFRA - Server not available at {SERVER_HOST}:{SERVER_PORT}")
-            sys.exit(2)
+            print(f"\nFAIL: Server not available at {SERVER_HOST}:{SERVER_PORT}")
+            sys.exit(1)
         
         # Run test
         result = run_backpressure_test()
@@ -517,11 +517,11 @@ def main():
             warmup_success_rate = result.warmup.messages_succeeded / result.warmup.messages_sent
             if warmup_success_rate < 0.10:  # Less than 10% indicates total routing failure
                 print("\n" + "=" * 70)
-                print(f"SKIP:INFRA - Cluster routing completely broken")
+                print(f"FAIL: Cluster routing completely broken")
                 print(f"  Warmup success rate: {warmup_success_rate:.1%} (expected >10%)")
                 print(f"  This indicates edge-core connection failure.")
                 print(f"  Run with a fresh cluster: make start")
-                sys.exit(2)
+                sys.exit(1)
         
         # Analyze and report
         passed = analyze_results(result)

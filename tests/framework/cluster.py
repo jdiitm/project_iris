@@ -89,12 +89,16 @@ class ClusterManager:
             return "localhost"
     
     def _run_make(self, target: str, timeout: int = 60) -> bool:
-        """Run a make target with NODE_SUFFIX if set in environment."""
+        """Run a make target with NODE_SUFFIX and CONFIG if set."""
         try:
             suffix = os.environ.get("IRIS_NODE_SUFFIX", "")
             cmd = ["make", target]
             if suffix:
                 cmd.append(f"NODE_SUFFIX={suffix}")
+            
+            # INF-004: Pass TLS config if specified
+            if self.config_path:
+                cmd.append(f"CONFIG={self.config_path}")
             
             result = subprocess.run(
                 cmd,

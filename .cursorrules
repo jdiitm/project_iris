@@ -59,6 +59,27 @@ Before writing code, produce (no code edits in this phase):
 
 ---
 
+## Robust Testing Protocol (MANDATORY)
+
+When asked to run ANY test (unit, integration, or manual verification), you MUST use the `scripts/smart_test.py` wrapper.
+This ensures:
+1. Environment is nuked (Clean Slate).
+2. Logs are persisted to `tests/artifacts/logs/`.
+3. Post-run analysis catches hidden errors (`badarg`, `failed to open wal`, etc.).
+
+**Usage:**
+```bash
+python3 scripts/smart_test.py -- <YOUR_TEST_COMMAND>
+```
+**Examples:**
+- `python3 scripts/smart_test.py -- python3 tests/run_tests.py --tier 0`
+- `python3 scripts/smart_test.py -- make cluster-up`
+
+**Do NOT run `make test` or `python tests/run_tests.py` directly.**
+Always wrap it.
+
+---
+
 ## Pre-Commit: Required Output
 
 Generate these sections before any commit:

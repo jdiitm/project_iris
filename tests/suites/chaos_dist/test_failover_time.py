@@ -201,13 +201,13 @@ def test_failover_time():
     
     # Check prerequisites
     if not check_docker_available():
-        print("\n⚠️ Docker not available - skipping failover test")
-        return None
+        print("\n❌ FAIL: Docker not available - required for failover test")
+        return False
     
     if not check_container_exists(CONTAINER_NAME):
-        print(f"\n⚠️ Container {CONTAINER_NAME} not found")
+        print(f"\n❌ FAIL: Container {CONTAINER_NAME} not found")
         print("  Start cluster with: make cluster-up")
-        return None
+        return False
     
     print("\n1. Starting traffic generator...")
     monitor = TrafficMonitor()
@@ -228,20 +228,19 @@ def test_failover_time():
     print(f"   Initial: {initial_success} success, {initial_fail} fail")
     
     if initial_success == 0:
-        print("   ❌ No successful traffic - server not responding")
+        print("   ❌ FAIL: No successful traffic - server not responding")
         monitor.stop()
         worker_thread.join()
-        return None
+        return False
     
     print(f"\n2. Killing primary core: {CONTAINER_NAME}")
     kill_time = time.time()
     if not kill_container(CONTAINER_NAME):
-        print("   ❌ Failed to kill container")
+        print("   ❌ FAIL: Failed to kill container")
         monitor.stop()
         worker_thread.join()
-        # Per TEST_CONTRACT.md: return None = SKIP (exit code 2)
-        print("\nSKIP:DOCKER - Container not available")
-        return None
+        print("\nFAIL: Docker container operation failed")
+        return False
     print("   ✅ Container killed")
     
     print(f"\n3. Monitoring failover (timeout: {FAILOVER_TARGET_SECONDS + 30}s)...")
@@ -352,9 +351,9 @@ def main():
         print("RESULT: FAILED")
         sys.exit(1)
     else:
-        # Per TEST_CONTRACT.md: exit(2) = SKIP
-        print("RESULT: SKIPPED")
-        sys.exit(2)
+        # No skips - None results are failures
+        print("RESULT: FAILED")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

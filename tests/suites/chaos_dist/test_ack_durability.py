@@ -392,9 +392,9 @@ def test_ack_implies_durability():
         return run_simplified_test()
     
     if not check_container_exists(CONTAINER_NAME):
-        print(f"  ⚠️ Container {CONTAINER_NAME} not found")
+        print(f"  ❌ FAIL: Container {CONTAINER_NAME} not found")
         print("  Start cluster with: make cluster-up")
-        return None  # Skip, not fail
+        return False  # No skips - cluster must be running
     
     # Ensure cluster replication is healthy before running durability test
     print("\n0. Ensuring cluster replication is healthy...")
@@ -412,9 +412,9 @@ def test_ack_implies_durability():
         sock = connect_plaintext()  # Use plaintext for now
         login(sock, sender)
     except Exception as e:
-        print(f"  ❌ Connection failed: {e}")
+        print(f"  ❌ FAIL: Connection failed: {e}")
         print("  Ensure server is running: make start")
-        return None
+        return False
     
     print(f"\n2. Sending message to offline receiver: {receiver}")
     print(f"   Message: {test_message}")
@@ -526,8 +526,8 @@ def run_simplified_test():
         send_message(sock, receiver, test_message)
         sock.close()
     except Exception as e:
-        print(f"  ❌ Send failed: {e}")
-        return None
+        print(f"  ❌ FAIL: Send failed: {e}")
+        return False
     
     print("\n2. Waiting for storage...")
     time.sleep(1)
@@ -536,15 +536,15 @@ def run_simplified_test():
     try:
         sock = connect_plaintext()
         if not login(sock, receiver):
-            print("  ❌ Login failed")
-            return None
+            print("  ❌ FAIL: Login failed")
+            return False
         
         # Receive messages using reliable message protocol
         messages = receive_offline_messages(sock, timeout=5)
         sock.close()
     except Exception as e:
-        print(f"  ❌ Receive failed: {e}")
-        return None
+        print(f"  ❌ FAIL: Receive failed: {e}")
+        return False
     
     # Check if test message is in any received message
     for msg in messages:
@@ -552,8 +552,8 @@ def run_simplified_test():
             print("\n✅ Message delivered to receiver")
             return True
     
-    print("\n⚠️ Message not found (may be timing issue)")
-    return None
+    print("\n❌ FAIL: Message not found")
+    return False
 
 
 def restore_cluster_state():
@@ -611,10 +611,10 @@ def main():
         print("RESULT: FAILED - RFC VIOLATION DETECTED")
         sys.exit(1)
     else:
-        # Per TEST_CONTRACT.md: exit(2) = SKIP
-        print("RESULT: SKIPPED (prerequisites not met)")
-        print("SKIP:INFRA - Docker cluster not available or not running")
-        sys.exit(2)
+        # No skips - None results are failures
+        print("RESULT: FAILED")
+        print("FAIL: Test did not complete successfully")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

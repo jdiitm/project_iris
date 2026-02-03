@@ -453,12 +453,12 @@ def main():
     log(f"=== Group Membership Tests (profile={TEST_PROFILE}, seed={TEST_SEED}) ===")
     
     if not check_erlang_available():
-        log("[SKIP] Erlang not available. Exiting with code 2.")
-        sys.exit(2)
+        log("[FAIL] Erlang not available - environment not properly configured")
+        sys.exit(1)
     
     if not check_module_compiled():
-        log("[SKIP] iris_group.beam not found. Run 'make' first.")
-        sys.exit(2)
+        log("[FAIL] iris_group.beam not found. Run 'make' first.")
+        sys.exit(1)
     
     results = []
     

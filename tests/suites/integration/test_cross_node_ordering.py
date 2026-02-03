@@ -128,7 +128,8 @@ def test_message_ordering():
         login(sender_sock, sender)
     except Exception as e:
         print(f"  ❌ Connection failed: {e}")
-        return None
+        print("  This is a TEST FAILURE - server should be reachable")
+        return False  # Connection failure = FAIL, not skip
     
     print(f"\n2. Sending {MESSAGE_COUNT} ordered messages...")
     for seq in range(1, MESSAGE_COUNT + 1):
@@ -149,7 +150,8 @@ def test_message_ordering():
         login(receiver_sock, receiver)
     except Exception as e:
         print(f"  ❌ Connection failed: {e}")
-        return None
+        print("  This is a TEST FAILURE - server should be reachable")
+        return False  # Connection failure = FAIL, not skip
     
     print("\n5. Receiving offline messages...")
     time.sleep(1)  # Wait for delivery
@@ -163,9 +165,9 @@ def test_message_ordering():
     print(f"   Found {len(sequences)} messages")
     
     if len(sequences) == 0:
-        print("\n⚠️ No messages found - test inconclusive")
-        print("  This may indicate offline storage isn't working")
-        return None
+        print("\n❌ FAIL: No messages found")
+        print("  Offline storage is not working - this is a test failure")
+        return False
     
     print(f"   Received sequences: {sequences}")
     
@@ -222,8 +224,11 @@ def main():
         print("RESULT: FAILED")
         sys.exit(1)
     else:
-        print("RESULT: SKIPPED")
-        sys.exit(0)
+        # None = inconclusive (no messages received)
+        # This is a FAILURE - infrastructure should always work
+        print("RESULT: FAILED")
+        print("FAIL: No messages found - offline storage not working")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

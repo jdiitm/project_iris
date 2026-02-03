@@ -317,8 +317,8 @@ def main():
     log(f"=== Group Fan-out Stress Tests (profile={TEST_PROFILE}, seed={TEST_SEED}) ===")
     
     if not check_modules_compiled():
-        log("[SKIP] Required modules not compiled. Run 'make' first.")
-        sys.exit(2)
+        log("[FAIL] Required modules not compiled. Run 'make' first.")
+        sys.exit(1)
     
     results = []
     

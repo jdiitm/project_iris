@@ -464,9 +464,12 @@ def test_offline_e2ee_ordering():
         while len(received_order) < 5:
             try:
                 msg = bob_client.recv_msg(timeout=2.0)
-                if msg and "ORDER:" in str(msg):
-                    num = int(msg.split(":")[1])
-                    received_order.append(num)
+                if msg:
+                    # Handle both bytes and str
+                    msg_str = msg.decode('utf-8', errors='replace') if isinstance(msg, bytes) else str(msg)
+                    if "ORDER:" in msg_str:
+                        num = int(msg_str.split(":")[1].split()[0])  # Handle trailing data
+                        received_order.append(num)
                 else:
                     break
             except socket.timeout:
@@ -478,19 +481,29 @@ def test_offline_e2ee_ordering():
     
     log(f"Received order: {received_order}")
     
-    # Check if order is preserved (allow partial delivery)
-    if len(received_order) >= 3:
+    # Check if order is preserved
+    if len(received_order) == 0:
+        log("[FAIL] No messages received - ordering cannot be verified")
+        return False  # Zero messages is a failure, not a pass
+    elif len(received_order) >= 3:
         is_ordered = all(received_order[i] <= received_order[i+1] 
                         for i in range(len(received_order)-1))
         if is_ordered:
-            log("[PASS] Message ordering preserved")
+            log(f"[PASS] Message ordering preserved ({len(received_order)} messages)")
             return True
         else:
             log("[FAIL] Messages out of order")
             return False
     else:
-        log(f"[WARN] Only received {len(received_order)} messages, skipping order check")
-        return True  # Partial delivery is OK for smoke
+        # 1-2 messages received - partial but still check ordering
+        is_ordered = all(received_order[i] <= received_order[i+1] 
+                        for i in range(len(received_order)-1)) if len(received_order) > 1 else True
+        if is_ordered:
+            log(f"[PASS] Message ordering preserved ({len(received_order)} messages, partial delivery)")
+            return True
+        else:
+            log("[FAIL] Messages out of order")
+            return False
 
 
 def test_e2ee_encryption_decryption():
