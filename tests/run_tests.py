@@ -15,7 +15,9 @@ Usage:
     ./tests/run_tests.py --all                    # Run all tests
     ./tests/run_tests.py --all --skip-docker      # Skip Docker tests (faster)
     ./tests/run_tests.py --suite unit             # Run specific suite
-    ./tests/run_tests.py --tier 0                 # CI Tier 0 (unit + integration)
+    ./tests/run_tests.py --tier 0                 # Tier 0: unit, integration
+    ./tests/run_tests.py --tier 1                 # Tier 1: e2e, security, resilience (no overlap)
+    ./tests/run_tests.py --tier 2                 # Tier 2: performance, stress, chaos
     ./tests/run_tests.py --list                   # List all available tests
 """
 
@@ -595,11 +597,11 @@ def main():
     if args.suite:
         suites = [args.suite]
     elif args.tier == 0:
-        suites = TIER_0_SUITES
+        suites = TIER_0_SUITES  # unit, integration
     elif args.tier == 1:
-        suites = TIER_0_SUITES + TIER_1_SUITES
+        suites = TIER_1_SUITES  # e2e, contract, compatibility, security, resilience (no overlap)
     elif args.tier == 2:
-        suites = TIER_0_SUITES + TIER_1_SUITES + TIER_2_SUITES
+        suites = TIER_2_SUITES  # performance_light, stress, chaos_controlled (no overlap)
     elif args.all:
         all_tests = list_all_tests()
         suites = list(all_tests.keys())
