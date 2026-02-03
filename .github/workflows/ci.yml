@@ -330,11 +330,30 @@ jobs:
     steps:
       - name: Verify All Tiers
         run: |
-          for tier in tier0 tier1 tier2 tier2-docker tier3; do
-            result="${{ needs[tier].result }}"
-            if [ "$result" != "success" ] && [ "$result" != "skipped" ]; then
-              echo "::error::$tier failed - release blocked"
-              exit 1
-            fi
-          done
+          echo "Tier 0: ${{ needs.tier0.result }}"
+          echo "Tier 1: ${{ needs.tier1.result }}"
+          echo "Tier 2: ${{ needs.tier2.result }}"
+          echo "Tier 2 Docker: ${{ needs.tier2-docker.result }}"
+          echo "Tier 3: ${{ needs.tier3.result }}"
+          
+          if [[ "${{ needs.tier0.result }}" != "success" ]]; then
+            echo "::error::Tier 0 failed - release blocked"
+            exit 1
+          fi
+          if [[ "${{ needs.tier1.result }}" != "success" ]]; then
+            echo "::error::Tier 1 failed - release blocked"
+            exit 1
+          fi
+          if [[ "${{ needs.tier2.result }}" != "success" && "${{ needs.tier2.result }}" != "skipped" ]]; then
+            echo "::error::Tier 2 failed - release blocked"
+            exit 1
+          fi
+          if [[ "${{ needs.tier2-docker.result }}" != "success" && "${{ needs.tier2-docker.result }}" != "skipped" ]]; then
+            echo "::error::Tier 2 Docker failed - release blocked"
+            exit 1
+          fi
+          if [[ "${{ needs.tier3.result }}" != "success" ]]; then
+            echo "::error::Tier 3 failed - release blocked"
+            exit 1
+          fi
           echo "All tiers passed - release approved"
