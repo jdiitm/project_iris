@@ -3,6 +3,12 @@
 
 -include_lib("kernel/include/inet.hrl").
 
+%% =============================================================================
+%% HOT-001 FIX: Paginated Offline Delivery Constants
+%% =============================================================================
+-define(OFFLINE_PAGE_SIZE, 500).      %% Messages per page
+-define(OFFLINE_INLINE_LIMIT, 1000).  %% Deliver all if under this limit
+
 %% Dynamic Core node discovery with failover
 get_core_node() ->
     case iris_core_registry:get_core() of
@@ -138,6 +144,48 @@ handle_packet({read_receipt, MsgId, OriginalSender}, User, _Pid, _Mod) when User
     {ok, User, []};
 
 handle_packet({read_receipt, _MsgId, _OriginalSender}, undefined, _Pid, _Mod) ->
+    %% Not logged in - ignore
+    {ok, undefined, []};
+
+%% =============================================================================
+%% HOT-001 FIX: Paginated Offline Message Retrieval
+%% =============================================================================
+%% For users with large offline queues (1000+ messages), messages are delivered
+%% in pages. Client requests additional pages with {get_offline_page, Cursor}.
+
+handle_packet({get_offline_page, Cursor}, User, _Pid, _Mod) when User =/= undefined ->
+    %% Client requesting next page of offline messages
+    CoreNode = get_core_node(),
+    case rpc:call(CoreNode, iris_core, retrieve_offline_paginated, 
+                  [User, ?OFFLINE_PAGE_SIZE, Cursor], 5000) of
+        {Msgs, NextCursor} when is_list(Msgs), length(Msgs) > 0 ->
+            %% Encode messages
+            MsgActions = lists:map(fun(Msg) ->
+                MsgId = iris_proto:generate_msg_id(),
+                {send, iris_proto:encode_reliable_msg(MsgId, Msg)}
+            end, Msgs),
+            
+            %% Confirm delivery of previous page (delete from storage)
+            PrevCursor = max(0, Cursor - ?OFFLINE_PAGE_SIZE),
+            spawn(fun() ->
+                rpc:call(CoreNode, iris_core, delete_offline_confirmed, 
+                         [User, {PrevCursor, Cursor}], 5000)
+            end),
+            
+            %% Add continuation indicator if more pages exist
+            case NextCursor of
+                done ->
+                    {ok, User, MsgActions};
+                _ ->
+                    Remaining = 0, %% Unknown at this point
+                    MoreIndicator = encode_offline_more(NextCursor, Remaining),
+                    {ok, User, MsgActions ++ [{send, MoreIndicator}]}
+            end;
+        _ ->
+            {ok, User, []}
+    end;
+
+handle_packet({get_offline_page, _Cursor}, undefined, _Pid, _Mod) ->
     %% Not logged in - ignore
     {ok, undefined, []};
 
@@ -384,20 +432,80 @@ complete_login(User, TransportPid) ->
         end
     end),
 
-    %% PHASE 3: Retrieve offline messages SYNCHRONOUSLY (RFC FR-2 compliance)
-    %% Messages MUST be delivered when recipient connects
-    OfflineActions = case rpc:call(get_core_node(), iris_core, retrieve_offline, [User], 5000) of
+    %% PHASE 3: Retrieve offline messages (HOT-001 FIX: Paginated for large queues)
+    %% Messages MUST be delivered when recipient connects (RFC FR-2 compliance)
+    %% But for celebrity accounts with 1M+ messages, we stream in pages to prevent OOM
+    OfflineActions = deliver_offline_messages(User),
+    
+    %% Response: LOGIN_OK followed by any offline messages
+    {ok, User, [{send, <<3, "LOGIN_OK">>} | OfflineActions]}.
+
+%% =============================================================================
+%% HOT-001 FIX: Paginated Offline Delivery for Celebrity Hotspots
+%% For normal users (<1000 offline messages): deliver all at once
+%% For hot users (>=1000 messages): deliver first page + OFFLINE_MORE indicator
+%% Client must request subsequent pages via {get_offline_page, Cursor}
+
+deliver_offline_messages(User) ->
+    CoreNode = get_core_node(),
+    %% First, check queue depth to decide delivery strategy
+    QueueDepth = try
+        rpc:call(CoreNode, iris_core, get_offline_queue_depth, [User], 2000)
+    catch _:_ -> 0
+    end,
+    
+    case QueueDepth of
+        N when is_integer(N), N > 0, N =< ?OFFLINE_INLINE_LIMIT ->
+            %% Small queue - deliver all at once (original behavior)
+            deliver_all_offline(User, CoreNode);
+        N when is_integer(N), N > ?OFFLINE_INLINE_LIMIT ->
+            %% Large queue - deliver first page + continuation indicator
+            logger:info("HOT-001: User ~p has ~p offline messages, using paginated delivery", [User, N]),
+            deliver_offline_page(User, CoreNode, 0, N);
+        _ ->
+            %% No messages or error
+            []
+    end.
+
+deliver_all_offline(User, CoreNode) ->
+    case rpc:call(CoreNode, iris_core, retrieve_offline, [User], 5000) of
         Msgs when is_list(Msgs), length(Msgs) > 0 ->
-            %% Encode each offline message as reliable message and include in response
             lists:map(fun(Msg) ->
                 MsgId = iris_proto:generate_msg_id(),
                 {send, iris_proto:encode_reliable_msg(MsgId, Msg)}
             end, Msgs);
         _ -> []
-    end,
-    
-    %% Response: LOGIN_OK followed by any offline messages
-    {ok, User, [{send, <<3, "LOGIN_OK">>} | OfflineActions]}.
+    end.
+
+deliver_offline_page(User, CoreNode, Cursor, TotalCount) ->
+    case rpc:call(CoreNode, iris_core, retrieve_offline_paginated, 
+                  [User, ?OFFLINE_PAGE_SIZE, Cursor], 5000) of
+        {Msgs, NextCursor} when is_list(Msgs), length(Msgs) > 0 ->
+            %% Encode messages
+            MsgActions = lists:map(fun(Msg) ->
+                MsgId = iris_proto:generate_msg_id(),
+                {send, iris_proto:encode_reliable_msg(MsgId, Msg)}
+            end, Msgs),
+            
+            %% Add continuation indicator if more pages exist
+            case NextCursor of
+                done ->
+                    %% Last page - just send messages
+                    MsgActions;
+                _ ->
+                    %% More pages - append OFFLINE_MORE indicator
+                    %% Client should send {get_offline_page, NextCursor} to continue
+                    Remaining = TotalCount - (Cursor + length(Msgs)),
+                    MoreIndicator = encode_offline_more(NextCursor, Remaining),
+                    MsgActions ++ [{send, MoreIndicator}]
+            end;
+        _ -> []
+    end.
+
+%% Encode indicator that more offline messages are available
+%% Format: [opcode=0x80, cursor:32, remaining:32]
+encode_offline_more(NextCursor, Remaining) ->
+    <<16#80, NextCursor:32, Remaining:32>>.
 
 parse_login_data(Data) ->
     case binary:split(Data, <<":">>) of
@@ -539,7 +647,8 @@ terminate(User) ->
                 [{User, Self}] ->
                     %% We own it - safe to delete
                     ets:delete(local_presence_v2, User),
-                    rpc:cast(get_core_node(), iris_core, update_status, [User, offline]);
+                    rpc:cast(get_core_node(), iris_core, update_status, [User, offline]),
+                    ok;  %% FIX: Explicit ok return (rpc:cast returns true)
                 [{User, _OtherPid}] ->
                     %% Different process owns it (new login happened) - don't delete
                     ok;

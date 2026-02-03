@@ -18,6 +18,7 @@ REQUIRES: Docker global cluster running (docker/global-cluster/)
 """
 
 import socket
+import ssl
 import time
 import statistics
 import sys
@@ -25,12 +26,32 @@ import os
 import threading
 import subprocess
 import shutil
+from pathlib import Path
 
 # Add project root to sys.path
 current_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.abspath(os.path.join(current_dir, "../../.."))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
+
+# TLS Configuration
+CA_CERT = Path(project_root) / "certs" / "ca.pem"
+
+
+def create_tls_socket(host: str, port: int, timeout: int = 10) -> socket.socket:
+    """Create a TLS-wrapped socket connection."""
+    context = ssl.create_default_context()
+    if CA_CERT.exists():
+        context.load_verify_locations(str(CA_CERT))
+    else:
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+    
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.settimeout(timeout)
+    tls_sock = context.wrap_socket(sock, server_hostname=host)
+    tls_sock.connect((host, port))
+    return tls_sock
 
 # Configuration
 EDGE_WEST_HOST = os.environ.get("EDGE_WEST_HOST", "localhost")
@@ -256,9 +277,7 @@ class LatencyReceiver:
         self.thread = None
     
     def connect(self):
-        self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.sock.settimeout(TIMEOUT)
-        self.sock.connect((self.host, self.port))
+        self.sock = create_tls_socket(self.host, self.port, timeout=TIMEOUT)
         # Login
         self.sock.sendall(bytes([0x01]) + self.username.encode())
         resp = self.sock.recv(1024)
@@ -320,9 +339,7 @@ class LatencySender:
         self.sent = {}  # msg_id -> send_time
     
     def connect(self):
-        self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.sock.settimeout(TIMEOUT)
-        self.sock.connect((self.host, self.port))
+        self.sock = create_tls_socket(self.host, self.port, timeout=TIMEOUT)
         # Login
         self.sock.sendall(bytes([0x01]) + self.username.encode())
         resp = self.sock.recv(1024)

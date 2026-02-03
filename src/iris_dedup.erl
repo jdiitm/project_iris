@@ -64,42 +64,46 @@ start_link(Opts) ->
 
 %% @doc Check if message ID was seen; if not, mark it as seen.
 %% Returns: new | duplicate
-%% P0-C3: Tiered check: ETS (hot) -> Bloom (warm) -> new
+%% P0-C3: Tiered check with ATOMIC ETS insert to prevent race conditions
+%% FIX: Use ets:insert_new/2 for atomic check-and-mark (RFC atomicity requirement)
 -spec check_and_mark(binary()) -> new | duplicate.
 check_and_mark(MsgId) ->
     Now = os:system_time(millisecond),
-    %% Tier 1: Check hot ETS cache
-    case ets:lookup(?TABLE, MsgId) of
-        [{MsgId, _Timestamp}] ->
-            %% Found in hot tier - definite duplicate
+    %% ATOMIC Tier 1: Try to insert into hot ETS cache
+    %% ets:insert_new returns true only if key didn't exist, false if it did
+    %% This is atomic - no race condition between check and mark
+    case ets:insert_new(?TABLE, {MsgId, Now}) of
+        false ->
+            %% Key already existed - definite duplicate (hot tier hit)
             gen_server:cast(?SERVER, duplicate_caught),
             duplicate;
-        [] ->
+        true ->
+            %% Successfully claimed in hot tier - but check warm tier for 7-day dedup
             %% Tier 2: Check bloom filter (7-day window)
             case check_bloom(MsgId) of
                 true ->
                     %% P0-FIX: Bloom filter hit is PROBABILISTIC.
                     %% We MUST verify against definitive storage to avoid false positives (Data Loss).
                     %% False Positive Rate ~0.1% -> 1 in 1000 messages would be dropped without this check.
-                    %% Use dedup_log table which is keyed by MsgId (not offline_msg which uses {User, BucketID}).
                     case mnesia:dirty_read(dedup_log, MsgId) of
                         [{dedup_log, MsgId, _Timestamp}] ->
-                            %% Confirmed duplicate in dedup log
+                            %% Confirmed duplicate in dedup log (warm tier hit)
+                            %% Remove from hot tier since it's actually a duplicate
+                            ets:delete(?TABLE, MsgId),
                             gen_server:cast(?SERVER, bloom_hit),
                             duplicate;
                         [] ->
-                            %% False positive! The message is NEW.
-                            %% Add to hot cache, bloom, and dedup_log.
-                            logger:info("Dedup: Bloom false positive for ~p - allowing", [MsgId]),
-                            true = ets:insert(?TABLE, {MsgId, Now}),
+                            %% False positive! The message is truly NEW.
+                            %% Already in hot cache, now add to bloom and dedup_log
+                            logger:debug("Dedup: Bloom false positive for ~p - allowing", [MsgId]),
                             add_to_bloom(MsgId),
                             write_dedup_log(MsgId, Now),
                             gen_server:cast(?SERVER, {false_positive, Now}),
                             new
                     end;
                 false ->
-                    %% New message - mark in all tiers (hot ETS, bloom, dedup_log)
-                    true = ets:insert(?TABLE, {MsgId, Now}),
+                    %% Not in bloom either - definitely new message
+                    %% Already in hot cache, now add to bloom and dedup_log
                     add_to_bloom(MsgId),
                     write_dedup_log(MsgId, Now),
                     gen_server:cast(?SERVER, {new_entry, Now}),

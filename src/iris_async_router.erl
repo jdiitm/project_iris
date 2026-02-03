@@ -236,6 +236,30 @@ route_to_remote(User, Msg, MsgId, State) ->
 %% FORENSIC_AUDIT_FIX: Extracted blocking logic into separate function
 %% This runs in a spawned process, not blocking the shard GenServer
 do_remote_route(User, Msg, MsgId) ->
+    %% HOT-002 FIX: Check destination rate limit before routing
+    %% This protects hot recipients (celebrities) from being overwhelmed
+    case check_destination_rate(User) of
+        allow ->
+            do_remote_route_inner(User, Msg, MsgId);
+        {deny, RetryAfter} ->
+            %% Destination is rate limited - store offline for later delivery
+            logger:warning("HOT-002: Destination ~p rate limited (msg_id=~p), storing offline. Retry in ~pms",
+                          [User, MsgId, RetryAfter]),
+            store_offline_guaranteed(User, Msg, MsgId),
+            {success, offline}  %% Not a failure - graceful degradation
+    end.
+
+%% HOT-002 FIX: Check destination rate limit
+check_destination_rate(User) ->
+    case whereis(iris_rate_limiter) of
+        undefined -> allow;  %% Rate limiter not running
+        _ -> 
+            try iris_rate_limiter:check_destination(User)
+            catch _:_ -> allow  %% Fail open
+            end
+    end.
+
+do_remote_route_inner(User, Msg, MsgId) ->
     case get_shard_nodes(User) of
         [] ->
             %% No shard nodes - try legacy routing (fire-and-forget)
@@ -284,8 +308,9 @@ get_shard_nodes(User) ->
     end.
 
 %% Fallback to discovery service
+%% P0-A FIX: Include ALL core nodes across ALL regions for cross-region routing
 get_discovery_nodes() ->
-    case whereis(iris_discovery) of
+    LocalNodes = case whereis(iris_discovery) of
         undefined ->
             %% No discovery - use pg or connected nodes
             case pg:get_members(iris_shards) of
@@ -297,6 +322,27 @@ get_discovery_nodes() ->
             end;
         _ ->
             iris_discovery:get_nodes(iris_core)
+    end,
+    
+    %% P0-A FIX: Also include cross-region cores for global user lookup
+    CrossRegionNodes = get_all_region_cores(),
+    lists:usort(LocalNodes ++ CrossRegionNodes).
+
+%% P0-A FIX: Get all core nodes across all configured regions
+get_all_region_cores() ->
+    case whereis(iris_region_router) of
+        undefined -> [];
+        _ ->
+            try
+                Regions = iris_region_router:get_all_regions(),
+                lists:flatmap(fun(Region) ->
+                    case iris_region_router:get_region_endpoint(Region) of
+                        {ok, Nodes} -> Nodes;
+                        _ -> []
+                    end
+                end, Regions)
+            catch _:_ -> []
+            end
     end.
 
 %% Route using circuit breaker with fallback

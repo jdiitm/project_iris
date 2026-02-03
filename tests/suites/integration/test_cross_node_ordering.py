@@ -18,9 +18,11 @@ FAIL: Any out-of-order delivery detected
 """
 
 import socket
+import ssl
 import time
 import sys
 import os
+from pathlib import Path
 
 # Configuration
 SERVER_HOST = os.environ.get("IRIS_HOST", "localhost")
@@ -28,12 +30,24 @@ SERVER_PORT = int(os.environ.get("IRIS_PORT", "8085"))
 MESSAGE_COUNT = 20
 TIMEOUT = 10
 
+# TLS Configuration
+PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
+CA_CERT = PROJECT_ROOT / "certs" / "ca.pem"
+
 
 def connect():
-    """Create connection."""
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.settimeout(TIMEOUT)
-    sock.connect((SERVER_HOST, SERVER_PORT))
+    """Create TLS connection."""
+    context = ssl.create_default_context()
+    if CA_CERT.exists():
+        context.load_verify_locations(str(CA_CERT))
+    else:
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+    
+    raw_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    raw_sock.settimeout(TIMEOUT)
+    raw_sock.connect((SERVER_HOST, SERVER_PORT))
+    sock = context.wrap_socket(raw_sock, server_hostname=SERVER_HOST)
     return sock
 
 

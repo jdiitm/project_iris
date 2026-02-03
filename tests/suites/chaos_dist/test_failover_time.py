@@ -27,6 +27,8 @@ from pathlib import Path
 
 # Project root for init_cluster.sh
 PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 # Configuration
 SERVER_HOST = os.environ.get("IRIS_HOST", "localhost")
@@ -78,11 +80,9 @@ class TrafficMonitor:
 
 
 def connect():
-    """Create connection."""
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.settimeout(5)
-    sock.connect((SERVER_HOST, SERVER_PORT))
-    return sock
+    """Create TLS connection."""
+    from tests.suites.chaos_dist.utils import create_tls_socket
+    return create_tls_socket(SERVER_HOST, SERVER_PORT, timeout=5)
 
 
 def login(sock, username):

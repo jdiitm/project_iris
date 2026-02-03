@@ -90,13 +90,16 @@ test_membership_mode_default() ->
     end.
 
 test_membership_mode_dynamic() ->
-    %% Setting to dynamic should work
+    %% FIX: CB-1 audit deprecated dynamic mode for safety reasons.
+    %% Even when dynamic is configured, the service now reports 'static' internally
+    %% because dynamic mode defeats split-brain protection (both sides see 100% quorum).
     application:set_env(iris_core, partition_guard_mode, dynamic),
     case iris_partition_guard:start_link() of
         {ok, Pid} ->
             Status = iris_partition_guard:get_status(),
             gen_server:stop(Pid, normal, 1000),
-            ?assertEqual(dynamic, maps:get(membership_mode, Status));
+            %% Should return 'static' even with dynamic configured (CB-1 safety fix)
+            ?assertEqual(static, maps:get(membership_mode, Status));
         {error, {already_started, _}} ->
             %% If already running, skip - can't change mode on running guard
             ok

@@ -57,6 +57,21 @@ TIER_1_SUITES = ["resilience", "performance_light", "chaos_controlled", "contrac
 # Tests that require TLS-enabled cluster (use config/test_tls.config)
 TLS_REQUIRED_TESTS = ["test_tls_mandatory"]
 
+# Check if Erlang has SSL support (required for TLS tests)
+def check_erlang_ssl_available() -> bool:
+    """Check if Erlang was compiled with SSL support."""
+    try:
+        result = subprocess.run(
+            ["erl", "-noshell", "-eval", 
+             "case code:ensure_loaded(ssl) of {module,_}->io:format(\"yes\");_->io:format(\"no\") end, init:stop()."],
+            capture_output=True, text=True, timeout=10
+        )
+        return "yes" in result.stdout
+    except Exception:
+        return False
+
+ERLANG_SSL_AVAILABLE = check_erlang_ssl_available()
+
 # Known failing tests - excluded from determinism requirements (Phase 2)
 KNOWN_FAILING_TESTS = []  # All tests should pass after hardening
 
@@ -482,11 +497,30 @@ def start_docker_cluster() -> bool:
         # Stop any existing cluster first
         log_info("  Phase 1: Stopping existing Docker cluster...")
         subprocess.run(
-            ["docker", "compose", "-f", str(DOCKER_COMPOSE_FILE), "down", "--remove-orphans", "-v"],
+            ["docker", "compose", "-f", str(DOCKER_COMPOSE_FILE), "down", "--remove-orphans", "-v", "--timeout", "30"],
             cwd=str(DOCKER_CLUSTER_DIR),
             capture_output=True,
             timeout=120
         )
+        
+        # Force remove any containers that might be orphaned (belt and suspenders)
+        container_names = (
+            [f"core-east-{i}" for i in [1,2]] +
+            [f"core-west-{i}" for i in [1,2]] +
+            [f"core-eu-{i}" for i in [1,2]] +
+            [f"edge-east-{i}" for i in [1,2]] +
+            [f"edge-west-{i}" for i in [1,2]] +
+            [f"edge-eu-{i}" for i in [1,2]] +
+            ["edge-sydney-1", "edge-sydney-2", "edge-saopaulo", "loadgen-east", "loadgen-west"]
+        )
+        subprocess.run(
+            ["docker", "rm", "-f"] + container_names,
+            capture_output=True,
+            timeout=30
+        )
+        
+        # Wait for Docker to fully release resources
+        time.sleep(3)
         
         # Start fresh cluster
         log_info("  Phase 2: Starting Docker cluster (this may take 1-2 minutes)...")
@@ -881,6 +915,31 @@ def nuke_cluster():
     """
     log_info("Nuking cluster (complete teardown)...")
     
+    # 0. CRITICAL: Stop Docker cluster FIRST to avoid stale container references
+    try:
+        docker_compose_file = PROJECT_ROOT / "docker" / "global-cluster" / "docker-compose.yml"
+        if docker_compose_file.exists():
+            subprocess.run(
+                ["docker", "compose", "-f", str(docker_compose_file), "down", "--remove-orphans", "-v", "--timeout", "10"],
+                capture_output=True,
+                timeout=60
+            )
+            # Also force remove any containers that might be orphaned
+            subprocess.run(
+                ["docker", "rm", "-f"] + 
+                [f"core-east-{i}" for i in [1,2]] +
+                [f"core-west-{i}" for i in [1,2]] +
+                [f"core-eu-{i}" for i in [1,2]] +
+                [f"edge-east-{i}" for i in [1,2]] +
+                [f"edge-west-{i}" for i in [1,2]] +
+                [f"edge-eu-{i}" for i in [1,2]] +
+                ["edge-sydney-1", "edge-sydney-2", "edge-saopaulo", "loadgen-east", "loadgen-west"],
+                capture_output=True,
+                timeout=30
+            )
+    except Exception:
+        pass
+    
     # 1. Try graceful stop first
     try:
         subprocess.run(
@@ -904,8 +963,8 @@ def nuke_cluster():
     except Exception:
         pass
     
-    # 4. Kill any process holding our ports (8085-8089)
-    for port in [8085, 8086, 8087, 8088, 8089]:
+    # 4. Kill any process holding our ports (8085-8094 for all edges)
+    for port in range(8085, 8095):
         try:
             subprocess.run(["fuser", "-k", f"{port}/tcp"], capture_output=True, timeout=5)
         except Exception:

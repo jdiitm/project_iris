@@ -14,6 +14,9 @@
 -export([start_link/0, start_link/1]).
 -export([check/1, check/2, allow/1, allow/2]).
 -export([get_stats/0, get_user_tokens/1]).
+%% HOT-002 FIX: Destination rate limiting to protect hot recipients
+-export([check_destination/1, check_destination/2, get_destination_stats/1]).
+-export([promote_destination/2, is_destination_hot/1]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
 -define(SERVER, ?MODULE).
@@ -236,3 +239,210 @@ cleanup_idle_fold(User, Cutoff) ->
             ok
     end,
     cleanup_idle_fold(Next, Cutoff).
+
+%% =============================================================================
+%% HOT-002 FIX: Destination Rate Limiting
+%% =============================================================================
+%% Protect hot recipients (celebrities/VIPs) from being overwhelmed by limiting
+%% the rate of incoming messages per destination user. This prevents:
+%% 1. Memory exhaustion on Edge nodes handling celebrity mailboxes
+%% 2. Cluster crashes during fan-in scenarios (stress_global_fan_in)
+%% 3. Login failures for users with large offline queues (stress_hotspot)
+%%
+%% Destination limits are HIGHER than sender limits (celebrities expect traffic).
+%% Limits can be dynamically promoted for known hot users.
+%% =============================================================================
+
+-define(DEST_TABLE, iris_dest_rate_buckets).
+-define(HOT_DEST_TABLE, iris_hot_destinations).
+-define(DEFAULT_DEST_RATE, 10000).    %% 10K msgs/sec per destination (high)
+-define(DEFAULT_DEST_BURST, 50000).   %% 50K burst capacity
+-define(HOT_DEST_RATE, 100000).       %% 100K msgs/sec for promoted hot users
+-define(HOT_DEST_BURST, 500000).      %% 500K burst for hot users
+
+-record(dest_bucket, {
+    user :: binary(),
+    tokens :: float(),
+    rate :: integer(),
+    burst :: integer(),
+    last_refill :: integer(),
+    total_received :: integer()       %% Track total for hot detection
+}).
+
+%% @doc Check if a message can be delivered to destination user
+%% Returns allow | {deny, RetryAfterMs} | {throttle, ReducedRate}
+-spec check_destination(binary()) -> allow | {deny, integer()} | {throttle, integer()}.
+check_destination(DestUser) ->
+    check_destination(DestUser, 1).
+
+-spec check_destination(binary(), integer()) -> allow | {deny, integer()} | {throttle, integer()}.
+check_destination(DestUser, Tokens) ->
+    %% Ensure destination table exists
+    ensure_dest_table(),
+    
+    Now = os:system_time(millisecond),
+    Bucket = get_or_create_dest_bucket(DestUser, Now),
+    RefilledBucket = refill_dest_bucket(Bucket, Now),
+    
+    case consume_dest_tokens(RefilledBucket, Tokens) of
+        {ok, NewBucket} ->
+            %% Update total received count for hot detection
+            UpdatedBucket = NewBucket#dest_bucket{
+                total_received = NewBucket#dest_bucket.total_received + Tokens
+            },
+            save_dest_bucket(UpdatedBucket),
+            
+            %% Check if this user is becoming hot (auto-promote)
+            maybe_auto_promote(UpdatedBucket),
+            allow;
+        {not_enough, CurrentTokens} ->
+            %% Calculate retry-after
+            TokensNeeded = Tokens - CurrentTokens,
+            RefillRate = RefilledBucket#dest_bucket.rate / 1000,
+            RetryAfter = round(TokensNeeded / max(0.001, RefillRate)),
+            
+            logger:warning("HOT-002: Destination ~p rate limited (tokens=~p, need=~p)", 
+                          [DestUser, CurrentTokens, Tokens]),
+            {deny, max(10, min(RetryAfter, 60000))}
+    end.
+
+%% @doc Manually promote a destination to hot status with custom bucket count
+%% This increases their rate limit significantly
+-spec promote_destination(binary(), integer()) -> ok.
+promote_destination(DestUser, BucketMultiplier) ->
+    ensure_dest_table(),
+    ensure_hot_table(),
+    
+    %% Mark as hot destination
+    ets:insert(?HOT_DEST_TABLE, {DestUser, BucketMultiplier, os:system_time(millisecond)}),
+    
+    %% Upgrade their bucket limits
+    Now = os:system_time(millisecond),
+    Rate = ?HOT_DEST_RATE * BucketMultiplier,
+    Burst = ?HOT_DEST_BURST * BucketMultiplier,
+    
+    NewBucket = #dest_bucket{
+        user = DestUser,
+        tokens = float(Burst),
+        rate = Rate,
+        burst = Burst,
+        last_refill = Now,
+        total_received = 0
+    },
+    save_dest_bucket(NewBucket),
+    
+    logger:info("HOT-002: Promoted ~p to hot destination (rate=~p, burst=~p)", 
+               [DestUser, Rate, Burst]),
+    ok.
+
+%% @doc Check if a destination is marked as hot
+-spec is_destination_hot(binary()) -> boolean().
+is_destination_hot(DestUser) ->
+    ensure_hot_table(),
+    case ets:lookup(?HOT_DEST_TABLE, DestUser) of
+        [{DestUser, _, _}] -> true;
+        [] -> false
+    end.
+
+%% @doc Get stats for a specific destination
+-spec get_destination_stats(binary()) -> map() | undefined.
+get_destination_stats(DestUser) ->
+    ensure_dest_table(),
+    case ets:lookup(?DEST_TABLE, DestUser) of
+        [#dest_bucket{tokens = T, rate = R, burst = B, total_received = Total}] ->
+            #{
+                tokens => T,
+                rate => R,
+                burst => B,
+                total_received => Total,
+                is_hot => is_destination_hot(DestUser)
+            };
+        [] ->
+            undefined
+    end.
+
+%% Internal: Ensure destination rate limit table exists
+ensure_dest_table() ->
+    case ets:whereis(?DEST_TABLE) of
+        undefined ->
+            try
+                ets:new(?DEST_TABLE, [
+                    set,
+                    named_table,
+                    public,
+                    {keypos, #dest_bucket.user},
+                    {read_concurrency, true},
+                    {write_concurrency, true}
+                ])
+            catch
+                error:badarg -> ok  %% Already exists (race condition)
+            end;
+        _ -> ok
+    end.
+
+ensure_hot_table() ->
+    case ets:whereis(?HOT_DEST_TABLE) of
+        undefined ->
+            try
+                ets:new(?HOT_DEST_TABLE, [
+                    set,
+                    named_table,
+                    public,
+                    {read_concurrency, true}
+                ])
+            catch
+                error:badarg -> ok
+            end;
+        _ -> ok
+    end.
+
+get_or_create_dest_bucket(DestUser, Now) ->
+    case ets:lookup(?DEST_TABLE, DestUser) of
+        [Bucket] -> Bucket;
+        [] ->
+            %% Check if hot destination
+            {Rate, Burst} = case is_destination_hot(DestUser) of
+                true -> {?HOT_DEST_RATE, ?HOT_DEST_BURST};
+                false -> {?DEFAULT_DEST_RATE, ?DEFAULT_DEST_BURST}
+            end,
+            #dest_bucket{
+                user = DestUser,
+                tokens = float(Burst),
+                rate = Rate,
+                burst = Burst,
+                last_refill = Now,
+                total_received = 0
+            }
+    end.
+
+refill_dest_bucket(Bucket = #dest_bucket{tokens = Tokens, rate = Rate, 
+                                          burst = Burst, last_refill = LastRefill}, Now) ->
+    Elapsed = Now - LastRefill,
+    if Elapsed =< 0 ->
+        Bucket;
+    true ->
+        RefillAmount = (Rate / 1000) * Elapsed,
+        NewTokens = min(float(Burst), Tokens + RefillAmount),
+        Bucket#dest_bucket{tokens = NewTokens, last_refill = Now}
+    end.
+
+consume_dest_tokens(Bucket = #dest_bucket{tokens = Tokens}, Requested) when Tokens >= Requested ->
+    {ok, Bucket#dest_bucket{tokens = Tokens - Requested}};
+consume_dest_tokens(#dest_bucket{tokens = Tokens}, _Requested) ->
+    {not_enough, Tokens}.
+
+save_dest_bucket(Bucket) ->
+    true = ets:insert(?DEST_TABLE, Bucket),
+    ok.
+
+%% Auto-promote users receiving high traffic to hot status
+maybe_auto_promote(#dest_bucket{user = User, total_received = Total}) when Total > 100000 ->
+    %% User has received 100K+ messages - auto-promote
+    case is_destination_hot(User) of
+        true -> ok;
+        false ->
+            logger:info("HOT-002: Auto-promoting ~p to hot destination (received ~p msgs)", [User, Total]),
+            promote_destination(User, 10)
+    end;
+maybe_auto_promote(_) ->
+    ok.
