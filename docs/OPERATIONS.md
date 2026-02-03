@@ -1,6 +1,6 @@
 # Operations Guide
 
-**Last Updated**: 2026-02-01
+**Last Updated**: 2026-02-03 | **TLS Enforced**
 
 ## Quick Reference
 
@@ -329,3 +329,46 @@ mnesia:table_info(offline_msg, size).
 3. **Quorum writes for critical data**: `#{durability => quorum}`
 4. **Test failover monthly**: Kill random node, verify recovery < 5 min
 5. **Never enable `allow_table_nuke` permanently**
+6. **Monitor certificate expiry**: Alert 30 days before expiration
+
+---
+
+## Troubleshooting
+
+### TLS Connection Issues
+
+**Connection refused / TLS handshake failed**:
+```bash
+# Verify TLS is working
+openssl s_client -connect localhost:8085 -CAfile certs/ca.pem
+
+# Check server is listening with TLS
+ss -tlnp | grep 8085
+
+# Check server started with TLS config
+ps aux | grep beam.smp | grep test_tls
+```
+
+**Certificate verification failed**:
+```bash
+# Check certificate validity
+openssl x509 -in certs/edge-east-1.pem -noout -dates
+
+# Verify CA chain
+openssl verify -CAfile certs/ca.pem certs/edge-east-1.pem
+```
+
+### General Issues
+
+**Edge can't reach Core**: Hidden nodes don't auto-reconnect.
+```erlang
+net_adm:ping('core_node').
+```
+
+**Data lost after restart**: Ensure `-mnesia dir` points to persistent storage.
+
+**Tables missing**: Check `mnesia:system_info(directory)` matches config.
+
+**Quorum not reached**: Check nodes available with `iris_quorum_write:get_replicas/1`.
+
+**Cross-region routing fails**: Verify `region_endpoints` config and network.

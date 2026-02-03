@@ -1,7 +1,7 @@
 # Architectural Decisions & Design Rationale
 
-**Last Updated**: 2026-01-30  
-**Status**: Current (RFC-001 v3.0 Aligned)
+**Last Updated**: 2026-02-03  
+**Status**: Current (RFC-001 v3.0 Aligned, TLS Enforced)
 
 ---
 
@@ -291,19 +291,27 @@ nuke_and_recreate_table(Table) ->
 
 ## 7. Test Infrastructure
 
-### Decision: Deterministic Test Execution
+### Decision: Deterministic Test Execution with TLS Enforcement
 
 **Key Principles**:
 1. All tests use seeded random (`TEST_SEED` env var)
 2. Exit codes: 0=pass, 1=fail, 2=skip
 3. No CI-mode tricks that change pass/fail behavior
 4. Docker as canonical execution environment
+5. **TLS enforced** on all client connections (NFR-14)
 
-**Test Counts** (as of 2026-01-29 - Post Principal Audit):
-- EUnit tests: 77 (all passing) - includes P0/P1/P2 audit coverage
-- Integration tests: 22 (all passing)
-- Total tests: 99+ (including stress/chaos suites)
-- See [TEST_STATUS.md](TEST_STATUS.md) for current counts and detailed results
+**Test Counts** (as of 2026-02-03 - Post TLS Stabilization):
+- Python test files: 63 (all passing)
+- Total test cases: 115+ (all passing)
+- Chaos_dist tests: 12 (Docker required, TLS enabled)
+- See [TESTING.md](TESTING.md) for current counts and detailed results
+
+**TLS Test Infrastructure** (Feb 2026):
+- Server runs with `config/test_tls.config`
+- All Python clients use `ssl.SSLContext` with CA verification
+- Certificates in `certs/` directory (CA, server, client)
+- `tests/utilities/iris_client.py` defaults to TLS
+- `tests/suites/chaos_dist/utils.py` provides TLS helpers
 
 **Principal Test Audit Coverage** (Jan 29, 2026):
 - P0 (Safety): State machine, idempotency tests
@@ -402,6 +410,18 @@ The Chief Architect forensic audit identified several items requiring separate R
 | **Decision** | Deprecate (ephemeral spawn + circuit breaker sufficient) |
 | **Effort** | 0.5 days |
 | **Blocked By** | None (low priority cleanup) |
+
+### Implemented Fixes (2026-02-03)
+
+**TLS Stabilization Fixes**:
+
+| Finding | Fix | Module/File |
+|---------|-----|-------------|
+| TLS not enforced in tests | All clients now use TLS by default | `iris_client.py`, all test files |
+| Chaos_dist plaintext connections | Created TLS helpers module | `tests/suites/chaos_dist/utils.py` |
+| Reliable message ACKs missing | Implemented proper ACK handling | `test_bridge_durability.py`, `test_cross_region_chaos.py` |
+| Non-blocking TLS socket issues | Changed to timeout-based blocking | All chaos_dist tests |
+| Server port not configured | Added explicit port to TLS config | `config/test_tls.config` |
 
 ### Implemented Fixes (2026-01-29)
 

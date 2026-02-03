@@ -1,6 +1,6 @@
 # Deployment Guide
 
-**Last Updated**: 2026-02-01
+**Last Updated**: 2026-02-03 | **TLS Required**
 
 ## Architecture
 
@@ -260,22 +260,97 @@ iris_partition_guard:is_safe_for_writes().
 
 ---
 
+## TLS Configuration
+
+**TLS is mandatory for all client connections.**
+
+### Certificate Setup
+
+The `certs/` directory contains:
+- `ca.pem` / `ca.key` - Certificate Authority
+- `edge-*.pem` / `edge-*.key` - Edge node certificates
+- `core-*.pem` / `core-*.key` - Core node certificates
+- `test-client.pem` / `test-client.key` - Client certificates (for mTLS)
+
+### Generate New Certificates
+
+```bash
+cd certs/
+./generate_certs.sh
+```
+
+### Server TLS Configuration
+
+```erlang
+%% config/test_tls.config (development)
+[
+    {iris_edge, [
+        {port, 8085},
+        {tls, [
+            {certfile, "certs/edge-east-1.pem"},
+            {keyfile, "certs/edge-east-1.key"},
+            {cacertfile, "certs/ca.pem"},
+            {verify, verify_none}  %% Use verify_peer for mTLS
+        ]}
+    ]}
+].
+```
+
+### Starting with TLS
+
+```bash
+# Development
+erl -pa ebin -config config/test_tls -eval \
+    "application:ensure_all_started(iris_core), application:ensure_all_started(iris_edge)."
+
+# Production (with mTLS)
+erl -pa ebin -config config/prod_mtls -eval \
+    "application:ensure_all_started(iris_core), application:ensure_all_started(iris_edge)."
+```
+
+### Client TLS (Python)
+
+```python
+import ssl
+from pathlib import Path
+
+context = ssl.create_default_context()
+context.load_verify_locations('certs/ca.pem')
+# For mTLS:
+# context.load_cert_chain('certs/test-client.pem', 'certs/test-client.key')
+
+sock = socket.create_connection(('localhost', 8085))
+tls_sock = context.wrap_socket(sock, server_hostname='localhost')
+```
+
+### Verify TLS is Working
+
+```bash
+# Test TLS handshake
+openssl s_client -connect localhost:8085 -CAfile certs/ca.pem
+
+# Should see: Verify return code: 0 (ok)
+```
+
+---
+
 ## Security Checklist
 
 ### Required
 
+- [x] **TLS certificates**: Client connections (enforced)
 - [ ] JWT secret: 32+ bytes, identical across nodes
 - [ ] Expected cluster nodes: Listed for partition guard
 - [ ] WAL directory: Persistent storage, not tmpfs
-- [ ] TLS certificates: Client connections
 - [ ] Erlang cookie: Secured (`chmod 400`)
 - [ ] `allow_table_nuke`: Set to `false`
 
 ### Recommended
 
-- [ ] mTLS for inter-node communication
+- [ ] mTLS for inter-node communication (certificates in `certs/`)
 - [ ] Firewall: 4369 (epmd), 9000-9010 (distribution)
 - [ ] Monitoring for partition events
+- [ ] Certificate rotation (before expiry)
 
 ---
 

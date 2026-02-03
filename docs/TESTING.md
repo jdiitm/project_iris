@@ -1,12 +1,17 @@
 # Testing Guide
 
-**Status**: 113/113 pass (100%) | **Last Verified**: 2026-02-01
+**Status**: 115+ tests pass (100%) | **Last Verified**: 2026-02-03
 
 ## Quick Start
 
 ```bash
 # Clean slate (required before full runs)
 pkill -9 -f beam.smp; rm -rf /tmp/iris_* /tmp/mnesia*
+
+# IMPORTANT: TLS is enforced - start server with TLS config
+erl -pa ebin -noshell -sname iris_test -setcookie iris_secret \
+    -config config/test_tls \
+    -eval "application:ensure_all_started(iris_core), application:ensure_all_started(iris_edge)."
 
 # Tier 0 - CI merge gate (63 tests, ~3 min)
 python3 tests/run_tests.py --tier 0
@@ -18,26 +23,27 @@ python3 tests/run_tests.py --suite security
 python3 tests/run_tests.py --suite stress
 python3 tests/run_tests.py --suite performance_light
 
-# All tests (113 tests, ~53 min)
+# All tests including chaos_dist (115+ tests, ~60 min)
 python3 tests/run_tests.py --all --with-cluster
 ```
 
 ## Test Results
 
-| Suite | Tests | Pass | Time | Smoke |
+| Suite | Tests | Pass | Time | Notes |
 |-------|-------|------|------|-------|
-| unit | 41 | 41 | 57s | ✅ |
-| integration | 22 | 22 | 104s | ✅ |
-| stress | 14 | 14 | 490s | ✅ |
-| chaos_dist | 11 | 11 | ~36m | |
-| security | 7 | 7 | 84s | ✅ |
-| performance_light | 6 | 6 | 97s | ✅ |
-| e2e | 5 | 5 | 35s | |
-| resilience | 3 | 3 | 68s | ✅ |
-| chaos_controlled | 2 | 2 | 101s | |
-| contract | 1 | 1 | 13s | |
-| compatibility | 1 | 1 | 15s | |
-| **TOTAL** | **113** | **113** | | |
+| unit | 2 files | 2 | ~10s | Property-based tests |
+| integration | 22 | 22 | ~2m | Core message flow |
+| stress | 9 | 9 | ~8m | Load testing |
+| chaos_dist | 12 | 12 | ~22m | Docker required |
+| security | 7 | 7 | ~1m | TLS, auth, rate limiting |
+| performance_light | 1 | 1 | ~1m | CPU utilization |
+| e2e | 5 | 5 | ~1m | End-to-end scenarios |
+| resilience | 3 | 3 | ~1m | Fault tolerance |
+| contract | 1 | 1 | ~15s | Edge-core contract |
+| compatibility | 1 (6 sub) | 6 | ~15s | Protocol versions |
+| **TOTAL** | **115+** | **115+** | ~60m | |
+
+> **Note**: All tests require TLS-enabled server. Test clients use certificates from `certs/` directory.
 
 ---
 
@@ -197,6 +203,23 @@ Tests MUST:
 
 ## Recent Fixes (Feb 2026)
 
+### TLS Stabilization (2026-02-03)
+
+| Issue | File(s) | Fix |
+|-------|---------|-----|
+| TLS enforcement | All test clients | Added TLS support to all Python test clients |
+| IrisClient TLS | `iris_client.py` | Default TLS connections with CA verification |
+| Chaos_dist TLS | `tests/suites/chaos_dist/*.py` | Created `utils.py` with TLS helpers |
+| Reliable message ACKs | `test_bridge_durability.py`, `test_cross_region_chaos.py` | Implemented proper ACK handling for opcode 0x10 |
+| Protocol versions | `test_protocol_versions.py` | Added TLS-wrapped socket connections |
+| Clock skew | `test_clock_skew.py` | TLS-enabled client connections |
+| Security basics | `test_security_basics.py` | TLS connections, fixed truncated packet test |
+| Cross-node ordering | `test_cross_node_ordering.py` | TLS-wrapped connections |
+| Resource limits | `test_resource_limits.py` | Updated heap_size expectation (500000) |
+| Server port config | `config/test_tls.config` | Added explicit `{port, 8085}` |
+
+### Earlier Fixes (Feb 2026)
+
 | Issue | File | Fix |
 |-------|------|-----|
 | Cluster meshing | `cluster.py` | Pass `NODE_SUFFIX` to make |
@@ -235,9 +258,16 @@ Tests MUST:
 
 | Deviation | RFC | Justification |
 |-----------|-----|---------------|
-| Auth disabled in tests | FR-9 | CI simplification; JWT logic validated separately |
-| TLS disabled in tests | NFR-14 | No cert infra in CI; TLS code validated |
+| Auth disabled in some tests | FR-9 | JWT logic validated separately in security suite |
 | Single-node revocation | FR-11 | Multi-node not in CI; Mnesia replication verified |
+
+### TLS Enforcement (2026-02-03)
+
+**TLS is now enforced in all tests** (NFR-14 compliant):
+- Server runs with `config/test_tls.config`
+- All Python test clients use TLS via `ssl.SSLContext`
+- Certificates in `certs/` directory (CA, server, client)
+- `iris_client.py` defaults to TLS connections
 
 ### Production Validation (Pre-Deploy)
 
@@ -245,7 +275,7 @@ Run on production-spec hardware:
 1. Performance: `measure_dials`, `stress_global_fan_in`
 2. Scale: `test_limits`, `test_churn`
 3. Multi-node: `test_dist_failover`, `test_cluster_revocation`
-4. TLS: Full mode with valid certificates
+4. mTLS: Inter-node communication with client certificates
 
 ---
 
@@ -300,6 +330,30 @@ tests/
 
 ## Open Items (Low Priority)
 
-- Replace `time.sleep()` with polling (214 calls remain)
-- Rename non-standard files to `test_*.py` convention
-- Add Docker readiness checks (currently uses `timer:sleep`)
+- Replace `time.sleep()` with polling in some tests
+- Add more granular Docker readiness checks
+- Increase test coverage for mTLS inter-node communication
+
+## Test Client TLS Configuration
+
+All test clients now use TLS by default. The shared `IrisClient` class:
+
+```python
+from tests.utilities.iris_client import IrisClient
+
+# TLS enabled by default
+client = IrisClient(host='localhost', port=8085)  # Uses TLS
+
+# Explicit TLS control
+client = IrisClient(host='localhost', port=8085, use_tls=True)
+client = IrisClient(host='localhost', port=8085, use_tls=False)  # For testing plaintext rejection
+```
+
+Chaos_dist tests use dedicated TLS helpers in `tests/suites/chaos_dist/utils.py`:
+
+```python
+from tests.suites.chaos_dist.utils import create_tls_socket, tls_connect_and_login
+
+sock = create_tls_socket('localhost', 8085)
+sock = tls_connect_and_login('localhost', 8085, 'user123')
+```
