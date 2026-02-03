@@ -23,11 +23,17 @@ Prerequisites:
 import os
 import sys
 import socket
+import ssl
 import struct
 import subprocess
 import json
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass
+from pathlib import Path
+
+# TLS Configuration
+PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
+CA_CERT = PROJECT_ROOT / "certs" / "ca.pem"
 
 # Configuration
 SERVER_HOST = os.environ.get("IRIS_HOST", "localhost")
@@ -426,9 +432,18 @@ def test_message_ack_contract():
 def test_live_login_contract():
     """Test: Live server respects login contract."""
     try:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(TIMEOUT)
-        sock.connect((SERVER_HOST, SERVER_PORT))
+        # Create TLS context
+        context = ssl.create_default_context()
+        if CA_CERT.exists():
+            context.load_verify_locations(str(CA_CERT))
+        else:
+            context.check_hostname = False
+            context.verify_mode = ssl.CERT_NONE
+        
+        raw_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        raw_sock.settimeout(TIMEOUT)
+        raw_sock.connect((SERVER_HOST, SERVER_PORT))
+        sock = context.wrap_socket(raw_sock, server_hostname=SERVER_HOST)
         
         # Send login per contract
         contract = next(c for c in PROTOCOL_CONTRACTS if c.name == "login_request")
@@ -448,17 +463,26 @@ def test_live_login_contract():
         return True
     
     except socket.error as e:
-        print(f"  ⚠ live_login contract: SKIPPED (server not available: {e})")
-        return None
+        print(f"  ❌ FAIL: live_login contract failed (server not available: {e})")
+        return False
 
 
 def test_live_message_contract():
     """Test: Live server respects message contract."""
     try:
+        # Create TLS context
+        context = ssl.create_default_context()
+        if CA_CERT.exists():
+            context.load_verify_locations(str(CA_CERT))
+        else:
+            context.check_hostname = False
+            context.verify_mode = ssl.CERT_NONE
+        
         # Login sender
-        sender_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sender_sock.settimeout(TIMEOUT)
-        sender_sock.connect((SERVER_HOST, SERVER_PORT))
+        raw_sender = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        raw_sender.settimeout(TIMEOUT)
+        raw_sender.connect((SERVER_HOST, SERVER_PORT))
+        sender_sock = context.wrap_socket(raw_sender, server_hostname=SERVER_HOST)
         
         sender_name = f"contract_sender_{int(__import__('time').time())}"
         login_contract = next(c for c in PROTOCOL_CONTRACTS if c.name == "login_request")
@@ -468,9 +492,10 @@ def test_live_message_contract():
         assert b"LOGIN_OK" in response, "Sender login failed"
         
         # Login receiver
-        recv_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        recv_sock.settimeout(TIMEOUT)
-        recv_sock.connect((SERVER_HOST, SERVER_PORT))
+        raw_recv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        raw_recv.settimeout(TIMEOUT)
+        raw_recv.connect((SERVER_HOST, SERVER_PORT))
+        recv_sock = context.wrap_socket(raw_recv, server_hostname=SERVER_HOST)
         
         recv_name = f"contract_recv_{int(__import__('time').time())}"
         recv_sock.sendall(generate_protocol_data(login_contract, username=recv_name))
@@ -508,8 +533,8 @@ def test_live_message_contract():
         return True
     
     except socket.error as e:
-        print(f"  ⚠ live_message contract: SKIPPED (server not available: {e})")
-        return None
+        print(f"  ❌ FAIL: live_message contract failed (server not available: {e})")
+        return False
 
 
 # =============================================================================

@@ -18,9 +18,11 @@ FAIL: Any out-of-order delivery detected
 """
 
 import socket
+import ssl
 import time
 import sys
 import os
+from pathlib import Path
 
 # Configuration
 SERVER_HOST = os.environ.get("IRIS_HOST", "localhost")
@@ -28,12 +30,24 @@ SERVER_PORT = int(os.environ.get("IRIS_PORT", "8085"))
 MESSAGE_COUNT = 20
 TIMEOUT = 10
 
+# TLS Configuration
+PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
+CA_CERT = PROJECT_ROOT / "certs" / "ca.pem"
+
 
 def connect():
-    """Create connection."""
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.settimeout(TIMEOUT)
-    sock.connect((SERVER_HOST, SERVER_PORT))
+    """Create TLS connection."""
+    context = ssl.create_default_context()
+    if CA_CERT.exists():
+        context.load_verify_locations(str(CA_CERT))
+    else:
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+    
+    raw_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    raw_sock.settimeout(TIMEOUT)
+    raw_sock.connect((SERVER_HOST, SERVER_PORT))
+    sock = context.wrap_socket(raw_sock, server_hostname=SERVER_HOST)
     return sock
 
 
@@ -114,7 +128,8 @@ def test_message_ordering():
         login(sender_sock, sender)
     except Exception as e:
         print(f"  ❌ Connection failed: {e}")
-        return None
+        print("  This is a TEST FAILURE - server should be reachable")
+        return False  # Connection failure = FAIL, not skip
     
     print(f"\n2. Sending {MESSAGE_COUNT} ordered messages...")
     for seq in range(1, MESSAGE_COUNT + 1):
@@ -135,7 +150,8 @@ def test_message_ordering():
         login(receiver_sock, receiver)
     except Exception as e:
         print(f"  ❌ Connection failed: {e}")
-        return None
+        print("  This is a TEST FAILURE - server should be reachable")
+        return False  # Connection failure = FAIL, not skip
     
     print("\n5. Receiving offline messages...")
     time.sleep(1)  # Wait for delivery
@@ -149,9 +165,9 @@ def test_message_ordering():
     print(f"   Found {len(sequences)} messages")
     
     if len(sequences) == 0:
-        print("\n⚠️ No messages found - test inconclusive")
-        print("  This may indicate offline storage isn't working")
-        return None
+        print("\n❌ FAIL: No messages found")
+        print("  Offline storage is not working - this is a test failure")
+        return False
     
     print(f"   Received sequences: {sequences}")
     
@@ -208,8 +224,11 @@ def main():
         print("RESULT: FAILED")
         sys.exit(1)
     else:
-        print("RESULT: SKIPPED")
-        sys.exit(0)
+        # None = inconclusive (no messages received)
+        # This is a FAILURE - infrastructure should always work
+        print("RESULT: FAILED")
+        print("FAIL: No messages found - offline storage not working")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

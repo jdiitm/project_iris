@@ -98,12 +98,20 @@ def test_truncated_packet():
         
         time.sleep(0.5)
         
-        # Try to send another valid message
-        send_msg(s, "target", "valid_msg")
+        # Server may close connection (which is valid security behavior)
+        # or may wait for more data - either is acceptable
+        try:
+            send_msg(s, "target", "valid_msg")
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            # Connection closed by server - this is GOOD security behavior
+            pass
         
-        s.close()
+        try:
+            s.close()
+        except:
+            pass
         
-        # Verify server still alive
+        # Key test: Verify server still alive and accepting new connections
         s2 = get_connection()
         login(s2, "verify_user2")
         s2.close()

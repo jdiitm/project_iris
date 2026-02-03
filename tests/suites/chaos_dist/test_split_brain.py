@@ -36,6 +36,12 @@ import json
 import struct
 from typing import Optional, Tuple, List
 
+# Project root for imports
+from pathlib import Path
+PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 # Configuration
 SERVER_HOST = os.environ.get("IRIS_HOST", "localhost")
 EAST_EDGE_PORT = int(os.environ.get("IRIS_EAST_PORT", "8085"))  # edge-east-1
@@ -80,32 +86,9 @@ class WriteTracker:
 
 
 def connect_and_login(port: int, username: str) -> Optional[socket.socket]:
-    """Connect to server and login."""
-    try:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(TIMEOUT)
-        sock.connect((SERVER_HOST, port))
-        
-        # Login
-        packet = bytes([0x01]) + username.encode()
-        sock.sendall(packet)
-        
-        response = sock.recv(1024)
-        if b"LOGIN_OK" in response:
-            return sock
-        else:
-            log(f"Login rejected for {username} on port {port}: {response[:50]}")
-            sock.close()
-            return None
-    except socket.timeout:
-        log(f"Connection timeout to port {port} for {username}")
-        return None
-    except socket.error as e:
-        log(f"Socket error to port {port} for {username}: {e}")
-        return None
-    except Exception as e:
-        log(f"Unexpected error connecting to port {port}: {e}")
-        return None
+    """Connect to server via TLS and login."""
+    from tests.suites.chaos_dist.utils import tls_connect_and_login
+    return tls_connect_and_login(SERVER_HOST, port, username, timeout=TIMEOUT)
 
 
 def send_message_with_tracking(sock: socket.socket, target: str, message: str) -> Tuple[bool, str]:
@@ -141,12 +124,11 @@ def send_message_with_tracking(sock: socket.socket, target: str, message: str) -
 
 
 def retrieve_offline_messages(port: int, username: str) -> List[str]:
-    """Retrieve any offline messages for a user."""
+    """Retrieve any offline messages for a user via TLS."""
+    from tests.suites.chaos_dist.utils import create_tls_socket
     messages = []
     try:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(10)
-        sock.connect((SERVER_HOST, port))
+        sock = create_tls_socket(SERVER_HOST, port, timeout=10)
         
         # Login
         packet = bytes([0x01]) + username.encode()
@@ -225,42 +207,57 @@ def check_cluster_running() -> bool:
 
 
 def check_partition_guard_status(container: str) -> dict:
-    """Check partition guard status on a core node."""
-    cmd = """
-    erl -noshell -sname check_pg_$$ -setcookie iris_secret -eval '
-        Node = list_to_atom(os:getenv("TARGET_NODE")),
-        case rpc:call(Node, iris_partition_guard, get_status, [], 5000) of
-            {badrpc, Reason} -> 
-                io:format("{\"error\": \"~p\"}~n", [Reason]);
-            Status ->
-                io:format("{\"mode\": \"~p\", \"quorum\": ~p}~n", 
-                         [maps:get(mode, Status, unknown),
-                          maps:get(has_quorum, Status, unknown)])
-        end,
-        init:stop().'
+    """Check partition guard status on a core node.
+    
+    P2 FIX: Simplified Erlang command to avoid quoting issues.
+    Uses simple text output instead of JSON with escaped quotes.
     """
+    if "east" in container:
+        target_node = "core_east_1@coreeast1"
+    else:
+        target_node = "core_west_1@corewest1"
+    
+    # P2 FIX: Use simple text format to avoid shell quoting issues
+    # Output format: MODE:mode_value QUORUM:quorum_value
+    cmd = f'''erl -noshell -sname check_pg_$RANDOM -setcookie iris_secret -eval "
+        case rpc:call('{target_node}', iris_partition_guard, get_status, [], 5000) of
+            {{badrpc, Reason}} -> 
+                io:format(\\"ERROR:~p~n\\", [Reason]);
+            Status when is_map(Status) ->
+                Mode = maps:get(mode, Status, unknown),
+                Quorum = maps:get(has_quorum, Status, unknown),
+                io:format(\\"MODE:~p QUORUM:~p~n\\", [Mode, Quorum]);
+            Other ->
+                io:format(\\"UNEXPECTED:~p~n\\", [Other])
+        end,
+        init:stop()."'''
     
     try:
-        if "east" in container:
-            target_node = "core_east_1@coreeast1"
-        else:
-            target_node = "core_west_1@corewest1"
-        
         result = subprocess.run(
-            ["docker", "exec", "-e", f"TARGET_NODE={target_node}", container, "sh", "-c", cmd],
+            ["docker", "exec", container, "sh", "-c", cmd],
             capture_output=True,
             text=True,
             timeout=15
         )
         
-        for line in result.stdout.split('\n'):
-            if line.strip().startswith('{'):
-                try:
-                    return json.loads(line.replace("'", '"'))
-                except:
-                    pass
+        output = result.stdout.strip()
         
-        return {"raw_output": result.stdout, "raw_error": result.stderr}
+        # Parse the simple format
+        if "ERROR:" in output:
+            error_part = output.split("ERROR:")[1].strip() if "ERROR:" in output else output
+            return {"error": error_part}
+        elif "MODE:" in output:
+            # Parse MODE:value QUORUM:value format
+            mode_match = output.split("MODE:")[1].split()[0] if "MODE:" in output else "unknown"
+            quorum_match = output.split("QUORUM:")[1].split()[0] if "QUORUM:" in output else "unknown"
+            return {
+                "mode": mode_match.strip(),
+                "has_quorum": quorum_match.strip() == "true"
+            }
+        else:
+            return {"raw_output": output, "raw_error": result.stderr}
+    except subprocess.TimeoutExpired:
+        return {"error": "timeout"}
     except Exception as e:
         return {"error": str(e)}
 
@@ -295,12 +292,12 @@ def test_split_brain_detection():
     
     # Prerequisites
     if not check_docker_available():
-        print("SKIP:INFRA - Docker not available")
-        sys.exit(2)
+        print("FAIL: Docker not available - required for split-brain test")
+        sys.exit(1)
     
     if not check_cluster_running():
-        print("SKIP:INFRA - Cluster not running. Start with: make cluster-up")
-        sys.exit(2)
+        print("FAIL: Cluster not running. Start with: make cluster-up")
+        sys.exit(1)
     
     test_id = str(int(time.time()))
     tracker = WriteTracker()
@@ -603,7 +600,7 @@ def main():
     elif result is False:
         return 1
     else:
-        return 2  # SKIP
+        return 1  # No skips - failures only
 
 
 if __name__ == "__main__":

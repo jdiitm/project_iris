@@ -25,6 +25,8 @@
 -export([get_queue_depth/0, get_queue_depth/1]).
 -export([get_stats/0, drain_region/1]).
 -export([init_tables/0]).
+%% GEO-001 FIX: Mesh health and auto-recovery
+-export([get_mesh_health/0, get_disconnected_nodes/0, force_reconnect/1]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
@@ -37,6 +39,10 @@
 -define(BASE_BACKOFF_MS, 1000).
 -define(MAX_BACKOFF_MS, 60000).
 -define(BATCH_SIZE, 100).
+%% GEO-001 FIX: Auto-reconnection constants
+-define(RECONNECT_INTERVAL_MS, 5000).   %% 5 seconds between reconnect attempts
+-define(HEALTH_CHECK_INTERVAL_MS, 10000). %% 10 seconds health check
+-define(NODE_TIMEOUT_MS, 30000).         %% Mark node dead after 30s unreachable
 
 %% Outbound message record - name MUST match table name for Mnesia writes
 -record(cross_region_outbound, {
@@ -65,8 +71,11 @@
 }).
 
 -record(state, {
-    drain_timer,     %% Timer ref for periodic drain
-    stats           %% Delivery statistics
+    drain_timer,        %% Timer ref for periodic drain
+    health_timer,       %% GEO-001: Timer for health checks
+    stats,              %% Delivery statistics
+    disconnected = [],  %% GEO-001: List of disconnected nodes
+    reconnect_timers = #{} %% GEO-001: Node -> Timer map for reconnection
 }).
 
 %% =============================================================================
@@ -133,6 +142,25 @@ get_stats() ->
 -spec drain_region(binary()) -> ok.
 drain_region(Region) ->
     gen_server:cast(?SERVER, {drain_region, Region}).
+
+%% =============================================================================
+%% GEO-001 FIX: Mesh Health API
+%% =============================================================================
+
+%% @doc Get current mesh health status
+-spec get_mesh_health() -> map().
+get_mesh_health() ->
+    gen_server:call(?SERVER, get_mesh_health).
+
+%% @doc Get list of currently disconnected nodes
+-spec get_disconnected_nodes() -> [node()].
+get_disconnected_nodes() ->
+    gen_server:call(?SERVER, get_disconnected_nodes).
+
+%% @doc Force immediate reconnection attempt to a node
+-spec force_reconnect(node()) -> ok | {error, term()}.
+force_reconnect(Node) ->
+    gen_server:call(?SERVER, {force_reconnect, Node}).
 
 %% @doc Initialize Mnesia tables for cross-region messaging
 -spec init_tables() -> ok.
@@ -226,22 +254,34 @@ init([]) ->
     init_tables(),
     
     %% Start periodic drain timer
-    Timer = erlang:send_after(?DRAIN_INTERVAL_MS, self(), drain),
+    DrainTimer = erlang:send_after(?DRAIN_INTERVAL_MS, self(), drain),
+    
+    %% GEO-001 FIX: Start health check timer
+    HealthTimer = erlang:send_after(?HEALTH_CHECK_INTERVAL_MS, self(), health_check),
+    
+    %% GEO-001 FIX: Monitor all connected nodes for disconnection
+    lists:foreach(fun(Node) ->
+        erlang:monitor_node(Node, true)
+    end, nodes()),
     
     %% Join the region bridge pg group for discovery
     pg:join(iris_region_bridges, self()),
     
     State = #state{
-        drain_timer = Timer,
+        drain_timer = DrainTimer,
+        health_timer = HealthTimer,
         stats = #{
             sent => 0,
             delivered => 0,
             failed => 0,
-            retried => 0
-        }
+            retried => 0,
+            reconnected => 0  %% GEO-001: Track successful reconnections
+        },
+        disconnected = [],
+        reconnect_timers = #{}
     },
     
-    logger:info("Cross-region bridge started for region ~s", 
+    logger:info("Cross-region bridge started for region ~s (GEO-001: auto-reconnect enabled)", 
                 [iris_region_router:get_current_region()]),
     
     {ok, State}.
@@ -249,6 +289,38 @@ init([]) ->
 handle_call(get_stats, _From, State = #state{stats = Stats}) ->
     QueueDepth = get_queue_depth(),
     {reply, Stats#{queue_depth => QueueDepth}, State};
+
+%% GEO-001 FIX: Mesh health API handlers
+handle_call(get_mesh_health, _From, State = #state{disconnected = Disconnected, stats = Stats}) ->
+    ConnectedNodes = nodes(),
+    Health = #{
+        connected_nodes => ConnectedNodes,
+        disconnected_nodes => Disconnected,
+        total_connected => length(ConnectedNodes),
+        total_disconnected => length(Disconnected),
+        reconnections => maps:get(reconnected, Stats, 0),
+        healthy => length(Disconnected) == 0
+    },
+    {reply, Health, State};
+
+handle_call(get_disconnected_nodes, _From, State = #state{disconnected = Disconnected}) ->
+    {reply, Disconnected, State};
+
+handle_call({force_reconnect, Node}, _From, State = #state{reconnect_timers = Timers}) ->
+    %% Cancel any existing timer
+    NewTimers = case maps:get(Node, Timers, undefined) of
+        undefined -> Timers;
+        Timer -> 
+            erlang:cancel_timer(Timer),
+            maps:remove(Node, Timers)
+    end,
+    
+    %% Try immediate reconnect
+    Result = case net_kernel:connect_node(Node) of
+        true -> ok;
+        false -> {error, connect_failed}
+    end,
+    {reply, Result, State#state{reconnect_timers = NewTimers}};
 
 handle_call(_Request, _From, State) ->
     {reply, {error, unknown_request}, State}.
@@ -281,11 +353,114 @@ handle_info(drain, State) ->
     Timer = erlang:send_after(?DRAIN_INTERVAL_MS, self(), drain),
     {noreply, NewState#state{drain_timer = Timer}};
 
+%% =============================================================================
+%% GEO-001 FIX: Node Monitoring and Auto-Reconnection
+%% =============================================================================
+
+handle_info({nodedown, Node}, State = #state{disconnected = Disconnected, 
+                                              reconnect_timers = Timers}) ->
+    %% Node went down - schedule reconnection attempt
+    logger:warning("GEO-001: Node ~p went down, scheduling reconnect in ~pms", 
+                  [Node, ?RECONNECT_INTERVAL_MS]),
+    
+    %% Cancel any existing timer for this node
+    NewTimers = case maps:get(Node, Timers, undefined) of
+        undefined -> Timers;
+        OldTimer -> 
+            erlang:cancel_timer(OldTimer),
+            maps:remove(Node, Timers)
+    end,
+    
+    %% Schedule reconnection
+    ReconnectTimer = erlang:send_after(?RECONNECT_INTERVAL_MS, self(), {reconnect, Node}),
+    
+    %% Add to disconnected list if not already there
+    NewDisconnected = case lists:member(Node, Disconnected) of
+        true -> Disconnected;
+        false -> [Node | Disconnected]
+    end,
+    
+    {noreply, State#state{
+        disconnected = NewDisconnected,
+        reconnect_timers = NewTimers#{Node => ReconnectTimer}
+    }};
+
+handle_info({nodeup, Node}, State = #state{disconnected = Disconnected,
+                                            reconnect_timers = Timers,
+                                            stats = Stats}) ->
+    %% Node came back up (via external reconnect or our attempt)
+    logger:info("GEO-001: Node ~p reconnected", [Node]),
+    
+    %% Cancel any pending reconnect timer
+    NewTimers = case maps:get(Node, Timers, undefined) of
+        undefined -> Timers;
+        Timer -> 
+            erlang:cancel_timer(Timer),
+            maps:remove(Node, Timers)
+    end,
+    
+    %% Remove from disconnected list
+    NewDisconnected = lists:delete(Node, Disconnected),
+    
+    %% Re-enable node monitoring
+    erlang:monitor_node(Node, true),
+    
+    %% Update stats
+    NewStats = maps:update_with(reconnected, fun(V) -> V + 1 end, 1, Stats),
+    
+    {noreply, State#state{
+        disconnected = NewDisconnected,
+        reconnect_timers = NewTimers,
+        stats = NewStats
+    }};
+
+handle_info({reconnect, Node}, State = #state{disconnected = _Disconnected,
+                                               reconnect_timers = Timers}) ->
+    %% Attempt to reconnect to node
+    NewTimers = maps:remove(Node, Timers),
+    
+    case net_kernel:connect_node(Node) of
+        true ->
+            logger:info("GEO-001: Successfully reconnected to ~p", [Node]),
+            %% nodeup message will handle the rest
+            {noreply, State#state{reconnect_timers = NewTimers}};
+        false ->
+            %% Reconnection failed - schedule another attempt
+            logger:warning("GEO-001: Reconnection to ~p failed, retrying in ~pms", 
+                          [Node, ?RECONNECT_INTERVAL_MS]),
+            ReconnectTimer = erlang:send_after(?RECONNECT_INTERVAL_MS, self(), {reconnect, Node}),
+            {noreply, State#state{reconnect_timers = NewTimers#{Node => ReconnectTimer}}}
+    end;
+
+handle_info(health_check, State = #state{disconnected = Disconnected}) ->
+    %% Periodic health check of all known nodes
+    NewState = do_health_check(State),
+    
+    %% Log status if there are disconnected nodes
+    case Disconnected of
+        [] -> ok;
+        _ -> logger:warning("GEO-001: ~p node(s) currently disconnected: ~p", 
+                           [length(Disconnected), Disconnected])
+    end,
+    
+    %% Reschedule health check
+    HealthTimer = erlang:send_after(?HEALTH_CHECK_INTERVAL_MS, self(), health_check),
+    {noreply, NewState#state{health_timer = HealthTimer}};
+
 handle_info(_Info, State) ->
     {noreply, State}.
 
 terminate(_Reason, State) ->
     erlang:cancel_timer(State#state.drain_timer),
+    %% GEO-001: Cancel health timer
+    case State#state.health_timer of
+        undefined -> ok;
+        HTimer -> erlang:cancel_timer(HTimer)
+    end,
+    %% GEO-001: Cancel all reconnect timers
+    maps:foreach(fun(_Node, Timer) ->
+        erlang:cancel_timer(Timer)
+    end, State#state.reconnect_timers),
     pg:leave(iris_region_bridges, self()),
     ok.
 
@@ -434,3 +609,70 @@ generate_msg_id() ->
 increment_stat(Key, State = #state{stats = Stats}) ->
     NewStats = maps:update_with(Key, fun(V) -> V + 1 end, 1, Stats),
     State#state{stats = NewStats}.
+
+%% =============================================================================
+%% GEO-001 FIX: Health Check Implementation
+%% =============================================================================
+
+do_health_check(State = #state{disconnected = Disconnected, reconnect_timers = Timers}) ->
+    %% Check if any disconnected nodes have come back
+    %% (might have reconnected via other means)
+    {StillDisconnected, NowConnected} = lists:partition(
+        fun(Node) -> not lists:member(Node, nodes()) end,
+        Disconnected
+    ),
+    
+    %% For nodes that reconnected externally, clean up state
+    NewTimers = lists:foldl(fun(Node, Acc) ->
+        logger:info("GEO-001: Node ~p reconnected (detected via health check)", [Node]),
+        case maps:get(Node, Acc, undefined) of
+            undefined -> Acc;
+            Timer -> 
+                erlang:cancel_timer(Timer),
+                maps:remove(Node, Acc)
+        end
+    end, Timers, NowConnected),
+    
+    %% Ensure all connected nodes are being monitored
+    lists:foreach(fun(Node) ->
+        erlang:monitor_node(Node, true)
+    end, nodes()),
+    
+    %% Ping all known region endpoints to discover new nodes
+    discover_and_monitor_regions(),
+    
+    State#state{
+        disconnected = StillDisconnected,
+        reconnect_timers = NewTimers
+    }.
+
+%% Discover region endpoints and set up monitoring
+discover_and_monitor_regions() ->
+    case whereis(iris_region_router) of
+        undefined -> ok;
+        _ ->
+            try
+                Regions = iris_region_router:get_all_regions(),
+                lists:foreach(fun(Region) ->
+                    case iris_region_router:get_region_endpoint(Region) of
+                        {ok, Nodes} ->
+                            lists:foreach(fun(Node) ->
+                                case lists:member(Node, nodes()) of
+                                    true -> ok;
+                                    false ->
+                                        %% Try to connect to unknown node
+                                        case net_kernel:connect_node(Node) of
+                                            true ->
+                                                logger:info("GEO-001: Discovered and connected to new node ~p in region ~s",
+                                                           [Node, Region]),
+                                                erlang:monitor_node(Node, true);
+                                            false -> ok
+                                        end
+                                end
+                            end, Nodes);
+                        _ -> ok
+                    end
+                end, Regions)
+            catch _:_ -> ok
+            end
+    end.

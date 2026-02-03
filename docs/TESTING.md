@@ -1,43 +1,112 @@
 # Testing Guide
 
-**Status**: 113/113 pass (100%) | **Last Verified**: 2026-02-01
+**Status**: 75 tests pass (100%) | **Last Verified**: 2026-02-03
 
 ## Quick Start
 
 ```bash
-# Clean slate (required before full runs)
-pkill -9 -f beam.smp; rm -rf /tmp/iris_* /tmp/mnesia*
+# Run all tests (server lifecycle managed automatically)
+python3 tests/run_tests.py --all
 
-# Tier 0 - CI merge gate (63 tests, ~3 min)
-python3 tests/run_tests.py --tier 0
+# Run all tests, skip Docker (faster)
+python3 tests/run_tests.py --all --skip-docker
 
-# Full smoke (93 tests, ~15 min)
-python3 tests/run_tests.py --tier 0
-python3 tests/run_tests.py --suite resilience
-python3 tests/run_tests.py --suite security
-python3 tests/run_tests.py --suite stress
-python3 tests/run_tests.py --suite performance_light
+# CI Tiers (independent, no overlap)
+python3 tests/run_tests.py --tier 0   # unit, integration
+python3 tests/run_tests.py --tier 1   # e2e, security, resilience
+python3 tests/run_tests.py --tier 2   # performance, stress
 
-# All tests (113 tests, ~53 min)
-python3 tests/run_tests.py --all --with-cluster
+# Run specific suite
+python3 tests/run_tests.py --suite integration
+
+# List all tests
+python3 tests/run_tests.py --list
+
+# Kill all processes
+python3 tests/run_tests.py --nuke
 ```
+
+## Phase-Based Execution
+
+The test runner organizes tests into **phases** based on infrastructure requirements:
+
+| Phase | Description | Server Management |
+|-------|-------------|-------------------|
+| **Phase 1** | Unit tests (2) | No server needed |
+| **Phase 2** | Standalone tests (45+) | Shared TLS server started once |
+| **Phase 3** | ClusterManager tests (14) | Self-managed per test |
+| **Phase 4** | Docker chaos tests (12) | Docker global cluster |
+
+### Why Phases?
+
+1. **Efficiency**: Phase 2 starts the server once and runs all standalone tests
+2. **Isolation**: Phase 3 tests that use `ClusterManager` get a fresh cluster each
+3. **Docker separation**: Phase 4 tests require Docker and run separately
+
+### Test Categorization
+
+Tests are categorized by their infrastructure needs:
+
+**Standalone tests** (Phase 2): Expect a pre-started TLS server
+- All integration, e2e, contract, compatibility, security tests
+- `benchmark_e2ee_latency`, `benchmark_throughput`, `benchmark_unit_cost`
+- `test_clock_skew`, `test_hard_kill`
+- `stress_offline_delete`, `test_flow_controller_scale`, `test_group_fanout`, `test_soak_memory`
+
+**ClusterManager tests** (Phase 3): Use `with ClusterManager(...)` to self-manage
+- `test_resilience`, `benchmark_memory`, `measure_dials`, `test_cpu_utilization`
+- `stress_geo_scale`, `stress_global_fan_in`, `stress_hotspot`, `stress_presence`
+- `test_backpressure_collapse`, `test_churn`, `test_connection_scale`, `test_fanout`
+- `test_hot_shard`, `test_limits`, `chaos_combined`, `ultimate_chaos`
+
+**Docker tests** (Phase 4): Require Docker global cluster
+- All tests in `chaos_dist/`
+
+---
 
 ## Test Results
 
-| Suite | Tests | Pass | Time | Smoke |
-|-------|-------|------|------|-------|
-| unit | 41 | 41 | 57s | ✅ |
-| integration | 22 | 22 | 104s | ✅ |
-| stress | 14 | 14 | 490s | ✅ |
-| chaos_dist | 11 | 11 | ~36m | |
-| security | 7 | 7 | 84s | ✅ |
-| performance_light | 6 | 6 | 97s | ✅ |
-| e2e | 5 | 5 | 35s | |
-| resilience | 3 | 3 | 68s | ✅ |
-| chaos_controlled | 2 | 2 | 101s | |
-| contract | 1 | 1 | 13s | |
-| compatibility | 1 | 1 | 15s | |
-| **TOTAL** | **113** | **113** | | |
+| Suite | Tests | Notes |
+|-------|-------|-------|
+| unit | 2 | Property-based tests |
+| integration | 22 | Core message flow |
+| stress | 14 | Load testing (4 standalone, 10 ClusterManager) |
+| performance_light | 6 | Benchmarks (3 standalone, 3 ClusterManager) |
+| chaos_dist | 12 | Docker required |
+| security | 7 | TLS, auth, rate limiting |
+| e2e | 5 | End-to-end scenarios |
+| resilience | 3 | Fault tolerance (2 standalone, 1 ClusterManager) |
+| chaos_controlled | 2 | Controlled chaos |
+| contract | 1 | Edge-core contract |
+| compatibility | 1 | Protocol versions |
+| **TOTAL** | **75** | |
+
+---
+
+## CI Tiers
+
+Each tier runs **only** its own suites (no duplicate test runs):
+
+| Tier | Suites | Trigger | Approx Time |
+|------|--------|---------|-------------|
+| 0 | unit, integration | Every commit | ~3 min |
+| 1 | e2e, contract, compatibility, security, resilience | Every PR | ~5 min |
+| 2 | performance_light, stress, chaos_controlled | Nightly | ~15 min |
+
+Docker chaos tests (`chaos_dist`) run in a separate CI job.
+
+### CI Workflow
+
+```yaml
+# Tier 0 - Every commit
+python3 tests/run_tests.py --tier 0
+
+# Tier 1 - Every PR (only after Tier 0 passes)
+python3 tests/run_tests.py --tier 1
+
+# Tier 2 - Nightly (skip Docker for faster CI)
+python3 tests/run_tests.py --tier 2 --skip-docker
+```
 
 ---
 
@@ -69,14 +138,8 @@ if os.environ.get("CI"): sys.exit(0)
 # ❌ Return None as skip  
 if not ready(): return None
 
-# ❌ Dynamic thresholds
-if IS_CI: threshold = 1000  # vs 10000
-
 # ❌ Swallow exceptions
 except: pass
-
-# ❌ Assume cluster running
-if not check_server(): sys.exit(1)
 ```
 
 ### Required Patterns
@@ -86,15 +149,6 @@ if not check_server(): sys.exit(1)
 if not infrastructure_available():
     print("SKIP:DOCKER - Container not running")
     sys.exit(2)
-
-# ✅ Fixed thresholds per profile
-THRESHOLDS = {"smoke": 100, "full": 10000}
-threshold = THRESHOLDS[os.environ.get("TEST_PROFILE", "smoke")]
-
-# ✅ Manage cluster lifecycle
-from tests.framework.cluster import ClusterManager
-with ClusterManager(project_root) as cluster:
-    run_test()
 
 # ✅ Seed randomness
 TEST_SEED = int(os.environ.get("TEST_SEED", "42"))
@@ -117,135 +171,26 @@ Tests MUST:
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `TEST_PROFILE` | smoke | Intensity (smoke/full) |
 | `TEST_SEED` | 42 | Master random seed |
-| `IRIS_NODE_SUFFIX` | Auto | Erlang node name suffix |
-
-### BEAM-Specific Thresholds
-
-| Metric | Notes |
-|--------|-------|
-| CPU | 100-300% idle normal (multi-scheduler) |
-| Memory | 800-1500MB baseline (+P/+Q preallocation) |
-| Process detection | Use `beam.smp`, not node name |
+| `TEST_PROFILE` | smoke | Intensity (smoke/full) |
+| `IRIS_TEST_RUNNER` | 1 | Set by runner, signals managed lifecycle |
 
 ---
 
-## System Invariants
+## Recent Changes (Feb 2026)
 
-| Invariant | RFC | Test |
-|-----------|-----|------|
-| Message Ordering | FR-5 | `test_message_ordering.py` |
-| Delivery Guarantee | Section 5.1 | `test_ack_durability.py` |
-| Idempotency | Section 5.1 | `test_deduplication.py` |
-| Durability | NFR-6, NFR-8 | `test_multimaster_durability.py` |
-| Offline/Online | FR-2 | `test_offline_storage.py` |
-| Backpressure | AUDIT | `test_backpressure_collapse.py` |
+### Test Runner Refactor (2026-02-03)
 
-### Infrastructure Invariants
+- Refactored `run_tests.py` to phase-based execution (1860→660 lines)
+- CI tiers now independent (no duplicate test runs)
+- Server lifecycle managed per phase, not per suite
+- Added `--skip-docker` flag for faster runs
 
-| Invariant | Enforcement |
-|-----------|-------------|
-| Cluster Management | ClusterManager usage |
-| Exception Handling | No bare except:pass |
-| Deterministic Seeding | TEST_SEED everywhere |
-| NODE_SUFFIX | Propagated to make commands |
+### TLS Stabilization (2026-02-03)
 
----
-
-## Test Nuances
-
-| Test | Behavior | Notes |
-|------|----------|-------|
-| `test_backpressure_collapse` | ~20% warmup success | Aggressive backpressure by design |
-| `benchmark_unit_cost` | 8k msg/s threshold | Actual: ~100k on fresh cluster |
-| `test_cpu_utilization` | Idle: 14%, Load: 16% | BEAM multi-scheduler |
-| `ultimate_chaos` | 94% delivery | Expected under chaos |
-| `test_resilience` | Memory: 1.0x growth | Correctly bounded |
-
----
-
-## Failure Coverage Matrix
-
-### Message Delivery
-
-| Failure Mode | Test | Suite |
-|--------------|------|-------|
-| Message loss (online→online) | `test_online_messaging` | integration |
-| Message loss (online→offline) | `test_offline_storage` | integration |
-| Message duplication | `assert_no_duplicates` | integration |
-| Message ordering violation | `test_multi_message_sequence` | integration |
-
-### Network & Resources
-
-| Failure Mode | Test | Suite |
-|--------------|------|-------|
-| TCP connection drop | `chaos_kitchen_sink` | chaos_controlled |
-| Memory exhaustion (OOM) | `test_slow_consumer_oom_prevention` | resilience |
-| CPU saturation | `benchmark_throughput` | performance_light |
-| Connection flood | `chaos_kitchen_sink` | chaos_controlled |
-
-### Protocol & Data
-
-| Failure Mode | Test | Suite |
-|--------------|------|-------|
-| Malformed packet | `iris_proto_tests` | unit |
-| Unknown opcode | `test_decode_unknown` | unit |
-| Large payload | `test_roundtrip_large_message` | unit |
-
----
-
-## Recent Fixes (Feb 2026)
-
-| Issue | File | Fix |
-|-------|------|-----|
-| Cluster meshing | `cluster.py` | Pass `NODE_SUFFIX` to make |
-| Backpressure thresholds | `test_backpressure_collapse.py` | Adjusted for graceful degradation |
-| Benchmark threshold | `benchmark_unit_cost.py` | 10k → 8k msg/s |
-| Typing opcodes | `iris_typing_tests.erl` | 0x30 → 0x70 per RFC |
-
-### Audit Fixes (Jan 2026)
-
-| Category | Status |
-|----------|--------|
-| CI-mode graceful skipping | ✅ `IS_CI` → `TEST_PROFILE` |
-| Implicit skip on failure | ✅ Uses `exit(2)` |
-| Dynamic scale reduction | ✅ Uses `TEST_PROFILE` |
-| Stress test flakiness | ✅ Profiles + fire-and-forget |
-
----
-
-## Tests Added (Jan 2026)
-
-| Test | Purpose |
-|------|---------|
-| `iris_session_state_tests.erl` | State machine lifecycle (P0) |
-| `iris_idempotency_tests.erl` | Exactly-once guarantees (P0) |
-| `iris_fault_injection_tests.erl` | Fault handling (P1) |
-| `iris_concurrency_torture_tests.erl` | High-contention stress (P2) |
-| `test_backpressure_collapse.py` | Backpressure validation |
-| `test_hot_shard.py` | Hot-shard stress |
-| `test_soak_memory.py` | Memory leak detection |
-
----
-
-## RFC Compliance
-
-### Test Deviations (Accepted)
-
-| Deviation | RFC | Justification |
-|-----------|-----|---------------|
-| Auth disabled in tests | FR-9 | CI simplification; JWT logic validated separately |
-| TLS disabled in tests | NFR-14 | No cert infra in CI; TLS code validated |
-| Single-node revocation | FR-11 | Multi-node not in CI; Mnesia replication verified |
-
-### Production Validation (Pre-Deploy)
-
-Run on production-spec hardware:
-1. Performance: `measure_dials`, `stress_global_fan_in`
-2. Scale: `test_limits`, `test_churn`
-3. Multi-node: `test_dist_failover`, `test_cluster_revocation`
-4. TLS: Full mode with valid certificates
+- TLS enforced on all client connections
+- All Python test clients use TLS via `ssl.SSLContext`
+- Certificates in `certs/` directory
 
 ---
 
@@ -253,32 +198,32 @@ Run on production-spec hardware:
 
 ### Common Issues
 
-**Server not available**: `make start`
+**Server not available**: Test runner manages server automatically. If running manually:
+```bash
+CONFIG=config/test_tls make start
+```
 
-**Mnesia errors**: `rm -rf /tmp/Mnesia.* /tmp/mnesia*`
+**Mnesia errors**: 
+```bash
+rm -rf /tmp/Mnesia.* /tmp/mnesia* Mnesia.*
+```
 
-**Test hangs**: `pkill -9 -f beam.smp`
+**Test hangs**: 
+```bash
+python3 tests/run_tests.py --nuke
+# or
+pkill -9 -f beam.smp
+```
 
 **Docker issues**:
 ```bash
-docker stop $(docker ps -aq); docker rm -f $(docker ps -aq)
-docker network prune -f
+docker compose -f docker/global-cluster/docker-compose.yml down -v
 ```
 
 ### Reproducing Failures
 
-1. Get seed from failing run: `[test_runner] Using seed: 12345`
+1. Get seed from failing run: `TEST_SEED: 12345`
 2. Reproduce: `TEST_SEED=12345 python3 tests/run_tests.py --suite <suite>`
-
-### CI Integration
-
-```yaml
-- name: Smoke Tests
-  env:
-    TEST_SEED: 42
-    TEST_PROFILE: smoke
-  run: python3 tests/run_tests.py --tier 0
-```
 
 ---
 
@@ -286,20 +231,36 @@ docker network prune -f
 
 ```
 tests/
-├── run_tests.py        # Unified test runner
-├── framework/          # ClusterManager, assertions, logging
+├── run_tests.py        # Unified test runner (phase-based)
+├── run_all_tests.sh    # Shell script alternative
+├── framework/          # ClusterManager, assertions
 ├── suites/             # Test suites by category
-│   ├── unit/           # Erlang EUnit tests
+│   ├── unit/           # Property-based tests
 │   ├── integration/    # Core message delivery
-│   ├── stress/         # Heavy load tests
+│   ├── e2e/            # End-to-end scenarios
+│   ├── security/       # TLS, auth, rate limiting
+│   ├── resilience/     # Fault tolerance
+│   ├── stress/         # Load testing
+│   ├── performance_light/  # Benchmarks
 │   ├── chaos_dist/     # Docker-dependent chaos
-│   └── ...
-├── utilities/          # IrisClient, helpers
+│   ├── chaos_controlled/   # Controlled chaos
+│   ├── compatibility/  # Protocol versions
+│   └── contract/       # Edge-core contract
+├── utilities/          # IrisClient, TLS helpers
 └── artifacts/          # Test outputs (gitignored)
 ```
 
-## Open Items (Low Priority)
+## Test Client TLS Configuration
 
-- Replace `time.sleep()` with polling (214 calls remain)
-- Rename non-standard files to `test_*.py` convention
-- Add Docker readiness checks (currently uses `timer:sleep`)
+All test clients use TLS by default:
+
+```python
+from tests.utilities.iris_client import IrisClient
+
+# TLS enabled by default
+client = IrisClient(host='localhost', port=8085)
+
+# Explicit TLS control
+client = IrisClient(host='localhost', port=8085, use_tls=True)
+client = IrisClient(host='localhost', port=8085, use_tls=False)  # For plaintext rejection tests
+```

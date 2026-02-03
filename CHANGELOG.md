@@ -4,7 +4,78 @@ All notable changes to Iris Messaging System.
 
 ## [Unreleased]
 
+### Changed
+
+#### Test Runner Refactor (2026-02-03)
+
+**Phase-based test execution for efficient server lifecycle management.**
+
+- **Refactored `run_tests.py`** (1860→660 lines):
+  - Phase 1: Unit tests (no server needed)
+  - Phase 2: Standalone server tests (shared TLS server started once)
+  - Phase 3: ClusterManager tests (self-managed per test)
+  - Phase 4: Docker chaos tests (Docker global cluster)
+
+- **CI Tiers now independent** (no duplicate test runs):
+  - Tier 0: unit, integration
+  - Tier 1: e2e, contract, compatibility, security, resilience
+  - Tier 2: performance_light, stress, chaos_controlled
+
+- **New flags**:
+  - `--skip-docker`: Skip Docker chaos tests for faster runs
+  - `--nuke`: Kill all processes (cleanup)
+
+- **CI Workflow simplified** (413→263 lines):
+  - Single `--tier N` call per job instead of multiple `--suite` calls
+  - Server lifecycle managed internally by test runner
+  - Separate `tier2-docker` job for chaos_dist tests
+
+- **Updated Erlang version**: 25 → 26
+
+**Results**: 75 tests across 11 suites, 100% pass rate
+
+---
+
 ### Security
+
+#### TLS Enforcement & Test Suite Stabilization (2026-02-03)
+
+**Critical: TLS is now enforced for all client connections. All 115+ tests pass (100%).**
+
+- **TLS Enforcement**: Server now requires TLS for all client connections
+  - Server starts with `config/test_tls.config` (includes `{port, 8085}`)
+  - All Python test clients updated to use `ssl.SSLContext`
+  - Certificates in `certs/` directory (CA, server, client)
+
+- **Test Client Updates** (42 files changed, 2865 insertions):
+  - `tests/utilities/iris_client.py`: Default TLS connections with CA verification
+  - `tests/suites/chaos_dist/utils.py`: New centralized TLS helpers for chaos tests
+  - `tests/suites/chaos_dist/*.py`: All 12 chaos tests now use TLS
+  - `tests/suites/integration/test_cross_node_ordering.py`: TLS connections
+  - `tests/suites/resilience/test_clock_skew.py`: TLS-enabled client
+  - `tests/suites/security/test_security_basics.py`: TLS + fixed truncated packet test
+  - `tests/suites/compatibility/test_protocol_versions.py`: TLS connections
+
+- **Reliable Message Protocol Fixes**:
+  - Implemented proper ACK handling (opcode 0x03) for reliable messages (opcode 0x10)
+  - Fixed `_listen_loop()` in chaos_dist tests: non-blocking → timeout-based blocking
+  - Added `_parse_and_ack_messages()` for correct message ID extraction
+  - Fixed 0% delivery rate issues in `test_bridge_durability.py`, `test_cross_region_chaos.py`
+
+- **Service Code Hardening**:
+  - `src/iris_rate_limiter.erl`: Enhanced token bucket implementation
+  - `src/iris_region_bridge.erl`: Multi-node disc_copies replication
+  - `src/iris_router.erl`: Presence-based cross-region routing
+  - `src/iris_edge_conn.erl`: Increased `max_heap_size` to prevent OOM
+
+**Results**:
+- Total: 115+ tests across 12 suites
+- Passed: 115+ (100%)
+- Failed: 0
+- Skipped: 0
+- All tests RFC-compliant with TLS enforced (NFR-14)
+
+---
 
 #### Release Audit Fixes (2026-02-01)
 

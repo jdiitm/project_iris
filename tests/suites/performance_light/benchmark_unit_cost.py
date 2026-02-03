@@ -18,6 +18,7 @@ Exit codes:
 """
 
 import socket
+import ssl
 import struct
 import time
 import os
@@ -25,9 +26,24 @@ import sys
 import threading
 import psutil
 import argparse
+from pathlib import Path
 
 HOST = 'localhost'
 PORT = 8085
+
+# TLS Configuration
+PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
+CA_CERT = PROJECT_ROOT / "certs" / "ca.pem"
+
+def get_ssl_context():
+    """Create SSL context for TLS connections."""
+    context = ssl.create_default_context()
+    if CA_CERT.exists():
+        context.load_verify_locations(str(CA_CERT))
+    else:
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+    return context
 MSG_COUNT = 50000
 
 # Minimum throughput threshold (messages per second)
@@ -42,11 +58,13 @@ def log(msg):
 
 def create_socket():
     try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-        s.connect((HOST, PORT))
+        raw_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        raw_sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        raw_sock.connect((HOST, PORT))
+        context = get_ssl_context()
+        s = context.wrap_socket(raw_sock, server_hostname=HOST)
         return s
-    except socket.error as e:
+    except (socket.error, ssl.SSLError) as e:
         log(f"Socket connection failed: {e}")
         return None
 
@@ -129,9 +147,13 @@ def main() -> int:
     passed = True
     
     # Check if server is already running
-    test_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server_running = test_sock.connect_ex((HOST, PORT)) == 0
-    test_sock.close()
+    try:
+        test_sock = create_socket()
+        server_running = test_sock is not None
+        if test_sock:
+            test_sock.close()
+    except:
+        server_running = False
     
     if not server_running:
         log("FAIL: Server not running on port 8085")

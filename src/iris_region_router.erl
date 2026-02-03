@@ -54,16 +54,21 @@ route_to_user(UserId, Msg) ->
 
 -spec route_to_user(binary(), binary(), map()) -> ok | {error, term()}.
 route_to_user(UserId, Msg, Opts) ->
-    HomeRegion = get_home_region(UserId),
+    %% FIX: Use target_region from Opts if provided (presence-based routing)
+    %% Otherwise fall back to hash-based home region
+    TargetRegion = case maps:get(target_region, Opts, undefined) of
+        undefined -> get_home_region(UserId);
+        Region -> Region
+    end,
     CurrentRegion = get_current_region(),
     
-    case HomeRegion == CurrentRegion of
+    case TargetRegion == CurrentRegion of
         true ->
-            %% User belongs to this region - use local routing
+            %% User is in this region - use local routing
             iris_async_router:route(UserId, Msg);
         false ->
-            %% User belongs to another region - cross-region routing
-            route_cross_region(HomeRegion, UserId, Msg, Opts)
+            %% User is in another region - cross-region routing via bridge
+            route_cross_region(TargetRegion, UserId, Msg, Opts)
     end.
 
 %% =============================================================================

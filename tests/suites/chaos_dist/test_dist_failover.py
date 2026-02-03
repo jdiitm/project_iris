@@ -21,6 +21,8 @@ from pathlib import Path
 
 # Project root for init_cluster.sh
 PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 from dataclasses import dataclass
 from typing import List, Tuple
 
@@ -69,10 +71,9 @@ class Metrics:
 
 
 def connect_and_login(host, port, user_id) -> socket.socket:
-    """Connect and login, return socket."""
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.settimeout(3.0)
-    s.connect((host, port))
+    """Connect via TLS and login, return socket."""
+    from tests.suites.chaos_dist.utils import create_tls_socket
+    s = create_tls_socket(host, port, timeout=3)
     s.sendall(OP_LOGIN + user_id.encode())
     s.recv(1024)  # LOGIN_OK
     return s

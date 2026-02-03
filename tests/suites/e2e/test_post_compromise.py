@@ -318,12 +318,12 @@ def main():
     
     # Prerequisites
     if not check_erlang_available():
-        log("[SKIP] Erlang not available")
-        sys.exit(2)
+        log("[FAIL] Erlang not available - environment not properly configured")
+        sys.exit(1)
     
     if not check_module_compiled():
-        log("[SKIP] iris_ratchet.beam not found. Run 'make' first.")
-        sys.exit(2)
+        log("[FAIL] iris_ratchet.beam not found. Run 'make' first.")
+        sys.exit(1)
     
     results = []
     

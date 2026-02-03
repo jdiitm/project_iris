@@ -42,7 +42,7 @@ def test_oom_kill():
         
         %% Check max_heap_size flag
         {max_heap_size, Flags} = process_info(Pid, max_heap_size),
-        Expected = #{size => 50000, kill => true},
+        Expected = #{size => 500000, kill => true},
         
         IsSubset = maps:fold(fun(K, V, Acc) -> 
             Acc andalso (maps:get(K, Flags, undefined) == V)

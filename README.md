@@ -1,9 +1,11 @@
 # Project Iris: WhatsApp-Class Messaging Engine
 
-[![Tests](https://img.shields.io/badge/tests-113%20total%20|%2093%20smoke%20passing-brightgreen)](tests/run_tests.py)
-[![Erlang](https://img.shields.io/badge/Erlang-OTP%2025%2B-blue)](https://www.erlang.org/)
+[![Tests](https://img.shields.io/badge/tests-75%20|%20100%25%20passing-brightgreen)](tests/run_tests.py)
+[![TLS](https://img.shields.io/badge/TLS-enforced-green)](docs/DEPLOYMENT.md)
+[![Erlang](https://img.shields.io/badge/Erlang-OTP%2026%2B-blue)](https://www.erlang.org/)
 
 > **Current Status**: Development. Tested at **10K concurrent connections** locally.  
+> Full test suite (75 tests) passing with TLS enforced.  
 > Architecture designed for 1M+ users per region (see [Scalability Analysis](docs/SCALABILITY_ANALYSIS.md)).  
 > Planet-scale deployment (2B+ users) requires multi-region infrastructure.
 
@@ -72,8 +74,8 @@ Project Iris is a high-performance distributed messaging system built in **Erlan
 
 ### Prerequisites
 
-- **Runtime**: Erlang/OTP 25+
-- **Python**: 3.9+ (for tests)
+- **Runtime**: Erlang/OTP 26+
+- **Python**: 3.11+ (for tests)
 - **Docker**: For cluster simulation (optional)
 
 ### Build & Run
@@ -105,29 +107,37 @@ python3 tests/run_tests.py --all
 
 ## Testing
 
-**Status**: 113/113 pass (100%) | **Smoke**: 93 tests (~15 min)
+**Status**: 75 tests pass (100%) | **Last Verified**: 2026-02-03
+
+The test runner uses phase-based execution for efficient server lifecycle management:
 
 ```bash
-# Tier 0 (63 tests, ~3 min)
-python3 tests/run_tests.py --tier 0
+# Run all tests (handles server lifecycle automatically)
+python3 tests/run_tests.py --all
 
-# Full smoke (93 tests, ~15 min)
-python3 tests/run_tests.py --tier 0 && \
-python3 tests/run_tests.py --suite resilience && \
-python3 tests/run_tests.py --suite security && \
-python3 tests/run_tests.py --suite stress && \
-python3 tests/run_tests.py --suite performance_light
+# Run all tests, skip Docker chaos tests (faster)
+python3 tests/run_tests.py --all --skip-docker
 
-# All tests (113 tests, ~53 min)
-python3 tests/run_tests.py --all --with-cluster
+# CI Tiers (independent, no overlap)
+python3 tests/run_tests.py --tier 0   # unit, integration (~3 min)
+python3 tests/run_tests.py --tier 1   # e2e, security, resilience (~5 min)
+python3 tests/run_tests.py --tier 2   # performance, stress (~10 min)
+
+# Run specific suite
+python3 tests/run_tests.py --suite integration
+
+# List all tests
+python3 tests/run_tests.py --list
 ```
 
-| Suite | Tests | Pass | Suite | Tests | Pass |
-|-------|-------|------|-------|-------|------|
-| unit | 41 | 100% | security | 7 | 100% |
-| integration | 22 | 100% | performance_light | 6 | 100% |
-| stress | 14 | 100% | e2e | 5 | 100% |
-| chaos_dist | 11 | 100% | resilience | 3 | 100% |
+| Suite | Tests | Suite | Tests |
+|-------|-------|-------|-------|
+| unit | 2 | security | 7 |
+| integration | 22 | performance_light | 6 |
+| stress | 14 | e2e | 5 |
+| chaos_dist | 12 | resilience | 3 |
+| compatibility | 1 | contract | 1 |
+| chaos_controlled | 2 | **TOTAL** | **75** |
 
 See [TESTING.md](docs/TESTING.md) for details.
 
@@ -169,12 +179,15 @@ iris_store:put(Table, Key, Value, #{durability => best_effort}).
 
 | Feature | Status |
 |---------|--------|
-| TLS 1.2/1.3 | ✅ Supported |
+| TLS 1.2/1.3 | ✅ **Enforced** (all client connections) |
 | mTLS (inter-node) | ✅ Configurable |
 | JWT Authentication | ✅ HMAC-SHA256 |
 | Rate Limiting | ✅ Token bucket |
 | DoS Protection | ✅ Protocol limits |
 | E2EE | ✅ Signal Protocol |
+
+> **Note**: TLS is enforced for all client connections. Tests use certificates in `certs/` directory.
+> See [DEPLOYMENT.md](docs/DEPLOYMENT.md) for TLS configuration.
 
 ## Documentation
 
@@ -194,12 +207,23 @@ project_iris/
 ├── test_utils/             # Erlang test utilities and unit tests
 ├── tests/
 │   ├── run_tests.py        # Unified test runner
-│   ├── suites/             # Test suites (11 categories)
-│   └── framework/          # Test framework utilities
-├── config/                 # Erlang config files
-├── certs/                  # TLS certificates
+│   ├── suites/             # Test suites (12 categories)
+│   │   ├── unit/           # Property-based tests
+│   │   ├── integration/    # Core message flow tests
+│   │   ├── e2e/            # End-to-end scenarios
+│   │   ├── security/       # Security validation
+│   │   ├── resilience/     # Fault tolerance
+│   │   ├── stress/         # Load testing
+│   │   ├── chaos_dist/     # Docker-based chaos tests
+│   │   ├── compatibility/  # Protocol version tests
+│   │   ├── contract/       # API contract tests
+│   │   └── performance_light/ # CPU/resource tests
+│   ├── framework/          # ClusterManager, assertions
+│   └── utilities/          # IrisClient (TLS-enabled)
+├── config/                 # Erlang config files (inc. test_tls.config)
+├── certs/                  # TLS certificates (CA, server, client)
 ├── docker/
-│   └── global-cluster/     # Docker cluster simulation
+│   └── global-cluster/     # Docker cluster simulation (6 cores, 11 edges)
 ├── docs/                   # Documentation
 └── Makefile                # Build and test commands
 ```

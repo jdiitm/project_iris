@@ -3,6 +3,12 @@
 
 -include_lib("kernel/include/inet.hrl").
 
+%% =============================================================================
+%% HOT-001 FIX: Paginated Offline Delivery Constants
+%% =============================================================================
+-define(OFFLINE_PAGE_SIZE, 500).      %% Messages per page
+-define(OFFLINE_INLINE_LIMIT, 1000).  %% Deliver all if under this limit
+
 %% Dynamic Core node discovery with failover
 get_core_node() ->
     case iris_core_registry:get_core() of
@@ -31,6 +37,38 @@ legacy_core_node() ->
                      %% This results in {badrpc, _} which is handled gracefully
                      node()
              end
+    end.
+
+%% Check if iris_group service is available (on core node or locally)
+is_group_service_available() ->
+    %% First check local (for single-node/test setups)
+    case whereis(iris_group) of
+        Pid when is_pid(Pid) -> true;
+        undefined ->
+            %% Try core node via RPC
+            CoreNode = get_core_node(),
+            case rpc:call(CoreNode, erlang, whereis, [iris_group], 2000) of
+                Pid when is_pid(Pid) -> true;
+                _ -> false
+            end
+    end.
+
+%% Call iris_group function, routing to core node if needed
+call_iris_group(Function, Args) ->
+    %% First try local (for single-node/test setups)
+    case whereis(iris_group) of
+        Pid when is_pid(Pid) ->
+            apply(iris_group, Function, Args);
+        undefined ->
+            %% Route to core node
+            CoreNode = get_core_node(),
+            case rpc:call(CoreNode, iris_group, Function, Args, 5000) of
+                {badrpc, Reason} ->
+                    logger:warning("Group RPC failed: ~p", [Reason]),
+                    {error, group_service_unavailable};
+                Result ->
+                    Result
+            end
     end.
 
 %% handle_packet(Packet, User, TransportPid, TransportMod) -> {ok, NewUser, Actions}
@@ -142,6 +180,48 @@ handle_packet({read_receipt, _MsgId, _OriginalSender}, undefined, _Pid, _Mod) ->
     {ok, undefined, []};
 
 %% =============================================================================
+%% HOT-001 FIX: Paginated Offline Message Retrieval
+%% =============================================================================
+%% For users with large offline queues (1000+ messages), messages are delivered
+%% in pages. Client requests additional pages with {get_offline_page, Cursor}.
+
+handle_packet({get_offline_page, Cursor}, User, _Pid, _Mod) when User =/= undefined ->
+    %% Client requesting next page of offline messages
+    CoreNode = get_core_node(),
+    case rpc:call(CoreNode, iris_core, retrieve_offline_paginated, 
+                  [User, ?OFFLINE_PAGE_SIZE, Cursor], 5000) of
+        {Msgs, NextCursor} when is_list(Msgs), length(Msgs) > 0 ->
+            %% Encode messages
+            MsgActions = lists:map(fun(Msg) ->
+                MsgId = iris_proto:generate_msg_id(),
+                {send, iris_proto:encode_reliable_msg(MsgId, Msg)}
+            end, Msgs),
+            
+            %% Confirm delivery of previous page (delete from storage)
+            PrevCursor = max(0, Cursor - ?OFFLINE_PAGE_SIZE),
+            spawn(fun() ->
+                rpc:call(CoreNode, iris_core, delete_offline_confirmed, 
+                         [User, {PrevCursor, Cursor}], 5000)
+            end),
+            
+            %% Add continuation indicator if more pages exist
+            case NextCursor of
+                done ->
+                    {ok, User, MsgActions};
+                _ ->
+                    Remaining = 0, %% Unknown at this point
+                    MoreIndicator = encode_offline_more(NextCursor, Remaining),
+                    {ok, User, MsgActions ++ [{send, MoreIndicator}]}
+            end;
+        _ ->
+            {ok, User, []}
+    end;
+
+handle_packet({get_offline_page, _Cursor}, undefined, _Pid, _Mod) ->
+    %% Not logged in - ignore
+    {ok, undefined, []};
+
+%% =============================================================================
 %% E2EE Key Bundle Operations (RFC-001-AMENDMENT-001, FR-13, FR-14)
 %% =============================================================================
 %% Server never has access to plaintext - only routes encrypted messages
@@ -219,12 +299,12 @@ handle_packet({e2ee_msg, _Recipient, _Ciphertext, _Header}, undefined, _Pid, _Mo
 
 handle_packet({group_create, GroupName}, User, _Pid, _Mod) when User =/= undefined ->
     %% Create a new group with User as admin
-    case whereis(iris_group) of
-        undefined ->
+    case is_group_service_available() of
+        false ->
             %% Group module not running
             {ok, User, [{send, encode_error(group_service_unavailable)}]};
-        _ ->
-            case iris_group:create_group(GroupName, User) of
+        true ->
+            case call_iris_group(create_group, [GroupName, User]) of
                 {ok, GroupId} ->
                     %% Send group_join notification back to creator
                     JoinPacket = iris_proto:encode_group_join(GroupId, User),
@@ -240,11 +320,11 @@ handle_packet({group_create, _GroupName}, undefined, _Pid, _Mod) ->
 
 handle_packet({group_leave, GroupId}, User, _Pid, _Mod) when User =/= undefined ->
     %% Leave a group
-    case whereis(iris_group) of
-        undefined ->
+    case is_group_service_available() of
+        false ->
             {ok, User, [{send, encode_error(group_service_unavailable)}]};
-        _ ->
-            case iris_group:remove_member(GroupId, User, User) of
+        true ->
+            case call_iris_group(remove_member, [GroupId, User, User]) of
                 ok ->
                     {ok, User, [{send, <<16#32, "OK">>}]};
                 {error, Reason} ->
@@ -261,16 +341,16 @@ handle_packet({group_msg, GroupId, Ciphertext, Header}, User, _Pid, _Mod) when U
     %% Rate limit check
     case check_message_rate(User) of
         allow ->
-            case whereis(iris_group) of
-                undefined ->
+            case is_group_service_available() of
+                false ->
                     {ok, User, [{send, encode_error(group_service_unavailable)}]};
-                _ ->
-                    case iris_group:is_member(GroupId, User) of
+                true ->
+                    case call_iris_group(is_member, [GroupId, User]) of
                         false ->
                             {ok, User, [{send, encode_error(not_member)}]};
                         true ->
                             %% Fan out to all group members
-                            case iris_group:get_members(GroupId) of
+                            case call_iris_group(get_members, [GroupId]) of
                                 {ok, Members} ->
                                     %% Encode the message once
                                     DeliveryPacket = iris_proto:encode_group_msg(GroupId, 
@@ -285,7 +365,9 @@ handle_packet({group_msg, GroupId, Ciphertext, Header}, User, _Pid, _Mod) when U
                                     {ok, User, []};
                                 {error, _Reason} ->
                                     {ok, User, [{send, encode_error(group_not_found)}]}
-                            end
+                            end;
+                        {error, _} ->
+                            {ok, User, [{send, encode_error(group_service_unavailable)}]}
                     end
             end;
         {deny, RetryAfter} ->
@@ -298,22 +380,24 @@ handle_packet({group_msg, _GroupId, _Ciphertext, _Header}, undefined, _Pid, _Mod
 
 handle_packet({group_roster, GroupId}, User, _Pid, _Mod) when User =/= undefined ->
     %% Request group roster (member list)
-    case whereis(iris_group) of
-        undefined ->
+    case is_group_service_available() of
+        false ->
             {ok, User, [{send, encode_error(group_service_unavailable)}]};
-        _ ->
-            case iris_group:is_member(GroupId, User) of
+        true ->
+            case call_iris_group(is_member, [GroupId, User]) of
                 false ->
                     {ok, User, [{send, encode_error(not_member)}]};
                 true ->
-                    case iris_group:get_members(GroupId) of
+                    case call_iris_group(get_members, [GroupId]) of
                         {ok, Members} ->
                             MemberIds = [M || #{user_id := M} <- Members],
                             Response = iris_proto:encode_group_roster_response(GroupId, MemberIds),
                             {ok, User, [{send, Response}]};
                         {error, Reason} ->
                             {ok, User, [{send, encode_error(Reason)}]}
-                    end
+                    end;
+                {error, _} ->
+                    {ok, User, [{send, encode_error(group_service_unavailable)}]}
             end
     end;
 
@@ -322,21 +406,21 @@ handle_packet({group_roster, _GroupId}, undefined, _Pid, _Mod) ->
 
 handle_packet({sender_key_dist, GroupId, KeyData}, User, _Pid, _Mod) when User =/= undefined ->
     %% Distribute sender key to group
-    case whereis(iris_group) of
-        undefined ->
+    case is_group_service_available() of
+        false ->
             {ok, User, [{send, encode_error(group_service_unavailable)}]};
-        _ ->
-            case iris_group:is_member(GroupId, User) of
+        true ->
+            case call_iris_group(is_member, [GroupId, User]) of
                 false ->
                     {ok, User, [{send, encode_error(not_member)}]};
                 true ->
                     %% Store sender key and broadcast to members
                     KeyId = crypto:strong_rand_bytes(8),
                     KeyIdHex = binary_to_list(base16_encode(KeyId)),
-                    ok = iris_group:store_sender_key(GroupId, User, list_to_binary(KeyIdHex), KeyData),
+                    call_iris_group(store_sender_key, [GroupId, User, list_to_binary(KeyIdHex), KeyData]),
                     
                     %% Notify all other members of the new sender key
-                    case iris_group:get_members(GroupId) of
+                    case call_iris_group(get_members, [GroupId]) of
                         {ok, Members} ->
                             DistPacket = iris_proto:encode_sender_key_dist(GroupId, KeyData),
                             lists:foreach(fun(#{user_id := MemberId}) ->
@@ -347,7 +431,9 @@ handle_packet({sender_key_dist, GroupId, KeyData}, User, _Pid, _Mod) when User =
                             end, Members);
                         _ -> ok
                     end,
-                    {ok, User, []}
+                    {ok, User, []};
+                {error, _} ->
+                    {ok, User, [{send, encode_error(group_service_unavailable)}]}
             end
     end;
 
@@ -384,20 +470,80 @@ complete_login(User, TransportPid) ->
         end
     end),
 
-    %% PHASE 3: Retrieve offline messages SYNCHRONOUSLY (RFC FR-2 compliance)
-    %% Messages MUST be delivered when recipient connects
-    OfflineActions = case rpc:call(get_core_node(), iris_core, retrieve_offline, [User], 5000) of
+    %% PHASE 3: Retrieve offline messages (HOT-001 FIX: Paginated for large queues)
+    %% Messages MUST be delivered when recipient connects (RFC FR-2 compliance)
+    %% But for celebrity accounts with 1M+ messages, we stream in pages to prevent OOM
+    OfflineActions = deliver_offline_messages(User),
+    
+    %% Response: LOGIN_OK followed by any offline messages
+    {ok, User, [{send, <<3, "LOGIN_OK">>} | OfflineActions]}.
+
+%% =============================================================================
+%% HOT-001 FIX: Paginated Offline Delivery for Celebrity Hotspots
+%% For normal users (<1000 offline messages): deliver all at once
+%% For hot users (>=1000 messages): deliver first page + OFFLINE_MORE indicator
+%% Client must request subsequent pages via {get_offline_page, Cursor}
+
+deliver_offline_messages(User) ->
+    CoreNode = get_core_node(),
+    %% First, check queue depth to decide delivery strategy
+    QueueDepth = try
+        rpc:call(CoreNode, iris_core, get_offline_queue_depth, [User], 2000)
+    catch _:_ -> 0
+    end,
+    
+    case QueueDepth of
+        N when is_integer(N), N > 0, N =< ?OFFLINE_INLINE_LIMIT ->
+            %% Small queue - deliver all at once (original behavior)
+            deliver_all_offline(User, CoreNode);
+        N when is_integer(N), N > ?OFFLINE_INLINE_LIMIT ->
+            %% Large queue - deliver first page + continuation indicator
+            logger:info("HOT-001: User ~p has ~p offline messages, using paginated delivery", [User, N]),
+            deliver_offline_page(User, CoreNode, 0, N);
+        _ ->
+            %% No messages or error
+            []
+    end.
+
+deliver_all_offline(User, CoreNode) ->
+    case rpc:call(CoreNode, iris_core, retrieve_offline, [User], 5000) of
         Msgs when is_list(Msgs), length(Msgs) > 0 ->
-            %% Encode each offline message as reliable message and include in response
             lists:map(fun(Msg) ->
                 MsgId = iris_proto:generate_msg_id(),
                 {send, iris_proto:encode_reliable_msg(MsgId, Msg)}
             end, Msgs);
         _ -> []
-    end,
-    
-    %% Response: LOGIN_OK followed by any offline messages
-    {ok, User, [{send, <<3, "LOGIN_OK">>} | OfflineActions]}.
+    end.
+
+deliver_offline_page(User, CoreNode, Cursor, TotalCount) ->
+    case rpc:call(CoreNode, iris_core, retrieve_offline_paginated, 
+                  [User, ?OFFLINE_PAGE_SIZE, Cursor], 5000) of
+        {Msgs, NextCursor} when is_list(Msgs), length(Msgs) > 0 ->
+            %% Encode messages
+            MsgActions = lists:map(fun(Msg) ->
+                MsgId = iris_proto:generate_msg_id(),
+                {send, iris_proto:encode_reliable_msg(MsgId, Msg)}
+            end, Msgs),
+            
+            %% Add continuation indicator if more pages exist
+            case NextCursor of
+                done ->
+                    %% Last page - just send messages
+                    MsgActions;
+                _ ->
+                    %% More pages - append OFFLINE_MORE indicator
+                    %% Client should send {get_offline_page, NextCursor} to continue
+                    Remaining = TotalCount - (Cursor + length(Msgs)),
+                    MoreIndicator = encode_offline_more(NextCursor, Remaining),
+                    MsgActions ++ [{send, MoreIndicator}]
+            end;
+        _ -> []
+    end.
+
+%% Encode indicator that more offline messages are available
+%% Format: [opcode=0x80, cursor:32, remaining:32]
+encode_offline_more(NextCursor, Remaining) ->
+    <<16#80, NextCursor:32, Remaining:32>>.
 
 parse_login_data(Data) ->
     case binary:split(Data, <<":">>) of
@@ -539,7 +685,8 @@ terminate(User) ->
                 [{User, Self}] ->
                     %% We own it - safe to delete
                     ets:delete(local_presence_v2, User),
-                    rpc:cast(get_core_node(), iris_core, update_status, [User, offline]);
+                    rpc:cast(get_core_node(), iris_core, update_status, [User, offline]),
+                    ok;  %% FIX: Explicit ok return (rpc:cast returns true)
                 [{User, _OtherPid}] ->
                     %% Different process owns it (new login happened) - don't delete
                     ok;

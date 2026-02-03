@@ -222,9 +222,9 @@ def main():
         print("    1. Server started with config/test (TLS disabled)")
         print("    2. Erlang installation missing SSL support")
         print("    3. TLS certificates not found")
-        print("\n  SKIPPING TLS TESTS (environment limitation)")
-        print("  To enable: ensure Erlang has SSL and start with config/test_tls")
-        sys.exit(0)  # Skip rather than fail
+        print("\n  FAIL: Server not running with TLS enabled")
+        print("  TLS is MANDATORY - start server with: erl -config config/test_tls ...")
+        sys.exit(1)  # No skips - TLS must be enabled
     print("  Server has TLS enabled ✓")
     
     results = []

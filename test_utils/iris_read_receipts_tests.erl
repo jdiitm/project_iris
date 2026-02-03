@@ -5,10 +5,13 @@
 %% Tests for Read Receipts (RFC FR-4)
 %% =============================================================================
 %% Tests cover:
-%% - Protocol encoding/decoding for READ_RECEIPT (0x40)
-%% - Protocol encoding for READ_RECEIPT_RELAY (0x41)
+%% - Protocol encoding/decoding for READ_RECEIPT (0x74)
+%% - Protocol encoding for READ_RECEIPT_RELAY (0x75)
 %% - Read receipts module API
 %% - Disabled state handling
+%%
+%% FIX LOG:
+%% - Corrected opcodes from 0x40/0x41 to RFC-compliant 0x74/0x75
 %% =============================================================================
 
 %% ---------------------------------------------------------------------------
@@ -19,8 +22,8 @@ encode_read_receipt_test() ->
     MsgId = <<"msg_12345">>,
     OriginalSender = <<"alice">>,
     Encoded = iris_proto:encode_read_receipt(MsgId, OriginalSender),
-    %% Format: 0x40 | MsgIdLen(16) | MsgId | SenderLen(16) | Sender
-    Expected = <<16#40, 9:16, "msg_12345", 5:16, "alice">>,
+    %% Format: 0x74 | MsgIdLen(16) | MsgId | SenderLen(16) | Sender
+    Expected = <<16#74, 9:16, "msg_12345", 5:16, "alice">>,
     ?assertEqual(Expected, Encoded).
 
 encode_read_receipt_relay_test() ->
@@ -28,8 +31,8 @@ encode_read_receipt_relay_test() ->
     Reader = <<"bob">>,
     Timestamp = 1706700000000,
     Encoded = iris_proto:encode_read_receipt_relay(MsgId, Reader, Timestamp),
-    %% Format: 0x41 | MsgIdLen(16) | MsgId | ReaderLen(16) | Reader | Timestamp(64)
-    Expected = <<16#41, 9:16, "msg_67890", 3:16, "bob", Timestamp:64>>,
+    %% Format: 0x75 | MsgIdLen(16) | MsgId | ReaderLen(16) | Reader | Timestamp(64)
+    Expected = <<16#75, 9:16, "msg_67890", 3:16, "bob", Timestamp:64>>,
     ?assertEqual(Expected, Encoded).
 
 encode_read_receipt_binary_msgid_test() ->
@@ -39,7 +42,7 @@ encode_read_receipt_binary_msgid_test() ->
     Encoded = iris_proto:encode_read_receipt(MsgId, Sender),
     MsgIdLen = byte_size(MsgId),
     SenderLen = byte_size(Sender),
-    Expected = <<16#40, MsgIdLen:16, MsgId/binary, SenderLen:16, Sender/binary>>,
+    Expected = <<16#74, MsgIdLen:16, MsgId/binary, SenderLen:16, Sender/binary>>,
     ?assertEqual(Expected, Encoded).
 
 %% ---------------------------------------------------------------------------
@@ -47,26 +50,26 @@ encode_read_receipt_binary_msgid_test() ->
 %% ---------------------------------------------------------------------------
 
 decode_read_receipt_test() ->
-    Packet = <<16#40, 9:16, "msg_12345", 5:16, "alice">>,
+    Packet = <<16#74, 9:16, "msg_12345", 5:16, "alice">>,
     {Result, Rest} = iris_proto:decode(Packet),
     ?assertEqual({read_receipt, <<"msg_12345">>, <<"alice">>}, Result),
     ?assertEqual(<<>>, Rest).
 
 decode_read_receipt_with_remainder_test() ->
-    Packet = <<16#40, 5:16, "msg_1", 3:16, "bob", "extra">>,
+    Packet = <<16#74, 5:16, "msg_1", 3:16, "bob", "extra">>,
     {Result, Rest} = iris_proto:decode(Packet),
     ?assertEqual({read_receipt, <<"msg_1">>, <<"bob">>}, Result),
     ?assertEqual(<<"extra">>, Rest).
 
 decode_read_receipt_partial_test() ->
     %% Incomplete packet
-    Packet = <<16#40, 10:16, "msg_">>,  %% Only 4 bytes of 10-byte MsgId
+    Packet = <<16#74, 10:16, "msg_">>,  %% Only 4 bytes of 10-byte MsgId
     Result = iris_proto:decode(Packet),
     ?assertMatch({more, _}, Result).
 
 decode_read_receipt_msgid_too_long_test() ->
     %% MsgId length exceeds MAX_MSGID_LEN (64)
-    Packet = <<16#40, 65:16, (binary:copy(<<"x">>, 65))/binary, 5:16, "alice">>,
+    Packet = <<16#74, 65:16, (binary:copy(<<"x">>, 65))/binary, 5:16, "alice">>,
     {Result, _} = iris_proto:decode(Packet),
     ?assertEqual({error, msgid_too_long}, Result).
 

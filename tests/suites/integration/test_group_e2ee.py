@@ -204,11 +204,11 @@ def check_group_response(response: bytes, client, test_name: str) -> Optional[by
             group_id, _ = result
             return group_id
     
-    # Check for service unavailable (skip)
+    # Check for service unavailable - this is a FAILURE
     if is_group_service_unavailable(response):
-        log(f"  SKIP: Group service not available (tested via test_group_membership)")
+        log(f"  FAIL: Group service not available - ensure iris_group module is compiled and loaded")
         client.close()
-        return b'__SKIPPED__'
+        return None  # Return None = failure, not skip
     
     # Check for other error response
     if response[0] == 0xFE:
@@ -269,9 +269,9 @@ def test_group_create_via_protocol():
                 if err_len <= len(response) - 3:
                     err_msg = response[3:3+err_len].decode('utf-8', errors='replace')
                     if "group_service_unavailable" in err_msg:
-                        log("  SKIP: Group service not available (tested via test_group_membership)")
+                        log("  FAIL: Group service not available - ensure iris_group module is compiled and loaded")
                         client.close()
-                        return True  # Return True to mark as "skipped/passed"
+                        return False  # No skips - service must be available
             log("  FAIL: Error response received")
             client.close()
             return False
@@ -308,8 +308,6 @@ def test_group_message_delivery():
         group_id = check_group_response(response, admin, "Group Message Delivery")
         if group_id is None:
             return False
-        if group_id == b'__SKIPPED__':
-            return True
         
         log(f"  Group created: {group_id.decode('utf-8', errors='replace')}")
         
@@ -370,8 +368,6 @@ def test_sender_key_distribution():
         group_id = check_group_response(response, client, "Sender Key Distribution")
         if group_id is None:
             return False
-        if group_id == b'__SKIPPED__':
-            return True
         
         log(f"  Group created: {group_id.decode('utf-8', errors='replace')}")
         
@@ -427,8 +423,6 @@ def test_group_roster_request():
         group_id = check_group_response(response, client, "Group Roster Request")
         if group_id is None:
             return False
-        if group_id == b'__SKIPPED__':
-            return True
         
         log(f"  Group created: {group_id.decode('utf-8', errors='replace')}")
         
@@ -487,8 +481,6 @@ def test_group_leave():
         group_id = check_group_response(response, client, "Group Leave")
         if group_id is None:
             return False
-        if group_id == b'__SKIPPED__':
-            return True
         
         log(f"  Group created: {group_id.decode('utf-8', errors='replace')}")
         

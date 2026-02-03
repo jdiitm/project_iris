@@ -17,6 +17,8 @@ x-core-defaults: &core-defaults
   working_dir: /app
   environment:
     - IRIS_COOKIE=${IRIS_COOKIE:-iris_secret}
+    # P0-B FIX: Enable multimaster durability for guaranteed replication before ACK
+    - IRIS_MULTIMASTER_DURABILITY=true
   # NET_ADMIN capability required for iptables partition testing
   cap_add:
     - NET_ADMIN
@@ -49,7 +51,7 @@ services:
     <<: *core-defaults
     container_name: core-east-1
     hostname: coreeast1
-    command: ["sh", "-c", "cd /app && erl -noinput -sname core_east_1@coreeast1 -setcookie $$IRIS_COOKIE -pa ebin -config config/test -mnesia dir '\"/data/mnesia\"' -eval 'application:ensure_all_started(mnesia), iris_core:init_db(), application:ensure_all_started(iris_core).'"]
+    command: ["sh", "-c", "apk add --no-cache iptables >/dev/null 2>&1 || true; mkdir -p /data/mnesia/wal && cd /app && erl -noinput -sname core_east_1@coreeast1 -setcookie $$IRIS_COOKIE -pa ebin -config config/docker_cluster -mnesia dir '\"/data/mnesia\"' -iris_core wal_directory '\"/data/mnesia/wal\"' -iris_core region_id '<<\"us-east\">>' -eval 'application:ensure_all_started(mnesia), iris_core:init_db(), application:ensure_all_started(iris_core).'"]
     volumes:
       - ../../:/app:ro
       - mnesia-east-1:/data/mnesia
@@ -68,7 +70,7 @@ services:
     container_name: core-east-2
     hostname: coreeast2
     # Secondary core: Join primary's Mnesia cluster (wait for primary to be ready)
-    command: ["sh", "-c", "cd /app && rm -rf /data/mnesia/* && erl -noinput -sname core_east_2@coreeast2 -setcookie $$IRIS_COOKIE -pa ebin -config config/test -mnesia dir '\"/data/mnesia\"' -eval 'timer:sleep(5000), pong = net_adm:ping(core_east_1@coreeast1), mnesia:start(), mnesia:change_config(extra_db_nodes, [core_east_1@coreeast1]), mnesia:change_table_copy_type(schema, node(), disc_copies), application:ensure_all_started(iris_core).'"]
+    command: ["sh", "-c", "apk add --no-cache iptables >/dev/null 2>&1 || true; mkdir -p /data/mnesia/wal && cd /app && rm -rf /data/mnesia/LATEST.LOG /data/mnesia/*.LOG /data/mnesia/schema* && erl -noinput -sname core_east_2@coreeast2 -setcookie $$IRIS_COOKIE -pa ebin -config config/docker_cluster -mnesia dir '\"/data/mnesia\"' -iris_core wal_directory '\"/data/mnesia/wal\"' -iris_core region_id '<<\"us-east\">>' -eval 'timer:sleep(5000), pong = net_adm:ping(core_east_1@coreeast1), mnesia:start(), mnesia:change_config(extra_db_nodes, [core_east_1@coreeast1]), mnesia:change_table_copy_type(schema, node(), disc_copies), application:ensure_all_started(iris_core).'"]
     volumes:
       - ../../:/app:ro
       - mnesia-east-2:/data/mnesia
@@ -88,7 +90,7 @@ services:
     <<: *edge-defaults
     container_name: edge-east-1
     hostname: edgeeast1
-    command: ["sh", "-c", "cd /app && erl -noinput -sname edge_east_1@edgeeast1 -hidden -setcookie $$IRIS_COOKIE -pa ebin -config config/test -iris_edge port 8085 -eval 'application:ensure_all_started(iris_edge), net_adm:ping(core_east_1@coreeast1).'"]
+    command: ["sh", "-c", "cd /app && erl -noinput -sname edge_east_1@edgeeast1 -hidden -setcookie $$IRIS_COOKIE -pa ebin -config config/docker_cluster -iris_edge port 8085 -iris_edge tls_certfile '\"/app/certs/edge-east-1.pem\"' -iris_edge tls_keyfile '\"/app/certs/edge-east-1.key\"' -iris_core region_id '<<\"us-east\">>' -eval 'application:ensure_all_started(iris_edge), net_adm:ping(core_east_1@coreeast1).'"]
     ports: ["8085:8085"]
     networks:
       iris_east: {ipv4_address: 172.30.0.20}
@@ -100,7 +102,7 @@ services:
     <<: *edge-defaults
     container_name: edge-east-2
     hostname: edgeeast2
-    command: ["sh", "-c", "cd /app && erl -noinput -sname edge_east_2@edgeeast2 -hidden -setcookie $$IRIS_COOKIE -pa ebin -config config/test -iris_edge port 8086 -eval 'application:ensure_all_started(iris_edge), net_adm:ping(core_east_2@coreeast2).'"]
+    command: ["sh", "-c", "cd /app && erl -noinput -sname edge_east_2@edgeeast2 -hidden -setcookie $$IRIS_COOKIE -pa ebin -config config/docker_cluster -iris_edge port 8086 -iris_edge tls_certfile '\"/app/certs/edge-east-2.pem\"' -iris_edge tls_keyfile '\"/app/certs/edge-east-2.key\"' -iris_core region_id '<<\"us-east\">>' -eval 'application:ensure_all_started(iris_edge), net_adm:ping(core_east_2@coreeast2).'"]
     ports: ["8086:8086"]
     networks:
       iris_east: {ipv4_address: 172.30.0.21}
@@ -116,7 +118,7 @@ services:
     container_name: core-west-1
     hostname: corewest1
     # Secondary core: Join primary's Mnesia cluster (wait for primary to be ready)
-    command: ["sh", "-c", "cd /app && rm -rf /data/mnesia/* && erl -noinput -sname core_west_1@corewest1 -setcookie $$IRIS_COOKIE -pa ebin -config config/test -mnesia dir '\"/data/mnesia\"' -eval 'timer:sleep(5000), pong = net_adm:ping(core_east_1@coreeast1), mnesia:start(), mnesia:change_config(extra_db_nodes, [core_east_1@coreeast1]), mnesia:change_table_copy_type(schema, node(), disc_copies), application:ensure_all_started(iris_core).'"]
+    command: ["sh", "-c", "apk add --no-cache iptables >/dev/null 2>&1 || true; mkdir -p /data/mnesia/wal && cd /app && rm -rf /data/mnesia/LATEST.LOG /data/mnesia/*.LOG /data/mnesia/schema* && erl -noinput -sname core_west_1@corewest1 -setcookie $$IRIS_COOKIE -pa ebin -config config/docker_cluster -mnesia dir '\"/data/mnesia\"' -iris_core wal_directory '\"/data/mnesia/wal\"' -iris_core region_id '<<\"us-west\">>' -eval 'timer:sleep(5000), pong = net_adm:ping(core_east_1@coreeast1), mnesia:start(), mnesia:change_config(extra_db_nodes, [core_east_1@coreeast1]), mnesia:change_table_copy_type(schema, node(), disc_copies), application:ensure_all_started(iris_core).'"]
     volumes:
       - ../../:/app:ro
       - mnesia-west-1:/data/mnesia
@@ -137,7 +139,7 @@ services:
     container_name: core-west-2
     hostname: corewest2
     # Secondary core: Join via core-west-1 (wait for parent to be ready)
-    command: ["sh", "-c", "cd /app && rm -rf /data/mnesia/* && erl -noinput -sname core_west_2@corewest2 -setcookie $$IRIS_COOKIE -pa ebin -config config/test -mnesia dir '\"/data/mnesia\"' -eval 'timer:sleep(8000), pong = net_adm:ping(core_west_1@corewest1), mnesia:start(), mnesia:change_config(extra_db_nodes, [core_west_1@corewest1]), mnesia:change_table_copy_type(schema, node(), disc_copies), application:ensure_all_started(iris_core).'"]
+    command: ["sh", "-c", "apk add --no-cache iptables >/dev/null 2>&1 || true; mkdir -p /data/mnesia/wal && cd /app && rm -rf /data/mnesia/LATEST.LOG /data/mnesia/*.LOG /data/mnesia/schema* && erl -noinput -sname core_west_2@corewest2 -setcookie $$IRIS_COOKIE -pa ebin -config config/docker_cluster -mnesia dir '\"/data/mnesia\"' -iris_core wal_directory '\"/data/mnesia/wal\"' -iris_core region_id '<<\"us-west\">>' -eval 'timer:sleep(8000), pong = net_adm:ping(core_west_1@corewest1), mnesia:start(), mnesia:change_config(extra_db_nodes, [core_west_1@corewest1]), mnesia:change_table_copy_type(schema, node(), disc_copies), application:ensure_all_started(iris_core).'"]
     volumes:
       - ../../:/app:ro
       - mnesia-west-2:/data/mnesia
@@ -157,7 +159,7 @@ services:
     <<: *edge-defaults
     container_name: edge-west-1
     hostname: edgewest1
-    command: ["sh", "-c", "cd /app && erl -noinput -sname edge_west_1@edgewest1 -hidden -setcookie $$IRIS_COOKIE -pa ebin -config config/test -iris_edge port 8087 -eval 'application:ensure_all_started(iris_edge), net_adm:ping(core_west_1@corewest1).'"]
+    command: ["sh", "-c", "cd /app && erl -noinput -sname edge_west_1@edgewest1 -hidden -setcookie $$IRIS_COOKIE -pa ebin -config config/docker_cluster -iris_edge port 8087 -iris_edge tls_certfile '\"/app/certs/edge-west-1.pem\"' -iris_edge tls_keyfile '\"/app/certs/edge-west-1.key\"' -iris_core region_id '<<\"us-west\">>' -eval 'application:ensure_all_started(iris_edge), net_adm:ping(core_west_1@corewest1).'"]
     ports: ["8087:8087"]
     networks:
       iris_west: {ipv4_address: 172.31.0.20}
@@ -169,7 +171,7 @@ services:
     <<: *edge-defaults
     container_name: edge-west-2
     hostname: edgewest2
-    command: ["sh", "-c", "cd /app && erl -noinput -sname edge_west_2@edgewest2 -hidden -setcookie $$IRIS_COOKIE -pa ebin -config config/test -iris_edge port 8088 -eval 'application:ensure_all_started(iris_edge), net_adm:ping(core_west_2@corewest2).'"]
+    command: ["sh", "-c", "cd /app && erl -noinput -sname edge_west_2@edgewest2 -hidden -setcookie $$IRIS_COOKIE -pa ebin -config config/docker_cluster -iris_edge port 8088 -iris_edge tls_certfile '\"/app/certs/edge-west-2.pem\"' -iris_edge tls_keyfile '\"/app/certs/edge-west-2.key\"' -iris_core region_id '<<\"us-west\">>' -eval 'application:ensure_all_started(iris_edge), net_adm:ping(core_west_2@corewest2).'"]
     ports: ["8088:8088"]
     networks:
       iris_west: {ipv4_address: 172.31.0.21}
@@ -185,7 +187,7 @@ services:
     container_name: core-eu-1
     hostname: coreeu1
     # Secondary core: Join primary's Mnesia cluster (wait for primary to be ready)
-    command: ["sh", "-c", "cd /app && rm -rf /data/mnesia/* && erl -noinput -sname core_eu_1@coreeu1 -setcookie $$IRIS_COOKIE -pa ebin -config config/test -mnesia dir '\"/data/mnesia\"' -eval 'timer:sleep(5000), pong = net_adm:ping(core_east_1@coreeast1), mnesia:start(), mnesia:change_config(extra_db_nodes, [core_east_1@coreeast1]), mnesia:change_table_copy_type(schema, node(), disc_copies), application:ensure_all_started(iris_core).'"]
+    command: ["sh", "-c", "apk add --no-cache iptables >/dev/null 2>&1 || true; mkdir -p /data/mnesia/wal && cd /app && rm -rf /data/mnesia/LATEST.LOG /data/mnesia/*.LOG /data/mnesia/schema* && erl -noinput -sname core_eu_1@coreeu1 -setcookie $$IRIS_COOKIE -pa ebin -config config/docker_cluster -mnesia dir '\"/data/mnesia\"' -iris_core wal_directory '\"/data/mnesia/wal\"' -iris_core region_id '<<\"eu\">>' -eval 'timer:sleep(5000), pong = net_adm:ping(core_east_1@coreeast1), mnesia:start(), mnesia:change_config(extra_db_nodes, [core_east_1@coreeast1]), mnesia:change_table_copy_type(schema, node(), disc_copies), application:ensure_all_started(iris_core).'"]
     volumes:
       - ../../:/app:ro
       - mnesia-eu-1:/data/mnesia
@@ -206,7 +208,7 @@ services:
     container_name: core-eu-2
     hostname: coreeu2
     # Secondary core: Join via core-eu-1 (wait for parent to be ready)
-    command: ["sh", "-c", "cd /app && rm -rf /data/mnesia/* && erl -noinput -sname core_eu_2@coreeu2 -setcookie $$IRIS_COOKIE -pa ebin -config config/test -mnesia dir '\"/data/mnesia\"' -eval 'timer:sleep(8000), pong = net_adm:ping(core_eu_1@coreeu1), mnesia:start(), mnesia:change_config(extra_db_nodes, [core_eu_1@coreeu1]), mnesia:change_table_copy_type(schema, node(), disc_copies), application:ensure_all_started(iris_core).'"]
+    command: ["sh", "-c", "apk add --no-cache iptables >/dev/null 2>&1 || true; mkdir -p /data/mnesia/wal && cd /app && rm -rf /data/mnesia/LATEST.LOG /data/mnesia/*.LOG /data/mnesia/schema* && erl -noinput -sname core_eu_2@coreeu2 -setcookie $$IRIS_COOKIE -pa ebin -config config/docker_cluster -mnesia dir '\"/data/mnesia\"' -iris_core wal_directory '\"/data/mnesia/wal\"' -iris_core region_id '<<\"eu\">>' -eval 'timer:sleep(8000), pong = net_adm:ping(core_eu_1@coreeu1), mnesia:start(), mnesia:change_config(extra_db_nodes, [core_eu_1@coreeu1]), mnesia:change_table_copy_type(schema, node(), disc_copies), application:ensure_all_started(iris_core).'"]
     healthcheck:
       test: ["CMD-SHELL", "epmd -names 2>/dev/null | grep -q core_eu_2"]
       interval: 5s
@@ -226,7 +228,7 @@ services:
     <<: *edge-defaults
     container_name: edge-eu-1
     hostname: edgeeu1
-    command: ["sh", "-c", "cd /app && erl -noinput -sname edge_eu_1@edgeeu1 -hidden -setcookie $$IRIS_COOKIE -pa ebin -config config/test -iris_edge port 8089 -eval 'application:ensure_all_started(iris_edge), net_adm:ping(core_eu_1@coreeu1).'"]
+    command: ["sh", "-c", "cd /app && erl -noinput -sname edge_eu_1@edgeeu1 -hidden -setcookie $$IRIS_COOKIE -pa ebin -config config/docker_cluster -iris_edge port 8089 -iris_edge tls_certfile '\"/app/certs/edge-eu-1.pem\"' -iris_edge tls_keyfile '\"/app/certs/edge-eu-1.key\"' -iris_core region_id '<<\"eu\">>' -eval 'application:ensure_all_started(iris_edge), net_adm:ping(core_eu_1@coreeu1).'"]
     ports: ["8089:8089"]
     networks:
       iris_eu: {ipv4_address: 172.33.0.20}
@@ -238,7 +240,7 @@ services:
     <<: *edge-defaults
     container_name: edge-eu-2
     hostname: edgeeu2
-    command: ["sh", "-c", "cd /app && erl -noinput -sname edge_eu_2@edgeeu2 -hidden -setcookie $$IRIS_COOKIE -pa ebin -config config/test -iris_edge port 8094 -eval 'application:ensure_all_started(iris_edge), net_adm:ping(core_eu_2@coreeu2).'"]
+    command: ["sh", "-c", "cd /app && erl -noinput -sname edge_eu_2@edgeeu2 -hidden -setcookie $$IRIS_COOKIE -pa ebin -config config/docker_cluster -iris_edge port 8094 -iris_edge tls_certfile '\"/app/certs/edge-eu-2.pem\"' -iris_edge tls_keyfile '\"/app/certs/edge-eu-2.key\"' -iris_core region_id '<<\"eu\">>' -eval 'application:ensure_all_started(iris_edge), net_adm:ping(core_eu_2@coreeu2).'"]
     ports: ["8094:8094"]
     networks:
       iris_eu: {ipv4_address: 172.33.0.21}
@@ -253,7 +255,7 @@ services:
     <<: *edge-defaults
     container_name: edge-sydney-1
     hostname: edgesydney1
-    command: ["sh", "-c", "cd /app && erl -noinput -sname edge_sydney_1@edgesydney1 -hidden -setcookie $$IRIS_COOKIE -pa ebin -config config/test -iris_edge port 8090 -eval 'application:ensure_all_started(iris_edge), net_adm:ping(core_east_1@coreeast1).'"]
+    command: ["sh", "-c", "cd /app && erl -noinput -sname edge_sydney_1@edgesydney1 -hidden -setcookie $$IRIS_COOKIE -pa ebin -config config/docker_cluster -iris_edge port 8090 -iris_edge tls_certfile '\"/app/certs/edge-sydney-1.pem\"' -iris_edge tls_keyfile '\"/app/certs/edge-sydney-1.key\"' -iris_core region_id '<<\"us-east\">>' -eval 'application:ensure_all_started(iris_edge), net_adm:ping(core_east_1@coreeast1).'"]
     ports: ["8090:8090"]
     networks:
       iris_sydney: {ipv4_address: 172.32.0.20}
@@ -265,7 +267,7 @@ services:
     <<: *edge-defaults
     container_name: edge-sydney-2
     hostname: edgesydney2
-    command: ["sh", "-c", "cd /app && erl -noinput -sname edge_sydney_2@edgesydney2 -hidden -setcookie $$IRIS_COOKIE -pa ebin -config config/test -iris_edge port 8091 -eval 'application:ensure_all_started(iris_edge), net_adm:ping(core_east_2@coreeast2).'"]
+    command: ["sh", "-c", "cd /app && erl -noinput -sname edge_sydney_2@edgesydney2 -hidden -setcookie $$IRIS_COOKIE -pa ebin -config config/docker_cluster -iris_edge port 8091 -iris_edge tls_certfile '\"/app/certs/edge-sydney-2.pem\"' -iris_edge tls_keyfile '\"/app/certs/edge-sydney-2.key\"' -iris_core region_id '<<\"us-east\">>' -eval 'application:ensure_all_started(iris_edge), net_adm:ping(core_east_2@coreeast2).'"]
     ports: ["8091:8091"]
     networks:
       iris_sydney: {ipv4_address: 172.32.0.21}
@@ -280,7 +282,7 @@ services:
     <<: *edge-defaults
     container_name: edge-saopaulo
     hostname: edgesaopaulo
-    command: ["sh", "-c", "cd /app && erl -noinput -sname edge_saopaulo@edgesaopaulo -hidden -setcookie $$IRIS_COOKIE -pa ebin -config config/test -iris_edge port 8092 -eval 'application:ensure_all_started(iris_edge), net_adm:ping(core_west_1@corewest1).'"]
+    command: ["sh", "-c", "cd /app && erl -noinput -sname edge_saopaulo@edgesaopaulo -hidden -setcookie $$IRIS_COOKIE -pa ebin -config config/docker_cluster -iris_edge port 8092 -iris_edge tls_certfile '\"/app/certs/edge-saopaulo.pem\"' -iris_edge tls_keyfile '\"/app/certs/edge-saopaulo.key\"' -iris_core region_id '<<\"us-west\">>' -eval 'application:ensure_all_started(iris_edge), net_adm:ping(core_west_1@corewest1).'"]
     ports: ["8092:8092"]
     networks:
       iris_saopaulo: {ipv4_address: 172.34.0.20}

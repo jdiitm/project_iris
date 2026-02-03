@@ -11,6 +11,7 @@ This test manages its own cluster via ClusterManager for test isolation.
 """
 
 import socket
+import ssl
 import time
 import threading
 import statistics
@@ -18,6 +19,7 @@ import sys
 import os
 from dataclasses import dataclass
 from typing import List, Tuple
+from pathlib import Path
 
 # Add project root to path
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -26,6 +28,19 @@ if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
 from tests.framework.cluster import ClusterManager
+
+# TLS Configuration
+CA_CERT = Path(project_root) / "certs" / "ca.pem"
+
+def get_ssl_context():
+    """Create SSL context for TLS connections."""
+    context = ssl.create_default_context()
+    if CA_CERT.exists():
+        context.load_verify_locations(str(CA_CERT))
+    else:
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+    return context
 
 # Configuration
 SERVER_HOST = os.environ.get("IRIS_HOST", "localhost")
@@ -57,11 +72,13 @@ class MetricResult:
         return f"{status} {self.name}: {self.value:.2f} {self.unit} (threshold: {self.threshold} {self.unit})"
 
 
-def connect_and_login(user_id: str) -> socket.socket:
-    """Create connection and login."""
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.settimeout(5)
-    sock.connect((SERVER_HOST, SERVER_PORT))
+def connect_and_login(user_id: str) -> ssl.SSLSocket:
+    """Create TLS connection and login."""
+    raw_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    raw_sock.settimeout(5)
+    raw_sock.connect((SERVER_HOST, SERVER_PORT))
+    context = get_ssl_context()
+    sock = context.wrap_socket(raw_sock, server_hostname=SERVER_HOST)
     sock.sendall(bytes([0x01]) + user_id.encode())
     sock.recv(1024)  # LOGIN_OK
     return sock
@@ -248,11 +265,13 @@ def measure_latency() -> MetricResult:
 
 
 def check_server():
-    """Verify server is running."""
+    """Verify server is running (with TLS)."""
     try:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(2)
-        sock.connect((SERVER_HOST, SERVER_PORT))
+        raw_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        raw_sock.settimeout(2)
+        raw_sock.connect((SERVER_HOST, SERVER_PORT))
+        context = get_ssl_context()
+        sock = context.wrap_socket(raw_sock, server_hostname=SERVER_HOST)
         sock.close()
         return True
     except:
@@ -273,8 +292,8 @@ def main():
     print(f"  Throughput: >{MIN_THROUGHPUT_MSG_SEC} msg/s")
     print(f"  P99 Latency: <{MAX_P99_LATENCY_MS}ms")
     
-    # Use ClusterManager to ensure cluster is running
-    with ClusterManager(project_root=project_root) as cluster:
+    # Use ClusterManager to ensure cluster is running with TLS
+    with ClusterManager(project_root=project_root, tls_enabled=True, config_path="config/test_tls") as cluster:
         if not check_server():
             print("\n❌ Server not available after cluster start")
             sys.exit(1)

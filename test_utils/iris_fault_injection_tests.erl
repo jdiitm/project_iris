@@ -234,7 +234,12 @@ test_oom_pressure_handled() ->
     %% Note: We don't actually trigger OOM as it would affect the test process.
     %% Instead, we verify the backpressure module exists and responds.
     
-    case whereis(iris_backpressure) orelse whereis(iris_flow_controller) of
+    %% FIX: 'orelse' returns boolean, not PID. Use nested case instead.
+    MaybePid = case whereis(iris_backpressure) of
+        undefined -> whereis(iris_flow_controller);
+        Pid -> Pid
+    end,
+    case MaybePid of
         undefined ->
             %% Modules not running - test the defensive pattern directly
             MemoryPercent = try
@@ -243,9 +248,9 @@ test_oom_pressure_handled() ->
                 _:_ -> 50.0  %% Default safe value
             end,
             ?assert(is_number(MemoryPercent));
-        Pid when is_pid(Pid) ->
+        Pid2 when is_pid(Pid2) ->
             %% Module running - verify it's responsive
-            ?assert(erlang:is_process_alive(Pid))
+            ?assert(erlang:is_process_alive(Pid2))
     end.
 
 test_large_message_handled() ->

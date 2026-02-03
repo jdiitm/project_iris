@@ -14,9 +14,11 @@ import os
 import sys
 import time
 import socket
+import ssl
 import subprocess
 import threading
 import statistics
+from pathlib import Path
 
 # Add project root to path
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -25,6 +27,19 @@ if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
 from tests.framework.cluster import ClusterManager
+
+# TLS Configuration
+CA_CERT = Path(project_root) / "certs" / "ca.pem"
+
+def get_ssl_context():
+    """Create SSL context for TLS connections."""
+    context = ssl.create_default_context()
+    if CA_CERT.exists():
+        context.load_verify_locations(str(CA_CERT))
+    else:
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+    return context
 
 # Configuration
 TEST_PROFILE = os.environ.get("TEST_PROFILE", "smoke")
@@ -69,11 +84,13 @@ def get_cpu_percent():
 
 
 def create_connection(user_id):
-    """Create a connection and login."""
+    """Create a TLS connection and login."""
     try:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(5)
-        sock.connect(('localhost', EDGE_PORT))
+        raw_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        raw_sock.settimeout(5)
+        raw_sock.connect(('localhost', EDGE_PORT))
+        context = get_ssl_context()
+        sock = context.wrap_socket(raw_sock, server_hostname='localhost')
         username = f"cpu_user_{user_id}".encode()
         sock.sendall(b'\x01' + username)
         sock.setblocking(False)

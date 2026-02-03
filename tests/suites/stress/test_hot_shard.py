@@ -507,8 +507,8 @@ def main():
     with ClusterManager(project_root=project_root) as cluster:
         # Check prerequisites
         if not check_server_available():
-            print(f"\nSKIP:INFRA - Server not available at {SERVER_HOST}:{SERVER_PORT}")
-            sys.exit(2)
+            print(f"\nFAIL: Server not available at {SERVER_HOST}:{SERVER_PORT}")
+            sys.exit(1)
         
         # Run test
         result = run_hot_shard_test()

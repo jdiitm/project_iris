@@ -80,10 +80,9 @@ class SimpleClient:
         self.buffer = b""
     
     def connect(self):
-        """Establish TCP connection."""
-        self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.sock.settimeout(TIMEOUT)
-        self.sock.connect((self.host, self.port))
+        """Establish TLS connection."""
+        from tests.suites.chaos_dist.utils import create_tls_socket
+        self.sock = create_tls_socket(self.host, self.port, timeout=TIMEOUT)
     
     def close(self):
         """Close connection."""
@@ -163,11 +162,10 @@ class SimpleClient:
 
 
 def check_server_available():
-    """Check if server is reachable."""
+    """Check if server is reachable via TLS."""
     try:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(2)
-        sock.connect((EDGE_HOST, EDGE_PORT))
+        from tests.suites.chaos_dist.utils import create_tls_socket
+        sock = create_tls_socket(EDGE_HOST, EDGE_PORT, timeout=2)
         sock.close()
         return True
     except:

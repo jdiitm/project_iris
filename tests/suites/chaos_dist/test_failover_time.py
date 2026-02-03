@@ -27,6 +27,8 @@ from pathlib import Path
 
 # Project root for init_cluster.sh
 PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 # Configuration
 SERVER_HOST = os.environ.get("IRIS_HOST", "localhost")
@@ -78,11 +80,9 @@ class TrafficMonitor:
 
 
 def connect():
-    """Create connection."""
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.settimeout(5)
-    sock.connect((SERVER_HOST, SERVER_PORT))
-    return sock
+    """Create TLS connection."""
+    from tests.suites.chaos_dist.utils import create_tls_socket
+    return create_tls_socket(SERVER_HOST, SERVER_PORT, timeout=5)
 
 
 def login(sock, username):
@@ -201,13 +201,13 @@ def test_failover_time():
     
     # Check prerequisites
     if not check_docker_available():
-        print("\n⚠️ Docker not available - skipping failover test")
-        return None
+        print("\n❌ FAIL: Docker not available - required for failover test")
+        return False
     
     if not check_container_exists(CONTAINER_NAME):
-        print(f"\n⚠️ Container {CONTAINER_NAME} not found")
+        print(f"\n❌ FAIL: Container {CONTAINER_NAME} not found")
         print("  Start cluster with: make cluster-up")
-        return None
+        return False
     
     print("\n1. Starting traffic generator...")
     monitor = TrafficMonitor()
@@ -228,20 +228,19 @@ def test_failover_time():
     print(f"   Initial: {initial_success} success, {initial_fail} fail")
     
     if initial_success == 0:
-        print("   ❌ No successful traffic - server not responding")
+        print("   ❌ FAIL: No successful traffic - server not responding")
         monitor.stop()
         worker_thread.join()
-        return None
+        return False
     
     print(f"\n2. Killing primary core: {CONTAINER_NAME}")
     kill_time = time.time()
     if not kill_container(CONTAINER_NAME):
-        print("   ❌ Failed to kill container")
+        print("   ❌ FAIL: Failed to kill container")
         monitor.stop()
         worker_thread.join()
-        # Per TEST_CONTRACT.md: return None = SKIP (exit code 2)
-        print("\nSKIP:DOCKER - Container not available")
-        return None
+        print("\nFAIL: Docker container operation failed")
+        return False
     print("   ✅ Container killed")
     
     print(f"\n3. Monitoring failover (timeout: {FAILOVER_TARGET_SECONDS + 30}s)...")
@@ -298,42 +297,40 @@ def test_failover_time():
 
 
 def restore_cluster_state():
-    """Re-initialize cluster after test that restarts containers.
+    """Restore killed container after failover test.
     
-    IMPORTANT: After killing Mnesia nodes, their state becomes stale.
-    We must do a FULL cluster restart to ensure clean state.
+    Instead of a full cluster rebuild (which takes 5+ minutes),
+    just restart the killed container and wait for it to rejoin.
     """
+    print(f"[cleanup] Restarting killed container: {CONTAINER_NAME}")
     try:
-        # Import from shared utility
-        import sys
-        sys.path.insert(0, str(PROJECT_ROOT / "tests" / "utilities"))
-        try:
-            from cluster_utils import restore_cluster_state as _restore
-            _restore()
-        except ImportError:
-            # Fallback if utility not available
-            print("[cleanup] Restoring cluster state (inline fallback)...")
-            docker_dir = PROJECT_ROOT / "docker" / "global-cluster"
-            compose_file = docker_dir / "docker-compose.yml"
+        # Just restart the specific container we killed
+        result = subprocess.run(
+            ["docker", "start", CONTAINER_NAME],
+            capture_output=True,
+            timeout=30
+        )
+        
+        if result.returncode == 0:
+            print(f"[cleanup] Container {CONTAINER_NAME} restarted")
+            # Give it time to rejoin the cluster
+            print("[cleanup] Waiting for container to stabilize (15s)...")
+            time.sleep(15)
             
-            subprocess.run(
-                ["docker", "compose", "-f", str(compose_file), "down", "--remove-orphans", "-v"],
-                cwd=str(docker_dir), capture_output=True, timeout=60
+            # Verify it's running
+            check = subprocess.run(
+                ["docker", "inspect", "-f", "{{.State.Running}}", CONTAINER_NAME],
+                capture_output=True, text=True, timeout=10
             )
-            time.sleep(5)
-            subprocess.run(
-                ["docker", "compose", "-f", str(compose_file), "up", "-d"],
-                cwd=str(docker_dir), capture_output=True, timeout=180
-            )
-            time.sleep(60)
+            if "true" in check.stdout.lower():
+                print(f"[cleanup] Container {CONTAINER_NAME} is running")
+            else:
+                print(f"[cleanup] Warning: Container may not be fully healthy")
+        else:
+            print(f"[cleanup] Warning: Could not restart container: {result.stderr.decode()}")
             
-            init_script = docker_dir / "init_cluster.sh"
-            if init_script.exists():
-                subprocess.run(
-                    ["bash", str(init_script)],
-                    cwd=str(docker_dir), capture_output=True, timeout=300
-                )
-            print("[cleanup] Cluster state restored")
+    except subprocess.TimeoutExpired:
+        print("[cleanup] Warning: Container restart timed out")
     except Exception as e:
         print(f"[cleanup] Warning: Could not restore cluster state: {e}")
 
@@ -352,9 +349,9 @@ def main():
         print("RESULT: FAILED")
         sys.exit(1)
     else:
-        # Per TEST_CONTRACT.md: exit(2) = SKIP
-        print("RESULT: SKIPPED")
-        sys.exit(2)
+        # No skips - None results are failures
+        print("RESULT: FAILED")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

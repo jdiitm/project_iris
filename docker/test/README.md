@@ -11,8 +11,14 @@ make test-docker
 # Run with custom seed for reproduction
 TEST_SEED=12345 make test-docker
 
+# Run specific tier
+python3 tests/run_tests.py --tier 0
+
+# Run all tests, skip Docker chaos tests
+python3 tests/run_tests.py --all --skip-docker
+
 # Run specific suite
-TEST_SUITE=unit make test-docker
+python3 tests/run_tests.py --suite unit
 ```
 
 ## Files

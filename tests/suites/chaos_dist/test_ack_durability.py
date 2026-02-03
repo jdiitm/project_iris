@@ -50,8 +50,12 @@ RECOVERY_TIMEOUT = 60
 def connect_tls():
     """Create TLS connection to Iris edge."""
     context = ssl.create_default_context()
-    context.check_hostname = False
-    context.verify_mode = ssl.CERT_NONE
+    ca_cert = PROJECT_ROOT / "certs" / "ca.pem"
+    if ca_cert.exists():
+        context.load_verify_locations(str(ca_cert))
+    else:
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
     
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.settimeout(TIMEOUT)
@@ -61,18 +65,20 @@ def connect_tls():
 
 
 def connect_plaintext():
-    """Create plaintext connection (for testing without TLS)."""
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.settimeout(TIMEOUT)
-    sock.connect((SERVER_HOST, SERVER_PORT))
-    return sock
+    """Create plaintext connection - DEPRECATED, use connect_tls()."""
+    # Now just calls connect_tls() since TLS is enabled
+    return connect_tls()
 
 
 def login(sock, username):
-    """Send login packet."""
+    """Send login packet and wait for LOGIN_OK."""
     packet = bytes([0x01]) + username.encode()
     sock.sendall(packet)
-    time.sleep(0.1)
+    try:
+        response = sock.recv(1024)
+        return b"LOGIN_OK" in response
+    except socket.timeout:
+        return False
 
 
 def send_message(sock, target, message):
@@ -94,6 +100,88 @@ def send_message(sock, target, message):
     except socket.error as e:
         log(f"  Socket error waiting for ACK: {e}")
         return False
+
+
+def receive_offline_messages(sock, timeout=10):
+    """Receive offline messages using reliable message protocol.
+    
+    The server sends reliable messages (opcode 16) that require ACK.
+    Returns list of message contents received.
+    """
+    import struct
+    
+    messages = []
+    sock.settimeout(1.0)  # Short timeout for polling
+    end_time = time.time() + timeout
+    buffer = b""
+    
+    while time.time() < end_time:
+        try:
+            data = sock.recv(4096)
+            if data:
+                buffer += data
+                buffer, msgs = parse_and_ack_messages(sock, buffer)
+                messages.extend(msgs)
+        except socket.timeout:
+            # Check if we got any messages and no more coming
+            if messages and not buffer:
+                break
+            continue
+        except ssl.SSLWantReadError:
+            continue
+        except Exception:
+            break
+    
+    return messages
+
+
+def parse_and_ack_messages(sock, data):
+    """Parse reliable messages and send ACKs.
+    
+    Returns (remaining_buffer, list_of_message_contents)
+    """
+    import struct
+    
+    messages = []
+    idx = 0
+    
+    while idx < len(data):
+        opcode = data[idx]
+        
+        # Check for reliable message (opcode 16 = 0x10)
+        if opcode == 16:
+            # Format: 16 | IdLen(16) | MsgId | MsgLen(32) | Msg
+            if idx + 3 > len(data):
+                break  # Need more data
+            
+            id_len = struct.unpack('>H', data[idx+1:idx+3])[0]
+            
+            if idx + 3 + id_len + 4 > len(data):
+                break  # Need more data
+            
+            msg_id = data[idx+3:idx+3+id_len]
+            msg_len = struct.unpack('>I', data[idx+3+id_len:idx+3+id_len+4])[0]
+            
+            if idx + 3 + id_len + 4 + msg_len > len(data):
+                break  # Need more data
+            
+            msg = data[idx+3+id_len+4:idx+3+id_len+4+msg_len]
+            
+            # Send ACK (opcode 0x03 | MsgId)
+            try:
+                ack_packet = bytes([0x03]) + msg_id
+                sock.sendall(ack_packet)
+            except Exception:
+                pass
+            
+            messages.append(msg)
+            idx += 3 + id_len + 4 + msg_len
+        else:
+            # Skip unknown byte
+            idx += 1
+    
+    remaining = data[idx:] if idx < len(data) else b""
+    return remaining, messages
 
 
 def kill_container(container_name):
@@ -304,9 +392,9 @@ def test_ack_implies_durability():
         return run_simplified_test()
     
     if not check_container_exists(CONTAINER_NAME):
-        print(f"  ⚠️ Container {CONTAINER_NAME} not found")
+        print(f"  ❌ FAIL: Container {CONTAINER_NAME} not found")
         print("  Start cluster with: make cluster-up")
-        return None  # Skip, not fail
+        return False  # No skips - cluster must be running
     
     # Ensure cluster replication is healthy before running durability test
     print("\n0. Ensuring cluster replication is healthy...")
@@ -324,9 +412,9 @@ def test_ack_implies_durability():
         sock = connect_plaintext()  # Use plaintext for now
         login(sock, sender)
     except Exception as e:
-        print(f"  ❌ Connection failed: {e}")
+        print(f"  ❌ FAIL: Connection failed: {e}")
         print("  Ensure server is running: make start")
-        return None
+        return False
     
     print(f"\n2. Sending message to offline receiver: {receiver}")
     print(f"   Message: {test_message}")
@@ -375,8 +463,10 @@ def test_ack_implies_durability():
     for attempt in range(10):
         try:
             sock = connect_plaintext()
-            login(sock, receiver)
-            break
+            if login(sock, receiver):
+                break
+            sock.close()
+            sock = None
         except Exception as e:
             if attempt < 9:
                 print(f"  Connection attempt {attempt+1} failed: {e}, retrying in 3s...")
@@ -390,19 +480,20 @@ def test_ack_implies_durability():
         return False
     
     print("\n8. Reading offline messages...")
-    # Give time for offline delivery
-    time.sleep(2)
-    try:
-        data = sock.recv(4096)
-        sock.close()
-    except socket.timeout:
-        data = b""
-        sock.close()
+    # Receive messages using reliable message protocol (with ACK)
+    messages = receive_offline_messages(sock, timeout=15)
+    sock.close()
     
-    print(f"   Received {len(data)} bytes")
+    print(f"   Received {len(messages)} message(s)")
     
-    # Check if our test message is in the data
-    if test_message.encode() in data:
+    # Check if our test message is in any received message
+    found = False
+    for msg in messages:
+        if test_message.encode() in msg:
+            found = True
+            break
+    
+    if found:
         print(f"\n✅ PASS: Message found after node crash recovery!")
         print("   ACK-durability contract is VALID")
         print("   RFC NFR-6 & NFR-8: COMPLIANT")
@@ -412,7 +503,10 @@ def test_ack_implies_durability():
         print("   ACK-durability contract is VIOLATED")
         print("   This is a CRITICAL RFC violation!")
         print(f"   Expected: {test_message}")
-        print(f"   Received data: {data[:200]}")
+        if messages:
+            print(f"   Received messages: {[m[:50] for m in messages]}")
+        else:
+            print("   No messages received")
         return False
 
 
@@ -432,8 +526,8 @@ def run_simplified_test():
         send_message(sock, receiver, test_message)
         sock.close()
     except Exception as e:
-        print(f"  ❌ Send failed: {e}")
-        return None
+        print(f"  ❌ FAIL: Send failed: {e}")
+        return False
     
     print("\n2. Waiting for storage...")
     time.sleep(1)
@@ -441,20 +535,25 @@ def run_simplified_test():
     print(f"\n3. Connecting as receiver: {receiver}")
     try:
         sock = connect_plaintext()
-        login(sock, receiver)
-        time.sleep(1)
-        data = sock.recv(4096)
+        if not login(sock, receiver):
+            print("  ❌ FAIL: Login failed")
+            return False
+        
+        # Receive messages using reliable message protocol
+        messages = receive_offline_messages(sock, timeout=5)
         sock.close()
     except Exception as e:
-        print(f"  ❌ Receive failed: {e}")
-        return None
+        print(f"  ❌ FAIL: Receive failed: {e}")
+        return False
     
-    if test_message.encode() in data:
-        print("\n✅ Message delivered to receiver")
-        return True
-    else:
-        print("\n⚠️ Message not found (may be timing issue)")
-        return None
+    # Check if test message is in any received message
+    for msg in messages:
+        if test_message.encode() in msg:
+            print("\n✅ Message delivered to receiver")
+            return True
+    
+    print("\n❌ FAIL: Message not found")
+    return False
 
 
 def restore_cluster_state():
@@ -512,10 +611,10 @@ def main():
         print("RESULT: FAILED - RFC VIOLATION DETECTED")
         sys.exit(1)
     else:
-        # Per TEST_CONTRACT.md: exit(2) = SKIP
-        print("RESULT: SKIPPED (prerequisites not met)")
-        print("SKIP:INFRA - Docker cluster not available or not running")
-        sys.exit(2)
+        # No skips - None results are failures
+        print("RESULT: FAILED")
+        print("FAIL: Test did not complete successfully")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

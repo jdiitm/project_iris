@@ -15,19 +15,32 @@ Test Scenarios:
 import sys
 import os
 import socket
+import ssl
 import struct
 import time
+from pathlib import Path
 
 # Add project root to path for proper imports
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 sys.path.insert(0, PROJECT_ROOT)
 
+# TLS Configuration
+CA_CERT = Path(PROJECT_ROOT) / "certs" / "ca.pem"
+
 
 def get_connection(port=8085):
-    """Get a raw socket connection."""
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.settimeout(5.0)
-    s.connect(('localhost', port))
+    """Get a TLS socket connection."""
+    context = ssl.create_default_context()
+    if CA_CERT.exists():
+        context.load_verify_locations(str(CA_CERT))
+    else:
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+    
+    raw_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    raw_sock.settimeout(5.0)
+    raw_sock.connect(('localhost', port))
+    s = context.wrap_socket(raw_sock, server_hostname='localhost')
     return s
 
 

@@ -6,7 +6,8 @@
 -export([wait_for_socket/3, connected/3]).
 
 -record(data, {
-    socket :: gen_tcp:socket(),
+    socket :: gen_tcp:socket() | ssl:sslsocket(),
+    transport = tcp :: tcp | ssl,  %% Track transport type for setopts/messages
     user :: binary(),
     buffer = <<>> :: binary(),
     timeouts = 0 :: integer(),
@@ -15,6 +16,10 @@
     last_activity :: integer(),   %% For hibernation
     hibernated = false :: boolean()
 }).
+
+%% Transport-agnostic setopts
+setopts(Socket, tcp, Opts) -> inet:setopts(Socket, Opts);
+setopts(Socket, ssl, Opts) -> ssl:setopts(Socket, Opts).
 
 %% Limits
 -define(RETRY_INTERVAL, 5000). %% 5 Seconds
@@ -66,7 +71,9 @@ init(_Args) ->
     case iris_ingress_guard:check() of
         allow ->
             %% AUDIT3 FIX: Kill process if it grows too large (prevent OOM)
-            process_flag(max_heap_size, #{size => 50000, kill => true}), %% ~400KB limit
+            %% TLS + cross-region routing requires significant memory
+            %% Increased to 500000 (~4MB) to handle complex routing operations
+            process_flag(max_heap_size, #{size => 500000, kill => true}),
             Now = os:system_time(millisecond),
             Timer = erlang:send_after(?RETRY_INTERVAL, self(), check_acks),
             {ok, wait_for_socket, #data{retry_timer = Timer, last_activity = Now}};
@@ -80,34 +87,44 @@ callback_mode() -> [state_functions, state_enter].
 wait_for_socket(enter, _OldState, _Data) ->
     keep_state_and_data;
 wait_for_socket(cast, {socket_ready, Socket}, Data) ->
+    %% Detect transport type (SSL sockets are tuples with sslsocket atom)
+    Transport = case Socket of
+        {sslsocket, _, _} -> ssl;
+        _ -> tcp
+    end,
     %% Now we own the socket, set active once + send_timeout (2s)
-    inet:setopts(Socket, [{active, once}, {send_timeout, 2000}]),
-    {next_state, connected, Data#data{socket = Socket}}.
+    setopts(Socket, Transport, [{active, once}, {send_timeout, 2000}]),
+    {next_state, connected, Data#data{socket = Socket, transport = Transport}}.
 
 %% STATE: connected
 connected(enter, _OldState, _Data) ->
     keep_state_and_data;
 
-connected(info, {tcp, _Socket, Bin}, Data = #data{buffer = Buff, socket = Socket}) ->
-    Now = os:system_time(millisecond),
-    NewBuff = <<Buff/binary, Bin/binary>>,
-    
-    %% DoS Protection: Reject oversized buffers
-    case byte_size(NewBuff) > ?MAX_BUFFER_SIZE of
-        true ->
-            logger:warning("Buffer overflow from client. Dropping connection."),
-            {stop, buffer_overflow, Data};
-        false ->
-            process_buffer(NewBuff, Data#data{last_activity = Now, hibernated = false})
-    end;
+%% Handle TCP data
+connected(info, {tcp, _Socket, Bin}, Data) ->
+    handle_socket_data(Bin, Data);
 
+%% Handle SSL data
+connected(info, {ssl, _Socket, Bin}, Data) ->
+    handle_socket_data(Bin, Data);
+
+%% Handle TCP close
 connected(info, {tcp_closed, _Socket}, Data) ->
     {stop, normal, Data};
 
+%% Handle SSL close
+connected(info, {ssl_closed, _Socket}, Data) ->
+    {stop, normal, Data};
+
+%% Handle TCP error
 connected(info, {tcp_error, _Socket, _Reason}, Data) ->
     {stop, normal, Data};
 
-connected(info, {deliver_msg, Msg}, Data = #data{socket = Socket, user = User, pending_acks = Pending}) ->
+%% Handle SSL error
+connected(info, {ssl_error, _Socket, _Reason}, Data) ->
+    {stop, normal, Data};
+
+connected(info, {deliver_msg, Msg}, Data = #data{socket = Socket, transport = Transport, user = User, pending_acks = Pending}) ->
     Now = os:system_time(millisecond),
     
     %% Bounded pending_acks: Drop oldest if at capacity
@@ -127,7 +144,7 @@ connected(info, {deliver_msg, Msg}, Data = #data{socket = Socket, user = User, p
             Packet = iris_proto:encode_reliable_msg(MsgId, Msg),
             NewPending = maps:put(MsgId, {Msg, os:system_time(seconds), 0}, BoundedPending),
             
-            case gen_tcp:send(Socket, Packet) of
+            case send(Socket, Transport, Packet) of
                 ok -> 
                     {keep_state, Data#data{pending_acks = NewPending, timeouts = 0, last_activity = Now}};
                 {error, _} ->
@@ -140,18 +157,18 @@ connected(info, {deliver_msg, Msg}, Data = #data{socket = Socket, user = User, p
 
 %% RFC FR-8: Typing indicator relay (best-effort, fire-and-forget)
 %% No durability required - if send fails, silently discard
-connected(info, {deliver_typing, Packet}, Data = #data{socket = Socket}) ->
+connected(info, {deliver_typing, Packet}, Data = #data{socket = Socket, transport = Transport}) ->
     Now = os:system_time(millisecond),
     %% Best-effort send - no retry, no ACK tracking
-    _ = gen_tcp:send(Socket, Packet),
+    _ = send(Socket, Transport, Packet),
     {keep_state, Data#data{last_activity = Now}};
 
 %% RFC FR-4: Read receipt relay (best-effort, fire-and-forget)
 %% No durability required - if send fails, silently discard
-connected(info, {deliver_read_receipt, Packet}, Data = #data{socket = Socket}) ->
+connected(info, {deliver_read_receipt, Packet}, Data = #data{socket = Socket, transport = Transport}) ->
     Now = os:system_time(millisecond),
     %% Best-effort send - no retry, no ACK tracking
-    _ = gen_tcp:send(Socket, Packet),
+    _ = send(Socket, Transport, Packet),
     {keep_state, Data#data{last_activity = Now}};
 
 connected(info, check_acks, Data = #data{pending_acks = Pending, user = User, retry_timer = OldTimer, last_activity = LastActivity}) ->
@@ -209,35 +226,51 @@ enforce_pending_limit(Pending, User) ->
     
     maps:from_list(KeepEntries).
 
-process_buffer(Bin, Data = #data{socket = Socket, user = CurrentUser}) ->
+%% Helper for handling incoming socket data (shared by tcp/ssl handlers)
+handle_socket_data(Bin, Data = #data{buffer = Buff}) ->
+    Now = os:system_time(millisecond),
+    NewBuff = <<Buff/binary, Bin/binary>>,
+    
+    %% DoS Protection: Reject oversized buffers
+    case byte_size(NewBuff) > ?MAX_BUFFER_SIZE of
+        true ->
+            logger:warning("Buffer overflow from client. Dropping connection."),
+            {stop, buffer_overflow, Data};
+        false ->
+            process_buffer(NewBuff, Data#data{last_activity = Now, hibernated = false})
+    end.
+
+%% Transport-agnostic send
+send(Socket, tcp, Msg) -> gen_tcp:send(Socket, Msg);
+send(Socket, ssl, Msg) -> ssl:send(Socket, Msg).
+
+process_buffer(Bin, Data = #data{socket = Socket, transport = Transport, user = CurrentUser}) ->
     case iris_proto:decode(Bin) of
         {more, _} ->
-            inet:setopts(Socket, [{active, once}]),
+            setopts(Socket, Transport, [{active, once}]),
             {keep_state, Data#data{buffer = Bin}};
 
         {Packet, Rest} ->
             %% Delegate to Logic Module
             {ok, NewUser, Actions} = iris_session:handle_packet(Packet, CurrentUser, self(), ?MODULE),
             
-            %% Execute Actions
             %% Execute Actions & Update State
             NewData = lists:foldl(fun
                 ({send, Msg}, D) -> 
-                    _ = gen_tcp:send(Socket, Msg), 
+                    _ = send(Socket, Transport, Msg), 
                     D;
                 ({send_batch, Msgs}, D) -> 
-                    _ = [gen_tcp:send(Socket, M) || M <- Msgs], 
+                    _ = [send(Socket, Transport, M) || M <- Msgs], 
                     D;
                 ({deliver_msg, Msg}, D = #data{pending_acks = P}) ->
                     %% Wrap in reliable message format
                     MsgId = generate_msg_id(),
                     OutPacket = iris_proto:encode_reliable_msg(MsgId, Msg),
                     NewP = maps:put(MsgId, {Msg, os:system_time(seconds), 0}, P),
-                    _ = gen_tcp:send(Socket, OutPacket),
+                    _ = send(Socket, Transport, OutPacket),
                     D#data{pending_acks = NewP};
-                ({ack_received, MsgId}, D = #data{pending_acks = P, user = AckUser}) -> 
+                ({ack_received, MsgId}, D = #data{pending_acks = P}) -> 
                     %% Remove from pending
-                    %% io:format("[ACK] Received for ~p from ~s~n", [MsgId, AckUser]),
                     D#data{pending_acks = maps:remove(MsgId, P)};
                 (close, _D) -> gen_statem:stop({shutdown, closed}), error(closed)
             end, Data, Actions),

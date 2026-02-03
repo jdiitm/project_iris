@@ -10,12 +10,47 @@ Protocol:
 """
 
 import socket
+import ssl
 import struct
+import os
+from pathlib import Path
+
+# Default CA certificate path
+PROJECT_ROOT = Path(__file__).parent.parent.parent
+DEFAULT_CA_CERT = PROJECT_ROOT / "certs" / "ca.pem"
 
 class IrisClient:
-    def __init__(self, host='localhost', port=8085):
-        self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.sock.connect((host, port))
+    def __init__(self, host='localhost', port=8085, use_tls=True):
+        """
+        Create an Iris client connection.
+        
+        Args:
+            host: Server hostname
+            port: Server port
+            use_tls: Whether to use TLS (default True for RFC compliance)
+        """
+        raw_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        raw_sock.settimeout(10.0)
+        
+        if use_tls:
+            # Create TLS context
+            context = ssl.create_default_context()
+            
+            # Load CA certificate if available
+            ca_cert = os.environ.get('IRIS_CA_CERT', str(DEFAULT_CA_CERT))
+            if os.path.exists(ca_cert):
+                context.load_verify_locations(ca_cert)
+            else:
+                # For testing: disable cert verification if no CA available
+                context.check_hostname = False
+                context.verify_mode = ssl.CERT_NONE
+            
+            raw_sock.connect((host, port))
+            self.sock = context.wrap_socket(raw_sock, server_hostname=host)
+        else:
+            raw_sock.connect((host, port))
+            self.sock = raw_sock
+        
         self.sock.settimeout(5.0)
         self.buffer = b''
         self.user = None

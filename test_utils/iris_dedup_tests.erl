@@ -6,6 +6,19 @@
 %% =============================================================================
 
 setup() ->
+    %% FIX: Ensure Mnesia and dedup_log table exist (required for bloom filter verification)
+    application:ensure_all_started(mnesia),
+    case mnesia:create_table(dedup_log, [
+        {attributes, [msg_id, timestamp]},
+        {type, set}
+    ]) of
+        {atomic, ok} -> ok;
+        {aborted, {already_exists, dedup_log}} -> ok;
+        {aborted, Reason} -> 
+            logger:warning("Could not create dedup_log table: ~p", [Reason]),
+            ok
+    end,
+    
     case whereis(iris_dedup) of
         undefined ->
             {ok, Pid} = iris_dedup:start_link(),

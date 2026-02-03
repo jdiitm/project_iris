@@ -29,6 +29,7 @@ Prerequisites:
 import os
 import sys
 import socket
+import ssl
 import struct
 import subprocess
 import time
@@ -42,6 +43,10 @@ random.seed(TEST_SEED)
 
 # Project root for init_cluster.sh
 PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
+
+# Add project root to sys.path for imports
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 # Configuration
 SERVER_HOST = os.environ.get("IRIS_HOST", "localhost")
@@ -77,11 +82,9 @@ def generate_unique_id():
 
 
 def connect(host, port):
-    """Create TCP connection."""
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.settimeout(TIMEOUT)
-    sock.connect((host, port))
-    return sock
+    """Create TLS connection."""
+    from tests.suites.chaos_dist.utils import create_tls_socket
+    return create_tls_socket(host, port, timeout=TIMEOUT)
 
 
 def login(sock, username):
@@ -89,7 +92,9 @@ def login(sock, username):
     packet = bytes([0x01]) + username.encode()
     sock.sendall(packet)
     
-    # Wait for response
+    # Wait for response with extended timeout for post-failover scenarios
+    old_timeout = sock.gettimeout()
+    sock.settimeout(15)  # Extended timeout for cluster recovery scenarios
     try:
         response = sock.recv(1024)
         if b"LOGIN_OK" in response:
@@ -98,6 +103,8 @@ def login(sock, username):
             return False, response
     except socket.timeout:
         return False, b"timeout"
+    finally:
+        sock.settimeout(old_timeout)
 
 
 def send_message(sock, target, message):
@@ -123,6 +130,89 @@ def send_message(sock, target, message):
         return len(response) > 0, response
     except socket.timeout:
         return False, b"timeout"
+
+
+def receive_offline_messages(sock, timeout=10):
+    """Receive offline messages using reliable message protocol.
+    
+    The server sends reliable messages (opcode 16) that require ACK.
+    Returns list of message contents received.
+    """
+    import ssl
+    
+    messages = []
+    sock.settimeout(1.0)  # Short timeout for polling
+    end_time = time.time() + timeout
+    buffer = b""
+    
+    while time.time() < end_time:
+        try:
+            data = sock.recv(4096)
+            if data:
+                buffer += data
+                buffer, msgs = parse_and_ack_messages(sock, buffer)
+                messages.extend(msgs)
+                # If we got messages and buffer is empty, we might be done
+                if messages and not buffer:
+                    # Wait a bit more for any stragglers
+                    time.sleep(0.5)
+        except socket.timeout:
+            if messages:
+                break
+            continue
+        except ssl.SSLWantReadError:
+            continue
+        except Exception:
+            break
+    
+    return messages
+
+
+def parse_and_ack_messages(sock, data):
+    """Parse reliable messages and send ACKs.
+    
+    Returns (remaining_buffer, list_of_message_contents)
+    """
+    messages = []
+    idx = 0
+    
+    while idx < len(data):
+        opcode = data[idx]
+        
+        # Check for reliable message (opcode 16 = 0x10)
+        if opcode == 16:
+            # Format: 16 | IdLen(16) | MsgId | MsgLen(32) | Msg
+            if idx + 3 > len(data):
+                break  # Need more data
+            
+            id_len = struct.unpack('>H', data[idx+1:idx+3])[0]
+            
+            if idx + 3 + id_len + 4 > len(data):
+                break  # Need more data
+            
+            msg_id = data[idx+3:idx+3+id_len]
+            msg_len = struct.unpack('>I', data[idx+3+id_len:idx+3+id_len+4])[0]
+            
+            if idx + 3 + id_len + 4 + msg_len > len(data):
+                break  # Need more data
+            
+            msg = data[idx+3+id_len+4:idx+3+id_len+4+msg_len]
+            
+            # Send ACK (opcode 0x03 | MsgId)
+            try:
+                ack_packet = bytes([0x03]) + msg_id
+                sock.sendall(ack_packet)
+            except Exception:
+                pass
+            
+            messages.append(msg)
+            idx += 3 + id_len + 4 + msg_len
+        else:
+            # Skip unknown byte
+            idx += 1
+    
+    remaining = data[idx:] if idx < len(data) else b""
+    return remaining, messages
 
 
 def docker_sigkill(container_name):
@@ -426,47 +516,82 @@ def test_multimaster_durability():
     log(f"Connecting to secondary edge (port {SECONDARY_EDGE_PORT})")
     
     # Secondary edge should still be connected to secondary core
-    # Give it a moment to stabilize
-    time.sleep(2)
+    # Give it a moment to stabilize after primary death
+    time.sleep(5)
     
     current_phase = TestPhase.VERIFY
     
-    try:
-        sock2 = connect(SERVER_HOST, SECONDARY_EDGE_PORT)
-    except Exception as e:
-        log(f"Failed to connect to secondary: {e}")
-        # Try to restart primary before failing
+    # Try connecting with retries
+    sock2 = None
+    for attempt in range(5):
+        try:
+            sock2 = connect(SERVER_HOST, SECONDARY_EDGE_PORT)
+            break
+        except Exception as e:
+            if attempt < 4:
+                log(f"Connection attempt {attempt+1} failed: {e}, retrying...")
+                time.sleep(2)
+            else:
+                log(f"Failed to connect to secondary after 5 attempts: {e}")
+                docker_start(PRIMARY_CORE)
+                return False
+    
+    if sock2 is None:
+        log("Failed to establish connection to secondary")
         docker_start(PRIMARY_CORE)
         return False
     
-    log(f"Logging in as receiver: {receiver}")
-    success, response = login(sock2, receiver)
+    # Try login with retries (cluster may need time to stabilize)
+    success = False
+    response = b""
+    for login_attempt in range(3):
+        log(f"Logging in as receiver: {receiver} (attempt {login_attempt + 1})")
+        success, response = login(sock2, receiver)
+        
+        if success:
+            break
+        
+        log(f"Login attempt {login_attempt + 1} failed: {response}")
+        sock2.close()
+        
+        if login_attempt < 2:
+            log("Waiting 5s before retry...")
+            time.sleep(5)
+            try:
+                sock2 = connect(SERVER_HOST, SECONDARY_EDGE_PORT)
+            except Exception as e:
+                log(f"Reconnect failed: {e}")
+                continue
     
     if not success:
-        log(f"Receiver login failed: {response}")
-        sock2.close()
+        log(f"Receiver login failed after all attempts")
+        try:
+            sock2.close()
+        except:
+            pass
         docker_start(PRIMARY_CORE)
         return False
     
-    log("Checking for offline messages...")
+    log("Checking for offline messages using reliable message protocol...")
     
-    # The offline message should be included in login response or delivered immediately
-    # Check the login response first
-    message_found = test_message.encode() in response
-    
-    if not message_found:
-        # Try receiving with timeout
-        log("Message not in login response, waiting for delivery...")
-        try:
-            sock2.settimeout(5)
-            data = sock2.recv(4096)
-            message_found = test_message.encode() in data
-            if message_found:
-                log(f"Received {len(data)} bytes containing test message")
-        except socket.timeout:
-            log("No additional data received")
-    
+    # Receive messages using reliable message protocol (with ACK)
+    messages = receive_offline_messages(sock2, timeout=15)
     sock2.close()
+    
+    log(f"Received {len(messages)} message(s)")
+    
+    # Check if our test message is in any received message
+    message_found = False
+    for msg in messages:
+        if test_message.encode() in msg:
+            message_found = True
+            log(f"✓ Found test message in received data")
+            break
+    
+    if not message_found and messages:
+        log(f"Messages received but test message not found:")
+        for i, msg in enumerate(messages[:3]):  # Show first 3
+            log(f"  [{i}]: {msg[:50]}...")
     
     # Restart primary core for cluster health
     log(f"Restarting {PRIMARY_CORE} for cluster health...")

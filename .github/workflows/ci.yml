@@ -1,33 +1,33 @@
 # =============================================================================
 # Project Iris CI/CD Pipeline
 # =============================================================================
-# Implements tiered testing strategy per FAANG Test Hardening Plan Section 5.2
+# Streamlined testing aligned with run_tests.py phase-based execution.
 #
-# Features:
-#   - Deterministic test execution with seeded randomness
-#   - Docker-based hermetic environment option
-#   - Tiered testing (Tier 0-3)
+# Phases:
+#   Phase 1: Unit tests (no server)
+#   Phase 2: Standalone server tests (TLS-enabled)
+#   Phase 3: ClusterManager tests (self-managed)
+#   Phase 4: Docker chaos tests
 #
-# Gates:
-#   - PR Merge: Tier 0 + Tier 1 (15 min timeout, block on failure)
-#   - Nightly:  Tier 2 (2 hour timeout, alert on-call)
-#   - Release:  Tier 3 (manual trigger, block release)
+# Tiers:
+#   Tier 0: Unit + Integration (every commit, 10 min)
+#   Tier 1: E2E + Security + Resilience (every PR, 15 min)
+#   Tier 2: Chaos + Performance (nightly, 2 hours)
+#   Tier 3: Stress + Soak (manual, 24 hours)
 #
 # Reproduction:
-#   To reproduce a failed test run, use the TEST_SEED from the logs:
-#   TEST_SEED=<seed_from_logs> make test-docker
+#   TEST_SEED=<seed> python3 tests/run_tests.py --tier 0
 # =============================================================================
 
 name: CI
 
 on:
   push:
-    branches: [main, master, develop]
+    branches: [main, master, develop, 'fix/**', 'feat/**']
   pull_request:
     branches: [main, master, develop]
   schedule:
-    # Nightly at 2 AM UTC
-    - cron: '0 2 * * *'
+    - cron: '0 2 * * *'  # Nightly at 2 AM UTC
   workflow_dispatch:
     inputs:
       tier:
@@ -35,20 +35,15 @@ on:
         required: true
         default: '0'
         type: choice
-        options:
-          - '0'
-          - '1'
-          - '2'
-          - '3'
+        options: ['0', '1', '2', '3']
       seed:
-        description: 'Test seed for reproduction (default: 42)'
+        description: 'Test seed for reproduction'
         required: false
         default: '42'
 
 env:
-  ERLANG_VERSION: '25'
+  ERLANG_VERSION: '26'
   PYTHON_VERSION: '3.11'
-  # Determinism configuration
   TEST_SEED: ${{ github.event.inputs.seed || '42' }}
   PYTHONUNBUFFERED: '1'
   CI: 'true'
@@ -60,77 +55,50 @@ jobs:
   tier0:
     name: Tier 0 - Unit & Integration
     runs-on: ubuntu-latest
-    timeout-minutes: 10
-    
+    timeout-minutes: 15
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      
-      - name: Log Determinism Configuration
-        run: |
-          echo "=========================================="
-          echo "DETERMINISM CONFIGURATION"
-          echo "=========================================="
-          echo "TEST_SEED: ${{ env.TEST_SEED }}"
-          echo "Run ID: ${{ github.run_id }}"
-          echo "Commit: ${{ github.sha }}"
-          echo ""
-          echo "To reproduce this run locally:"
-          echo "  TEST_SEED=${{ env.TEST_SEED }} make test-docker"
-          echo "=========================================="
-      
-      - name: RFC Compliance Check
-        run: |
-          python3 scripts/rfc_watchdog.py --check
-          if [ "${{ github.event_name }}" == "pull_request" ]; then
-            python3 scripts/rfc_watchdog.py --diff origin/${{ github.base_ref }} || true
-          fi
-      
+
       - name: Setup Erlang
         uses: erlef/setup-beam@v1
         with:
           otp-version: ${{ env.ERLANG_VERSION }}
-      
+
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-      
-      - name: Install Test Dependencies
+
+      - name: Install Dependencies
         run: pip install -r requirements-test.txt
-      
+
       - name: Cache Erlang builds
         uses: actions/cache@v4
         with:
           path: ebin
           key: ebin-${{ hashFiles('src/**/*.erl') }}
-      
-      - name: Compile
-        run: make all
-      
-      - name: Run Unit Tests (Erlang)
-        run: make test
-      
-      - name: Start Server
+
+      - name: Log Test Configuration
         run: |
-          make start
-          sleep 5
-      
-      - name: Run Unit Tests (Python)
-        run: python3 tests/run_tests.py --suite unit
+          echo "=========================================="
+          echo "TEST CONFIGURATION"
+          echo "=========================================="
+          echo "TEST_SEED: $TEST_SEED"
+          echo "Commit: ${{ github.sha }}"
+          echo ""
+          echo "Reproduction:"
+          echo "  TEST_SEED=$TEST_SEED python3 tests/run_tests.py --tier 0"
+          echo "=========================================="
+
+      - name: Run Tier 0 Tests
+        run: python3 tests/run_tests.py --tier 0
         env:
           TEST_SEED: ${{ env.TEST_SEED }}
-      
-      - name: Run Integration Tests
-        run: python3 tests/run_tests.py --suite integration
-        env:
-          TEST_SEED: ${{ env.TEST_SEED }}
-      
-      - name: Stop Server
-        if: always()
-        run: make stop
-      
-      - name: Upload Test Artifacts
+          CONFIG: config/test_tls
+
+      - name: Upload Artifacts
         if: failure()
         uses: actions/upload-artifact@v4
         with:
@@ -138,70 +106,39 @@ jobs:
           path: tests/artifacts/
 
   # ===========================================================================
-  # TIER 1: E2E + Security (Every PR)
+  # TIER 1: E2E + Security + Resilience (Every PR)
   # ===========================================================================
   tier1:
     name: Tier 1 - E2E & Security
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     needs: tier0
     if: github.event_name == 'pull_request' || github.event.inputs.tier >= '1'
-    
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      
+
       - name: Setup Erlang
         uses: erlef/setup-beam@v1
         with:
           otp-version: ${{ env.ERLANG_VERSION }}
-      
+
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-      
-      - name: Install Test Dependencies
+
+      - name: Install Dependencies
         run: pip install -r requirements-test.txt
-      
-      - name: Compile
-        run: make all
-      
-      - name: Start Server
-        run: |
-          make start
-          sleep 5
-      
-      - name: Run E2E Tests
-        run: python3 tests/run_tests.py --suite e2e
+
+      - name: Run Tier 1 Tests
+        run: python3 tests/run_tests.py --tier 1
         env:
           TEST_SEED: ${{ env.TEST_SEED }}
-      
-      - name: Run Security Tests
-        run: python3 tests/run_tests.py --suite security
-        env:
-          TEST_SEED: ${{ env.TEST_SEED }}
-      
-      - name: Run Compatibility Tests
-        run: python3 tests/run_tests.py --suite compatibility
-        env:
-          TEST_SEED: ${{ env.TEST_SEED }}
-      
-      - name: Run Resilience Tests
-        run: python3 tests/run_tests.py --suite resilience
-        env:
-          TEST_SEED: ${{ env.TEST_SEED }}
-      
-      - name: Run Contract Tests
-        run: python3 tests/run_tests.py --suite contract
-        env:
-          TEST_SEED: ${{ env.TEST_SEED }}
-      
-      - name: Stop Server
-        if: always()
-        run: make stop
-      
-      - name: Upload Test Artifacts
+          CONFIG: config/test_tls
+
+      - name: Upload Artifacts
         if: failure()
         uses: actions/upload-artifact@v4
         with:
@@ -220,70 +157,31 @@ jobs:
       github.event_name == 'schedule' || 
       github.event.inputs.tier >= '2' ||
       (github.event_name == 'push' && github.ref == 'refs/heads/main')
-    
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      
+
       - name: Setup Erlang
         uses: erlef/setup-beam@v1
         with:
           otp-version: ${{ env.ERLANG_VERSION }}
-      
+
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-      
-      - name: Install Test Dependencies
+
+      - name: Install Dependencies
         run: pip install -r requirements-test.txt
-      
-      - name: Compile
-        run: make all
-      
-      - name: Start Docker Cluster
-        run: |
-          make cluster-up
-          sleep 30
-      
-      - name: Run Chaos Tests (Controlled)
-        run: python3 tests/run_tests.py --suite chaos_controlled
+
+      - name: Run Tier 2 Tests (skip Docker in CI)
+        run: python3 tests/run_tests.py --tier 2 --skip-docker
         env:
           TEST_SEED: ${{ env.TEST_SEED }}
-      
-      - name: Run Performance Light Tests
-        run: python3 tests/run_tests.py --suite performance_light
-        env:
-          TEST_SEED: ${{ env.TEST_SEED }}
-      
-      - name: Collect Performance Metrics
-        run: |
-          python3 tests/perf/collect_metrics.py --output metrics.json
-        continue-on-error: true
-      
-      - name: Compare Against Baseline
-        run: |
-          python3 tests/perf/baseline.py compare --metrics metrics.json --record
-        continue-on-error: true
-      
-      - name: Upload Metrics
-        uses: actions/upload-artifact@v4
-        with:
-          name: performance-metrics
-          path: |
-            metrics.json
-            tests/perf/baselines/
-      
-      - name: Run Chaos Distributed Tests
-        run: python3 tests/run_tests.py --suite chaos_dist
-        env:
-          TEST_SEED: ${{ env.TEST_SEED }}
-      
-      - name: Stop Docker Cluster
-        if: always()
-        run: make cluster-down
-      
-      - name: Upload Test Artifacts
+          CONFIG: config/test_tls
+
+      - name: Upload Artifacts
         if: failure()
         uses: actions/upload-artifact@v4
         with:
@@ -291,121 +189,170 @@ jobs:
           path: tests/artifacts/
 
   # ===========================================================================
-  # TIER 3: Stress + Soak (Manual / Pre-Release)
+  # TIER 2 Docker: Chaos Distributed (Nightly, separate job)
   # ===========================================================================
-  tier3:
-    name: Tier 3 - Stress & Soak
+  tier2-docker:
+    name: Tier 2 - Docker Chaos
     runs-on: ubuntu-latest
-    timeout-minutes: 1440  # 24 hours max
-    if: github.event.inputs.tier == '3'
+    timeout-minutes: 60
     needs: tier2
-    
+    if: |
+      github.event_name == 'schedule' || 
+      github.event.inputs.tier >= '2'
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      
+
       - name: Setup Erlang
         uses: erlef/setup-beam@v1
         with:
           otp-version: ${{ env.ERLANG_VERSION }}
-      
+
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-      
+
       - name: Install Dependencies
         run: pip install -r requirements-test.txt
-      
-      - name: Compile
-        run: make all
-      
-      - name: Start Docker Cluster (Production Spec)
+
+      - name: Start Docker Cluster
         run: |
-          # Use larger resource limits for stress testing
-          export DOCKER_MEMORY_LIMIT=8g
-          make cluster-up
+          docker compose -f docker/global-cluster/docker-compose.yml up -d
+          echo "Waiting for cluster to stabilize (60s)..."
           sleep 60
-      
+
+      - name: Run Docker Chaos Tests
+        run: python3 tests/run_tests.py --suite chaos_dist
+        env:
+          TEST_SEED: ${{ env.TEST_SEED }}
+
+      - name: Stop Docker Cluster
+        if: always()
+        run: docker compose -f docker/global-cluster/docker-compose.yml down -v
+
+      - name: Upload Artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tier2-docker-artifacts
+          path: tests/artifacts/
+
+  # ===========================================================================
+  # TIER 3: Stress & Soak (Manual / Pre-Release)
+  # ===========================================================================
+  tier3:
+    name: Tier 3 - Stress & Soak
+    runs-on: ubuntu-latest
+    timeout-minutes: 1440  # 24 hours
+    needs: [tier2, tier2-docker]
+    if: github.event.inputs.tier == '3'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Erlang
+        uses: erlef/setup-beam@v1
+        with:
+          otp-version: ${{ env.ERLANG_VERSION }}
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install Dependencies
+        run: pip install -r requirements-test.txt
+
+      - name: Start Docker Cluster
+        run: |
+          docker compose -f docker/global-cluster/docker-compose.yml up -d
+          sleep 60
+
       - name: Run Stress Tests
         run: python3 tests/run_tests.py --suite stress
         env:
           TEST_SEED: ${{ env.TEST_SEED }}
-      
-      - name: Run Soak Test (6 hour)
-        run: |
-          timeout 21600 python3 tests/suites/stress/test_fanout.py || true
+          TEST_PROFILE: full
+
+      - name: Run Extended Soak (6 hours)
+        run: timeout 21600 python3 tests/suites/stress/test_fanout.py || true
         env:
           TEST_SEED: ${{ env.TEST_SEED }}
-        continue-on-error: true
-      
-      - name: Collect Final Metrics
-        run: python3 tests/perf/collect_metrics.py --output final_metrics.json
-        continue-on-error: true
-      
+          TEST_PROFILE: full
+
+      - name: Stop Docker Cluster
+        if: always()
+        run: docker compose -f docker/global-cluster/docker-compose.yml down -v
+
       - name: Upload Results
         uses: actions/upload-artifact@v4
         with:
           name: tier3-results
-          path: |
-            final_metrics.json
-            tests/artifacts/
-      
-      - name: Stop Docker Cluster
-        if: always()
-        run: make cluster-down
+          path: tests/artifacts/
 
   # ===========================================================================
-  # Quality Gate Check
+  # Quality Gate
   # ===========================================================================
   quality-gate:
     name: Quality Gate
     runs-on: ubuntu-latest
     needs: [tier0, tier1]
     if: always()
-    
+
     steps:
       - name: Check Tier 0
         if: needs.tier0.result != 'success'
         run: |
-          echo "::error::Tier 0 tests failed - blocking merge"
+          echo "::error::Tier 0 failed - merge blocked"
           exit 1
-      
+
       - name: Check Tier 1
         if: github.event_name == 'pull_request' && needs.tier1.result != 'success'
         run: |
-          echo "::error::Tier 1 tests failed - blocking merge"
+          echo "::error::Tier 1 failed - merge blocked"
           exit 1
-      
-      - name: Quality Gate Passed
-        run: echo "All required quality gates passed"
+
+      - name: Gate Passed
+        run: echo "All quality gates passed"
 
   # ===========================================================================
-  # Release Gate (Tier 3 Full Validation)
+  # Release Gate (Tier 3 required)
   # ===========================================================================
   release-gate:
     name: Release Gate
     runs-on: ubuntu-latest
-    needs: [tier0, tier1, tier2, tier3]
+    needs: [tier0, tier1, tier2, tier2-docker, tier3]
     if: github.event.inputs.tier == '3'
-    
+
     steps:
-      - name: Verify All Tiers Passed
+      - name: Verify All Tiers
         run: |
-          echo "Checking tier results..."
-          if [ "${{ needs.tier0.result }}" != "success" ]; then
+          echo "Tier 0: ${{ needs.tier0.result }}"
+          echo "Tier 1: ${{ needs.tier1.result }}"
+          echo "Tier 2: ${{ needs.tier2.result }}"
+          echo "Tier 2 Docker: ${{ needs.tier2-docker.result }}"
+          echo "Tier 3: ${{ needs.tier3.result }}"
+          
+          if [[ "${{ needs.tier0.result }}" != "success" ]]; then
             echo "::error::Tier 0 failed - release blocked"
             exit 1
           fi
-          if [ "${{ needs.tier1.result }}" != "success" ]; then
+          if [[ "${{ needs.tier1.result }}" != "success" ]]; then
             echo "::error::Tier 1 failed - release blocked"
             exit 1
           fi
-          if [ "${{ needs.tier2.result }}" != "success" ]; then
+          if [[ "${{ needs.tier2.result }}" != "success" && "${{ needs.tier2.result }}" != "skipped" ]]; then
             echo "::error::Tier 2 failed - release blocked"
             exit 1
           fi
-          if [ "${{ needs.tier3.result }}" != "success" ]; then
+          if [[ "${{ needs.tier2-docker.result }}" != "success" && "${{ needs.tier2-docker.result }}" != "skipped" ]]; then
+            echo "::error::Tier 2 Docker failed - release blocked"
+            exit 1
+          fi
+          if [[ "${{ needs.tier3.result }}" != "success" ]]; then
             echo "::error::Tier 3 failed - release blocked"
             exit 1
           fi

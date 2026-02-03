@@ -160,31 +160,9 @@ def count_running_cores() -> int:
 
 
 def connect_and_login(host: str, port: int, username: str) -> Optional[socket.socket]:
-    """Connect to server and login."""
-    try:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(TIMEOUT)
-        sock.connect((host, port))
-        
-        packet = bytes([0x01]) + username.encode()
-        sock.sendall(packet)
-        
-        response = sock.recv(1024)
-        if b"LOGIN_OK" in response:
-            return sock
-        else:
-            log(f"  Login failed for {username}: {response[:50]}")
-            sock.close()
-            return None
-    except socket.timeout:
-        log(f"  Connection timeout for {username} to {host}:{port}")
-        return None
-    except socket.error as e:
-        log(f"  Socket error for {username}: {e}")
-        return None
-    except Exception as e:
-        log(f"  Unexpected error connecting {username}: {e}")
-        return None
+    """Connect to server via TLS and login."""
+    from tests.suites.chaos_dist.utils import tls_connect_and_login
+    return tls_connect_and_login(host, port, username, timeout=TIMEOUT)
 
 
 def send_message(sock: socket.socket, target: str, message: str) -> Tuple[bool, float]:
