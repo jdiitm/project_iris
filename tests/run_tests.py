@@ -60,9 +60,11 @@ TIMEOUTS = {
 }
 
 # CI Tiers
+# Note: performance_light promoted to Tier 1 per RFC audit recommendation
+# to catch performance regressions before merge (not just nightly)
 TIER_0_SUITES = ["unit", "integration"]
-TIER_1_SUITES = ["e2e", "contract", "compatibility", "security", "resilience"]
-TIER_2_SUITES = ["performance_light", "stress", "chaos_controlled"]
+TIER_1_SUITES = ["e2e", "contract", "compatibility", "security", "resilience", "performance_light"]
+TIER_2_SUITES = ["stress", "chaos_controlled"]
 
 # Tests that use "with ClusterManager(...)" - they manage their own cluster
 CLUSTER_MANAGER_TESTS = [

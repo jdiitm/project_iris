@@ -228,6 +228,94 @@ jobs:
         env:
           TEST_SEED: ${{ env.TEST_SEED }}
 
+      # =========================================================================
+      # NFR-16 Clock Skew Enforcement (REQUIRED)
+      # =========================================================================
+      # This step verifies that clock skew tolerance is ACTUALLY tested,
+      # not skipped due to missing libfaketime. If the test skips or fails
+      # to run real clock injection, CI must fail.
+      - name: Verify NFR-16 Clock Skew Test (Required)
+        run: |
+          echo "=========================================="
+          echo "NFR-16: Clock Skew Tolerance Verification"
+          echo "=========================================="
+          python3 tests/run_tests.py --suite resilience --test test_clock_skew
+          
+          # Check that the test actually ran with real clock injection
+          LOG_FILE=$(ls -t tests/artifacts/*/test_clock_skew.log 2>/dev/null | head -1)
+          
+          if [ -z "$LOG_FILE" ]; then
+            echo "::error::Clock skew test log not found"
+            exit 1
+          fi
+          
+          echo "Checking log: $LOG_FILE"
+          
+          # Fail if test ran in simulation mode (no real clock injection)
+          if grep -q "SIMULATION MODE" "$LOG_FILE"; then
+            echo "::error::Clock skew test ran in SIMULATION MODE - NFR-16 not verified"
+            echo "libfaketime must be installed in Docker containers"
+            exit 1
+          fi
+          
+          # Fail if libfaketime was not available
+          if grep -q "libfaketime not available" "$LOG_FILE"; then
+            echo "::error::libfaketime not installed - NFR-16 cannot be verified"
+            exit 1
+          fi
+          
+          # Verify real injection occurred
+          if grep -q "REAL INJECTION" "$LOG_FILE"; then
+            echo "NFR-16 VERIFIED: Real clock injection tested"
+          else
+            echo "::warning::Could not confirm real clock injection"
+          fi
+          
+          echo "NFR-16 Clock Skew verification complete"
+
+      # =========================================================================
+      # NFR-15 Internal mTLS Verification (REQUIRED)
+      # =========================================================================
+      # This step verifies that inter-node communication uses mTLS.
+      # RFC-001 NFR-15 mandates mutual TLS for all internal traffic.
+      - name: Verify NFR-15 Internal mTLS (Required)
+        run: |
+          echo "=========================================="
+          echo "NFR-15: Internal mTLS Verification"
+          echo "=========================================="
+          
+          # Stop current cluster
+          docker compose -f docker/global-cluster/docker-compose.yml down -v
+          
+          # Start cluster with mTLS configuration
+          echo "Starting cluster with mTLS enabled..."
+          docker compose -f docker/global-cluster/docker-compose.yml \
+                         -f docker/global-cluster/docker-compose.mtls.yml up -d
+          
+          echo "Waiting for mTLS cluster to stabilize (60s)..."
+          sleep 60
+          
+          # Check cluster health
+          docker compose -f docker/global-cluster/docker-compose.yml \
+                         -f docker/global-cluster/docker-compose.mtls.yml ps
+          
+          # Run mTLS enforcement tests
+          echo "Running mTLS enforcement tests..."
+          python3 tests/suites/security/test_mtls_enforcement.py || {
+            echo "::error::mTLS enforcement test failed"
+            exit 1
+          }
+          
+          # Verify via cluster script if available
+          if [ -x ./docker/global-cluster/cluster.sh ]; then
+            echo "Verifying mTLS via cluster script..."
+            ./docker/global-cluster/cluster.sh verify-mtls || {
+              echo "::warning::cluster.sh verify-mtls not implemented or failed"
+            }
+          fi
+          
+          echo "NFR-15 Internal mTLS verification complete"
+
       - name: Stop Docker Cluster
         if: always()
         run: docker compose -f docker/global-cluster/docker-compose.yml down -v
