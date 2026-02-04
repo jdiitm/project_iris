@@ -94,26 +94,42 @@ is_local_region(Region) ->
     Region == get_current_region().
 
 %% @doc Get the current region ID
+%% FIX: Check both iris_core and iris_edge app env (edge nodes don't run iris_core)
 -spec get_current_region() -> binary().
 get_current_region() ->
     case application:get_env(iris_core, region_id) of
         {ok, Region} when is_binary(Region) -> Region;
         {ok, Region} when is_list(Region) -> list_to_binary(Region);
         {ok, Region} when is_atom(Region) -> atom_to_binary(Region, utf8);
-        _ -> <<"local">>  %% Default single-region mode
+        _ ->
+            %% Fallback to iris_edge config (for edge nodes)
+            case application:get_env(iris_edge, region_id) of
+                {ok, Region} when is_binary(Region) -> Region;
+                {ok, Region} when is_list(Region) -> list_to_binary(Region);
+                {ok, Region} when is_atom(Region) -> atom_to_binary(Region, utf8);
+                _ -> <<"local">>  %% Default single-region mode
+            end
     end.
 
 %% @doc Get all configured regions
+%% FIX: Check both iris_core and iris_edge app env (edge nodes don't run iris_core)
 -spec get_all_regions() -> [binary()].
 get_all_regions() ->
     case application:get_env(iris_core, regions) of
         {ok, Regions} when is_list(Regions) ->
             [normalize_region(R) || R <- Regions];
         _ ->
-            [get_current_region()]  %% Single region mode
+            %% Fallback to iris_edge config (for edge nodes)
+            case application:get_env(iris_edge, regions) of
+                {ok, Regions} when is_list(Regions) ->
+                    [normalize_region(R) || R <- Regions];
+                _ ->
+                    [get_current_region()]  %% Single region mode
+            end
     end.
 
 %% @doc Get the endpoint nodes for a region
+%% FIX: Check both iris_core and iris_edge app env (edge nodes don't run iris_core)
 -spec get_region_endpoint(binary()) -> {ok, [node()]} | {error, not_found}.
 get_region_endpoint(Region) ->
     case application:get_env(iris_core, region_endpoints) of
@@ -123,18 +139,33 @@ get_region_endpoint(Region) ->
                 Nodes when is_list(Nodes) -> {ok, Nodes}
             end;
         _ ->
-            {error, not_configured}
+            %% Fallback to iris_edge config (for edge nodes)
+            case application:get_env(iris_edge, region_endpoints) of
+                {ok, Endpoints} when is_map(Endpoints) ->
+                    case maps:get(Region, Endpoints, undefined) of
+                        undefined -> {error, not_found};
+                        Nodes when is_list(Nodes) -> {ok, Nodes}
+                    end;
+                _ ->
+                    {error, not_configured}
+            end
     end.
 
 %% @doc Set endpoint nodes for a region (runtime configuration)
+%% FIX: Set in the appropriate app (iris_core or iris_edge)
 -spec set_region_endpoint(binary(), [node()]) -> ok.
 set_region_endpoint(Region, Nodes) ->
-    CurrentEndpoints = case application:get_env(iris_core, region_endpoints) of
-        {ok, E} when is_map(E) -> E;
-        _ -> #{}
+    %% Determine which app to use based on what's configured
+    {App, CurrentEndpoints} = case application:get_env(iris_core, region_endpoints) of
+        {ok, E} when is_map(E) -> {iris_core, E};
+        _ ->
+            case application:get_env(iris_edge, region_endpoints) of
+                {ok, E} when is_map(E) -> {iris_edge, E};
+                _ -> {iris_core, #{}}  %% Default to iris_core
+            end
     end,
     NewEndpoints = maps:put(Region, Nodes, CurrentEndpoints),
-    application:set_env(iris_core, region_endpoints, NewEndpoints).
+    application:set_env(App, region_endpoints, NewEndpoints).
 
 %% =============================================================================
 %% API: Cross-Region Routing

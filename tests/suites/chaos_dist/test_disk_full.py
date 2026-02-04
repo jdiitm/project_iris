@@ -92,6 +92,45 @@ def check_container_running(container_name):
         return False
 
 
+def check_server_health(max_retries=3, retry_delay=5):
+    """
+    Verify server is healthy and accepting connections before running chaos tests.
+    Retries with backoff to handle slow cluster startup.
+    
+    Note: Sequenced messages (opcode 0x07) don't return explicit ACKs in the protocol,
+    so we just verify login works as a health check.
+    
+    Returns:
+        True if server is healthy and responding to logins
+    """
+    for attempt in range(max_retries):
+        try:
+            test_id = int(time.time() * 1000)
+            sock = connect_tls()
+            if not login(sock, f"health_check_{test_id}"):
+                sock.close()
+                if attempt < max_retries - 1:
+                    log(f"  Health check attempt {attempt + 1} failed (login), retrying in {retry_delay}s...")
+                    time.sleep(retry_delay)
+                    continue
+                return False
+            
+            # Login successful - server is healthy
+            sock.close()
+            log(f"  Server health check passed (attempt {attempt + 1})")
+            return True
+            
+        except Exception as e:
+            if attempt < max_retries - 1:
+                log(f"  Health check attempt {attempt + 1} failed ({e}), retrying in {retry_delay}s...")
+                time.sleep(retry_delay)
+            else:
+                log(f"  Health check failed after {max_retries} attempts: {e}")
+                return False
+    
+    return False
+
+
 def get_container_disk_usage(container_name):
     """Get disk usage inside container."""
     try:
@@ -233,7 +272,13 @@ def login(sock, username):
 _seq_counter = [0]
 
 def send_message(sock, target, message):
-    """Send message using RFC-compliant sequenced protocol (opcode 0x07)."""
+    """
+    Send message using RFC-compliant sequenced protocol (opcode 0x07).
+    
+    Note: The Iris protocol uses fire-and-forget messaging - there are no
+    explicit ACKs for sequenced messages. Success is determined by whether
+    the send completes without error.
+    """
     target_bytes = target.encode()
     msg_bytes = message.encode()
     
@@ -244,15 +289,12 @@ def send_message(sock, target, message):
               len(target_bytes).to_bytes(2, 'big') + target_bytes +
               seq_no.to_bytes(8, 'big') +
               len(msg_bytes).to_bytes(2, 'big') + msg_bytes)
-    sock.sendall(packet)
     
     try:
-        response = sock.recv(1024)
-        return len(response) > 0, response
-    except socket.timeout:
-        return False, b''
+        sock.sendall(packet)
+        return True, b'sent'  # Fire-and-forget - success if send completes
     except socket.error as e:
-        return False, b''
+        return False, str(e).encode()
 
 
 def receive_messages(sock, timeout=5):
@@ -624,6 +666,13 @@ def main():
     usage = get_container_disk_usage(CONTAINER_NAME)
     if usage:
         log(f"Initial disk usage: {usage['use_percent']}")
+    
+    # Verify server is healthy before running chaos tests
+    log("\nVerifying server health before chaos tests...")
+    if not check_server_health(max_retries=5, retry_delay=10):
+        log("FAIL: Server not responding - cluster may not be fully initialized")
+        log("Wait for cluster to stabilize or check container logs")
+        sys.exit(1)
     
     # Run tests
     test_disk_full_graceful_rejection()
