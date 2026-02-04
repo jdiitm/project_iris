@@ -2,11 +2,14 @@
 """
 Iris Client Library - Handles the reliable messaging protocol.
 
-Protocol:
+Protocol (RFC-001-AMENDMENT-001 v1.0 compliant):
 - Login: 0x01 | User
-- Send: 0x02 | TargetLen(16) | Target | MsgLen(16) | Msg
+- Send (sequenced): 0x07 | TargetLen(16) | Target | SeqNo(64) | MsgLen(16) | Msg
 - ACK: 0x03 | MsgId
 - Reliable Message: 0x10 | IdLen(16) | MsgId | MsgLen(32) | Msg
+
+NOTE: Opcode 0x02 (plaintext) is DEPRECATED and REJECTED in v1.0.
+      Use send_msg() which now uses opcode 0x07 (sequenced messages).
 """
 
 import socket
@@ -54,6 +57,7 @@ class IrisClient:
         self.sock.settimeout(5.0)
         self.buffer = b''
         self.user = None
+        self._seq_counter = 0  # Auto-incrementing sequence number for send_msg()
     
     def login(self, user):
         """Login to the server."""
@@ -75,15 +79,29 @@ class IrisClient:
         return True
     
     def send_msg(self, target, msg):
-        """Send a message to target user."""
+        """
+        Send a message to target user.
+        
+        RFC-001-AMENDMENT-001 v1.0 COMPLIANT: Uses opcode 0x07 (sequenced message)
+        instead of deprecated opcode 0x02 (plaintext) which is now rejected.
+        
+        Protocol: 0x07 | TargetLen(16) | Target | SeqNo(64) | MsgLen(16) | Msg
+        """
         target_bytes = target.encode('utf-8')
         if isinstance(msg, str):
             msg_bytes = msg.encode('utf-8')
         else:
             msg_bytes = msg
         
-        # Protocol: 0x02 | TargetLen(16) | Target | MsgLen(16) | Msg
-        payload = b'\x02' + struct.pack('>H', len(target_bytes)) + target_bytes + struct.pack('>H', len(msg_bytes)) + msg_bytes
+        # Auto-increment sequence number for ordering
+        self._seq_counter += 1
+        seq_no = self._seq_counter
+        
+        # Protocol: 0x07 | TargetLen(16) | Target | SeqNo(64) | MsgLen(16) | Msg
+        payload = (b'\x07' + 
+                   struct.pack('>H', len(target_bytes)) + target_bytes +
+                   struct.pack('>Q', seq_no) +
+                   struct.pack('>H', len(msg_bytes)) + msg_bytes)
         self.sock.sendall(payload)
     
     def send_msg_seq(self, target, msg, seq_no):

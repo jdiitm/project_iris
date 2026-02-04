@@ -177,6 +177,7 @@ class LoadGenerator:
         Send message and return (status, latency_ms).
         Status: 'success', 'rejected', 'timeout', 'error'
         
+        RFC-001-AMENDMENT-001 v1.0 COMPLIANT: Uses opcode 0x07 (sequenced message)
         For backpressure testing, we consider the send successful if the
         socket write completes without error. The server queues messages
         for delivery to the target.
@@ -186,9 +187,17 @@ class LoadGenerator:
             target_bytes = target.encode()
             msg_bytes = message.encode()
             
+            # Use instance sequence counter
+            if not hasattr(self, '_seq_counter'):
+                self._seq_counter = 0
+            self._seq_counter += 1
+            seq_no = self._seq_counter
+            
+            # Protocol: 0x07 | TargetLen(16) | Target | SeqNo(64) | MsgLen(16) | Msg
             packet = (
-                bytes([0x02]) +
+                bytes([0x07]) +
                 struct.pack('>H', len(target_bytes)) + target_bytes +
+                struct.pack('>Q', seq_no) +
                 struct.pack('>H', len(msg_bytes)) + msg_bytes
             )
             

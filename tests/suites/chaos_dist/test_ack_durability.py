@@ -86,13 +86,28 @@ def login(sock, username):
         return False
 
 
+# Sequence counter for RFC-compliant messaging
+_seq_counter = [0]
+
 def send_message(sock, target, message):
-    """Send message packet and wait for ACK."""
+    """
+    Send message packet and wait for ACK.
+    
+    RFC-001-AMENDMENT-001 v1.0 COMPLIANT: Uses opcode 0x07 (sequenced message)
+    instead of deprecated opcode 0x02 (plaintext) which is now rejected.
+    """
     target_bytes = target.encode()
     msg_bytes = message.encode()
-    packet = bytes([0x02]) + \
-             len(target_bytes).to_bytes(2, 'big') + target_bytes + \
-             len(msg_bytes).to_bytes(2, 'big') + msg_bytes
+    
+    # Increment sequence counter
+    _seq_counter[0] += 1
+    seq_no = _seq_counter[0]
+    
+    # Protocol: 0x07 | TargetLen(16) | Target | SeqNo(64) | MsgLen(16) | Msg
+    packet = (bytes([0x07]) +
+              len(target_bytes).to_bytes(2, 'big') + target_bytes +
+              seq_no.to_bytes(8, 'big') +
+              len(msg_bytes).to_bytes(2, 'big') + msg_bytes)
     sock.sendall(packet)
     
     # Wait for ACK (timeout means no ACK received)

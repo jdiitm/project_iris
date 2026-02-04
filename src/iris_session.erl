@@ -98,19 +98,21 @@ handle_packet({login, LoginData}, _Current, TransportPid, _Mod) ->
             end
     end;
 
-handle_packet({send_message, Target, Msg}, User, _Pid, _Mod) when User =/= undefined ->
-    %% VIOLATION-4 FIX: Rate limit check on message send
-    case check_message_rate(User) of
-        allow ->
-            iris_router:route(Target, Msg),
-            {ok, User, []};
-        {deny, RetryAfter} ->
-            logger:warning("Message rate limited for ~p", [User]),
-            {ok, User, [{send, encode_rate_limited(RetryAfter)}]}
-    end;
+handle_packet({send_message, _Target, _Msg}, User, _Pid, _Mod) when User =/= undefined ->
+    %% =============================================================================
+    %% RFC-001-AMENDMENT-001 Section 7: v1.0 REJECTS plaintext messages (opcode 0x02)
+    %% =============================================================================
+    %% Clients MUST use E2EE (opcode 0x23) or CBOR (opcode 0x10) for all messages.
+    %% This is a BREAKING CHANGE required for v1.0 compliance.
+    %% Deprecation schedule:
+    %%   v0.9: Emit warning (DONE)
+    %%   v1.0: Reject with error (THIS CODE)
+    %%   v1.1: Remove opcode from protocol spec
+    logger:warning("RFC VIOLATION: Rejected plaintext message (0x02) from ~p. Use E2EE (0x23) or CBOR (0x10)", [User]),
+    {ok, User, [{send, encode_error(e2ee_required)}]};
 
 handle_packet({send_message, _Target, _Msg}, undefined, _Pid, _Mod) ->
-    %% Not logged in - reject
+    %% Not logged in AND using deprecated plaintext - reject silently
     {ok, undefined, []};
 
 %% =============================================================================

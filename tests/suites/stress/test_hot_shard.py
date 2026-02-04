@@ -178,10 +178,14 @@ def connect_and_login(username: str, timeout: float = TIMEOUT) -> Optional[socke
         return None
 
 
+# Sequence counter for RFC-compliant messaging
+_hot_shard_seq_counter = [0]
+
 def send_message(sock: socket.socket, target: str, message: str) -> Tuple[bool, float]:
     """
     Send a message and measure latency.
     
+    RFC-001-AMENDMENT-001 v1.0 COMPLIANT: Uses opcode 0x07 (sequenced message)
     For stress testing, we measure the time to complete the socket write,
     which represents the time for the system to accept the message.
     Fire-and-forget semantics - server queues for delivery.
@@ -192,9 +196,15 @@ def send_message(sock: socket.socket, target: str, message: str) -> Tuple[bool, 
         target_bytes = target.encode()
         msg_bytes = message.encode()
         
+        # Increment sequence counter
+        _hot_shard_seq_counter[0] += 1
+        seq_no = _hot_shard_seq_counter[0]
+        
+        # Protocol: 0x07 | TargetLen(16) | Target | SeqNo(64) | MsgLen(16) | Msg
         packet = (
-            bytes([0x02]) +
+            bytes([0x07]) +
             struct.pack('>H', len(target_bytes)) + target_bytes +
+            struct.pack('>Q', seq_no) +
             struct.pack('>H', len(msg_bytes)) + msg_bytes
         )
         

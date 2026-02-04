@@ -151,13 +151,25 @@ class IrisClient:
             return False
     
     def send_message(self, target: str, message: str) -> bool:
-        """Send message to target user."""
+        """
+        Send message to target user.
+        
+        RFC-001-AMENDMENT-001 v1.0 COMPLIANT: Uses opcode 0x07 (sequenced message)
+        """
         target_bytes = target.encode()
         msg_bytes = message.encode()
         
+        # Use instance sequence counter
+        if not hasattr(self, '_seq_counter'):
+            self._seq_counter = 0
+        self._seq_counter += 1
+        seq_no = self._seq_counter
+        
+        # Protocol: 0x07 | TargetLen(16) | Target | SeqNo(64) | MsgLen(16) | Msg
         packet = (
-            bytes([0x02]) +
+            bytes([0x07]) +
             struct.pack('>H', len(target_bytes)) + target_bytes +
+            struct.pack('>Q', seq_no) +
             struct.pack('>H', len(msg_bytes)) + msg_bytes
         )
         

@@ -115,9 +115,15 @@ def tls_connect_and_login(host: str, port: int, username: str,
         return None
 
 
+# Sequence counter for RFC-compliant messaging
+_tls_seq_counter = [0]
+
 def tls_send_message(sock: ssl.SSLSocket, target: str, message: str) -> Tuple[bool, float]:
     """
     Send a message over a TLS socket.
+    
+    RFC-001-AMENDMENT-001 v1.0 COMPLIANT: Uses opcode 0x07 (sequenced message)
+    instead of deprecated opcode 0x02 (plaintext) which is now rejected.
     
     Args:
         sock: TLS socket from tls_connect_and_login()
@@ -134,10 +140,15 @@ def tls_send_message(sock: ssl.SSLSocket, target: str, message: str) -> Tuple[bo
         target_bytes = target.encode('utf-8')
         msg_bytes = message.encode('utf-8')
         
-        # Message packet: opcode 0x02 + target_len(2) + target + msg_len(2) + msg
+        # Increment sequence counter
+        _tls_seq_counter[0] += 1
+        seq_no = _tls_seq_counter[0]
+        
+        # Message packet: 0x07 | target_len(2) | target | seq_no(8) | msg_len(2) | msg
         packet = (
-            bytes([0x02]) +
+            bytes([0x07]) +
             struct.pack('>H', len(target_bytes)) + target_bytes +
+            struct.pack('>Q', seq_no) +
             struct.pack('>H', len(msg_bytes)) + msg_bytes
         )
         

@@ -71,15 +71,27 @@ def get_available_edge_ports():
     return available
 
 
+# Sequence counter for RFC-compliant messaging
+_seq_counter = [0]
+
 def send_message(sock, target, message):
     """
     Send a message and return True if accepted, False if rejected.
+    
+    RFC-001-AMENDMENT-001 v1.0 COMPLIANT: Uses opcode 0x07 (sequenced message)
+    instead of deprecated opcode 0x02 (plaintext) which is now rejected.
     """
     target_bytes = target.encode('utf-8')
     msg_bytes = message.encode('utf-8')
     
-    packet = (bytes([0x02]) + 
+    # Increment sequence counter
+    _seq_counter[0] += 1
+    seq_no = _seq_counter[0]
+    
+    # Protocol: 0x07 | TargetLen(16) | Target | SeqNo(64) | MsgLen(16) | Msg
+    packet = (bytes([0x07]) + 
               len(target_bytes).to_bytes(2, 'big') + target_bytes +
+              seq_no.to_bytes(8, 'big') +
               len(msg_bytes).to_bytes(2, 'big') + msg_bytes)
     
     try:

@@ -163,14 +163,17 @@ def measure_throughput() -> MetricResult:
     for i in range(NUM_MESSAGES):
         try:
             payload = f"throughput_msg_{i}".encode()
-            # Build packet: opcode(1) + target_len(2) + target + msg_len(2) + msg
-            packet = bytes([0x02]) + \
-                     len(target).to_bytes(2, 'big') + target + \
-                     len(payload).to_bytes(2, 'big') + payload
+            # RFC-001-AMENDMENT-001 v1.0 COMPLIANT: opcode 0x07 (sequenced)
+            # Protocol: 0x07 | target_len(2) | target | seq_no(8) | msg_len(2) | msg
+            seq_no = i + 1
+            packet = (bytes([0x07]) +
+                      len(target).to_bytes(2, 'big') + target +
+                      seq_no.to_bytes(8, 'big') +
+                      len(payload).to_bytes(2, 'big') + payload)
             sock.sendall(packet)
             sent += 1
         except Exception as e:
-            print(f"  ⚠️ Send error at msg {i}: {e}")
+            print(f"  Send error at msg {i}: {e}")
             break
     
     duration = time.time() - start_time
@@ -214,9 +217,12 @@ def measure_latency() -> MetricResult:
     for i in range(NUM_LATENCY_SAMPLES):
         try:
             payload = f"latency_{i}_{time.time()}".encode()
-            packet = bytes([0x02]) + \
-                     len(target).to_bytes(2, 'big') + target + \
-                     len(payload).to_bytes(2, 'big') + payload
+            # RFC-001-AMENDMENT-001 v1.0 COMPLIANT: opcode 0x07 (sequenced)
+            seq_no = i + 1
+            packet = (bytes([0x07]) +
+                      len(target).to_bytes(2, 'big') + target +
+                      seq_no.to_bytes(8, 'big') +
+                      len(payload).to_bytes(2, 'big') + payload)
             
             start = time.time()
             sock.setblocking(True)
