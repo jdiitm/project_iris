@@ -405,23 +405,148 @@ def benchmark_roster_retrieval():
 
 
 # =============================================================================
+# Benchmark 4: Roster Query P99 (NFR-29)
+# =============================================================================
+
+# NFR-29 SLA: Group roster query ≤50ms P99
+NFR29_ROSTER_P99_TARGET_MS = 50.0
+
+
+def benchmark_roster_query_p99():
+    """
+    Benchmark: RFC NFR-29 - Group roster query ≤50ms P99.
+    
+    This test performs many roster queries and asserts P99 latency.
+    
+    RFC Reference: NFR-29 - Group roster query ≤50ms P99
+    """
+    log("\n=== Benchmark: Roster Query P99 (NFR-29) ===")
+    log(f"  RFC NFR-29: Roster query P99 ≤ {NFR29_ROSTER_P99_TARGET_MS}ms")
+    
+    if not check_server_available():
+        log_result("Roster query P99 (NFR-29)", False, 0, "ms", NFR29_ROSTER_P99_TARGET_MS)
+        return False
+    
+    try:
+        # Connect and create a group
+        admin = IrisClient()
+        admin_user = unique_user("p99_admin")
+        admin.login(admin_user)
+        log(f"  Admin: {admin_user}")
+        
+        # Create group
+        group_name = f"p99_roster_{int(time.time())}".encode()
+        admin.sock.sendall(encode_group_create(group_name))
+        response = recv_with_timeout(admin.sock, 3.0)
+        
+        if len(response) == 0 or response[0] != 0x31:
+            log("  FAIL: Could not create group")
+            admin.close()
+            log_result("Roster query P99 (NFR-29)", False, 0, "ms", NFR29_ROSTER_P99_TARGET_MS)
+            return False
+        
+        gid_len = struct.unpack(">H", response[1:3])[0]
+        group_id = response[3:3+gid_len]
+        
+        # Add some members (256 = RFC max for E2EE groups)
+        MEMBER_COUNT = 256
+        log(f"  Adding {MEMBER_COUNT} members...")
+        
+        for i in range(MEMBER_COUNT):
+            member_name = f"p99_member_{i:04d}".encode()
+            admin.sock.sendall(encode_group_join(group_id, member_name))
+            if (i + 1) % 50 == 0:
+                time.sleep(0.01)
+        
+        time.sleep(0.5)
+        log(f"  {MEMBER_COUNT} members added")
+        
+        # Perform many roster queries to get good P99 measurement
+        NUM_QUERIES = 100
+        latencies = []
+        
+        log(f"  Querying roster {NUM_QUERIES} times...")
+        
+        for i in range(NUM_QUERIES):
+            start = time.perf_counter()
+            
+            admin.sock.sendall(encode_group_roster(group_id))
+            response = recv_with_timeout(admin.sock, 2.0)
+            
+            latency_ms = (time.perf_counter() - start) * 1000
+            
+            if len(response) > 0:
+                latencies.append(latency_ms)
+            
+            # Brief pause to avoid overwhelming server
+            if i % 20 == 0 and i > 0:
+                time.sleep(0.05)
+        
+        admin.close()
+        
+        if not latencies:
+            log("  FAIL: No successful roster queries")
+            log_result("Roster query P99 (NFR-29)", False, 0, "ms", NFR29_ROSTER_P99_TARGET_MS)
+            return False
+        
+        # Calculate P99
+        latencies.sort()
+        p50_idx = len(latencies) // 2
+        p99_idx = int(len(latencies) * 0.99)
+        
+        p50 = latencies[p50_idx]
+        p99 = latencies[p99_idx] if p99_idx < len(latencies) else latencies[-1]
+        avg = statistics.mean(latencies)
+        min_lat = latencies[0]
+        max_lat = latencies[-1]
+        
+        log(f"\n  Results ({len(latencies)} queries):")
+        log(f"    Min:  {min_lat:.2f}ms")
+        log(f"    P50:  {p50:.2f}ms")
+        log(f"    P99:  {p99:.2f}ms")
+        log(f"    Max:  {max_lat:.2f}ms")
+        log(f"    Avg:  {avg:.2f}ms")
+        
+        # NFR-29 SLA check
+        passed = p99 <= NFR29_ROSTER_P99_TARGET_MS
+        
+        if passed:
+            log(f"\n  RFC NFR-29: PASS - P99 {p99:.2f}ms ≤ {NFR29_ROSTER_P99_TARGET_MS}ms")
+        else:
+            log(f"\n  RFC NFR-29: FAIL - P99 {p99:.2f}ms > {NFR29_ROSTER_P99_TARGET_MS}ms")
+        
+        log_result("Roster query P99 (NFR-29)", passed, p99, "ms", NFR29_ROSTER_P99_TARGET_MS)
+        
+        return passed
+        
+    except Exception as e:
+        log(f"  Exception: {e}")
+        import traceback
+        traceback.print_exc()
+        log_result("Roster query P99 (NFR-29)", False, 0, "ms", NFR29_ROSTER_P99_TARGET_MS)
+        return False
+
+
+# =============================================================================
 # Main
 # =============================================================================
 
 def main():
     log("\n" + "=" * 60)
-    log("Group Size 1000 Benchmark (NFR-26)")
+    log("Group Size 1000 Benchmark (NFR-26, NFR-29)")
     log("RFC-001-AMENDMENT-001: Large Group Performance")
     log("=" * 60)
     log(f"\nTargets:")
-    log(f"  - Message P99 latency: < {LATENCY_P99_TARGET_MS}ms")
+    log(f"  - Message P99 latency: < {LATENCY_P99_TARGET_MS}ms (NFR-26)")
     log(f"  - Roster retrieval: < {ROSTER_TARGET_MS}ms")
+    log(f"  - Roster query P99: ≤ {NFR29_ROSTER_P99_TARGET_MS}ms (NFR-29)")
     log(f"  - Group size: {GROUP_SIZE} members")
     
     # Run benchmarks
     benchmark_group_creation()
     benchmark_message_fanout()
     benchmark_roster_retrieval()
+    benchmark_roster_query_p99()  # NFR-29
     
     # Summary
     log("\n" + "=" * 60)

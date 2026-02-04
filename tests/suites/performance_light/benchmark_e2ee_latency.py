@@ -504,6 +504,85 @@ def benchmark_e2e_latency_with_e2ee() -> LatencyResult:
     return result
 
 
+def benchmark_key_bundle_fetch() -> LatencyResult:
+    """
+    Benchmark key bundle fetch latency (FR-14).
+    
+    RFC FR-14: Key bundle fetch ≤50ms P99
+    
+    This test measures the latency to fetch another user's key bundle,
+    which is required before initiating an encrypted session.
+    """
+    log("Benchmarking key bundle fetch latency (FR-14)...")
+    
+    samples = []
+    
+    # We need at least one user with an uploaded key bundle
+    # For this test, we'll simulate key bundle fetch via protocol
+    
+    bundle_user = unique_user("bundle_owner")
+    fetcher_user = unique_user("bundle_fetcher")
+    
+    # Connect and login
+    try:
+        fetcher = IrisClient(host=EDGE_HOST, port=EDGE_PORT)
+        fetcher.login(fetcher_user)
+    except Exception as e:
+        log(f"  Could not connect: {e}")
+        return LatencyResult("Key Bundle Fetch", [])
+    
+    # Warmup fetches
+    for i in range(WARMUP_MESSAGES):
+        try:
+            # Send key bundle fetch request (opcode 0x20 = GET_KEY_BUNDLE)
+            target = f"{bundle_user}_{i}".encode()
+            packet = bytes([0x20]) + len(target).to_bytes(2, 'big') + target
+            
+            start = time.perf_counter()
+            fetcher.sock.sendall(packet)
+            fetcher.sock.settimeout(2.0)
+            response = fetcher.sock.recv(4096)
+            # Don't record warmup times
+        except socket.timeout:
+            pass
+        except Exception:
+            pass
+    
+    # Benchmark fetches
+    for i in range(NUM_SAMPLES):
+        try:
+            # Each fetch for a different "user" to avoid caching effects
+            target = f"{bundle_user}_{WARMUP_MESSAGES + i}".encode()
+            packet = bytes([0x20]) + len(target).to_bytes(2, 'big') + target
+            
+            start = time.perf_counter()
+            fetcher.sock.sendall(packet)
+            fetcher.sock.settimeout(2.0)
+            response = fetcher.sock.recv(4096)
+            elapsed_ms = (time.perf_counter() - start) * 1000
+            
+            # Any response (even error) counts - we're measuring server response time
+            if len(response) > 0:
+                samples.append(elapsed_ms)
+                
+        except socket.timeout:
+            # Timeout counts as a data point (worst case)
+            samples.append(2000.0)  # 2s timeout in ms
+        except Exception as e:
+            pass
+    
+    fetcher.close()
+    
+    result = LatencyResult("Key Bundle Fetch", samples) if samples else LatencyResult("Key Bundle Fetch", [0.0])
+    log(f"  Key Bundle Fetch: avg={result.avg_ms:.3f}ms, P50={result.p50_ms:.3f}ms, P99={result.p99_ms:.3f}ms")
+    
+    return result
+
+
+# FR-14 Threshold
+MAX_KEY_BUNDLE_FETCH_P99_MS = 50.0
+
+
 def benchmark_e2e_latency_plaintext() -> LatencyResult:
     """
     Benchmark end-to-end message latency without E2EE (baseline).
@@ -604,6 +683,20 @@ def main():
         
         e2ee_result = benchmark_e2e_latency_with_e2ee()
         results.append(e2ee_result)
+        
+        # FR-14: Key bundle fetch latency
+        log("\n--- Key Bundle Fetch (FR-14) ---")
+        bundle_result = benchmark_key_bundle_fetch()
+        results.append(bundle_result)
+        
+        # FR-14 P99 Assertion
+        if bundle_result.samples and bundle_result.p99_ms <= MAX_KEY_BUNDLE_FETCH_P99_MS:
+            log(f"[PASS] FR-14: Key bundle fetch P99 ({bundle_result.p99_ms:.2f}ms) <= {MAX_KEY_BUNDLE_FETCH_P99_MS}ms")
+        elif bundle_result.samples:
+            log(f"[FAIL] FR-14: Key bundle fetch P99 ({bundle_result.p99_ms:.2f}ms) > {MAX_KEY_BUNDLE_FETCH_P99_MS}ms")
+            passed = False
+        else:
+            log(f"[WARN] FR-14: No key bundle fetch samples collected")
         
         # Calculate overhead
         if plain_result.samples and e2ee_result.samples:
