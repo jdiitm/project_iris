@@ -1,21 +1,40 @@
 #!/usr/bin/env python3
 """
-Test: E2EE Isolation (Negative Security Tests)
+Test: Cryptographic Primitives Unit Tests
 RFC Reference: RFC-001-AMENDMENT-001 (E2EE Requirements)
 
-This test validates NEGATIVE security properties:
-1. Forward Secrecy: Revoked members cannot decrypt messages sent after revocation
-2. Non-Member Isolation: Non-members cannot decrypt intercepted ciphertext
+SCOPE: This is a UNIT TEST for cryptographic algorithms.
+It validates the Double Ratchet implementation in Python.
+It does NOT test the server implementation.
 
-These are critical security boundary tests that verify the cryptographic
-guarantees hold even under adversarial conditions.
+IMPORTANT DISTINCTION:
+- This test proves the ALGORITHM is correct
+- It does NOT prove the SERVER implements the algorithm correctly
+- It does NOT verify the "Untrusted Server" invariant (INV-3)
 
-CRITICAL: These tests must FAIL if security properties are violated.
+For server-side E2EE verification, see:
+- tests/suites/security/test_server_storage_audit.py (storage inspection)
+- tests/suites/security/test_revocation_integration.py (protocol-level)
+- tests/suites/integration/test_group_e2ee.py (transport-level)
+
+This test validates NEGATIVE security properties at the algorithm level:
+1. Forward Secrecy: Old keys cannot decrypt messages encrypted with new keys
+2. Non-Member Isolation: Without key material, decryption fails
+3. Key Rotation: Rotation creates a clean cryptographic break
+
+These properties are NECESSARY but NOT SUFFICIENT for system-level security.
+
+CRITICAL: These tests must FAIL if algorithm properties are violated.
 No skips, no partial passes. Binary pass/fail only.
 
 Tier: 1 (Post-merge validation)
-Safe for laptop: Yes
+Safe for laptop: Yes (pure algorithm test, no server required)
 Expected duration: <30s
+
+HISTORY:
+- Originally named test_e2ee_isolation.py in integration/ directory
+- Renamed to clarify scope: this is a UNIT test of crypto primitives
+- The original name implied system-level isolation testing
 """
 
 import os
@@ -28,7 +47,8 @@ import socket
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 sys.path.insert(0, PROJECT_ROOT)
 
-from tests.utilities import IrisClient, unique_user
+# NOTE: This is a pure algorithm test - it does NOT require server connection
+# The IrisClient import below is kept for compatibility but not used
 
 # Test results
 results = []
@@ -85,6 +105,9 @@ class SimulatedSenderKey:
     """
     Simulates Signal's Sender Key for group messaging.
     
+    This is a UNIT TEST simulation of the Double Ratchet algorithm.
+    It validates the algorithm's security properties in isolation.
+    
     In the real protocol:
     - Each sender has a chain key that advances with each message
     - Chain key evolution: chain_key_n+1 = HKDF(chain_key_n, "chain")
@@ -92,6 +115,8 @@ class SimulatedSenderKey:
     
     This simulation demonstrates the security property:
     - Old keys cannot decrypt messages encrypted with evolved keys
+    
+    NOTE: This does NOT test the server implementation.
     """
     
     def __init__(self, crypto, initial_seed: bytes = None):
@@ -154,6 +179,8 @@ class SimulatedReceiver:
     """
     Simulates a receiver trying to decrypt messages.
     
+    This is a UNIT TEST simulation - it does NOT test server behavior.
+    
     A legitimate receiver shares the sender key and can decrypt.
     An attacker with old keys or no keys cannot decrypt.
     """
@@ -214,24 +241,26 @@ class SimulatedReceiver:
 
 
 # =============================================================================
-# Test 1: Forward Secrecy (Revoked Member Isolation)
+# Test 1: Forward Secrecy (Algorithm Level)
 # =============================================================================
 
 def test_forward_secrecy():
     """
-    Test: Revoked member cannot decrypt messages sent after revocation.
+    Test: Old keys cannot decrypt messages encrypted with new keys.
+    
+    This is an ALGORITHM test, not a server test.
     
     Scenario:
-    1. Alice and Bob are in a group
+    1. Alice and Bob are in a group (simulated)
     2. Alice has the current sender key (can decrypt)
-    3. Alice is removed from the group
+    3. Alice is removed from the group (simulated)
     4. Sender key is rotated (chain key changes)
     5. Bob sends new messages
     6. Alice (with old keys) MUST NOT be able to decrypt new messages
     
-    This validates the forward secrecy property of the Double Ratchet.
+    This validates the forward secrecy property of the Double Ratchet algorithm.
     """
-    log("\n=== Test: Forward Secrecy (Revoked Member Cannot Decrypt) ===")
+    log("\n=== Test: Forward Secrecy (Algorithm - Old Keys Cannot Decrypt New) ===")
     
     crypto = get_crypto_primitives()
     
@@ -240,7 +269,7 @@ def test_forward_secrecy():
         bob_sender_key = SimulatedSenderKey(crypto)
         
         # Alice joins and receives current key state
-        log("  1. Alice joins group, receives sender key")
+        log("  1. Alice receives sender key (simulated group join)")
         alice_snapshot = bob_sender_key.snapshot()
         alice_message_index = bob_sender_key.message_index
         
@@ -267,9 +296,9 @@ def test_forward_secrecy():
         
         log(f"     Alice decrypted: {result.decode()}")
         
-        # === KEY ROTATION: Alice is removed ===
-        log("  3. Alice is REMOVED from group")
-        log("     Sender key is ROTATED (new chain key)")
+        # === KEY ROTATION: Alice is removed (simulated) ===
+        log("  3. KEY ROTATION (simulating Alice's removal)")
+        log("     New random chain key generated")
         
         # Simulate key rotation - Bob's chain key changes completely
         # In real Signal, this would be a new random key distributed to remaining members
@@ -277,7 +306,7 @@ def test_forward_secrecy():
         bob_sender_key.message_index = 0  # Reset index for new epoch
         
         # Bob sends new messages after Alice's removal
-        log("  4. Bob sends messages AFTER Alice removed")
+        log("  4. Bob encrypts messages with NEW key")
         msg2_plaintext = b"SECRET: Alice should NOT see this!"
         msg2_cipher, msg2_nonce, msg2_idx = bob_sender_key.encrypt(msg2_plaintext)
         
@@ -292,7 +321,7 @@ def test_forward_secrecy():
         
         if success2:
             log_test("Forward secrecy", False,
-                    f"SECURITY VIOLATION: Alice decrypted post-revocation message: {result2}")
+                    f"ALGORITHM BUG: Old keys decrypted new message: {result2}")
             return False
         
         log(f"     Correctly FAILED: {result2}")
@@ -301,20 +330,18 @@ def test_forward_secrecy():
         
         if success3:
             log_test("Forward secrecy", False,
-                    f"SECURITY VIOLATION: Alice decrypted post-revocation message: {result3}")
+                    f"ALGORITHM BUG: Old keys decrypted new message: {result3}")
             return False
         
         log(f"     Correctly FAILED: {result3}")
         
         # Verify new member (Carol) CAN decrypt
-        log("  6. New member (Carol) CAN decrypt new messages")
+        log("  6. New member (Carol) with NEW key CAN decrypt")
         carol_receiver = SimulatedReceiver(crypto, None)
         carol_receiver.known_chain_key = bob_sender_key.chain_key
         carol_receiver.known_message_index = 0  # Carol knows new epoch state
         
         # Carol needs to catch up since bob already sent 2 messages
-        # She can decrypt msg2 if she got the key before msg2 was sent
-        # Let's test msg3 which was sent after
         msg4_plaintext = b"Message Carol should see"
         msg4_cipher, msg4_nonce, msg4_idx = bob_sender_key.encrypt(msg4_plaintext)
         
@@ -326,7 +353,6 @@ def test_forward_secrecy():
         msg5_plaintext = b"Carol can decrypt this"
         msg5_cipher, msg5_nonce, msg5_idx = bob_sender_key.encrypt(msg5_plaintext)
         
-        # Carol decrypts the message right after she got the key state
         success5, result5 = carol_receiver.try_decrypt(msg5_cipher, msg5_nonce, msg5_idx)
         
         if not success5:
@@ -336,8 +362,8 @@ def test_forward_secrecy():
         
         log(f"     Carol decrypted: {result5.decode()}")
         
-        log_test("Forward secrecy", True,
-                "Revoked member cannot decrypt, new member can")
+        log_test("Forward secrecy (algorithm)", True,
+                "Old keys cannot decrypt, new keys can")
         return True
         
     except Exception as e:
@@ -346,26 +372,25 @@ def test_forward_secrecy():
 
 
 # =============================================================================
-# Test 2: Non-Member Isolation (Eve Cannot Decrypt)
+# Test 2: Non-Member Isolation (Algorithm Level)
 # =============================================================================
 
 def test_non_member_isolation():
     """
-    Test: Non-member cannot decrypt even if they intercept ciphertext.
+    Test: Without key material, decryption fails (AES-GCM property).
+    
+    This is an ALGORITHM test verifying that:
+    - Random keys cannot decrypt ciphertext
+    - Modified ciphertext is detected (authentication)
     
     Scenario:
-    1. Alice and Bob are in a group, Eve is NOT
-    2. Bob sends encrypted messages
-    3. Eve intercepts the ciphertext (simulating server misrouting or network sniff)
-    4. Eve attempts to decrypt with:
-       a) Random key guessing
-       b) Manipulated ciphertext
-       c) Replay of old ciphertexts
-    5. ALL attempts MUST fail
+    1. Bob encrypts messages
+    2. Eve intercepts ciphertexts but has NO keys
+    3. ALL decryption attempts by Eve MUST fail
     
-    This validates that the E2EE provides confidentiality against outsiders.
+    This validates AES-GCM's confidentiality and integrity.
     """
-    log("\n=== Test: Non-Member Isolation (Outsider Cannot Decrypt) ===")
+    log("\n=== Test: Non-Member Isolation (Algorithm - No Key = No Decrypt) ===")
     
     crypto = get_crypto_primitives()
     
@@ -374,7 +399,7 @@ def test_non_member_isolation():
         bob_sender_key = SimulatedSenderKey(crypto)
         
         # Bob sends messages
-        log("  1. Bob sends encrypted messages in group")
+        log("  1. Bob encrypts secret messages")
         secrets = [
             b"Secret message 1: Bank account 12345",
             b"Secret message 2: Password is hunter2",
@@ -388,7 +413,7 @@ def test_non_member_isolation():
             log(f"     Encrypted: {secret.decode()[:30]}...")
         
         # Eve intercepts all ciphertexts
-        log("  2. Eve intercepts all ciphertexts (network sniffing)")
+        log("  2. Eve intercepts ciphertexts")
         
         # Eve has NO key material
         eve_receiver = SimulatedReceiver(crypto, None)
@@ -399,7 +424,7 @@ def test_non_member_isolation():
             success, result = eve_receiver.try_decrypt(cipher, nonce, idx)
             if success:
                 log_test("Non-member isolation", False,
-                        f"SECURITY VIOLATION: Eve decrypted message {i+1}: {result}")
+                        f"ALGORITHM BUG: No-key decryption succeeded: {result}")
                 return False
             log(f"     Message {i+1}: {result} (correct)")
         
@@ -414,7 +439,7 @@ def test_non_member_isolation():
             
             if success:
                 log_test("Non-member isolation", False,
-                        f"SECURITY VIOLATION: Random key #{attempt+1} worked: {result}")
+                        f"ALGORITHM BUG: Random key #{attempt+1} worked: {result}")
                 return False
         
         log("     All 5 random key attempts failed (correct)")
@@ -436,7 +461,7 @@ def test_non_member_isolation():
         
         if success:
             log_test("Non-member isolation", False,
-                    f"SECURITY VIOLATION: Manipulated ciphertext decrypted: {result}")
+                    f"ALGORITHM BUG: Manipulated ciphertext decrypted: {result}")
             return False
         
         log(f"     Manipulation detected: {result} (correct)")
@@ -453,17 +478,13 @@ def test_non_member_isolation():
         
         if success:
             log_test("Non-member isolation", False,
-                    f"SECURITY VIOLATION: Wrong nonce worked: {result}")
+                    f"ALGORITHM BUG: Wrong nonce worked: {result}")
             return False
         
         log(f"     Nonce manipulation detected: {result} (correct)")
         
         # === Verify legitimate receiver CAN decrypt ===
-        log("  7. Legitimate member (Alice) CAN decrypt")
-        
-        # Alice has the sender key from the beginning
-        alice_sender_key = SimulatedSenderKey(crypto, bob_sender_key.snapshot())
-        # Actually, Alice needs Bob's original state. Let's re-create the scenario properly
+        log("  7. Legitimate receiver (Alice) with correct key CAN decrypt")
         
         # Fresh scenario for Alice verification
         bob_key_2 = SimulatedSenderKey(crypto)
@@ -491,8 +512,8 @@ def test_non_member_isolation():
         
         log(f"     Alice decrypted: {result.decode()}")
         
-        log_test("Non-member isolation", True,
-                "Non-member cannot decrypt, member can")
+        log_test("Non-member isolation (algorithm)", True,
+                "No key = no decrypt, correct key = decrypt")
         return True
         
     except Exception as e:
@@ -501,16 +522,20 @@ def test_non_member_isolation():
 
 
 # =============================================================================
-# Test 3: Key Rotation Completeness
+# Test 3: Key Rotation Completeness (Algorithm Level)
 # =============================================================================
 
 def test_key_rotation_completeness():
     """
     Test: After key rotation, ALL previous key material is useless.
     
-    Validates that key rotation creates a clean cryptographic break.
+    This is an ALGORITHM test validating that:
+    - Key rotation creates a complete cryptographic break
+    - No amount of old key material can recover new keys
+    
+    This is the mathematical foundation of forward secrecy.
     """
-    log("\n=== Test: Key Rotation Completeness ===")
+    log("\n=== Test: Key Rotation Completeness (Algorithm - Clean Break) ===")
     
     crypto = get_crypto_primitives()
     
@@ -533,13 +558,13 @@ def test_key_rotation_completeness():
             log(f"     Captured state and encrypted message {i+1}")
         
         # Perform key rotation
-        log("  2. Performing KEY ROTATION")
+        log("  2. Performing KEY ROTATION (new random key)")
         old_chain = sender_key.chain_key
         sender_key.chain_key = os.urandom(32)
         sender_key.message_index = 0
         
         # Send new messages after rotation
-        log("  3. Sending messages AFTER rotation")
+        log("  3. Encrypting messages AFTER rotation")
         post_rotation = []
         for i in range(3):
             msg = f"Post-rotation {i+1}".encode()
@@ -559,7 +584,7 @@ def test_key_rotation_completeness():
                 
                 if success:
                     log_test("Key rotation completeness", False,
-                            f"SECURITY VIOLATION: Snapshot {snap_idx} decrypted post-rotation msg: {result}")
+                            f"ALGORITHM BUG: Snapshot {snap_idx} decrypted post-rotation msg: {result}")
                     return False
         
         log("     All old snapshots correctly failed")
@@ -591,7 +616,7 @@ def test_key_rotation_completeness():
         
         log(f"     New state decrypted: {result.decode()}")
         
-        log_test("Key rotation completeness", True,
+        log_test("Key rotation completeness (algorithm)", True,
                 "Old snapshots useless after rotation")
         return True
         
@@ -606,14 +631,19 @@ def test_key_rotation_completeness():
 
 def main():
     log("\n" + "=" * 60)
-    log("E2EE Isolation Tests (Negative Security Validation)")
+    log("CRYPTOGRAPHIC PRIMITIVES UNIT TESTS")
     log("RFC Reference: RFC-001-AMENDMENT-001")
     log("=" * 60)
-    log("\nThese tests verify SECURITY BOUNDARIES:")
-    log("- Forward secrecy (revoked members cannot decrypt)")
-    log("- Non-member isolation (outsiders cannot decrypt)")
-    log("- Key rotation completeness (clean cryptographic break)")
-    log("\nAll tests must PASS for E2EE compliance.")
+    log("\nSCOPE: These tests validate the ALGORITHM, not the server.")
+    log("They prove Double Ratchet properties at the cryptographic level.")
+    log("\nFor server-side verification, see:")
+    log("  - test_server_storage_audit.py (storage inspection)")
+    log("  - test_revocation_integration.py (protocol-level)")
+    log("\nAlgorithm properties tested:")
+    log("  - Forward secrecy (old keys cannot decrypt new messages)")
+    log("  - Non-member isolation (no key = no decrypt)")
+    log("  - Key rotation completeness (clean cryptographic break)")
+    log("\nAll tests must PASS for algorithm correctness.")
     
     # Run tests
     test_forward_secrecy()
@@ -637,15 +667,17 @@ def main():
     log(f"Failed: {failed}")
     
     if failed > 0:
-        log("\nFAIL: E2EE isolation tests FAILED")
-        log("SECURITY BOUNDARIES MAY BE COMPROMISED")
+        log("\nFAIL: Cryptographic primitive tests FAILED")
+        log("ALGORITHM BUG DETECTED")
         sys.exit(1)
     else:
-        log("\nPASS: All E2EE isolation tests passed")
-        log("Security boundaries verified:")
-        log("  - Forward secrecy: VERIFIED")
-        log("  - Non-member isolation: VERIFIED")
-        log("  - Key rotation: VERIFIED")
+        log("\nPASS: All cryptographic primitive tests passed")
+        log("Algorithm properties verified:")
+        log("  - Forward secrecy: VERIFIED (algorithm level)")
+        log("  - Non-member isolation: VERIFIED (algorithm level)")
+        log("  - Key rotation: VERIFIED (algorithm level)")
+        log("\nNOTE: This does NOT verify server implementation.")
+        log("See test_server_storage_audit.py for server-level tests.")
         sys.exit(0)
 
 
