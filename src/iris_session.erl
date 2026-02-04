@@ -113,6 +113,26 @@ handle_packet({send_message, _Target, _Msg}, undefined, _Pid, _Mod) ->
     %% Not logged in - reject
     {ok, undefined, []};
 
+%% =============================================================================
+%% RFC FR-5: Sequence-numbered messages for FIFO ordering
+%% =============================================================================
+%% AUDIT FIX: Client includes sequence number to guarantee ordering even under
+%% parallel processing. The sequence number is used as the storage timestamp.
+handle_packet({send_seq, Target, SeqNo, Msg}, User, _Pid, _Mod) when User =/= undefined ->
+    case check_message_rate(User) of
+        allow ->
+            %% Route with sequence number preserved as ordering key
+            iris_router:route_sequenced(Target, Msg, SeqNo),
+            {ok, User, []};
+        {deny, RetryAfter} ->
+            logger:warning("Message rate limited for ~p", [User]),
+            {ok, User, [{send, encode_rate_limited(RetryAfter)}]}
+    end;
+
+handle_packet({send_seq, _Target, _SeqNo, _Msg}, undefined, _Pid, _Mod) ->
+    %% Not logged in - reject
+    {ok, undefined, []};
+
 handle_packet({batch_send, Target, Blob}, User, _Pid, _Mod) ->
     Msgs = iris_proto:unpack_batch(Blob),
     %% P2-1 FIX: Use rpc:cast for fire-and-forget batch storage

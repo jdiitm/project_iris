@@ -1,16 +1,20 @@
 #!/usr/bin/env python3
 """
-Durability Test - Zero Message Loss on Failover
+Client Reconnect Test - Message Delivery on Client Reconnection
+
+NOTE: This test validates CLIENT-SIDE reconnection and offline message delivery.
+It does NOT test server-side durability (WAL, crash recovery, SIGKILL survival).
+For server-side durability testing, see: chaos_dist/test_ack_durability.py
 
 Tests:
-1. Messages queued during node failure are preserved
-2. Pending acks are saved to offline storage on disconnect
-3. WAL recovery works after crash
+1. Client reconnects after disconnect and receives pending messages
+2. Messages to offline users are stored and delivered on login
+3. Multiple messages to offline user are all preserved
 
 INVARIANTS:
 - All messages to offline users must be delivered on reconnect
 - Multi-message batches must be fully preserved
-- No silent message loss
+- No silent message loss on client reconnect
 
 Tier: 0 (Required on every merge)
 """
@@ -267,8 +271,9 @@ def test_multi_message_durability():
 
 def main():
     log("=" * 60)
-    log(" DURABILITY TEST SUITE")
+    log(" CLIENT RECONNECT TEST SUITE")
     log("=" * 60)
+    log("NOTE: For server-side durability (SIGKILL, WAL), see chaos_dist/test_ack_durability.py")
     log(f"Random seed: {TEST_SEED}")
     
     # Note: pending_acks test is a stretch goal - requires server to detect

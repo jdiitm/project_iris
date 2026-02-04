@@ -244,7 +244,13 @@ store_offline_durable(User, Msg) ->
 %% Uses mnesia:sync_transaction which blocks until ALL disc_copies have the data
 %% This guarantees no message loss even under SIGKILL, but is slower (~20-100ms)
 store_offline_sync_replicated(User, Msg, BucketCount) ->
-    Timestamp = os:system_time(millisecond),
+    %% CRITICAL: Use HLC for proper message ordering (RFC FR-5)
+    Timestamp = case whereis(iris_hlc) of
+        undefined ->
+            os:system_time(nanosecond);
+        _Pid ->
+            iris_hlc:to_integer(iris_hlc:send())
+    end,
     BucketID = erlang:phash2(Msg, BucketCount),
     Key = {User, BucketID},
     Record = {offline_msg, Key, Timestamp, Msg},

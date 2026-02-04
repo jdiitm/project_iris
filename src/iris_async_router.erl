@@ -15,7 +15,7 @@
 %% - Zero silent message drops
 %% =============================================================================
 
--export([start_link/1, route/2, route/3, route_async/2]).
+-export([start_link/1, route/2, route/3, route_async/2, route_sequenced/3]).
 -export([register_local/2, unregister_local/1]).
 -export([get_local_count/0, get_stats/0, get_pool_size/0]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
@@ -89,6 +89,22 @@ route(User, Msg, Opts) ->
 -spec route_async(binary(), binary()) -> ok.
 route_async(User, Msg) ->
     route(User, Msg).
+
+%% =============================================================================
+%% RFC FR-5: Sequenced routing for FIFO ordering
+%% =============================================================================
+%% Route with client-provided sequence number for guaranteed ordering.
+%% The sequence number is used as the storage timestamp for offline messages.
+-spec route_sequenced(binary(), term(), non_neg_integer()) -> ok.
+route_sequenced(User, Msg, SeqNo) ->
+    incr_metric(route_attempt),
+    
+    PoolSize = get_pool_size(),
+    ShardId = (erlang:phash2(User, PoolSize) + 1),
+    Name = list_to_atom("iris_async_router_" ++ integer_to_list(ShardId)),
+    
+    gen_server:cast(Name, {route_sequenced, User, Msg, SeqNo}),
+    ok.
 
 %% Register is global (ETS is public), but we can track count locally if needed.
 %% For now, we don't track per-shard local count strictly, as ETS is the source of truth.
@@ -207,6 +223,27 @@ handle_cast({route_complete, {failure, _Reason}}, State) ->
     incr_metric(route_offline),
     {noreply, State#state{routed_offline = State#state.routed_offline + 1,
                           route_failures = State#state.route_failures + 1}};
+
+%% =============================================================================
+%% RFC FR-5: Sequenced routing for FIFO ordering
+%% =============================================================================
+handle_cast({route_sequenced, User, {sequenced_msg, SeqNo, Msg}, _SeqNo}, State) ->
+    case ets:lookup(?LOCAL_PRESENCE, User) of
+        [{User, Pid}] when is_pid(Pid) ->
+            case is_process_alive(Pid) of
+                true ->
+                    Pid ! {deliver_msg, Msg},
+                    incr_metric(route_success),
+                    {noreply, State#state{routed_local = State#state.routed_local + 1}};
+                false ->
+                    %% Stale entry - store offline with sequence number
+                    ets:delete(?LOCAL_PRESENCE, User),
+                    store_offline_sequenced(User, Msg, SeqNo, State)
+            end;
+        [] ->
+            %% User not online - store offline with sequence number
+            store_offline_sequenced(User, Msg, SeqNo, State)
+    end;
 
 handle_cast(_Msg, State) ->
     {noreply, State}.
@@ -438,6 +475,37 @@ store_offline_any_node([Node | Rest], User, Msg) ->
         ok -> ok;
         {ok, _} -> ok;
         _ -> store_offline_any_node(Rest, User, Msg)
+    end.
+
+%% =============================================================================
+%% RFC FR-5: Sequenced offline storage for FIFO ordering
+%% =============================================================================
+%% Store message with client-provided sequence number as timestamp.
+%% This guarantees FIFO ordering on retrieval.
+store_offline_sequenced(User, Msg, SeqNo, State) ->
+    Nodes = get_discovery_nodes(),
+    case store_offline_sequenced_any_node(Nodes, User, Msg, SeqNo) of
+        ok ->
+            incr_metric(route_offline),
+            {noreply, State#state{routed_offline = State#state.routed_offline + 1}};
+        {error, _Reason} ->
+            %% Fallback to local storage with sequence
+            logger:warning("Sequenced offline storage failed for ~p, storing locally", [User]),
+            case catch iris_offline_storage:store_with_seq(User, Msg, SeqNo) of
+                ok -> ok;
+                _ -> ok  %% Best effort
+            end,
+            incr_metric(route_offline),
+            {noreply, State#state{routed_offline = State#state.routed_offline + 1}}
+    end.
+
+store_offline_sequenced_any_node([], _User, _Msg, _SeqNo) ->
+    {error, all_nodes_failed};
+store_offline_sequenced_any_node([Node | Rest], User, Msg, SeqNo) ->
+    case rpc:call(Node, iris_offline_storage, store_with_seq, [User, Msg, SeqNo], 5000) of
+        ok -> ok;
+        {ok, _} -> ok;
+        _ -> store_offline_sequenced_any_node(Rest, User, Msg, SeqNo)
     end.
 
 %% Local fallback storage

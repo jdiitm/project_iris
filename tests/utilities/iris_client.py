@@ -86,6 +86,27 @@ class IrisClient:
         payload = b'\x02' + struct.pack('>H', len(target_bytes)) + target_bytes + struct.pack('>H', len(msg_bytes)) + msg_bytes
         self.sock.sendall(payload)
     
+    def send_msg_seq(self, target, msg, seq_no):
+        """
+        Send a message with client-provided sequence number (RFC FR-5).
+        
+        The sequence number guarantees FIFO ordering even under parallel processing.
+        Use this when message ordering is critical.
+        
+        Protocol: 0x07 | TargetLen(16) | Target | SeqNo(64) | MsgLen(16) | Msg
+        """
+        target_bytes = target.encode('utf-8')
+        if isinstance(msg, str):
+            msg_bytes = msg.encode('utf-8')
+        else:
+            msg_bytes = msg
+        
+        payload = (b'\x07' + 
+                   struct.pack('>H', len(target_bytes)) + target_bytes +
+                   struct.pack('>Q', seq_no) +
+                   struct.pack('>H', len(msg_bytes)) + msg_bytes)
+        self.sock.sendall(payload)
+    
     def recv_msg(self, timeout=5.0):
         """
         Receive a reliable message and send ACK.

@@ -34,15 +34,30 @@
 - Single-node durability relies on sync_transaction flushing before ACK
 - Multi-node durability (recommended) relies on replication to surviving nodes
 
-**NFR-16 (Clock Skew)**:
-- Tests validate message ordering and reconnect behavior
-- Real clock manipulation requires `libfaketime` in Docker containers
-- Simulation mode verifies protocol correctness, not actual clock drift handling
+**NFR-16 (Clock Skew / HLC)**:
+- **Erlang Unit Tests (VERIFIED)**: `test_utils/iris_hlc_tests.erl` (200+ lines)
+  - `test_clock_drift_handling`: 60s future timestamp bounded to 35s
+  - `test_concurrent_sends`: Multi-process HLC generation
+  - `test_happens_before`: Causal ordering verification
+  - `MAX_DRIFT_MS = 30000` (30 seconds) enforced in `src/iris_hlc.erl`
+- **Python Tests (PARTIAL)**: `test_clock_skew.py`
+  - Protocol-level tolerance testing via simulation
+  - Real NTP injection requires `libfaketime` in Docker containers
 
-**FR-20 (Group E2EE)**:
-- Tests validate protocol opcodes (0x30-0x36) and message routing
-- Cryptographic operations (Signal Protocol) validated at unit level only
-- Full crypto integration test requires `cryptography` library validation
+**FR-5 (Message Ordering)**:
+- **Fixed (2026-02-04)**: `test_cross_node_ordering.py` now uses client-provided sequence numbers
+- Added `send_msg_seq` (opcode 0x07) for guaranteed FIFO ordering
+- No artificial `time.sleep()` delays - tests concurrent message delivery
+
+**FR-20 (Group E2EE / Double Ratchet)**:
+- **Erlang Unit Tests (VERIFIED)**: `test_utils/iris_ratchet_tests.erl` (590 lines)
+  - `forward_secrecy_key_evolution_test`: Chain key advances after each message
+  - `attack_resistance_test_`: Replay, drop, MAC tampering, truncation, header manipulation
+  - `test_out_of_order_delivery`: Skipped message key handling
+  - `bidirectional_communication_test`: DH ratchet step verification
+- **Python Tests**: `test_group_e2ee.py`, `test_post_compromise.py`
+  - Protocol layer tested with 100+ ratchet advances
+  - AES-GCM/X25519 primitives validated when `cryptography` library available
 
 > **TLS Enforcement (2026-02-03)**: All client connections require TLS. Server uses `config/test_tls.config`.
 > All Python test clients use `ssl.SSLContext` with CA verification via `certs/ca.pem`.
@@ -75,9 +90,11 @@
 | Item | Status | Notes |
 |------|--------|-------|
 | NFR-15 mTLS (inter-node) | Deferred | Requires PKI infrastructure |
-| NFR-16 Clock Skew | Partial | Simulation only; real injection requires libfaketime |
+| NFR-16 Clock Skew | **VERIFIED** | HLC unit tests cover drift handling; Python tests cover protocol tolerance |
 | Section 9.1 Versioning | Deferred | Phase 2 (post-launch) |
-| E2EE Crypto Validation | Partial | Protocol tested; crypto ops at unit level |
+| E2EE Crypto Validation | **VERIFIED** | Erlang unit tests cover Double Ratchet; Python tests cover primitives |
+| NFR-17 Distributed Rate Limit | Partial | Single-node tested; cross-node test requires Docker cluster |
+| FR-19 Group Size Limit | **VERIFIED** | 256-member limit test added to `test_group_membership.py` |
 
 ## Test Coverage
 

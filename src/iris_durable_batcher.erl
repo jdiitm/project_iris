@@ -26,6 +26,16 @@
 %% Default changed from /tmp (often tmpfs) to data/wal (persistent)
 -define(DEFAULT_WAL_DIR, "data/wal").
 
+%% CRITICAL: Use HLC for proper message ordering (RFC FR-5)
+%% os:system_time(millisecond) has insufficient precision for rapid-fire messages
+get_timestamp() ->
+    case whereis(iris_hlc) of
+        undefined ->
+            os:system_time(nanosecond);
+        _Pid ->
+            iris_hlc:to_integer(iris_hlc:send())
+    end.
+
 -record(state, {
     shard_id :: integer(),
     wal_log :: disk_log:log() | undefined,
@@ -266,7 +276,7 @@ do_wal_write(User, Msg, BucketCount, State = #state{wal_log = undefined}) ->
     {ok, State#state{writes_mnesia = State#state.writes_mnesia + 1}};
 
 do_wal_write(User, Msg, BucketCount, State = #state{wal_log = Log, seq_no = SeqNo}) ->
-    Timestamp = os:system_time(millisecond),
+    Timestamp = get_timestamp(),
     BucketID = erlang:phash2(Msg, BucketCount),
     Key = {User, BucketID},
     NewSeqNo = SeqNo + 1,
@@ -403,7 +413,7 @@ do_wal_write_batch(User, Msgs, BucketCount, State = #state{wal_log = undefined})
     {ok, State#state{writes_mnesia = State#state.writes_mnesia + length(Msgs)}};
 
 do_wal_write_batch(User, Msgs, BucketCount, State = #state{wal_log = Log, seq_no = SeqNo}) ->
-    Timestamp = os:system_time(millisecond),
+    Timestamp = get_timestamp(),
     
     %% Build entries
     {Entries, FinalSeqNo, NewPending} = lists:foldl(fun(Msg, {AccE, AccSeq, AccP}) ->
@@ -434,7 +444,7 @@ do_wal_write_batch(User, Msgs, BucketCount, State = #state{wal_log = Log, seq_no
     end.
 
 do_direct_mnesia_write(User, Msg, BucketCount) ->
-    Timestamp = os:system_time(millisecond),
+    Timestamp = get_timestamp(),
     BucketID = erlang:phash2(Msg, BucketCount),
     Key = {User, BucketID},
     F = fun() -> mnesia:write({offline_msg, Key, Timestamp, Msg}) end,
