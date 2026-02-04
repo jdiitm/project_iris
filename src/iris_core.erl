@@ -119,6 +119,13 @@ init([]) ->
         #{id => iris_group,
           start => {iris_group, start_link, []},
           type => worker,
+          restart => permanent},
+          
+        %% Shard Manager: Consistent user-to-shard mapping for horizontal scaling
+        %% FIX: iris_shard was missing from supervisor - needed for message routing
+        #{id => iris_shard,
+          start => {iris_shard, start_link, []},
+          type => worker,
           restart => permanent}
     ],
 
