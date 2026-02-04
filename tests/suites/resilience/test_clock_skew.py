@@ -507,12 +507,13 @@ def test_docker_clock_skew():
     """
     Test actual clock skew by manipulating Docker container time.
     
-    This test is OPTIONAL - it only runs when Docker containers are available.
-    Other tests (ordering, dedup, presence, reconnect) verify clock skew tolerance
-    at the protocol level. This test adds real clock manipulation when possible.
+    CRITICAL: When Docker containers ARE running, this test MUST succeed with
+    real clock injection. Falling back to "protocol tests" is NOT acceptable
+    because those tests don't actually inject clock skew - they test with
+    synchronized clocks, which proves nothing about skew tolerance.
     
-    Returns True if: Docker not available (other tests cover skew) OR real injection worked
-    Returns False if: Docker available but injection/test failed
+    Returns True if: Docker not available (standalone mode) OR real injection worked
+    Returns False if: Docker available but injection failed (MUST install libfaketime)
     """
     global REAL_CLOCK_INJECTION
     
@@ -592,12 +593,17 @@ def test_docker_clock_skew():
         log_test("Docker clock skew", test_passed, 
                 f"REAL INJECTION: {CLOCK_SKEW_SECONDS}s skew tested on {target_container}")
     else:
-        # libfaketime not available - this is acceptable since protocol tests verify skew
-        log("  libfaketime not available in container")
-        log("  Clock skew tolerance is verified by protocol tests (ordering, dedup, etc.)")
-        log("  To enable real injection: apt-get install -y libfaketime in Docker image")
-        log_test("Docker clock skew", True, 
-                "libfaketime not available (protocol tests verify skew tolerance)")
+        # libfaketime not available - this is a FAILURE when Docker is running
+        # Protocol tests do NOT actually inject clock skew, so they don't verify NFR-16
+        log("  FAIL: libfaketime not available in container")
+        log("  When Docker cluster is running, real clock injection is REQUIRED")
+        log("  Protocol tests run with synchronized clocks and do NOT verify skew tolerance")
+        log("")
+        log("  FIX: Install libfaketime in Docker image:")
+        log("       apt-get install -y libfaketime")
+        log("  Or add to Dockerfile: RUN apt-get update && apt-get install -y libfaketime")
+        log_test("Docker clock skew", False, 
+                "FAIL: libfaketime not installed (required for NFR-16 verification)")
 
 
 # =============================================================================

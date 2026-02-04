@@ -433,11 +433,12 @@ def test_ack_implies_durability():
     else:
         print("  ✅ ACK received from server")
     
-    # Allow Mnesia WAL to flush (single-node durability requirement)
-    print("  Waiting 2s for Mnesia WAL flush...")
-    time.sleep(2)
+    # CRITICAL: Do NOT wait before killing. RFC NFR-8 requires ACK to mean
+    # "data is durable NOW". Any sleep here would mask race conditions where
+    # ACK is sent before sync_transaction completes.
+    # If this test fails, the bug is in the server (ACK sent prematurely).
     
-    print(f"\n3. Stopping core node: {CONTAINER_NAME}")
+    print(f"\n3. Stopping core node: {CONTAINER_NAME} (IMMEDIATELY after ACK)")
     if not kill_container(CONTAINER_NAME):
         print("  ❌ Failed to kill container")
         return False

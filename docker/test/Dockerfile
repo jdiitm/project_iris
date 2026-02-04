@@ -11,7 +11,8 @@
 
 FROM erlang:25-alpine
 
-# Install Python and dependencies
+# Install Python, dependencies, and clock manipulation tools
+# libfaketime is REQUIRED for NFR-16 (Clock Skew Tolerance) testing
 RUN apk add --no-cache \
     python3 \
     py3-pip \
@@ -19,6 +20,7 @@ RUN apk add --no-cache \
     curl \
     procps \
     coreutils \
+    libfaketime \
     && rm -rf /var/cache/apk/*
 
 # Create app directory

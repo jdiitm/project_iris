@@ -1,0 +1,25 @@
+# =============================================================================
+# Project Iris - Cluster Node Image
+# =============================================================================
+# Extended erlang:25-alpine with tools required for testing:
+# - libfaketime: Required for NFR-16 (Clock Skew Tolerance) testing
+# - procps: For process monitoring
+# - NET_ADMIN tools: For network partition testing
+# =============================================================================
+
+FROM erlang:25-alpine
+
+# Install testing tools
+# libfaketime is REQUIRED for RFC NFR-16 clock skew verification
+RUN apk add --no-cache \
+    libfaketime \
+    procps \
+    iptables \
+    iproute2 \
+    bash \
+    && rm -rf /var/cache/apk/*
+
+# Verify libfaketime is installed correctly
+RUN ls -la /usr/lib/faketime/ || echo "Warning: faketime lib path may vary"
+
+WORKDIR /app
