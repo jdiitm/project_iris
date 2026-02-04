@@ -34,6 +34,8 @@ import sys
 import re
 import argparse
 import socket
+import ssl
+from pathlib import Path
 
 # Add project root to sys.path
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -42,6 +44,25 @@ if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
 from tests.framework.cluster import ClusterManager, get_cluster
+
+# TLS Configuration
+CERTS_DIR = Path(project_root) / "certs"
+
+def create_tls_context():
+    """Create TLS context for secure connections."""
+    context = ssl.create_default_context()
+    ca_cert = CERTS_DIR / "ca.pem"
+    if ca_cert.exists():
+        context.load_verify_locations(str(ca_cert))
+    context.check_hostname = False
+    context.verify_mode = ssl.CERT_NONE  # For testing
+    return context
+
+def create_tls_socket(host='localhost', port=8085, timeout=5):
+    """Create a TLS-wrapped socket connection."""
+    context = create_tls_context()
+    sock = socket.create_connection((host, port), timeout=timeout)
+    return context.wrap_socket(sock, server_hostname=host)
 
 # ============================================================================
 # Configuration - Thresholds
@@ -83,11 +104,9 @@ def run_cmd(cmd, bg=False, ignore_fail=False, timeout=None):
         return ""
 
 def verify_cluster_alive():
-    """Verify the cluster is still responding."""
+    """Verify the cluster is still responding (TLS-enabled)."""
     try:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(5)
-        sock.connect(("localhost", 8085))
+        sock = create_tls_socket('localhost', 8085, timeout=5)
         sock.sendall(bytes([0x01]) + b"resilience_check")
         resp = sock.recv(1024)
         sock.close()
@@ -655,10 +674,8 @@ def run_offline_verify(args) -> bool:
         
         for i in range(verify_attempts):
             try:
-                # Try to login and receive any pending messages
-                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                sock.settimeout(5)
-                sock.connect(("localhost", 8085))
+                # Try to login and receive any pending messages (TLS-enabled)
+                sock = create_tls_socket('localhost', 8085, timeout=5)
                 
                 test_user = f"verify_user_{i}_{int(time.time())}"
                 sock.sendall(bytes([0x01]) + test_user.encode())
