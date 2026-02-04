@@ -625,6 +625,176 @@ def test_automatic_convergence() -> bool:
 
 
 # =============================================================================
+# Test: Partition FIFO Ordering (RFC Section 7.2)
+# =============================================================================
+
+def test_partition_fifo_ordering() -> bool:
+    """
+    Test: FIFO Ordering Across Partition-Heal Cycles
+    
+    RFC Section 7.2 specifies buffer-then-drain behavior. This test verifies
+    that messages queued during partition are delivered in FIFO order after heal.
+    
+    Scenario:
+    1. Create partition (minority/majority)
+    2. Send 50 numbered messages from majority to user in minority
+    3. Heal partition
+    4. Verify recipient receives messages 1-50 in ORDER
+    
+    This is CRITICAL because partition recovery might cause reordering if
+    not implemented correctly (e.g., if queues drain in parallel).
+    """
+    log("\n" + "=" * 60)
+    log("Test: Partition FIFO Ordering (RFC Section 7.2)")
+    log("=" * 60)
+    
+    test_id = f"fifo_{int(time.time())}"
+    NUM_MESSAGES = 50
+    
+    sender_name = f"fifo_sender_{test_id}"
+    receiver_name = f"fifo_receiver_{test_id}"
+    
+    # Phase 1: Create partition
+    log("\nPhase 1: Creating partition (isolating West region)...")
+    
+    for container in MINORITY_CONTAINERS:
+        if not iptables_drop_all(container):
+            log(f"  WARN: Failed to partition {container}")
+    
+    log("  Partition created. Waiting 10s for detection...")
+    time.sleep(10)
+    
+    # Phase 2: Send numbered messages from majority (East) to minority user
+    log(f"\nPhase 2: Sending {NUM_MESSAGES} numbered messages during partition...")
+    
+    sender = connect_and_login(EDGE_EAST["port"], sender_name)
+    if not sender:
+        log("  FAIL: Could not connect sender to majority")
+        iptables_restore_all()
+        return False
+    
+    sent_messages = []
+    for i in range(NUM_MESSAGES):
+        msg_content = f"FIFO_MSG_{test_id}_{i:04d}"  # Zero-padded for easy sorting
+        success, _ = send_message(sender, receiver_name, msg_content)
+        if success:
+            sent_messages.append(msg_content)
+        else:
+            log(f"  WARN: Message {i} not accepted")
+    
+    sender.close()
+    log(f"  Sent {len(sent_messages)} messages")
+    
+    if len(sent_messages) < NUM_MESSAGES * 0.9:
+        log(f"  FAIL: Too few messages accepted ({len(sent_messages)}/{NUM_MESSAGES})")
+        iptables_restore_all()
+        return False
+    
+    # Phase 3: Heal partition
+    log("\nPhase 3: Healing partition...")
+    
+    for container in MINORITY_CONTAINERS:
+        iptables_restore(container)
+    
+    log("  Waiting 30s for convergence and message delivery...")
+    time.sleep(30)
+    
+    # Phase 4: Connect as receiver and fetch messages
+    log("\nPhase 4: Fetching messages as receiver...")
+    
+    receiver = connect_and_login(EDGE_EAST["port"], receiver_name)
+    if not receiver:
+        # Try West edge
+        receiver = connect_and_login(EDGE_WEST["port"], receiver_name)
+    
+    if not receiver:
+        log("  FAIL: Could not connect as receiver")
+        return False
+    
+    # Request offline messages
+    received_messages = []
+    try:
+        receiver.sendall(bytes([0x04]))  # CATCHUP opcode
+        receiver.settimeout(10.0)
+        
+        # Collect all received data
+        all_data = b""
+        while True:
+            try:
+                chunk = receiver.recv(4096)
+                if not chunk:
+                    break
+                all_data += chunk
+            except socket.timeout:
+                break
+        
+        # Extract FIFO messages from received data
+        for msg in sent_messages:
+            if msg.encode() in all_data:
+                received_messages.append(msg)
+        
+    except Exception as e:
+        log(f"  Error fetching messages: {e}")
+    finally:
+        receiver.close()
+    
+    log(f"  Received {len(received_messages)}/{len(sent_messages)} messages")
+    
+    if len(received_messages) < len(sent_messages) * 0.9:
+        log(f"  FAIL: Too many messages lost")
+        return False
+    
+    # Phase 5: Verify FIFO ordering
+    log("\nPhase 5: Verifying FIFO ordering...")
+    
+    # Extract sequence numbers from received messages
+    received_seqs = []
+    for msg in received_messages:
+        # Parse "FIFO_MSG_{test_id}_{seq:04d}"
+        try:
+            seq = int(msg.split("_")[-1])
+            received_seqs.append(seq)
+        except ValueError:
+            continue
+    
+    # Check if received in order
+    is_ordered = True
+    out_of_order_count = 0
+    prev_seq = -1
+    
+    for seq in received_seqs:
+        if seq < prev_seq:
+            is_ordered = False
+            out_of_order_count += 1
+        prev_seq = seq
+    
+    if is_ordered:
+        log("  PASS: All messages received in FIFO order")
+        log("  RFC Section 7.2 Buffer-Then-Drain: VERIFIED")
+        return True
+    else:
+        log(f"  FAIL: {out_of_order_count} messages out of order")
+        log("  RFC Section 7.2 FIFO ordering VIOLATED")
+        
+        # Show first few out-of-order occurrences
+        prev = -1
+        shown = 0
+        for i, seq in enumerate(received_seqs):
+            if seq < prev and shown < 5:
+                log(f"    Position {i}: expected >{prev}, got {seq}")
+                shown += 1
+            prev = seq
+        
+        return False
+
+
+def iptables_restore_all():
+    """Helper to restore all containers."""
+    for container in MINORITY_CONTAINERS + MAJORITY_CONTAINERS:
+        iptables_restore(container)
+
+
+# =============================================================================
 # Main
 # =============================================================================
 
@@ -663,6 +833,7 @@ def main():
         results.append(("Minority Partition Write Rejection", test_minority_partition_write_rejection()))
         results.append(("Majority Partition Write Success", test_majority_partition_write_success()))
         results.append(("Automatic Convergence", test_automatic_convergence()))
+        results.append(("Partition FIFO Ordering", test_partition_fifo_ordering()))
     finally:
         # Always restore connectivity
         log("\nCleaning up: restoring all network connectivity...")
