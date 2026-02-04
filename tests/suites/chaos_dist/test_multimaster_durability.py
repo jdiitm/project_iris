@@ -98,6 +98,7 @@ def login(sock, username):
     try:
         response = sock.recv(1024)
         if b"LOGIN_OK" in response:
+            time.sleep(0.05)  # Ensure server-side registration completes
             return True, response
         else:
             return False, response

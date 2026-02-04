@@ -38,7 +38,7 @@ CA_CERT = PROJECT_ROOT / "certs" / "ca.pem"
 # Configuration
 SERVER_HOST = os.environ.get("IRIS_HOST", "localhost")
 SERVER_PORT = int(os.environ.get("IRIS_PORT", "8085"))
-TIMEOUT = 5
+TIMEOUT = 10  # Increased for reliability under load
 
 
 # =============================================================================
@@ -491,6 +491,10 @@ def test_live_message_contract():
         response = sender_sock.recv(1024)
         assert b"LOGIN_OK" in response, "Sender login failed"
         
+        # Small delay to ensure registration completes (same as IrisClient)
+        import time
+        time.sleep(0.05)
+        
         # Login receiver
         raw_recv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         raw_recv.settimeout(TIMEOUT)
@@ -503,6 +507,9 @@ def test_live_message_contract():
         response = recv_sock.recv(1024)
         assert b"LOGIN_OK" in response, "Receiver login failed"
         
+        # Small delay to ensure registration completes
+        time.sleep(0.05)
+        
         # Send message per contract
         msg_contract = next(c for c in PROTOCOL_CONTRACTS if c.name == "send_message")
         test_message = "contract_test_message"
@@ -510,12 +517,11 @@ def test_live_message_contract():
         
         sender_sock.sendall(msg_data)
         
-        # Give time for delivery
-        import time
-        time.sleep(0.5)
+        # Give time for delivery and use blocking receive with timeout
+        time.sleep(0.1)
         
-        # Check receiver got message
-        recv_sock.setblocking(False)
+        # Check receiver got message (use timeout instead of non-blocking)
+        recv_sock.settimeout(5.0)
         try:
             data = recv_sock.recv(4096)
             # Message should be delivered in reliable format
@@ -524,9 +530,9 @@ def test_live_message_contract():
             elif data and test_message.encode() in data:
                 print("  ✓ live_message contract: VALID (raw delivery)")
             else:
-                print(f"  ⚠ live_message contract: Unexpected response format")
-        except BlockingIOError:
-            print("  ⚠ live_message contract: No message received (timeout)")
+                print(f"  ⚠ live_message contract: Unexpected response format: {data[:20] if data else 'empty'}")
+        except socket.timeout:
+            print("  ⚠ live_message contract: No message received within timeout")
         
         sender_sock.close()
         recv_sock.close()

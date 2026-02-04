@@ -102,7 +102,11 @@ class SimpleClient:
         # Wait for LOGIN_OK
         try:
             response = self.sock.recv(1024)
-            return b"LOGIN_OK" in response
+            if b"LOGIN_OK" in response:
+                import time
+                time.sleep(0.05)  # Ensure server-side registration completes
+                return True
+            return False
         except:
             return False
     

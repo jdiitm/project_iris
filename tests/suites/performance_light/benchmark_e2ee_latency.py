@@ -534,9 +534,9 @@ def benchmark_key_bundle_fetch() -> LatencyResult:
     # Warmup fetches
     for i in range(WARMUP_MESSAGES):
         try:
-            # Send key bundle fetch request (opcode 0x20 = GET_KEY_BUNDLE)
+            # Send key bundle fetch request (opcode 0x21 = FETCH_PREKEYS per RFC-001-AMENDMENT-001)
             target = f"{bundle_user}_{i}".encode()
-            packet = bytes([0x20]) + len(target).to_bytes(2, 'big') + target
+            packet = bytes([0x21]) + len(target).to_bytes(2, 'big') + target
             
             start = time.perf_counter()
             fetcher.sock.sendall(packet)
@@ -552,8 +552,9 @@ def benchmark_key_bundle_fetch() -> LatencyResult:
     for i in range(NUM_SAMPLES):
         try:
             # Each fetch for a different "user" to avoid caching effects
+            # Opcode 0x21 = FETCH_PREKEYS per RFC-001-AMENDMENT-001
             target = f"{bundle_user}_{WARMUP_MESSAGES + i}".encode()
-            packet = bytes([0x20]) + len(target).to_bytes(2, 'big') + target
+            packet = bytes([0x21]) + len(target).to_bytes(2, 'big') + target
             
             start = time.perf_counter()
             fetcher.sock.sendall(packet)

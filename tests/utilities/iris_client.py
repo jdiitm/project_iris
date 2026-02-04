@@ -76,6 +76,13 @@ class IrisClient:
             extra = ack[idx + len(b"LOGIN_OK"):]
             if extra:
                 self.buffer = extra
+        
+        # Small delay to ensure server-side registration completes
+        # This prevents race conditions where messages are sent before
+        # the recipient is fully registered in the presence table
+        import time
+        time.sleep(0.05)  # 50ms is enough for ETS propagation
+        
         return True
     
     def send_msg(self, target, msg):

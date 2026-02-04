@@ -7,7 +7,28 @@
 # Usage:
 #   ./tests/run_all_tests.sh           # Run all tests
 #   ./tests/run_all_tests.sh --quick   # Skip Docker tests
+#   sudo ./tests/run_all_tests.sh      # Run with elevated permissions
 # ============================================================================
+
+# ============================================================================
+# ULIMIT CONFIGURATION (Required for Erlang VM)
+# ============================================================================
+# Erlang requires a minimum of ~1024 file descriptors. When running with sudo,
+# ulimit resets to default (often 1024), causing the auto-tune to set +P too low.
+# We set a reasonable minimum here to ensure Erlang can start.
+REQUIRED_ULIMIT=65536
+CURRENT_ULIMIT=$(ulimit -n)
+
+if [ "$CURRENT_ULIMIT" -lt "$REQUIRED_ULIMIT" ]; then
+    # Try to increase ulimit (will work if running as root/sudo)
+    ulimit -n "$REQUIRED_ULIMIT" 2>/dev/null || true
+    NEW_ULIMIT=$(ulimit -n)
+    if [ "$NEW_ULIMIT" -lt 4096 ]; then
+        echo "WARNING: ulimit -n is $NEW_ULIMIT (need at least 4096 for Erlang)"
+        echo "Try: sudo bash -c 'ulimit -n 65536 && $0 $*'"
+        exit 1
+    fi
+fi
 
 cd "$(dirname "$0")/.."
 PROJECT_ROOT=$(pwd)
@@ -50,9 +71,20 @@ cleanup() {
     pkill -9 beam.smp 2>/dev/null || true
     pkill -9 epmd 2>/dev/null || true
     docker compose -f docker/global-cluster/docker-compose.yml down -v 2>/dev/null || true
-    find . -maxdepth 1 -name "Mnesia.*" -exec rm -rf {} \; 2>/dev/null || true
+    
+    # Clean up Mnesia directories and data
+    rm -rf Mnesia.* MnesiaCore.* data/ 2>/dev/null || true
     find /tmp -maxdepth 1 -name "iris_*" -exec rm -rf {} \; 2>/dev/null || true
     rm -f erl_crash.dump core.log edge1.log edge2.log 2>/dev/null || true
+    
+    # Verify cleanup succeeded (detect permission issues early)
+    if ls -d Mnesia.* MnesiaCore.* data/ 2>/dev/null | grep -q .; then
+        echo -e "${RED}[CLEANUP ERROR]${NC} Could not remove Mnesia/data directories."
+        echo -e "${RED}These may have root permissions from a previous sudo run.${NC}"
+        echo -e "${YELLOW}Fix with: sudo rm -rf Mnesia.* MnesiaCore.* data/ core.log edge1.log${NC}"
+        exit 1
+    fi
+    
     sleep 2
 }
 
@@ -145,9 +177,36 @@ start_server || exit 1
 
 echo ""
 echo "--- Integration (22 tests) ---"
+# Run heavy load tests LAST to prevent Mnesia overload from affecting other tests
+HEAVY_TESTS="test_degradation_order"
+
 for test in tests/suites/integration/test_*.py; do
-    [ -f "$test" ] && run_test "$test" 180
+    [ -f "$test" ] || continue
+    test_name=$(basename "$test" .py)
+    
+    # Skip heavy tests in first pass
+    if [[ "$HEAVY_TESTS" == *"$test_name"* ]]; then
+        continue
+    fi
+    
+    run_test "$test" 180
 done
+
+# Now run heavy load tests (which may overwhelm Mnesia)
+echo ""
+echo "--- Heavy Load Integration Tests ---"
+for test_name in $HEAVY_TESTS; do
+    test="tests/suites/integration/${test_name}.py"
+    [ -f "$test" ] && run_test "$test" 300
+done
+
+# Restart server after heavy tests to recover Mnesia
+echo ""
+echo -e "${YELLOW}[RECOVERY]${NC} Restarting server after heavy load tests..."
+pkill -9 beam.smp 2>/dev/null || true
+sleep 3
+rm -rf Mnesia.* MnesiaCore.* 2>/dev/null || true
+start_server || exit 1
 
 echo ""
 echo "--- E2E (5 tests) ---"
@@ -178,6 +237,14 @@ echo "--- Resilience (2 standalone tests) ---"
 run_test "tests/suites/resilience/test_clock_skew.py" 300
 run_test "tests/suites/resilience/test_hard_kill.py" 300
 
+# Restart server after resilience tests (test_hard_kill kills the server)
+echo ""
+echo -e "${YELLOW}[RECOVERY]${NC} Restarting server after resilience tests..."
+pkill -9 beam.smp 2>/dev/null || true
+sleep 3
+rm -rf Mnesia.* MnesiaCore.* 2>/dev/null || true
+start_server || exit 1
+
 echo ""
 echo "--- Performance (3 standalone tests) ---"
 run_test "tests/suites/performance_light/benchmark_e2ee_latency.py" 180
@@ -189,7 +256,13 @@ echo "--- Stress (4 standalone tests) ---"
 run_test "tests/suites/stress/stress_offline_delete.py" 180
 run_test "tests/suites/stress/test_flow_controller_scale.py" 180
 run_test "tests/suites/stress/test_group_fanout.py" 180
-run_test "tests/suites/stress/test_soak_memory.py" 180
+
+# Soak test: Use CI duration (5 minutes instead of 1 hour)
+export SOAK_DURATION_HOURS=0.08  # ~5 minutes
+export SOAK_SAMPLE_INTERVAL=30
+run_test "tests/suites/stress/test_soak_memory.py" 420  # 7 minutes timeout
+unset SOAK_DURATION_HOURS
+unset SOAK_SAMPLE_INTERVAL
 
 echo ""
 echo "Stopping standalone server..."

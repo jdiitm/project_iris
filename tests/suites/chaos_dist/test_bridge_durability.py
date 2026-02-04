@@ -352,6 +352,8 @@ def send_cross_region_message(port: int, sender: str, target: str, msg_id: str) 
             log(f"  Login failed for {sender}")
             return False
         
+        time.sleep(0.05)  # Ensure server-side registration completes
+        
         # Send message to user in different region
         target_bytes = target.encode()
         msg_bytes = msg_id.encode()

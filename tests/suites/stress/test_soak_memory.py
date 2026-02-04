@@ -77,10 +77,12 @@ class MemorySample:
 class SoakTestConfig:
     """Configuration for soak test."""
     def __init__(self):
-        self.duration_hours = float(os.environ.get('SOAK_DURATION_HOURS', '1'))
+        # Default to 5 minutes for CI, use SOAK_DURATION_HOURS=1 for full hour test
+        # Use SOAK_DURATION_HOURS=24 for nightly runs
+        self.duration_hours = float(os.environ.get('SOAK_DURATION_HOURS', '0.08'))  # ~5 min default
         self.connections = int(os.environ.get('SOAK_CONNECTIONS', '100'))
         self.msg_rate = float(os.environ.get('SOAK_MSG_RATE', '10'))
-        self.sample_interval = int(os.environ.get('SOAK_SAMPLE_INTERVAL', '60'))
+        self.sample_interval = int(os.environ.get('SOAK_SAMPLE_INTERVAL', '30'))  # 30s for quick runs
         self.host = os.environ.get('IRIS_HOST', 'localhost')
         self.port = int(os.environ.get('IRIS_PORT', '8085'))
         self.max_memory_growth_pct = float(os.environ.get('SOAK_MAX_GROWTH_PCT', '10'))

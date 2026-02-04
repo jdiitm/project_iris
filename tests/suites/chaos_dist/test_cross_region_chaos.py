@@ -395,6 +395,8 @@ def send_message(port: int, sender: str, target: str, msg_id: str) -> bool:
         if b"LOGIN_OK" not in login_response:
             return False
         
+        time.sleep(0.05)  # Ensure server-side registration completes
+        
         # Send message with sequence number
         target_bytes = target.encode()
         msg_bytes = msg_id.encode()

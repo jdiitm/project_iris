@@ -112,7 +112,10 @@ def login(sock, username):
     sock.sendall(packet)
     try:
         response = sock.recv(1024)
-        return len(response) > 0
+        if len(response) > 0:
+            time.sleep(0.05)  # Ensure server-side registration completes
+            return True
+        return False
     except socket.timeout:
         return False
 
