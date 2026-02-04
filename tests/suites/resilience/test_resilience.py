@@ -48,6 +48,13 @@ from tests.framework.cluster import ClusterManager, get_cluster
 # TLS Configuration
 CERTS_DIR = Path(project_root) / "certs"
 
+def get_tls_cluster_manager():
+    """Create a ClusterManager with TLS enabled."""
+    return ClusterManager(
+        tls_enabled=True,
+        config_path='config/test_tls'
+    )
+
 def create_tls_context():
     """Create TLS context for secure connections."""
     context = ssl.create_default_context()
@@ -192,7 +199,7 @@ def run_split_brain(args) -> bool:
     write_rejections = 0      # AUDIT FIX: Track write rejections
     write_attempts = 0        # AUDIT FIX: Track write attempts
     
-    with ClusterManager() as cluster:
+    with get_tls_cluster_manager() as cluster:
         node = get_node("iris_edge1")
         core_node = get_node("iris_core")
         procs = []
@@ -336,7 +343,7 @@ def run_oom(args) -> bool:
     max_kb = 0
     crashed = False
     
-    with ClusterManager() as cluster:
+    with get_tls_cluster_manager() as cluster:
         # Verify cluster is alive before starting
         if not verify_cluster_alive():
             log("FAIL: Cluster not responsive before test")
@@ -436,7 +443,7 @@ def run_disk(args) -> bool:
     
     passed = True
     
-    with ClusterManager() as cluster:
+    with get_tls_cluster_manager() as cluster:
         node = get_node("iris_edge1")
         
         # Verify cluster is alive before starting
@@ -533,7 +540,7 @@ def run_backpressure(args) -> bool:
     max_queue = 0
     critical_exceeded = False
     
-    with ClusterManager() as cluster:
+    with get_tls_cluster_manager() as cluster:
         node = get_node("iris_edge1")
         
         # Verify cluster is alive before starting
@@ -640,7 +647,7 @@ def run_offline_verify(args) -> bool:
     passed = True
     verification_complete = False
     
-    with ClusterManager() as cluster:
+    with get_tls_cluster_manager() as cluster:
         node = get_node("iris_edge1")
         
         # Verify cluster is alive before starting

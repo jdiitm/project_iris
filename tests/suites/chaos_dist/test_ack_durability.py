@@ -4,21 +4,26 @@ ACK-Durability Test (RFC NFR-6, NFR-8)
 
 This test validates the critical durability contract:
 - Server ACKs ONLY after durable write (sync_transaction complete)
-- Killing node after ACK results in ZERO message loss
+- Hard crash (SIGKILL) after ACK results in ZERO message loss
 
 RFC Requirements:
 - NFR-6: Message durability 99.999%
 - NFR-8: RPO=0 (Recovery Point Objective = zero data loss)
+        "Kill -9 any node, verify all ACKed messages recovered"
 
 Test Strategy:
 1. Send message to offline user (forces storage)
 2. Wait for ACK from server
-3. Immediately kill -9 the core node
+3. Immediately SIGKILL the core node (hard crash, no WAL flush)
 4. Wait for node recovery
 5. Retrieve offline messages
 6. Verify message was preserved
 
-PASS: Message found after recovery
+CRITICAL: This test uses SIGKILL (not SIGTERM) to simulate power loss.
+For single-node: relies on sync_transaction having flushed before ACK.
+For multi-node: relies on replication to surviving nodes.
+
+PASS: Message found after hard crash recovery
 FAIL: Message lost (ACK was premature - RFC VIOLATION)
 """
 
@@ -185,17 +190,18 @@ def parse_and_ack_messages(sock, data):
 
 
 def kill_container(container_name):
-    """Stop Docker container gracefully (allows Mnesia WAL flush).
+    """Kill container with SIGKILL (hard crash, no graceful shutdown).
     
-    Note: RFC NFR-8 specifies "kill -9" durability, which requires multi-node
-    replication. In single-container Docker, we use graceful stop (SIGTERM)
-    with 10s timeout to allow Mnesia to fully flush its write-ahead log and
-    disc tables. True SIGKILL durability requires the production multi-node
-    setup with replication.
+    RFC NFR-8 requires RPO=0 with hard crash simulation. SIGKILL prevents
+    any Mnesia WAL flush or graceful shutdown, simulating power loss.
+    
+    For single-node durability, this relies on Mnesia's sync_transaction
+    having already flushed to disk before ACK was sent. For multi-node
+    durability (recommended), data survives via replication to other nodes.
     """
-    print(f"  Stopping container: {container_name} (graceful, 10s timeout)")
+    print(f"  Killing container: {container_name} (SIGKILL - hard crash)")
     result = subprocess.run(
-        ["docker", "stop", "-t", "10", container_name],
+        ["docker", "kill", "--signal=SIGKILL", container_name],
         capture_output=True,
         text=True
     )

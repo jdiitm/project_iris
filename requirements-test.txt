@@ -5,9 +5,7 @@
 # Core test dependencies
 hypothesis==6.92.1          # Property-based testing
 pytest==7.4.3               # Test framework (optional, for future migration)
-
-# No other dependencies required - tests use Python stdlib only
-# This keeps the test environment lightweight and reproducible
+cryptography>=41.0.0        # E2EE crypto validation (AES-GCM, X25519)
 
 # Note: The test suite primarily uses:
 # - unittest (stdlib)
