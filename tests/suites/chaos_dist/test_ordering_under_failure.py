@@ -78,6 +78,7 @@ class SimpleClient:
         self.sock = None
         self.user = None
         self.buffer = b""
+        self.seq_counter = 0  # Sequence counter for RFC-compliant messaging
     
     def connect(self):
         """Establish TLS connection."""
@@ -111,13 +112,24 @@ class SimpleClient:
             return False
     
     def send_message(self, recipient, message):
-        """Send a message to recipient."""
+        """Send a message to recipient using RFC-compliant opcode 0x07.
+        
+        RFC-001-AMENDMENT-001: Uses opcode 0x07 (sequenced message)
+        Protocol: 0x07 | TargetLen(16) | Target | SeqNo(64) | MsgLen(16) | Msg
+        """
         target = recipient.encode('utf-8')
         msg = message.encode('utf-8')
         
-        # Build packet: opcode(1) + target_len(2) + target + msg_len(2) + msg
-        packet = struct.pack('!BH', 2, len(target)) + target
-        packet += struct.pack('!H', len(msg)) + msg
+        # Increment sequence counter
+        self.seq_counter += 1
+        
+        # Build RFC-compliant packet with opcode 0x07
+        packet = (
+            bytes([0x07]) +
+            struct.pack('>H', len(target)) + target +
+            struct.pack('>Q', self.seq_counter) +
+            struct.pack('>H', len(msg)) + msg
+        )
         
         self.sock.sendall(packet)
     
@@ -267,9 +279,16 @@ def test_basic_ordering():
         sender.close()
         receiver.close()
         
-        if len(received) < 3:
+        # FIX: Require at least 1 message to validate ordering
+        # Receiving 0 messages is NOT acceptable - can't verify ordering without data
+        if len(received) == 0:
+            log_test("Basic ordering", False, 
+                    f"Received 0/{num_messages} - cannot verify ordering without messages")
+            return
+        
+        if len(received) == 1:
             log_test("Basic ordering", True, 
-                    f"Received {len(received)}/{num_messages} (low count acceptable)")
+                    f"Received 1/{num_messages} - single message (ordering trivially satisfied)")
             return
         
         # Check order
@@ -352,9 +371,15 @@ def test_ordering_during_edge_pause():
         sender.close()
         receiver.close()
         
-        if len(received) < 2:
+        # FIX: Require at least 1 message to validate ordering
+        if len(received) == 0:
+            log_test("Ordering during edge pause", False, 
+                    f"Received 0 messages - cannot verify ordering (infrastructure issue)")
+            return
+        
+        if len(received) == 1:
             log_test("Ordering during edge pause", True, 
-                    f"Received {len(received)} messages (disruption expected)")
+                    f"Received 1 message - single message (ordering trivially satisfied)")
             return
         
         # Check order of what was received
@@ -414,9 +439,15 @@ def test_ordering_with_jitter():
         sender.close()
         receiver.close()
         
-        if len(received) < 3:
+        # FIX: Require at least 1 message to validate ordering
+        if len(received) == 0:
+            log_test("Ordering with jitter", False, 
+                    f"Received 0/{num_messages} - cannot verify ordering without messages")
+            return
+        
+        if len(received) == 1:
             log_test("Ordering with jitter", True, 
-                    f"Received {len(received)}/{num_messages} (acceptable)")
+                    f"Received 1/{num_messages} - single message (ordering trivially satisfied)")
             return
         
         is_ordered = all(received[i] < received[i+1] for i in range(len(received)-1))
@@ -490,9 +521,15 @@ def test_ordering_during_reconnect():
         received = receiver.recv_messages(timeout=5)
         receiver.close()
         
-        if len(received) < 3:
+        # FIX: Require at least 1 message to validate ordering
+        if len(received) == 0:
+            log_test("Ordering during reconnect", False, 
+                    f"Received 0 messages - cannot verify ordering without messages")
+            return
+        
+        if len(received) == 1:
             log_test("Ordering during reconnect", True, 
-                    f"Received {len(received)} messages (acceptable)")
+                    f"Received 1 message - single message (ordering trivially satisfied)")
             return
         
         # Messages from same sender should maintain order even across reconnects
@@ -570,12 +607,13 @@ def test_concurrent_senders():
                     all_ordered = False
                     log(f"  Sender {s_id} out of order: {seqs}")
         
-        if all_ordered and len(received) > 0:
+        # FIX: Require at least 1 message to validate ordering
+        if len(received) == 0:
+            log_test("Concurrent senders ordering", False, 
+                    "0 messages received - cannot verify ordering without messages")
+        elif all_ordered:
             log_test("Concurrent senders ordering", True, 
                     f"Received {len(received)} messages, per-sender ordering preserved")
-        elif len(received) == 0:
-            log_test("Concurrent senders ordering", True, 
-                    "No messages received (acceptable for chaos test)")
         else:
             log_test("Concurrent senders ordering", False, 
                     "Per-sender ordering violated!")

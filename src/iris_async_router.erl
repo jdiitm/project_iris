@@ -316,16 +316,63 @@ store_offline_sequenced_sync(User, Msg, SeqNo) ->
     CoreNode = get_any_core_node(),
     case CoreNode of
         undefined ->
-            logger:error("No core node available for offline storage of ~p", [User]);
+            logger:error("No core node available for offline storage of ~p", [User]),
+            {error, no_core_available};
         Node ->
             %% Store with SeqNo as timestamp for ordering
-            rpc:call(Node, iris_core, store_offline_durable, [User, {SeqNo, Msg}], 5000)
+            Result = rpc:call(Node, iris_core, store_offline_durable, [User, {SeqNo, Msg}], 5000),
+            case Result of
+                ok ->
+                    logger:debug("Stored offline message for ~p on ~p (seq=~p)", [User, Node, SeqNo]),
+                    ok;
+                {error, Reason} ->
+                    logger:error("Failed to store offline message for ~p: ~p", [User, Reason]),
+                    {error, Reason};
+                {badrpc, Reason} ->
+                    logger:error("RPC failed storing offline message for ~p on ~p: ~p", [User, Node, Reason]),
+                    %% Try failover to another core
+                    store_offline_sequenced_failover(User, Msg, SeqNo, Node);
+                Other ->
+                    logger:warning("Unexpected result storing offline for ~p: ~p", [User, Other]),
+                    ok  %% Assume success for non-error responses
+            end
+    end.
+
+%% Failover: try other core nodes if primary fails
+store_offline_sequenced_failover(User, Msg, SeqNo, FailedNode) ->
+    OtherNodes = [N || N <- get_discovery_nodes(), N =/= FailedNode],
+    case OtherNodes of
+        [] ->
+            logger:error("All core nodes failed for offline storage of ~p", [User]),
+            {error, all_cores_failed};
+        [Node | _] ->
+            logger:info("Trying failover core ~p for offline storage of ~p", [Node, User]),
+            case rpc:call(Node, iris_core, store_offline_durable, [User, {SeqNo, Msg}], 5000) of
+                ok -> ok;
+                {error, R} -> {error, R};
+                {badrpc, R} -> 
+                    logger:error("Failover core ~p also failed: ~p", [Node, R]),
+                    {error, {badrpc, R}};
+                _ -> ok
+            end
     end.
 
 get_any_core_node() ->
+    %% FIX: Filter out unreachable nodes to avoid RPC timeouts during partitions
+    %% This prevents message loss when some cores are partitioned
     case get_discovery_nodes() of
         [] -> undefined;
-        [Node | _] -> Node
+        Nodes -> 
+            %% Find first reachable node (quick ping check)
+            find_first_reachable(Nodes)
+    end.
+
+%% Find first node that responds to ping (filters out partitioned nodes)
+find_first_reachable([]) -> undefined;
+find_first_reachable([Node | Rest]) ->
+    case net_adm:ping(Node) of
+        pong -> Node;
+        pang -> find_first_reachable(Rest)
     end.
 
 %% FORENSIC_AUDIT_FIX: Extracted blocking logic into separate function
@@ -463,16 +510,24 @@ route_to_node(Node, User, Msg, Fallbacks) ->
     end.
 
 %% Query all cores to find user (needed when Mnesia not replicated)
+%% FIX: Use net_adm:ping to filter out partitioned nodes before RPC
 find_user_across_cores([], _User) ->
     not_found;
 find_user_across_cores([Core | Rest], User) ->
-    case rpc:call(Core, iris_core, lookup_user, [User], 2000) of
-        {ok, _Node, UserPid} when is_pid(UserPid) ->
-            {ok, UserPid};
-        {error, not_found} ->
+    %% Quick connectivity check - skip unreachable nodes
+    case net_adm:ping(Core) of
+        pang ->
+            %% Node unreachable (partitioned) - skip
             find_user_across_cores(Rest, User);
-        {badrpc, _} ->
-            find_user_across_cores(Rest, User)
+        pong ->
+            case rpc:call(Core, iris_core, lookup_user, [User], 2000) of
+                {ok, _Node, UserPid} when is_pid(UserPid) ->
+                    {ok, UserPid};
+                {error, not_found} ->
+                    find_user_across_cores(Rest, User);
+                {badrpc, _} ->
+                    find_user_across_cores(Rest, User)
+            end
     end.
 
 store_offline_via_node(Node, User, Msg, Fallbacks) ->

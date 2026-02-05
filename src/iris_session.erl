@@ -120,10 +120,14 @@ handle_packet({send_message, _Target, _Msg}, undefined, _Pid, _Mod) ->
 %% =============================================================================
 %% AUDIT FIX: Client includes sequence number to guarantee ordering even under
 %% parallel processing. The sequence number is used as the storage timestamp.
+%% 
+%% NOTE: Dedup (RFC NFR-11) is handled on the CORE side in iris_core:store_offline_durable
+%% because that's where messages are persisted. Edge nodes don't have iris_dedup running.
 handle_packet({send_seq, Target, SeqNo, Msg}, User, _Pid, _Mod) when User =/= undefined ->
     case check_message_rate(User) of
         allow ->
             %% Route with sequence number preserved as ordering key
+            %% Dedup happens on core when message is stored
             iris_router:route_sequenced(Target, Msg, SeqNo),
             {ok, User, []};
         {deny, RetryAfter} ->
@@ -508,11 +512,8 @@ complete_login(User, TransportPid) ->
 
 deliver_offline_messages(User) ->
     CoreNode = get_core_node(),
-    %% First, check queue depth to decide delivery strategy
-    QueueDepth = try
-        rpc:call(CoreNode, iris_core, get_offline_queue_depth, [User], 2000)
-    catch _:_ -> 0
-    end,
+    %% First, check queue depth to decide delivery strategy (with failover)
+    QueueDepth = get_offline_queue_depth_with_failover(User, CoreNode),
     
     case QueueDepth of
         N when is_integer(N), N > 0, N =< ?OFFLINE_INLINE_LIMIT ->
@@ -522,19 +523,95 @@ deliver_offline_messages(User) ->
             %% Large queue - deliver first page + continuation indicator
             logger:info("HOT-001: User ~p has ~p offline messages, using paginated delivery", [User, N]),
             deliver_offline_page(User, CoreNode, 0, N);
+        unknown_try_anyway ->
+            %% Failed to get queue depth - try direct retrieval anyway (failover path)
+            logger:warning("Queue depth check failed for ~p, trying direct retrieval", [User]),
+            deliver_all_offline(User, CoreNode);
         _ ->
-            %% No messages or error
+            %% Confirmed no messages
             []
     end.
 
+%% Get offline queue depth with failover to other cores
+get_offline_queue_depth_with_failover(User, PrimaryCore) ->
+    case catch rpc:call(PrimaryCore, iris_core, get_offline_queue_depth, [User], 2000) of
+        N when is_integer(N) -> 
+            N;
+        {badrpc, _Reason} ->
+            %% Primary failed - try other cores
+            AllCores = application:get_env(iris_edge, core_nodes, []),
+            OtherCores = [C || C <- AllCores, C =/= PrimaryCore],
+            get_queue_depth_from_any(User, OtherCores);
+        _ -> 
+            0
+    end.
+
+get_queue_depth_from_any(_User, []) ->
+    %% All cores failed - return special marker to try retrieval anyway
+    unknown_try_anyway;
+get_queue_depth_from_any(User, [Core | Rest]) ->
+    case net_adm:ping(Core) of
+        pong ->
+            case catch rpc:call(Core, iris_core, get_offline_queue_depth, [User], 2000) of
+                N when is_integer(N) -> N;
+                _ -> get_queue_depth_from_any(User, Rest)
+            end;
+        pang ->
+            get_queue_depth_from_any(User, Rest)
+    end.
+
 deliver_all_offline(User, CoreNode) ->
+    %% Try primary core node first
     case rpc:call(CoreNode, iris_core, retrieve_offline, [User], 5000) of
         Msgs when is_list(Msgs), length(Msgs) > 0 ->
             lists:map(fun(Msg) ->
                 MsgId = iris_proto:generate_msg_id(),
                 {send, iris_proto:encode_reliable_msg(MsgId, Msg)}
             end, Msgs);
-        _ -> []
+        {badrpc, Reason} ->
+            %% Primary core failed - try other cores (multimaster failover)
+            logger:warning("Offline retrieval from ~p failed: ~p, trying other cores", [CoreNode, Reason]),
+            deliver_offline_failover(User, CoreNode);
+        [] ->
+            %% Primary returned empty - but other cores might have messages
+            %% (Mnesia sync might be pending after partition heal)
+            logger:debug("No offline messages on primary ~p, trying other cores", [CoreNode]),
+            deliver_offline_failover(User, CoreNode);
+        _ -> 
+            []
+    end.
+
+%% Failover: Try other core nodes if primary is down (multimaster durability)
+deliver_offline_failover(User, FailedCore) ->
+    %% Get all configured core nodes
+    AllCores = application:get_env(iris_edge, core_nodes, []),
+    %% Filter out the failed core and try remaining ones
+    OtherCores = [C || C <- AllCores, C =/= FailedCore],
+    deliver_offline_from_any(User, OtherCores).
+
+deliver_offline_from_any(_User, []) ->
+    logger:error("All core nodes failed for offline retrieval"),
+    [];
+deliver_offline_from_any(User, [Core | Rest]) ->
+    case net_adm:ping(Core) of
+        pong ->
+            case rpc:call(Core, iris_core, retrieve_offline, [User], 5000) of
+                Msgs when is_list(Msgs), length(Msgs) > 0 ->
+                    logger:info("Retrieved ~p offline messages from failover core ~p", [length(Msgs), Core]),
+                    lists:map(fun(Msg) ->
+                        MsgId = iris_proto:generate_msg_id(),
+                        {send, iris_proto:encode_reliable_msg(MsgId, Msg)}
+                    end, Msgs);
+                {badrpc, Reason} ->
+                    logger:warning("Failover core ~p also failed: ~p", [Core, Reason]),
+                    deliver_offline_from_any(User, Rest);
+                _ ->
+                    %% No messages on this core, try next
+                    deliver_offline_from_any(User, Rest)
+            end;
+        pang ->
+            %% Core unreachable, try next
+            deliver_offline_from_any(User, Rest)
     end.
 
 deliver_offline_page(User, CoreNode, Cursor, TotalCount) ->
@@ -559,7 +636,51 @@ deliver_offline_page(User, CoreNode, Cursor, TotalCount) ->
                     MoreIndicator = encode_offline_more(NextCursor, Remaining),
                     MsgActions ++ [{send, MoreIndicator}]
             end;
+        {badrpc, Reason} ->
+            %% Primary core failed - try other cores (multimaster failover)
+            logger:warning("Paginated offline retrieval from ~p failed: ~p, trying other cores", [CoreNode, Reason]),
+            deliver_offline_page_failover(User, CoreNode, Cursor, TotalCount);
+        {[], done} ->
+            %% Primary returned empty - but other cores might have messages
+            logger:debug("No paginated offline messages on primary ~p, trying other cores", [CoreNode]),
+            deliver_offline_page_failover(User, CoreNode, Cursor, TotalCount);
         _ -> []
+    end.
+
+%% Failover for paginated offline delivery
+deliver_offline_page_failover(User, FailedCore, Cursor, TotalCount) ->
+    AllCores = application:get_env(iris_edge, core_nodes, []),
+    OtherCores = [C || C <- AllCores, C =/= FailedCore],
+    deliver_page_from_any(User, OtherCores, Cursor, TotalCount).
+
+deliver_page_from_any(_User, [], _Cursor, _TotalCount) ->
+    logger:error("All core nodes failed for paginated offline retrieval"),
+    [];
+deliver_page_from_any(User, [Core | Rest], Cursor, TotalCount) ->
+    case net_adm:ping(Core) of
+        pong ->
+            case rpc:call(Core, iris_core, retrieve_offline_paginated,
+                          [User, ?OFFLINE_PAGE_SIZE, Cursor], 5000) of
+                {Msgs, NextCursor} when is_list(Msgs), length(Msgs) > 0 ->
+                    logger:info("Retrieved ~p offline messages from failover core ~p", [length(Msgs), Core]),
+                    MsgActions = lists:map(fun(Msg) ->
+                        MsgId = iris_proto:generate_msg_id(),
+                        {send, iris_proto:encode_reliable_msg(MsgId, Msg)}
+                    end, Msgs),
+                    case NextCursor of
+                        done -> MsgActions;
+                        _ ->
+                            Remaining = TotalCount - (Cursor + length(Msgs)),
+                            MoreIndicator = encode_offline_more(NextCursor, Remaining),
+                            MsgActions ++ [{send, MoreIndicator}]
+                    end;
+                {badrpc, _Reason} ->
+                    deliver_page_from_any(User, Rest, Cursor, TotalCount);
+                _ ->
+                    deliver_page_from_any(User, Rest, Cursor, TotalCount)
+            end;
+        pang ->
+            deliver_page_from_any(User, Rest, Cursor, TotalCount)
     end.
 
 %% Encode indicator that more offline messages are available

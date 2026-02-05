@@ -388,44 +388,29 @@ def main():
 
 
 def restore_cluster_state():
-    """Re-initialize cluster after test that restarts containers.
+    """Light-weight cluster restoration after failover tests.
     
-    IMPORTANT: After killing Mnesia nodes, their state becomes stale.
-    We must do a FULL cluster restart to ensure clean state.
+    NOTE: Full cluster restart is handled by the test runner (run_all_tests.sh),
+    not individual tests. This function only ensures containers are running
+    and basic connectivity is restored - does NOT do full Mnesia re-init.
     """
+    print("[cleanup] Light-weight cluster recovery...")
+    
+    # Just ensure the core container is started
     try:
-        # Import from shared utility
-        import sys
-        sys.path.insert(0, str(PROJECT_ROOT / "tests" / "utilities"))
-        try:
-            from cluster_utils import restore_cluster_state as _restore
-            _restore()
-        except ImportError:
-            # Fallback if utility not available
-            print("[cleanup] Restoring cluster state (inline fallback)...")
-            docker_dir = PROJECT_ROOT / "docker" / "global-cluster"
-            compose_file = docker_dir / "docker-compose.yml"
-            
-            subprocess.run(
-                ["docker", "compose", "-f", str(compose_file), "down", "--remove-orphans", "-v"],
-                cwd=str(docker_dir), capture_output=True, timeout=60
-            )
-            time.sleep(5)
-            subprocess.run(
-                ["docker", "compose", "-f", str(compose_file), "up", "-d"],
-                cwd=str(docker_dir), capture_output=True, timeout=180
-            )
-            time.sleep(60)
-            
-            init_script = docker_dir / "init_cluster.sh"
-            if init_script.exists():
-                subprocess.run(
-                    ["bash", str(init_script)],
-                    cwd=str(docker_dir), capture_output=True, timeout=300
-                )
-            print("[cleanup] Cluster state restored")
+        subprocess.run(
+            ["docker", "start", CORE_CONTAINER],
+            capture_output=True, timeout=30
+        )
+        # Wait for it to be healthy
+        wait_container_healthy(CORE_CONTAINER, timeout=30)
+        
+        # Reconnect edge to core
+        reconnect_edge_to_core()
+        
+        print("[cleanup] Core container restarted and reconnected")
     except Exception as e:
-        print(f"[cleanup] Warning: Could not restore cluster state: {e}")
+        print(f"[cleanup] Warning: Light-weight recovery failed: {e}")
 
 
 if __name__ == "__main__":

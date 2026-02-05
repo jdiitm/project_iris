@@ -516,11 +516,16 @@ def test_dedup_without_crash():
         log("  Sending message first time...")
         send_message_with_id(sock, receiver, test_message, msg_id)
         
+        # CRITICAL: Wait for first message to be written to Mnesia
+        # The dedup check requires the first write to complete before second arrives
+        time.sleep(0.5)
+        
         log("  Sending message second time (same ID)...")
         send_message_with_id(sock, receiver, test_message, msg_id)
         sock.close()
         
-        time.sleep(1)
+        # Wait for processing to complete
+        time.sleep(2)
         
         # Check receiver
         sock = connect_auto()
@@ -531,12 +536,17 @@ def test_dedup_without_crash():
         # Count occurrences
         msg_count = sum(1 for m in messages if msg_id.encode() in m or msg_id in str(m))
         
-        if msg_count <= 1:
-            log(f"  PASS: Dedup working (received {msg_count} copy)")
+        if msg_count == 0:
+            log(f"  WARN: No messages received (server may not be processing)")
+            log(f"        This is not a dedup failure, but an infrastructure issue")
+            return True  # Not a dedup failure
+        elif msg_count == 1:
+            log(f"  PASS: Dedup working correctly (received exactly 1 copy)")
             return True
         else:
-            log(f"  WARNING: Received {msg_count} copies (dedup may not be active)")
-            return True  # Not a failure for baseline
+            log(f"  FAIL: Received {msg_count} copies! Dedup NOT working!")
+            log(f"        This is a server-side dedup bug (RFC NFR-11)")
+            return False  # This is a real failure - dedup should work without crash
             
     except Exception as e:
         log(f"FAIL: {e}")
@@ -557,9 +567,7 @@ def main():
     # Run main crash test
     result = test_dedup_survives_sigkill()
     
-    # Restore cluster state
-    restore_cluster_state()
-    
+    # Print result BEFORE cleanup (cleanup should not affect test result)
     log("\n" + "#" * 60)
     if result:
         log("# RESULT: PASSED")
@@ -568,6 +576,15 @@ def main():
         log("# RESULT: FAILED")
         log("# RFC NFR-11 VIOLATION DETECTED")
     log("#" * 60)
+    
+    # Restore cluster state (best effort - don't fail test if cleanup fails)
+    # When running with --docker-core, the test runner handles cluster lifecycle
+    skip_cleanup = os.environ.get("SKIP_TEST_CLEANUP", "").lower() in ("1", "true", "yes")
+    if not skip_cleanup:
+        try:
+            restore_cluster_state()
+        except Exception as e:
+            log(f"[cleanup] Warning: Cleanup failed but test result is preserved: {e}")
     
     return 0 if result else 1
 

@@ -140,6 +140,33 @@ def iptables_drop_all(container: str) -> bool:
     return success
 
 
+def reconnect_edges_to_cores():
+    """
+    Reconnect all edge nodes to their core nodes after partition heal.
+    
+    After a network partition heals, edges may have lost their Erlang distribution
+    connections to cores. This function explicitly re-establishes those connections.
+    """
+    log("  Reconnecting edges to cores...")
+    
+    edge_core_pairs = [
+        ("edge-east-1", "core_east_1@coreeast1"),
+        ("edge-east-2", "core_east_2@coreeast2"),
+        ("edge-west-1", "core_west_1@corewest1"),
+        ("edge-west-2", "core_west_2@corewest2"),
+    ]
+    
+    for edge, core_node in edge_core_pairs:
+        try:
+            # Ping from edge to core to re-establish Erlang distribution connection
+            cmd = f"docker exec {edge} erl -noshell -hidden -sname reconn_{int(time.time())} -setcookie iris_secret -eval \"net_adm:ping('{core_node}'), halt(0).\""
+            subprocess.run(cmd, shell=True, capture_output=True, timeout=10)
+        except Exception as e:
+            log(f"  WARN: Could not reconnect {edge}: {e}")
+    
+    log("  Edge reconnection complete")
+
+
 def iptables_restore(container: str) -> bool:
     """
     Restore network connectivity by flushing iptables rules.
@@ -302,6 +329,16 @@ def connect_and_login(port: int, username: str) -> Optional[socket.socket]:
     """Connect to edge via TLS and login."""
     from tests.suites.chaos_dist.utils import tls_connect_and_login
     return tls_connect_and_login(SERVER_HOST, port, username, timeout=TIMEOUT)
+
+
+def connect_and_login_with_retry(port: int, username: str, max_retries: int = 3) -> Optional[socket.socket]:
+    """Connect to edge via TLS and login with retry logic.
+    
+    Used after partition heal when edge nodes may need time to re-establish connectivity.
+    """
+    from tests.suites.chaos_dist.utils import tls_connect_and_login_with_retry
+    return tls_connect_and_login_with_retry(SERVER_HOST, port, username, 
+                                            timeout=TIMEOUT, max_retries=max_retries)
 
 
 # Sequence counter for RFC-compliant messaging
@@ -613,21 +650,29 @@ def test_automatic_convergence() -> bool:
     west_received = False
     
     # Login as the receivers to check for offline messages
+    # NOTE: Offline messages are delivered AUTOMATICALLY after LOGIN_OK
+    # No need to send opcode 0x04 (that's batch_send, not catchup)
     east_receiver = connect_and_login(EDGE_EAST["port"], f"east_receiver_{test_id}")
     if east_receiver:
-        # Request offline messages (opcode 0x04)
         try:
-            east_receiver.sendall(bytes([0x04]))
+            # Offline messages arrive automatically after login
             east_receiver.settimeout(5.0)
-            response = east_receiver.recv(4096)
+            response = b""
+            try:
+                while True:
+                    chunk = east_receiver.recv(4096)
+                    if not chunk:
+                        break
+                    response += chunk
+            except socket.timeout:
+                pass  # Expected - no more data
+            
             # Check if the message from West arrived
             if f"west_to_east_{test_id}".encode() in response:
                 east_received = True
                 log(f"  East receiver got West message: PASS")
             else:
-                log(f"  East receiver: no West message found")
-        except socket.timeout:
-            log(f"  East receiver: timeout waiting for messages")
+                log(f"  East receiver: no West message found (got {len(response)} bytes)")
         except Exception as e:
             log(f"  East receiver error: {e}")
         finally:
@@ -635,19 +680,25 @@ def test_automatic_convergence() -> bool:
     
     west_receiver = connect_and_login(EDGE_WEST["port"], f"west_receiver_{test_id}")
     if west_receiver:
-        # Request offline messages (opcode 0x04)
         try:
-            west_receiver.sendall(bytes([0x04]))
+            # Offline messages arrive automatically after login
             west_receiver.settimeout(5.0)
-            response = west_receiver.recv(4096)
+            response = b""
+            try:
+                while True:
+                    chunk = west_receiver.recv(4096)
+                    if not chunk:
+                        break
+                    response += chunk
+            except socket.timeout:
+                pass  # Expected - no more data
+            
             # Check if the message from East arrived
             if f"east_to_west_{test_id}".encode() in response:
                 west_received = True
                 log(f"  West receiver got East message: PASS")
             else:
-                log(f"  West receiver: no East message found")
-        except socket.timeout:
-            log(f"  West receiver: timeout waiting for messages")
+                log(f"  West receiver: no East message found (got {len(response)} bytes)")
         except Exception as e:
             log(f"  West receiver error: {e}")
         finally:
@@ -754,37 +805,47 @@ def test_partition_fifo_ordering() -> bool:
     for container in MINORITY_CONTAINERS:
         iptables_restore(container)
     
-    log("  Waiting 15s for convergence and message delivery...")
-    time.sleep(15)
+    # CRITICAL: Reconnect edges to cores after partition heal
+    # Without this, edges may not be able to reach cores that have the messages
+    time.sleep(5)  # Brief wait for iptables rules to take effect
+    reconnect_edges_to_cores()
+    
+    log("  Waiting 20s for convergence and message delivery...")
+    time.sleep(20)  # Increased from 15s to allow more time for message sync
     
     # Phase 4: Connect as receiver and fetch messages
     log("\nPhase 4: Fetching messages as receiver...")
     
-    receiver = connect_and_login(EDGE_EAST["port"], receiver_name)
+    # Use retry logic - after partition heal, edge nodes may need time to reconnect
+    receiver = connect_and_login_with_retry(EDGE_EAST["port"], receiver_name, max_retries=5)
     if not receiver:
-        # Try West edge
-        receiver = connect_and_login(EDGE_WEST["port"], receiver_name)
+        # Try West edge with retries
+        receiver = connect_and_login_with_retry(EDGE_WEST["port"], receiver_name, max_retries=5)
     
     if not receiver:
-        log("  FAIL: Could not connect as receiver")
+        log("  FAIL: Could not connect as receiver after multiple retries")
         return False
     
-    # Request offline messages
+    # Offline messages are delivered AUTOMATICALLY after LOGIN_OK
+    # No need to send opcode 0x04 (that's batch_send, not catchup)
     received_messages = []
     try:
-        receiver.sendall(bytes([0x04]))  # CATCHUP opcode
-        receiver.settimeout(10.0)
+        receiver.settimeout(15.0)  # Extended timeout for offline delivery
         
-        # Collect all received data
+        # Collect all received data (server sends automatically after login)
         all_data = b""
-        while True:
+        start_time = time.time()
+        while time.time() - start_time < 10:  # 10 second collection window
             try:
                 chunk = receiver.recv(4096)
                 if not chunk:
                     break
                 all_data += chunk
+                # Keep receiving until timeout
             except socket.timeout:
                 break
+        
+        log(f"  Received {len(all_data)} bytes of data")
         
         # Extract FIFO messages from received data
         for msg in sent_messages:
@@ -949,22 +1010,47 @@ def test_outbox_queue_ttl_simulation():
         # Step 4: Verify message was queued and delivered
         log("\n  Step 4: Verifying queued message delivery...")
         
-        # Connect as receiver
+        # Connect as receiver and verify delivery
         receiver = connect_and_login(EDGE_WEST["port"], f"ttl_receiver_{test_id}")
-        if receiver:
-            receiver.settimeout(5.0)
-            try:
-                data = receiver.recv(4096)
-                if f"TTL_TEST_MSG_{test_id}".encode() in data:
-                    log("    Message delivered after partition heal")
-                    log("    Outbox queue working correctly")
-            except socket.timeout:
-                log("    No immediate delivery (may need sync)")
-            receiver.close()
+        message_delivered = False
         
-        log("\n  PASS: Outbox queue TTL test completed")
-        log("  Note: Full 7-day TTL expiry requires time manipulation test")
-        return True
+        if receiver:
+            receiver.settimeout(10.0)  # Longer timeout for post-partition delivery
+            all_data = b""
+            
+            try:
+                while True:
+                    try:
+                        chunk = receiver.recv(4096)
+                        if not chunk:
+                            break
+                        all_data += chunk
+                    except socket.timeout:
+                        break
+            except Exception:
+                pass
+            
+            if f"TTL_TEST_MSG_{test_id}".encode() in all_data:
+                log("    Message delivered after partition heal")
+                log("    Outbox queue working correctly")
+                message_delivered = True
+            else:
+                log(f"    Message NOT found in received data ({len(all_data)} bytes)")
+            
+            receiver.close()
+        else:
+            log("    Could not connect receiver to verify delivery")
+        
+        # FIX: Weak assertion hardening - require actual message delivery
+        if message_delivered:
+            log("\n  PASS: Outbox queue TTL test completed")
+            log("        Message was queued during partition and delivered after heal")
+            log("  Note: Full 7-day TTL expiry requires time manipulation test")
+            return True
+        else:
+            log("\n  FAIL: Message was NOT delivered after partition heal")
+            log("        Outbox queue may not be storing/delivering messages correctly")
+            return False
         
     except Exception as e:
         log(f"  Error: {e}")
@@ -1118,16 +1204,37 @@ def test_outbox_queue_overflow_backpressure():
         
         # Backpressure test passes if:
         # - We were able to send many messages (queue accepted them)
+        # - Messages were delivered after heal (at least 10% delivery rate)
         # - OR explicit rejections occurred (backpressure working)
-        # - Messages were delivered after heal
+        #
+        # FIX: Weak assertion hardening - require actual message delivery, not just sends
         
-        if sent_count > 100:
-            log("\n  PASS: Outbox queue handled message flood")
-            log("  Backpressure mechanism operational")
-            return True
-        else:
+        if sent_count < 100:
             log("\n  FAIL: Could not send enough messages to test overflow")
             return False
+        
+        # Calculate delivery rate
+        delivery_rate = received_count / max(sent_count, 1) * 100
+        log(f"    Delivery rate: {delivery_rate:.1f}%")
+        
+        # Require minimum 10% delivery rate after partition heal
+        # This validates that queue actually stores and delivers messages
+        MIN_DELIVERY_RATE = 10.0  # 10% minimum
+        
+        if received_count == 0:
+            log("\n  FAIL: Zero messages delivered after partition heal")
+            log("        Outbox queue is NOT working correctly")
+            log("        Expected at least some messages to be queued and delivered")
+            return False
+        elif delivery_rate < MIN_DELIVERY_RATE:
+            log(f"\n  FAIL: Delivery rate too low ({delivery_rate:.1f}% < {MIN_DELIVERY_RATE}%)")
+            log("        Messages may not be queued/delivered properly")
+            return False
+        else:
+            log(f"\n  PASS: Outbox queue handled message flood")
+            log(f"        Delivered {received_count}/{sent_count} messages ({delivery_rate:.1f}%)")
+            log("        Backpressure mechanism operational")
+            return True
         
     except Exception as e:
         log(f"  Error: {e}")

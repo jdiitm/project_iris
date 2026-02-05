@@ -79,35 +79,38 @@ check_and_mark(MsgId) ->
             duplicate;
         true ->
             %% Successfully claimed in hot tier - but check warm tier for 7-day dedup
-            %% Tier 2: Check bloom filter (7-day window)
-            case check_bloom(MsgId) of
-                true ->
-                    %% P0-FIX: Bloom filter hit is PROBABILISTIC.
-                    %% We MUST verify against definitive storage to avoid false positives (Data Loss).
-                    %% False Positive Rate ~0.1% -> 1 in 1000 messages would be dropped without this check.
-                    case mnesia:dirty_read(dedup_log, MsgId) of
-                        [{dedup_log, MsgId, _Timestamp}] ->
-                            %% Confirmed duplicate in dedup log (warm tier hit)
-                            %% Remove from hot tier since it's actually a duplicate
-                            ets:delete(?TABLE, MsgId),
-                            gen_server:cast(?SERVER, bloom_hit),
-                            duplicate;
-                        [] ->
-                            %% False positive! The message is truly NEW.
-                            %% Already in hot cache, now add to bloom and dedup_log
+            %% 
+            %% P0-FIX: ALWAYS check dedup_log (Mnesia disc_copies) first!
+            %% After crash/restart, bloom filter and ETS are empty, but dedup_log persists.
+            %% Previous code only checked dedup_log when bloom returned true, causing
+            %% duplicate delivery after crashes (RFC NFR-11 violation).
+            %%
+            case mnesia:dirty_read(dedup_log, MsgId) of
+                [{dedup_log, MsgId, _Timestamp}] ->
+                    %% Found in persistent dedup_log - definitely a duplicate!
+                    %% Remove from hot tier since it's actually a duplicate
+                    ets:delete(?TABLE, MsgId),
+                    gen_server:cast(?SERVER, bloom_hit),
+                    duplicate;
+                [] ->
+                    %% Not in dedup_log - check bloom as secondary verification
+                    %% Bloom check is optimization: if bloom says "definitely not seen", skip further checks
+                    case check_bloom(MsgId) of
+                        true ->
+                            %% Bloom says "probably seen" but dedup_log disagrees
+                            %% This is a bloom false positive - message is truly new
                             logger:debug("Dedup: Bloom false positive for ~p - allowing", [MsgId]),
                             add_to_bloom(MsgId),
                             write_dedup_log(MsgId, Now),
                             gen_server:cast(?SERVER, {false_positive, Now}),
+                            new;
+                        false ->
+                            %% Both dedup_log and bloom agree: definitely new
+                            add_to_bloom(MsgId),
+                            write_dedup_log(MsgId, Now),
+                            gen_server:cast(?SERVER, {new_entry, Now}),
                             new
-                    end;
-                false ->
-                    %% Not in bloom either - definitely new message
-                    %% Already in hot cache, now add to bloom and dedup_log
-                    add_to_bloom(MsgId),
-                    write_dedup_log(MsgId, Now),
-                    gen_server:cast(?SERVER, {new_entry, Now}),
-                    new
+                    end
             end
     end.
 

@@ -250,15 +250,18 @@ def send_message(sock, target: str, content: str) -> bool:
 
 
 def fetch_offline_messages(port: int, username: str) -> List[bytes]:
-    """Connect and fetch offline messages."""
+    """Connect and fetch offline messages.
+    
+    NOTE: Offline messages are delivered AUTOMATICALLY after LOGIN_OK.
+    No need to send opcode 0x04 (that's batch_send, not catchup).
+    """
     try:
         sock = connect_tls(port)
         if not login(sock, username):
             sock.close()
             return []
         
-        sock.sendall(bytes([0x04]))  # CATCHUP
-        
+        # Offline messages arrive automatically after login
         messages = []
         sock.settimeout(5)
         try:

@@ -76,6 +76,13 @@ init([]) ->
           type => worker,
           restart => permanent},
           
+        %% Deduplication Service: RFC NFR-11 - 7-day dedup window with Mnesia persistence
+        %% MUST start early - dedup checks happen during message processing
+        #{id => iris_dedup,
+          start => {iris_dedup, start_link, []},
+          type => worker,
+          restart => permanent},
+          
         %% Presence Manager: ETS-backed lockfree presence registry
         %% FORENSIC_AUDIT_FIX: Must start early - creates presence_local ETS table
         #{id => iris_presence,
@@ -229,44 +236,85 @@ store_offline(User, Msg) ->
 %% Old: mnesia:sync_transaction (Global Lock)
 %% New: iris_durable_batcher (Local Disk WAL) -> Mnesia (Async)
 %% P0-B FIX: For multimaster durability, use sync_transaction when cluster mode
+%% RFC NFR-11: Server-side deduplication with 7-day window
+%% RFC FR-5: FIFO ordering using client-provided sequence number
 store_offline_durable(User, Msg) ->
-    Count = get_bucket_count(User),
-    %% Check if we should use sync_transaction for guaranteed replication
-    case application:get_env(iris_core, multimaster_durability, false) of
-        true ->
-            %% P0-B FIX: Use sync_transaction to ensure replication BEFORE ACK
-            %% This is slower but guarantees RPO=0 even under SIGKILL
-            store_offline_sync_replicated(User, Msg, Count);
-        false ->
-            %% P1-H6 FIX: Use WAL for immediate durability (RPO=0) without global lock
-            case iris_durable_batcher:store(User, Msg, Count) of
-                ok -> ok;
-                {error, Reason} -> 
-                    logger:error("WAL write failed for user ~p: ~p", [User, Reason]),
-                    {error, durable_write_failed}
+    %% RFC NFR-11: Extract SeqNo and check dedup BEFORE storing
+    %% RFC FR-5: Preserve SeqNo for FIFO ordering
+    %% Message format may be: {SeqNo, RealMsg} or just binary
+    {DedupKey, ActualMsg, MaybeSeqNo} = case Msg of
+        {SeqNo, RealMsg} when is_integer(SeqNo) ->
+            %% Dedup key = User:SeqNo (unique per recipient+sequence)
+            Key = <<User/binary, ":", (integer_to_binary(SeqNo))/binary>>,
+            {Key, RealMsg, SeqNo};
+        _ ->
+            %% No sequence number - use message hash for dedup
+            Hash = erlang:phash2(Msg),
+            Key = <<User/binary, ":hash:", (integer_to_binary(Hash))/binary>>,
+            {Key, Msg, undefined}
+    end,
+    
+    %% Check for duplicate
+    case iris_dedup:check_and_mark(DedupKey) of
+        duplicate ->
+            %% Silently drop duplicate - this is expected behavior
+            logger:debug("Dedup: Dropping duplicate for ~p (key=~p)", [User, DedupKey]),
+            iris_metrics:dedup_hit(),
+            ok;  %% Return ok - duplicate is not an error
+        new ->
+            %% New message - store it
+            Count = get_bucket_count(User),
+            %% Check if we should use sync_transaction for guaranteed replication
+            case application:get_env(iris_core, multimaster_durability, false) of
+                true ->
+                    %% P0-B FIX: Use sync_transaction to ensure replication BEFORE ACK
+                    %% This is slower but guarantees RPO=0 even under SIGKILL
+                    store_offline_sync_replicated(User, ActualMsg, Count, MaybeSeqNo);
+                false ->
+                    %% P1-H6 FIX: Use WAL for immediate durability (RPO=0) without global lock
+                    case iris_durable_batcher:store(User, ActualMsg, Count) of
+                        ok -> ok;
+                        {error, Reason} -> 
+                            logger:error("WAL write failed for user ~p: ~p", [User, Reason]),
+                            {error, durable_write_failed}
+                    end
             end
     end.
 
 %% P0-B FIX: Sync-replicated offline storage for multimaster durability
 %% Uses mnesia:sync_transaction which blocks until ALL disc_copies have the data
 %% This guarantees no message loss even under SIGKILL, but is slower (~20-100ms)
+%% RFC FR-5: Use client SeqNo as timestamp when available for FIFO ordering
 store_offline_sync_replicated(User, Msg, BucketCount) ->
-    %% CRITICAL: Use HLC for proper message ordering (RFC FR-5)
-    Timestamp = case whereis(iris_hlc) of
+    store_offline_sync_replicated(User, Msg, BucketCount, undefined).
+
+store_offline_sync_replicated(User, Msg, BucketCount, MaybeSeqNo) ->
+    %% RFC FR-5: Use client's SeqNo as timestamp for FIFO ordering when available
+    %% If no SeqNo, fallback to HLC (maintains causality)
+    Timestamp = case MaybeSeqNo of
+        SeqNo when is_integer(SeqNo) ->
+            %% Use SeqNo directly - client guarantees ordering
+            SeqNo;
         undefined ->
-            os:system_time(nanosecond);
-        _Pid ->
-            iris_hlc:to_integer(iris_hlc:send())
+            %% Fallback to HLC for proper message ordering
+            case whereis(iris_hlc) of
+                undefined ->
+                    os:system_time(nanosecond);
+                _Pid ->
+                    iris_hlc:to_integer(iris_hlc:send())
+            end
     end,
     BucketID = erlang:phash2(Msg, BucketCount),
     Key = {User, BucketID},
     Record = {offline_msg, Key, Timestamp, Msg},
     
     %% sync_transaction: Blocks until ALL disc_copies nodes have committed
+    logger:debug("Storing offline msg for ~p: key=~p, ts=~p, node=~p", [User, Key, Timestamp, node()]),
     case mnesia:sync_transaction(fun() ->
         mnesia:write(Record)
     end) of
         {atomic, ok} -> 
+            logger:info("Stored offline msg for ~p on ~p (key=~p, ts=~p)", [User, node(), Key, Timestamp]),
             ok;
         {aborted, Reason} ->
             logger:error("Sync replicated store failed for user ~p: ~p", [User, Reason]),
@@ -657,6 +705,12 @@ init_cross_region_replication() ->
             
             %% Replicate user_meta table (disc_copies)
             replicate_table(user_meta, disc_copies, CoreNodes),
+            
+            %% Replicate dedup_log table (disc_copies for RFC NFR-11 dedup persistence)
+            replicate_table(dedup_log, disc_copies, CoreNodes),
+            
+            %% Replicate revoked_tokens table (disc_copies for auth revocation)
+            replicate_table(revoked_tokens, disc_copies, CoreNodes),
             
             logger:info("Cross-region replication initialized successfully"),
             ok

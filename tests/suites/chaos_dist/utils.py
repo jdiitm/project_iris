@@ -173,3 +173,41 @@ def close_socket(sock: Optional[ssl.SSLSocket]) -> None:
             sock.close()
         except Exception:
             pass
+
+
+def tls_connect_and_login_with_retry(host: str, port: int, username: str,
+                                      timeout: int = DEFAULT_TIMEOUT,
+                                      max_retries: int = 3,
+                                      retry_delay: float = 2.0) -> Optional[ssl.SSLSocket]:
+    """
+    Connect via TLS and perform login handshake with retry logic.
+    
+    After network partition heals, edge nodes may take time to re-establish
+    connectivity. This function retries login failures to handle transient
+    infrastructure issues.
+    
+    Args:
+        host: Hostname or IP address
+        port: Port number
+        username: Username for login
+        timeout: Connection timeout in seconds per attempt
+        max_retries: Maximum number of retry attempts (default 3)
+        retry_delay: Delay in seconds between retries (default 2.0)
+    
+    Returns:
+        ssl.SSLSocket if login successful, None if all retries exhausted
+    """
+    import time
+    
+    last_error = None
+    for attempt in range(max_retries + 1):
+        if attempt > 0:
+            print(f"  Retry {attempt}/{max_retries} for {username}...")
+            time.sleep(retry_delay)
+        
+        sock = tls_connect_and_login(host, port, username, timeout)
+        if sock:
+            return sock
+    
+    print(f"  All {max_retries + 1} login attempts failed for {username}")
+    return None
