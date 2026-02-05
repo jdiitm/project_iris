@@ -72,11 +72,13 @@ This ensures:
 python3 scripts/smart_test.py -- <YOUR_TEST_COMMAND>
 ```
 **Examples:**
-- `python3 scripts/smart_test.py -- python3 tests/run_tests.py --tier 0`
-- `python3 scripts/smart_test.py -- make cluster-up`
+- `python3 scripts/smart_test.py -- ./tests/run_all_tests.sh --quick`
+- `python3 scripts/smart_test.py -- ./docker/global-cluster/cluster.sh up`
 
-**Do NOT run `make test` or `python tests/run_tests.py` directly.**
-Always wrap it.
+**Proven test scripts:**
+- `./tests/run_all_tests.sh` - Main test runner
+- `./docker/global-cluster/cluster.sh` - Docker cluster management
+- `./docker/global-cluster/run_chaos_tests.sh` - Chaos tests with fresh cluster
 
 ---
 

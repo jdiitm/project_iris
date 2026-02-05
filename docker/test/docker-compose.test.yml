@@ -55,7 +55,7 @@ services:
     networks:
       - test-network
     # Command can be overridden for specific test suites
-    command: ["python3", "-u", "tests/run_tests.py", "--all"]
+    command: ["bash", "./tests/run_all_tests.sh"]
 
   # ===========================================================================
   # Core Nodes

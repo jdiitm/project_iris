@@ -49,7 +49,7 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD erl -noshell -eval "io:format('ok'), init:stop()." && python3 --version
 
 # Default command: run all tests
-CMD ["python3", "-u", "tests/run_tests.py", "--all"]
+CMD ["./tests/run_all_tests.sh"]
 
 # Labels
 LABEL maintainer="Project Iris"
