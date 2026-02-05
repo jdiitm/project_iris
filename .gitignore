@@ -10,6 +10,9 @@ erl_crash.dump
 Mnesia*/
 MnesiaCore.*
 
+# WAL (Write-Ahead Log) data files
+data/wal/
+
 # DETS
 *.dets
 
