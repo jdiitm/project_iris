@@ -418,11 +418,15 @@ verify_replication() {
     
     # Use RPC to query the existing core node (not start a new node)
     # Check ram_copies + disc_copies for total replicas
-    # Returns exit code 0 if all tables have >= 2 copies, 1 otherwise
+    # Returns exit code 0 if all REQUIRED tables have >= 2 copies
+    # Bridge tables (cross_region_*) are OPTIONAL - created lazily by iris_region_bridge
     docker exec core-east-1 sh -c 'erl -noshell -sname verify_helper_$RANDOM -setcookie iris_secret -eval "
         pong = net_adm:ping('"'"'core_east_1@coreeast1'"'"'),
-        Tables = [presence, offline_msg, user_status, user_meta],
-        Results = lists:map(fun(T) ->
+        
+        %% Required tables - must have >= 2 copies
+        RequiredTables = [presence, offline_msg, user_status, user_meta],
+        
+        CheckTable = fun(T) ->
             Ram = rpc:call('"'"'core_east_1@coreeast1'"'"', mnesia, table_info, [T, ram_copies]),
             Disc = rpc:call('"'"'core_east_1@coreeast1'"'"', mnesia, table_info, [T, disc_copies]),
             case {Ram, Disc} of
@@ -441,9 +445,11 @@ verify_replication() {
                     io:format(\"  ~p: NOT FOUND~n\", [T]),
                     false
             end
-        end, Tables),
+        end,
         
+        Results = lists:map(CheckTable, RequiredTables),
         AllOk = lists:all(fun(X) -> X end, Results),
+        
         case AllOk of
             true -> 
                 io:format(\"~n  All tables have >= 2 copies - REPLICATION OK~n\"),

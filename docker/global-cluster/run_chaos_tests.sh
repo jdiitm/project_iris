@@ -3,15 +3,15 @@
 # Chaos Test Runner with Proper Logging
 # =============================================================================
 # This script runs chaos/distributed tests with a fresh cluster per test,
-# logging results to a file for post-mortem analysis.
+# using cluster.sh for consistent cluster management.
 # =============================================================================
 
 # Don't use set -e as it causes premature exit on expected failures
-# We handle errors explicitly in the script
 set -o pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-LOG_DIR="$SCRIPT_DIR/../../tests/artifacts/logs"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+LOG_DIR="$PROJECT_ROOT/tests/artifacts/logs"
 LOG_FILE="$LOG_DIR/chaos_test_results_$(date +%Y%m%d_%H%M%S).log"
 
 # Colors for terminal output
@@ -55,70 +55,29 @@ log_header() {
     echo "============================================================" | tee -a "$LOG_FILE"
 }
 
-full_cleanup() {
-    log "NUKING everything..."
+# =============================================================================
+# Cluster Management - Delegate to proven cluster.sh script
+# =============================================================================
+
+cluster_down() {
+    log "Stopping cluster (via cluster.sh down)..."
     cd "$SCRIPT_DIR"
     
-    # Step 1: Kill ALL containers matching our patterns (don't rely on compose)
-    log "  Killing all iris/global-cluster containers..."
-    docker ps -a --format '{{.Names}}' | grep -E '^(core-|edge-|loadgen-)' | xargs -r docker kill 2>/dev/null || true
-    docker ps -a --format '{{.Names}}' | grep -E '^(core-|edge-|loadgen-)' | xargs -r docker rm -f 2>/dev/null || true
+    # Use the PROVEN cluster.sh script directly
+    bash "$SCRIPT_DIR/cluster.sh" down 2>&1 | tee -a "$LOG_FILE" || true
     
-    # Step 2: Remove ALL volumes matching our patterns
-    log "  Removing all mnesia volumes..."
-    docker volume ls -q | grep -E '(mnesia|global-cluster)' | xargs -r docker volume rm -f 2>/dev/null || true
+    # Brief wait for Docker to settle
+    sleep 3
     
-    # Step 3: Remove ALL networks matching our patterns  
-    log "  Removing all iris networks..."
-    docker network ls -q --filter name=iris | xargs -r docker network rm 2>/dev/null || true
-    docker network ls -q --filter name=global-cluster | xargs -r docker network rm 2>/dev/null || true
-    
-    # Step 4: Force prune anything orphaned
-    log "  Pruning orphaned resources..."
-    docker volume prune -f 2>/dev/null || true
-    docker network prune -f 2>/dev/null || true
-    
-    # Step 5: Verify nothing is left
-    local remaining=$(docker ps -a --format '{{.Names}}' | grep -E '^(core-|edge-|loadgen-)' | wc -l)
-    if [ "$remaining" -gt 0 ]; then
-        log "  WARNING: $remaining containers still exist, force killing..."
-        docker ps -a --format '{{.Names}}' | grep -E '^(core-|edge-|loadgen-)' | xargs -r docker rm -f 2>/dev/null || true
-    fi
-    
-    # Step 6: Wait for Docker daemon to fully reclaim resources
-    # This is critical - rapid cluster cycling exhausts Docker internal state
-    log "  Waiting 10s for Docker to fully settle..."
-    sleep 10
-    
-    # Step 7: Verify Docker is responsive
-    if ! docker info >/dev/null 2>&1; then
-        log "  WARNING: Docker not responsive, waiting more..."
-        sleep 10
-    fi
-    
-    log "  Nuke complete - verified clean slate"
+    log "Cluster stopped"
 }
 
-start_cluster() {
-    log "Starting cluster..."
+cluster_up() {
+    log "Starting cluster (via cluster.sh up)..."
     cd "$SCRIPT_DIR"
-    docker compose up -d --build --force-recreate 2>&1 | tee -a "$LOG_FILE"
     
-    # Wait longer for containers - secondary cores need time to join
-    # core-eu-2 has an 8s sleep before joining, plus Mnesia sync time
-    log "Waiting 45s for containers to stabilize (secondary cores need time)..."
-    sleep 45
-    
-    # Verify all containers are running before init
-    local running=$(docker ps --format '{{.Names}}' | grep -E '^core-' | wc -l)
-    if [ "$running" -lt 6 ]; then
-        log "WARNING: Only $running/6 core containers running"
-        log "Waiting additional 15s..."
-        sleep 15
-    fi
-    
-    log "Initializing cluster..."
-    if bash init_cluster.sh 2>&1 | tee -a "$LOG_FILE"; then
+    # Use the PROVEN cluster.sh script directly
+    if bash "$SCRIPT_DIR/cluster.sh" up 2>&1 | tee -a "$LOG_FILE"; then
         log "Cluster initialization SUCCESS"
         return 0
     else
@@ -134,7 +93,7 @@ run_test() {
     log_header "Running: $test_name"
     log "Test file: $test_file"
     
-    cd "$SCRIPT_DIR/../.."  # Go to project root
+    cd "$PROJECT_ROOT"
     
     # Run the test with timeout (5 minutes max)
     # These are standalone Python scripts, not pytest tests
@@ -163,7 +122,7 @@ log "Log file: $LOG_FILE"
 log "Total tests: ${#TESTS[@]}"
 
 # Initial cleanup
-full_cleanup
+cluster_down
 
 for test in "${TESTS[@]}"; do
     test_name=$(basename "$test" .py)
@@ -174,9 +133,9 @@ for test in "${TESTS[@]}"; do
     log "=========================================="
     
     # Clean and start fresh cluster for each test
-    full_cleanup
+    cluster_down
     
-    if start_cluster; then
+    if cluster_up; then
         # Cluster is ready, run the test
         if run_test "$test"; then
             PASS=$((PASS + 1))
@@ -197,7 +156,7 @@ for test in "${TESTS[@]}"; do
 done
 
 # Final cleanup
-full_cleanup
+cluster_down
 
 # =============================================================================
 # Summary

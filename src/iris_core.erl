@@ -712,6 +712,11 @@ init_cross_region_replication() ->
             %% Replicate revoked_tokens table (disc_copies for auth revocation)
             replicate_table(revoked_tokens, disc_copies, CoreNodes),
             
+            %% Replicate cross-region bridge tables (disc_copies for RPO=0 during partitions)
+            %% These tables store messages queued for delivery to partitioned regions
+            replicate_table(cross_region_outbound, disc_copies, CoreNodes),
+            replicate_table(cross_region_dead_letter, disc_copies, CoreNodes),
+            
             logger:info("Cross-region replication initialized successfully"),
             ok
     end.
