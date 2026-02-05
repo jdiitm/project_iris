@@ -218,10 +218,15 @@ wait_for_mnesia_cluster() {
 }
 
 # Force any isolated Mnesia nodes to join the cluster
+# This requires stopping Mnesia, deleting schema, and restarting with cluster
 force_nodes_to_join_cluster() {
     local cores=("core-east-1" "core-east-2" "core-west-1" "core-west-2" "core-eu-1" "core-eu-2")
     local nodes=("core_east_1@coreeast1" "core_east_2@coreeast2" "core_west_1@corewest1" 
                  "core_west_2@corewest2" "core_eu_1@coreeu1" "core_eu_2@coreeu2")
+    
+    # First, identify which nodes are NOT in the cluster
+    local isolated_containers=()
+    local isolated_nodes=()
     
     for i in "${!cores[@]}"; do
         local container="${cores[$i]}"
@@ -231,33 +236,70 @@ force_nodes_to_join_cluster() {
             continue
         fi
         
-        # Check if this node is isolated (not in cluster's db_nodes)
-        docker exec "$container" sh -c "erl -noshell -sname force_join_$RANDOM -setcookie iris_secret -eval \"
-            %% Connect to the main cluster via core-east-1
-            MainNode = 'core_east_1@coreeast1',
-            case net_adm:ping(MainNode) of
-                pong ->
-                    %% Get current db_nodes from main cluster
-                    DbNodes = rpc:call(MainNode, mnesia, system_info, [db_nodes], 5000),
-                    LocalNode = '$node',
-                    case DbNodes of
-                        Nodes when is_list(Nodes) ->
-                            case lists:member(LocalNode, Nodes) of
-                                true -> 
-                                    ok;  %% Already in cluster
-                                false ->
-                                    %% Force join the cluster
-                                    io:format('Forcing $node to join cluster~n'),
-                                    mnesia:change_config(extra_db_nodes, [MainNode]),
-                                    timer:sleep(2000)
-                            end;
-                        _ -> ok
+        # Skip core-east-1 as it's the reference node
+        if [ "$container" = "core-east-1" ]; then
+            continue
+        fi
+        
+        # Check if this node is in the cluster
+        local in_cluster=$(docker exec core-east-1 sh -c "erl -noshell -sname check_$RANDOM -setcookie iris_secret -eval \"
+            pong = net_adm:ping('core_east_1@coreeast1'),
+            DbNodes = rpc:call('core_east_1@coreeast1', mnesia, system_info, [db_nodes], 5000),
+            case DbNodes of
+                Nodes when is_list(Nodes) ->
+                    case lists:member('$node', Nodes) of
+                        true -> io:format(\\\"yes\\\");
+                        false -> io:format(\\\"no\\\")
                     end;
-                pang -> ok
+                _ -> io:format(\\\"error\\\")
             end,
             halt(0).
-        \"" 2>/dev/null || true
+        \"" 2>/dev/null || echo "error")
+        
+        if [ "$in_cluster" = "no" ]; then
+            isolated_containers+=("$container")
+            isolated_nodes+=("$node")
+            log_info "Node $node is isolated - will force join"
+        fi
     done
+    
+    # Force isolated nodes to join by restarting the container
+    # This is the most reliable way - the node will rejoin on startup
+    for i in "${!isolated_containers[@]}"; do
+        local container="${isolated_containers[$i]}"
+        local node="${isolated_nodes[$i]}"
+        
+        log_info "Restarting $container to force Mnesia rejoin..."
+        
+        # Delete Mnesia schema directory in the container
+        docker exec "$container" sh -c "rm -rf /opt/iris/data/mnesia/*" 2>/dev/null || true
+        
+        # Restart the container
+        docker restart "$container" 2>/dev/null || true
+    done
+    
+    # Wait for restarted containers to be healthy
+    if [ ${#isolated_containers[@]} -gt 0 ]; then
+        log_info "Waiting 15s for restarted nodes to rejoin..."
+        sleep 15
+        
+        # Now try change_config on the restarted nodes
+        for i in "${!isolated_containers[@]}"; do
+            local container="${isolated_containers[$i]}"
+            local node="${isolated_nodes[$i]}"
+            
+            docker exec "$container" sh -c "erl -noshell -sname force_$RANDOM -setcookie iris_secret -eval \"
+                MainNode = 'core_east_1@coreeast1',
+                case net_adm:ping(MainNode) of
+                    pong ->
+                        mnesia:change_config(extra_db_nodes, [MainNode]),
+                        timer:sleep(3000);
+                    pang -> ok
+                end,
+                halt(0).
+            \"" 2>/dev/null || true
+        done
+    fi
 }
 
 verify_mnesia_cluster_membership() {
