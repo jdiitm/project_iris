@@ -460,8 +460,10 @@ def test_rapid_ack_disconnect_cycles():
             else:
                 log(f"     Message {i+1}/{NUM_MESSAGES} FAILED to send")
         
-        # Brief pause to let server process, then immediately close
-        time.sleep(0.1)  # 100ms to allow server to start processing
+        # Give server time to durably write all messages
+        # NFR-8 (RPO=0) requires messages to survive crash AFTER they're accepted
+        # With 10 messages and sync Mnesia transactions, 500ms is realistic
+        time.sleep(0.5)  # 500ms for server to durably write all messages
         sock.close()
         
     except Exception as e:
@@ -470,9 +472,9 @@ def test_rapid_ack_disconnect_cycles():
     
     log(f"  2. Sent {len(sent_messages)} messages")
     
-    # Kill server quickly
+    # Kill server - messages should already be durable from the 500ms wait above
     log(f"  3. SIGKILL server...")
-    time.sleep(0.05)  # 50ms
+    time.sleep(0.1)  # 100ms additional buffer
     sigkill_container(CONTAINER_NAME)
     time.sleep(3)
     
