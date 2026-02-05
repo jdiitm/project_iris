@@ -282,12 +282,16 @@ route_sequenced_remote(User, Msg, SeqNo, State) ->
     {noreply, State}.
 
 do_sequenced_remote_route(User, Msg, SeqNo) ->
+    %% RFC FR-5 FIX: Re-wrap message with SeqNo for offline storage path
+    %% The handle_cast unwraps {sequenced_msg, SeqNo, Msg} for local delivery,
+    %% but we need the wrapper for store_offline_via_node to extract SeqNo
+    WrappedMsg = {sequenced_msg, SeqNo, Msg},
     case get_shard_nodes(User) of
         [] ->
             %% No shard nodes - query all cores for user
-            do_sequenced_route_fallback(User, Msg, SeqNo);
+            do_sequenced_route_fallback(User, WrappedMsg, SeqNo);
         [Primary | Fallbacks] ->
-            case route_to_node(Primary, User, Msg, Fallbacks) of
+            case route_to_node(Primary, User, WrappedMsg, Fallbacks) of
                 ok ->
                     {success, remote};
                 {ok, offline} ->
@@ -304,11 +308,21 @@ do_sequenced_route_fallback(User, Msg, SeqNo) ->
     AllCores = get_discovery_nodes(),
     case find_user_across_cores(AllCores, User) of
         {ok, UserPid} when is_pid(UserPid) ->
-            UserPid ! {deliver_msg, Msg},
+            %% RFC FR-5: Unwrap for online delivery (wrapper is only for offline storage)
+            DeliverMsg = case Msg of
+                {sequenced_msg, _S, RealMsg} -> RealMsg;
+                _ -> Msg
+            end,
+            UserPid ! {deliver_msg, DeliverMsg},
             {success, remote};
         not_found ->
             %% User not online - store offline
-            store_offline_sequenced_sync(User, Msg, SeqNo),
+            %% Msg may be wrapped as {sequenced_msg, SeqNo, RealMsg} - extract RealMsg for storage
+            RealMsg = case Msg of
+                {sequenced_msg, _S, RM} -> RM;
+                _ -> Msg
+            end,
+            store_offline_sequenced_sync(User, RealMsg, SeqNo),
             {success, offline}
     end.
 
@@ -532,9 +546,17 @@ find_user_across_cores([Core | Rest], User) ->
 
 store_offline_via_node(Node, User, Msg, Fallbacks) ->
     %% DURABILITY FIX: Use store_offline_durable for RPO=0 guarantee
+    %% RFC FR-5 FIX: Unwrap sequenced messages to pass SeqNo for FIFO ordering
+    StorableMsg = case Msg of
+        {sequenced_msg, SeqNo, RealMsg} when is_integer(SeqNo) ->
+            %% Pass as {SeqNo, RealMsg} tuple so iris_core uses SeqNo as timestamp
+            {SeqNo, RealMsg};
+        _ ->
+            Msg
+    end,
     case whereis(iris_circuit_breaker) of
         undefined ->
-            case rpc:call(Node, iris_core, store_offline_durable, [User, Msg], 5000) of
+            case rpc:call(Node, iris_core, store_offline_durable, [User, StorableMsg], 5000) of
                 {badrpc, _} -> try_route_fallbacks(Fallbacks, User, Msg);
                 ok -> ok;
                 {ok, _} -> ok;
@@ -542,7 +564,7 @@ store_offline_via_node(Node, User, Msg, Fallbacks) ->
             end;
         _ ->
             case iris_circuit_breaker:call_with_fallback(
-                    Node, iris_core, store_offline_durable, [User, Msg], Fallbacks) of
+                    Node, iris_core, store_offline_durable, [User, StorableMsg], Fallbacks) of
                 {error, circuit_open} -> try_route_fallbacks(Fallbacks, User, Msg);
                 {badrpc, _} -> try_route_fallbacks(Fallbacks, User, Msg);
                 ok -> ok;
@@ -557,11 +579,23 @@ try_route_fallbacks([Node | Rest], User, Msg) ->
     %% Try to lookup and deliver, or store offline
     case rpc:call(Node, iris_core, lookup_user, [User], 5000) of
         {ok, _UserNode, UserPid} when is_pid(UserPid) ->
-            UserPid ! {deliver_msg, Msg},
+            %% RFC FR-5: Unwrap sequenced messages for delivery
+            DeliverMsg = case Msg of
+                {sequenced_msg, _SeqNo, RealMsg} -> RealMsg;
+                _ -> Msg
+            end,
+            UserPid ! {deliver_msg, DeliverMsg},
             ok;
         {error, not_found} ->
             %% DURABILITY FIX: Use store_offline_durable for RPO=0 guarantee
-            case rpc:call(Node, iris_core, store_offline_durable, [User, Msg], 5000) of
+            %% RFC FR-5 FIX: Unwrap sequenced messages to pass SeqNo for FIFO ordering
+            StorableMsg = case Msg of
+                {sequenced_msg, SeqNo, RealMsg} when is_integer(SeqNo) ->
+                    {SeqNo, RealMsg};
+                _ ->
+                    Msg
+            end,
+            case rpc:call(Node, iris_core, store_offline_durable, [User, StorableMsg], 5000) of
                 {badrpc, _} -> try_route_fallbacks(Rest, User, Msg);
                 ok -> ok;
                 {ok, _} -> ok;

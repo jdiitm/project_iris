@@ -116,7 +116,7 @@ class FanOutResult:
 
 
 class IrisClient:
-    """Simple Iris protocol client."""
+    """Simple Iris protocol client with TLS auto-detection."""
     
     def __init__(self, host: str, port: int):
         self.host = host
@@ -129,7 +129,16 @@ class IrisClient:
         self._recv_thread: Optional[threading.Thread] = None
     
     def connect(self) -> bool:
-        """Connect to server."""
+        """Connect to server with TLS auto-detection."""
+        # Try TLS first (standard for CI and production)
+        try:
+            from tests.suites.chaos_dist.utils import create_tls_socket
+            self.sock = create_tls_socket(self.host, self.port, timeout=TIMEOUT)
+            return True
+        except Exception:
+            pass
+        
+        # Fallback to non-TLS (for local development without certs)
         try:
             self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.sock.settimeout(TIMEOUT)

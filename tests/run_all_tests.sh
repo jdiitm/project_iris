@@ -156,6 +156,34 @@ start_server() {
 }
 
 # ============================================================================
+# HEAVY TESTS (require server restart after running)
+# ============================================================================
+# These tests generate heavy load that can affect subsequent tests
+HEAVY_TESTS=(
+    "test_degradation_order"     # 200K+ messages, heavy load
+    "test_backpressure"          # Stress tests connections
+    "stress_hotspot"             # Heavy single-key load
+    "stress_geo_scale"           # Large scale test
+    "stress_global_fan_in"       # Fan-in stress
+    "test_hot_shard"             # Shard stress
+    "test_fanout"                # Fan-out stress
+    "test_connection_scale"      # Connection scaling
+    "test_soak_memory"           # Memory stress
+    "ultimate_chaos"             # Combined chaos
+    "chaos_combined"             # Combined chaos
+)
+
+is_heavy_test() {
+    local test_name=$1
+    for heavy in "${HEAVY_TESTS[@]}"; do
+        if [[ "$test_name" == *"$heavy"* ]]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+# ============================================================================
 # RUN TEST HELPER (standalone)
 # ============================================================================
 run_test() {
@@ -180,6 +208,31 @@ run_test() {
         TOTAL_FAIL=$((TOTAL_FAIL + 1))
         FAILED_TESTS+=("$test_name")
     fi
+    
+    # Restart server after heavy tests to ensure clean state for next test
+    if is_heavy_test "$test_name"; then
+        echo -e "    ${YELLOW}(heavy test - restarting server)${NC}"
+        restart_server_quick
+    fi
+}
+
+# Quick server restart (used after heavy tests)
+restart_server_quick() {
+    pkill -9 beam.smp 2>/dev/null || true
+    sleep 2
+    rm -rf Mnesia.* MnesiaCore.* 2>/dev/null || true
+    CONFIG=config/test_tls make start > "$LOG_DIR/server_restart.log" 2>&1
+    sleep 4
+    # Quick check that server is up
+    local attempts=0
+    while ! nc -z localhost 8085 2>/dev/null; do
+        attempts=$((attempts + 1))
+        if [ $attempts -ge 3 ]; then
+            echo -e "    ${RED}Warning: Server may not have restarted properly${NC}"
+            break
+        fi
+        sleep 2
+    done
 }
 
 # ============================================================================
@@ -318,8 +371,31 @@ else
 
     echo ""
     echo "--- Integration Tests ---"
+    echo "  (Server will restart automatically after heavy tests)"
+    
+    # Sort tests to run heavy tests last within integration suite
+    INTEGRATION_TESTS_LIGHT=()
+    INTEGRATION_TESTS_HEAVY=()
     for test in tests/suites/integration/test_*.py; do
-        [ -f "$test" ] && run_test "$test" 180
+        if [ -f "$test" ]; then
+            test_name=$(basename "$test" .py)
+            if is_heavy_test "$test_name"; then
+                INTEGRATION_TESTS_HEAVY+=("$test")
+            else
+                INTEGRATION_TESTS_LIGHT+=("$test")
+            fi
+        fi
+    done
+    
+    # Run light tests first
+    for test in "${INTEGRATION_TESTS_LIGHT[@]}"; do
+        run_test "$test" 180
+        sleep 0.5  # Brief pause between tests
+    done
+    
+    # Then run heavy tests (each will trigger server restart after)
+    for test in "${INTEGRATION_TESTS_HEAVY[@]}"; do
+        run_test "$test" 240  # Longer timeout for heavy tests
     done
 
     echo ""
@@ -368,8 +444,31 @@ else
 
     echo ""
     echo "--- Stress Tests ---"
+    echo "  (Server will restart automatically after heavy tests)"
+    
+    # Sort stress tests - run lighter ones first
+    STRESS_TESTS_LIGHT=()
+    STRESS_TESTS_HEAVY=()
     for test in tests/suites/stress/stress_*.py tests/suites/stress/test_*.py; do
-        [ -f "$test" ] && run_test "$test" 300
+        if [ -f "$test" ]; then
+            test_name=$(basename "$test" .py)
+            if is_heavy_test "$test_name"; then
+                STRESS_TESTS_HEAVY+=("$test")
+            else
+                STRESS_TESTS_LIGHT+=("$test")
+            fi
+        fi
+    done
+    
+    # Run light tests first
+    for test in "${STRESS_TESTS_LIGHT[@]}"; do
+        run_test "$test" 300
+        sleep 0.5
+    done
+    
+    # Then run heavy tests
+    for test in "${STRESS_TESTS_HEAVY[@]}"; do
+        run_test "$test" 300
     done
 
     echo ""
@@ -383,11 +482,14 @@ else
     echo ""
     echo -e "${BLUE}[PHASE 3]${NC} ClusterManager Tests (self-managed)"
     echo "============================================================================"
+    echo "  (Each test manages its own cluster - server restart between tests)"
 
     for test in tests/suites/chaos_controlled/*.py; do
         if [ -f "$test" ]; then
+            # Full cleanup before each chaos_controlled test
             pkill -9 beam.smp 2>/dev/null || true
             sleep 2
+            rm -rf Mnesia.* MnesiaCore.* 2>/dev/null || true
             run_test "$test" 300
         fi
     done

@@ -117,6 +117,22 @@ def get_port(region_id):
     # Region 1 -> 8085
     return 8085 + (region_id - 1)
 
+
+def create_socket(host, port, timeout=5.0):
+    """Create socket with TLS auto-detection."""
+    # Try TLS first (standard for CI and production)
+    try:
+        from tests.suites.chaos_dist.utils import create_tls_socket
+        return create_tls_socket(host, port, timeout=timeout)
+    except Exception:
+        pass
+    
+    # Fallback to non-TLS (for local development without certs)
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.settimeout(timeout)
+    s.connect((host, port))
+    return s
+
 def sender_worker(region_id, sender_id):
     port = get_port(region_id)
     host = 'localhost'
@@ -124,9 +140,7 @@ def sender_worker(region_id, sender_id):
     
     while time.time() < end_time:
         try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s.settimeout(5.0) # Prevent indefinite hang
-            s.connect((host, port))
+            s = create_socket(host, port, timeout=5.0)
             s.sendall(packet_login(f"sender_{region_id}_{sender_id}"))
             s.recv(1024) # Ack
             
@@ -169,9 +183,7 @@ def vip_receiver():
             region = random.randint(1, NUM_REGIONS)
             port = get_port(region)
             
-            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s.settimeout(5.0)
-            s.connect(('localhost', port))
+            s = create_socket('localhost', port, timeout=5.0)
             s.sendall(packet_login(VIP_USER))
             ack = s.recv(1024) # Login Ack + Offline Msgs stream starts
             
@@ -204,13 +216,12 @@ def verify_results():
     
     # 1. Fetch ALL VIP Msgs (Login via one node and drain everything)
     log("Draining VIP Inbox...")
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.settimeout(5.0)
     
     connected = False
+    s = None
     for attempt in range(5):
         try:
-            s.connect(('localhost', get_port(1))) # Region 1
+            s = create_socket('localhost', get_port(1), timeout=5.0) # Region 1
             connected = True
             break
         except Exception as e:
@@ -262,8 +273,7 @@ def verify_results():
     errors = 0
     for i in range(1, 6): # Check first 5
         user = f"normal_{i}"
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.connect(('localhost', get_port(1)))
+        s = create_socket('localhost', get_port(1), timeout=5.0)
         s.sendall(packet_login(user))
         s.recv(1024)
         

@@ -67,6 +67,29 @@ else:
     TIMEOUT_PER_CONN = 5.0
 
 
+def create_socket(host, port, timeout=5.0):
+    """Create socket with TLS auto-detection."""
+    # Try TLS first (standard for CI and production)
+    try:
+        from tests.suites.chaos_dist.utils import create_tls_socket
+        s = create_tls_socket(host, port, timeout=timeout)
+        # TCP_NODELAY may not work on TLS sockets, skip if it fails
+        try:
+            s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        except:
+            pass
+        return s
+    except Exception:
+        pass
+    
+    # Fallback to non-TLS (for local development without certs)
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.settimeout(timeout)
+    s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+    s.connect((host, port))
+    return s
+
+
 # =============================================================================
 # Data Structures
 # =============================================================================
@@ -122,10 +145,7 @@ class IrisConnection:
     def connect(self, host: str, port: int, timeout: float) -> bool:
         """Establish connection and login."""
         try:
-            self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.sock.settimeout(timeout)
-            self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-            self.sock.connect((host, port))
+            self.sock = create_socket(host, port, timeout=timeout)
             
             # Send login packet: 0x01 | username
             login_packet = bytes([0x01]) + self.user_id.encode('utf-8')
@@ -230,11 +250,9 @@ class ConnectionPool:
 def check_server_available() -> bool:
     """Check if server is accepting connections."""
     try:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(2)
-        result = sock.connect_ex((EDGE_HOST, EDGE_PORT))
+        sock = create_socket(EDGE_HOST, EDGE_PORT, timeout=2)
         sock.close()
-        return result == 0
+        return True
     except:
         return False
 

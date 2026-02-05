@@ -120,6 +120,22 @@ def log(msg: str):
     print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
 
 
+def create_socket(host, port, timeout=10.0):
+    """Create socket with TLS auto-detection."""
+    # Try TLS first (standard for CI and production)
+    try:
+        from tests.suites.chaos_dist.utils import create_tls_socket
+        return create_tls_socket(host, port, timeout=timeout)
+    except Exception:
+        pass
+    
+    # Fallback to non-TLS (for local development without certs)
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.settimeout(timeout)
+    s.connect((host, port))
+    return s
+
+
 class LoadGenerator:
     """Generates load at a configurable rate."""
     
@@ -136,9 +152,7 @@ class LoadGenerator:
     def _connect(self, username: str) -> Optional[socket.socket]:
         """Connect and login."""
         try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(TIMEOUT)
-            sock.connect((SERVER_HOST, SERVER_PORT))
+            sock = create_socket(SERVER_HOST, SERVER_PORT, timeout=TIMEOUT)
             
             packet = bytes([0x01]) + username.encode()
             sock.sendall(packet)
@@ -336,9 +350,7 @@ def check_for_oom() -> bool:
 def check_server_available() -> bool:
     """Check if server is reachable."""
     try:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(5)
-        sock.connect((SERVER_HOST, SERVER_PORT))
+        sock = create_socket(SERVER_HOST, SERVER_PORT, timeout=5)
         sock.close()
         return True
     except Exception:

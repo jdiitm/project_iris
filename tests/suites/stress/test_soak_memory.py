@@ -65,6 +65,22 @@ def log(msg):
     print(f"[{timestamp}] {msg}", flush=True)
 
 
+def create_socket(host, port, timeout=5.0):
+    """Create socket with TLS auto-detection."""
+    # Try TLS first (standard for CI and production)
+    try:
+        from tests.suites.chaos_dist.utils import create_tls_socket
+        return create_tls_socket(host, port, timeout=timeout)
+    except Exception:
+        pass
+    
+    # Fallback to non-TLS (for local development without certs)
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.settimeout(timeout)
+    s.connect((host, port))
+    return s
+
+
 class MemorySample:
     """Single memory sample."""
     def __init__(self, timestamp, beam_rss_mb, process_count, ets_memory_mb):
@@ -395,12 +411,10 @@ def test_soak_24h():
     
     # Check if we can connect to the server
     try:
-        test_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        test_sock.settimeout(5)
-        test_sock.connect((config.host, config.port))
+        test_sock = create_socket(config.host, config.port, timeout=5)
         test_sock.close()
         log(f"Successfully connected to {config.host}:{config.port}")
-    except socket.error as e:
+    except Exception as e:
         log(f"SKIP: Cannot connect to server at {config.host}:{config.port}: {e}")
         log("Make sure the Iris server is running before running soak tests.")
         return True  # Skip, don't fail

@@ -9,6 +9,70 @@
 -define(OFFLINE_PAGE_SIZE, 500).      %% Messages per page
 -define(OFFLINE_INLINE_LIMIT, 1000).  %% Deliver all if under this limit
 
+%% =============================================================================
+%% RFC Section 7.4: Graceful Degradation Levels
+%% =============================================================================
+%% Under overload, features are disabled in this order:
+%% 1. Typing indicators (FR-8) - disabled FIRST (at LEVEL_SLOW)
+%% 2. Presence updates (FR-6, FR-7) - disabled SECOND (at LEVEL_SHED)
+%% 3. Read receipts (FR-4) - disabled THIRD (at LEVEL_SHED)
+%% 4. Message delivery - NEVER disabled
+-define(LEVEL_NORMAL, 1).
+-define(LEVEL_SLOW, 2).
+-define(LEVEL_SHED, 3).
+-define(LEVEL_CRITICAL, 4).
+
+%% @doc Check if a feature should be degraded based on current load level.
+%% Returns true if the feature should be skipped (degraded).
+-spec should_degrade(atom()) -> boolean().
+should_degrade(Feature) ->
+    Level = get_flow_level(),
+    case Feature of
+        typing ->
+            %% Typing disabled at SLOW or higher (first to degrade)
+            Level >= ?LEVEL_SLOW;
+        presence ->
+            %% Presence disabled at SHED or higher (second to degrade)
+            Level >= ?LEVEL_SHED;
+        read_receipt ->
+            %% Read receipts disabled at SHED or higher (third to degrade)
+            Level >= ?LEVEL_SHED;
+        message ->
+            %% Messages NEVER disabled (RFC 7.4 requirement)
+            false
+    end.
+
+%% @doc Get current flow controller level (lockfree via ETS).
+-spec get_flow_level() -> integer().
+get_flow_level() ->
+    try
+        case ets:lookup(iris_flow_controller_ets, level) of
+            [{level, L}] -> L;
+            [] -> ?LEVEL_NORMAL
+        end
+    catch
+        error:badarg ->
+            %% ETS table doesn't exist yet - assume normal
+            ?LEVEL_NORMAL
+    end.
+
+%% @doc Track a request for flow controller rate calculation (RFC 7.4).
+%% This is lockfree - directly increments ETS counter without gen_server call.
+%% Enables throughput-based degradation: high message rates trigger SLOW/SHED levels,
+%% causing typing/presence to be dropped while keeping message delivery working.
+-spec track_request(binary()) -> ok.
+track_request(User) ->
+    try
+        %% Consistent hash to shard for write distribution
+        Shard = erlang:phash2(User, 16),  %% 16 shards
+        ets:update_counter(iris_flow_controller_ets, {admitted, Shard}, 1, {{admitted, Shard}, 0}),
+        ok
+    catch
+        error:badarg ->
+            %% ETS table doesn't exist yet - ignore
+            ok
+    end.
+
 %% Dynamic Core node discovery with failover
 get_core_node() ->
     case iris_core_registry:get_core() of
@@ -124,6 +188,9 @@ handle_packet({send_message, _Target, _Msg}, undefined, _Pid, _Mod) ->
 %% NOTE: Dedup (RFC NFR-11) is handled on the CORE side in iris_core:store_offline_durable
 %% because that's where messages are persisted. Edge nodes don't have iris_dedup running.
 handle_packet({send_seq, Target, SeqNo, Msg}, User, _Pid, _Mod) when User =/= undefined ->
+    %% RFC 7.4 FIX: Track request for flow controller rate calculation
+    %% This enables throughput-based degradation (typing/presence shed under load)
+    track_request(User),
     case check_message_rate(User) of
         allow ->
             %% Route with sequence number preserved as ordering key
@@ -147,21 +214,29 @@ handle_packet({batch_send, Target, Blob}, User, _Pid, _Mod) ->
     {ok, User, []};
 
 handle_packet({get_status, TargetUser}, User, _Pid, _Mod) ->
-    Now = os:system_time(seconds),
-    CacheResult = ets:lookup(presence_cache, TargetUser),
-    StatusTuple = case CacheResult of
-        [{TargetUser, CachedStatus, CachedTime, InsertTime}] 
-          when Now - InsertTime < 5 -> 
-             {CachedStatus, CachedTime};
-        [{_, _, _, _}] ->
-             fetch_and_cache(TargetUser, Now);
-        [] ->
-             fetch_and_cache(TargetUser, Now)
-    end,
-    
-    {FinalState, FinalTime} = StatusTuple,
-    Resp = iris_proto:encode_status(TargetUser, FinalState, FinalTime),
-    {ok, User, [{send, Resp}]};
+    %% RFC 7.4: Skip presence queries when under heavy load (second to degrade)
+    case should_degrade(presence) of
+        true ->
+            %% Return stale/unknown status instead of making expensive queries
+            Resp = iris_proto:encode_status(TargetUser, offline, 0),
+            {ok, User, [{send, Resp}]};
+        false ->
+            Now = os:system_time(seconds),
+            CacheResult = ets:lookup(presence_cache, TargetUser),
+            StatusTuple = case CacheResult of
+                [{TargetUser, CachedStatus, CachedTime, InsertTime}] 
+                  when Now - InsertTime < 5 -> 
+                     {CachedStatus, CachedTime};
+                [{_, _, _, _}] ->
+                     fetch_and_cache(TargetUser, Now);
+                [] ->
+                     fetch_and_cache(TargetUser, Now)
+            end,
+            
+            {FinalState, FinalTime} = StatusTuple,
+            Resp = iris_proto:encode_status(TargetUser, FinalState, FinalTime),
+            {ok, User, [{send, Resp}]}
+    end;
 
 handle_packet({ack, MsgId}, User, _Pid, _Mod) ->
     {ok, User, [{ack_received, MsgId}]};
@@ -171,16 +246,28 @@ handle_packet({ack, MsgId}, User, _Pid, _Mod) ->
 %% =============================================================================
 %% Fire-and-forget: relay to recipient if online, discard if offline.
 %% No durability required - typing is transient state.
+%% RFC Section 7.4: FIRST feature to degrade under load.
 
 handle_packet({typing_start, Target}, User, _Pid, _Mod) when User =/= undefined ->
-    %% Relay typing indicator to target if they're online
-    relay_typing_indicator(Target, User, true),
-    {ok, User, []};
+    %% RFC 7.4: Skip typing indicators when under load (first to degrade)
+    case should_degrade(typing) of
+        true ->
+            %% Silently drop - typing is non-critical
+            {ok, User, []};
+        false ->
+            relay_typing_indicator(Target, User, true),
+            {ok, User, []}
+    end;
 
 handle_packet({typing_stop, Target}, User, _Pid, _Mod) when User =/= undefined ->
-    %% Relay typing stop to target if they're online
-    relay_typing_indicator(Target, User, false),
-    {ok, User, []};
+    %% RFC 7.4: Skip typing indicators when under load (first to degrade)
+    case should_degrade(typing) of
+        true ->
+            {ok, User, []};
+        false ->
+            relay_typing_indicator(Target, User, false),
+            {ok, User, []}
+    end;
 
 handle_packet({typing_start, _Target}, undefined, _Pid, _Mod) ->
     %% Not logged in - ignore
@@ -195,11 +282,18 @@ handle_packet({typing_stop, _Target}, undefined, _Pid, _Mod) ->
 %% =============================================================================
 %% Best-effort: relay to original sender if online, discard if offline.
 %% No durability required - read status is non-critical metadata.
+%% RFC Section 7.4: THIRD feature to degrade under load.
 
 handle_packet({read_receipt, MsgId, OriginalSender}, User, _Pid, _Mod) when User =/= undefined ->
-    %% Relay read receipt to original sender
-    iris_read_receipts:relay_read_receipt(MsgId, User, OriginalSender),
-    {ok, User, []};
+    %% RFC 7.4: Skip read receipts when under heavy load (third to degrade)
+    case should_degrade(read_receipt) of
+        true ->
+            %% Silently drop - read receipts are non-critical
+            {ok, User, []};
+        false ->
+            iris_read_receipts:relay_read_receipt(MsgId, User, OriginalSender),
+            {ok, User, []}
+    end;
 
 handle_packet({read_receipt, _MsgId, _OriginalSender}, undefined, _Pid, _Mod) ->
     %% Not logged in - ignore
@@ -754,8 +848,11 @@ fetch_and_cache(TargetUser, Now) ->
 %% Internal: Rate Limiting (VIOLATION-4 FIX)
 %% =============================================================================
 %% Rate limit on message sending, not just login
+%% RFC 7.4 FIX: Also track request for flow controller rate-based degradation
 
 check_message_rate(User) ->
+    %% Track request for flow controller (rate-based degradation)
+    iris_flow_controller:track_request(User),
     case whereis(iris_rate_limiter) of
         undefined -> allow;
         _ -> iris_rate_limiter:check(User)

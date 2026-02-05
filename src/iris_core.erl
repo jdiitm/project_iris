@@ -244,8 +244,12 @@ store_offline_durable(User, Msg) ->
     %% Message format may be: {SeqNo, RealMsg} or just binary
     {DedupKey, ActualMsg, MaybeSeqNo} = case Msg of
         {SeqNo, RealMsg} when is_integer(SeqNo) ->
-            %% Dedup key = User:SeqNo (unique per recipient+sequence)
-            Key = <<User/binary, ":", (integer_to_binary(SeqNo))/binary>>,
+            %% BUG FIX: Dedup key must include message content hash, not just User:SeqNo
+            %% Each sender has their own SeqNo counter starting at 1, so without content hash,
+            %% messages from different senders with the same SeqNo would be incorrectly deduplicated.
+            %% Key format: User:SeqNo:ContentHash (unique per recipient+sequence+content)
+            ContentHash = erlang:phash2(RealMsg),
+            Key = <<User/binary, ":", (integer_to_binary(SeqNo))/binary, ":", (integer_to_binary(ContentHash))/binary>>,
             {Key, RealMsg, SeqNo};
         _ ->
             %% No sequence number - use message hash for dedup
@@ -272,7 +276,8 @@ store_offline_durable(User, Msg) ->
                     store_offline_sync_replicated(User, ActualMsg, Count, MaybeSeqNo);
                 false ->
                     %% P1-H6 FIX: Use WAL for immediate durability (RPO=0) without global lock
-                    case iris_durable_batcher:store(User, ActualMsg, Count) of
+                    %% RFC FR-5: Pass MaybeSeqNo for FIFO ordering
+                    case iris_durable_batcher:store(User, ActualMsg, Count, MaybeSeqNo) of
                         ok -> ok;
                         {error, Reason} -> 
                             logger:error("WAL write failed for user ~p: ~p", [User, Reason]),

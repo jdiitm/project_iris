@@ -188,20 +188,28 @@ retrieve(User, Count) ->
 %% @doc Retrieve a batch of messages without global lock (dirty read)
 %% Returns {Messages, NextCursor} where NextCursor is used for pagination.
 %% Messages are NOT deleted - caller must confirm delivery then call delete_confirmed/3.
+%% RFC FR-5: Messages are sorted by Timestamp to guarantee FIFO ordering even when
+%% messages are spread across multiple buckets due to content-based hashing.
 -spec retrieve_cursor(binary(), integer(), integer()) -> {list(), integer()}.
 retrieve_cursor(User, Count, Cursor) ->
     %% Calculate batch range (e.g., buckets Cursor to Cursor+BatchSize)
     BatchSize = min(10, Count - Cursor),  %% Max 10 buckets per batch
     EndCursor = Cursor + BatchSize,
     
-    %% Dirty read (lockfree) from buckets
-    Msgs = lists:flatmap(fun(ID) ->
+    %% Dirty read (lockfree) from buckets - keep full records for sorting
+    Records = lists:flatmap(fun(ID) ->
         Key = {User, ID},
         case mnesia:dirty_read(offline_msg, Key) of
             [] -> [];
-            Records -> [Msg || {_, _, _, Msg} <- Records]
+            Recs -> Recs
         end
     end, lists:seq(Cursor, EndCursor - 1)),
+    
+    %% RFC FR-5 FIX: Sort by Timestamp (3rd element) to ensure FIFO ordering
+    %% This is critical because messages are bucketed by content hash, not arrival order.
+    %% Without sorting, messages would be returned in bucket-ID order, breaking FIFO.
+    Sorted = lists:sort(fun({_, _, Ts1, _}, {_, _, Ts2, _}) -> Ts1 =< Ts2 end, Records),
+    Msgs = [Msg || {_, _, _, Msg} <- Sorted],
     
     NextCursor = if
         EndCursor >= Count -> done;
@@ -250,6 +258,7 @@ delete_all_async(User, Count) ->
     ok.
 
 sort_and_extract(Records) ->
+    %% Sort by timestamp (SeqNo) for FIFO ordering (RFC FR-5)
     Sorted = lists:sort(fun({_, _, Ts1, _}, {_, _, Ts2, _}) -> Ts1 =< Ts2 end, Records),
     RawMsgs = [Msg || {_, _, _, Msg} <- Sorted],
     lists:flatten(RawMsgs).

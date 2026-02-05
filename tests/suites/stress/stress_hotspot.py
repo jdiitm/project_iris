@@ -72,10 +72,26 @@ def log_latency(duration_sec, msg_type="send"):
 # Socket Utilities
 # ============================================================================
 
-def create_socket(port=8085):
+def create_socket(port=8085, timeout=10.0):
+    """Create socket with TLS auto-detection."""
+    # Try TLS first (standard for CI and production)
+    try:
+        from tests.suites.chaos_dist.utils import create_tls_socket
+        s = create_tls_socket(HOST, port, timeout=timeout)
+        # TCP_NODELAY may not work on TLS sockets, skip if it fails
+        try:
+            s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        except:
+            pass
+        return s
+    except Exception:
+        pass
+    
+    # Fallback to non-TLS (for local development without certs)
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        s.settimeout(timeout)
         s.connect((HOST, port))
         return s
     except:

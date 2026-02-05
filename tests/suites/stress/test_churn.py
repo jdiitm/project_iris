@@ -34,6 +34,23 @@ from tests.framework.cluster import ClusterManager, get_cluster
 def log(msg):
     print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
 
+
+def create_socket(host, port, timeout=5.0):
+    """Create socket with TLS auto-detection."""
+    # Try TLS first (standard for CI and production)
+    try:
+        from tests.suites.chaos_dist.utils import create_tls_socket
+        return create_tls_socket(host, port, timeout=timeout)
+    except Exception:
+        pass
+    
+    # Fallback to non-TLS (for local development without certs)
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.settimeout(timeout)
+    s.connect((host, port))
+    return s
+
+
 def get_hostname():
     return subprocess.check_output("hostname -s", shell=True).decode().strip()
 
@@ -87,9 +104,7 @@ def get_tcp_connections(port=8085):
 def verify_edge_alive(port=8085, timeout=2):
     """Verify edge is accepting connections."""
     try:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(timeout)
-        sock.connect(('127.0.0.1', port))
+        sock = create_socket('127.0.0.1', port, timeout=timeout)
         # Send a simple login to verify edge is responsive
         sock.sendall(b'\x01probe_churn_test')
         sock.settimeout(2)

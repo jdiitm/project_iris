@@ -54,6 +54,26 @@ PROFILES = {
 
 CONFIG = PROFILES.get(TEST_PROFILE, PROFILES["smoke"])
 
+# CI environment detection
+IS_CI = os.environ.get("CI") == "true" or os.environ.get("GITHUB_ACTIONS") == "true"
+
+
+def create_socket(host, port, timeout=5.0):
+    """Create socket with TLS auto-detection."""
+    # Try TLS first (standard for CI and production)
+    try:
+        from tests.suites.chaos_dist.utils import create_tls_socket
+        return create_tls_socket(host, port, timeout=timeout)
+    except Exception:
+        pass
+    
+    # Fallback to non-TLS (for local development without certs)
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.settimeout(timeout)
+    s.connect((host, port))
+    return s
+
+
 # ============================================================================
 # Utilities
 # ============================================================================
@@ -233,9 +253,7 @@ def run_combined_chaos(edge_node: str, duration: int = 30):
         nonlocal chaos_active, errors
         while chaos_active:
             try:
-                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                sock.settimeout(1)
-                sock.connect(("localhost", 8085))
+                sock = create_socket("localhost", 8085, timeout=1)
                 # Send garbage
                 sock.sendall(os.urandom(random.randint(1, 100)))
                 sock.close()
@@ -248,9 +266,7 @@ def run_combined_chaos(edge_node: str, duration: int = 30):
         nonlocal chaos_active, errors
         while chaos_active:
             try:
-                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                sock.settimeout(0.5)
-                sock.connect(("localhost", 8085))
+                sock = create_socket("localhost", 8085, timeout=0.5)
                 # Immediate disconnect (simulates network issues)
                 sock.close()
             except:
@@ -274,9 +290,7 @@ def run_combined_chaos(edge_node: str, duration: int = 30):
         nonlocal chaos_active, errors
         while chaos_active:
             try:
-                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                sock.settimeout(5)
-                sock.connect(("localhost", 8085))
+                sock = create_socket("localhost", 8085, timeout=5)
                 sock.sendall(bytes([0x01]) + f"slow_{int(time.time()*1000)}".encode())
                 # Read very slowly
                 for _ in range(10):
@@ -332,9 +346,7 @@ def run_combined_chaos(edge_node: str, duration: int = 30):
     log("[COMBINED CHAOS] Verifying system health...")
     
     try:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(5)
-        sock.connect(("localhost", 8085))
+        sock = create_socket("localhost", 8085, timeout=5)
         sock.sendall(bytes([0x01]) + b"post_chaos_verify")
         resp = sock.recv(1024)
         sock.close()
@@ -400,9 +412,7 @@ def main():
             log(f"ERROR: Edge node {edge_name} not reachable")
             # Try socket check
             try:
-                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                sock.settimeout(5)
-                sock.connect(("localhost", 8085))
+                sock = create_socket("localhost", 8085, timeout=5)
                 sock.close()
                 log("Socket check passed, continuing...")
             except Exception as e:
@@ -414,9 +424,7 @@ def main():
         # Running under test runner - just verify connectivity
         log("Verifying cluster connectivity...")
         try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(5)
-            sock.connect(("localhost", 8085))
+            sock = create_socket("localhost", 8085, timeout=5)
             sock.sendall(bytes([0x01]) + b"ultimate_precheck")
             resp = sock.recv(1024)
             sock.close()
@@ -537,9 +545,7 @@ def main():
         
         # Assertion 5: Post-chaos connectivity
         try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(5)
-            sock.connect(("localhost", 8085))
+            sock = create_socket("localhost", 8085, timeout=5)
             
             test_user = f"chaos_verify_{int(time.time())}"
             sock.sendall(bytes([0x01]) + test_user.encode())
