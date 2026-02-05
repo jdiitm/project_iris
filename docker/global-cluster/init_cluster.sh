@@ -47,26 +47,50 @@ wait_for_epmd() {
 wait_for_mnesia() {
     local container=$1
     local node_name=$2
-    local max_attempts=${3:-60}
+    local max_attempts=${3:-90}  # Increased from 60 to 90 seconds
     local attempt=0
     
     log_info "Waiting for Mnesia on $node_name..."
+    
+    # Initial delay to let the Erlang app start (Docker healthcheck only verifies EPMD)
+    sleep 5
+    
     while [ $attempt -lt $max_attempts ]; do
+        # Use a shorter RPC timeout and check both Mnesia running AND app started
         local status=$(docker exec "$container" erl -noshell -sname probe_$RANDOM \
             -setcookie "$COOKIE" -eval "
-            case rpc:call('$node_name', mnesia, system_info, [is_running], 5000) of
-                yes -> io:format(\"ready\"), halt(0);
-                _ -> halt(1)
+            case net_adm:ping('$node_name') of
+                pang -> io:format(\"node_down\"), halt(1);
+                pong ->
+                    case rpc:call('$node_name', mnesia, system_info, [is_running], 5000) of
+                        yes -> 
+                            %% Also verify iris_core is started
+                            case rpc:call('$node_name', application, which_applications, [], 5000) of
+                                Apps when is_list(Apps) ->
+                                    case lists:keymember(iris_core, 1, Apps) of
+                                        true -> io:format(\"ready\"), halt(0);
+                                        false -> io:format(\"app_not_started\"), halt(1)
+                                    end;
+                                _ -> io:format(\"app_check_failed\"), halt(1)
+                            end;
+                        _ -> io:format(\"mnesia_not_running\"), halt(1)
+                    end
             end." 2>/dev/null || echo "not_ready")
         
         if [ "$status" = "ready" ]; then
             log_info "Mnesia ready on $node_name"
             return 0
         fi
+        
+        # Log progress every 15 seconds
+        if [ $((attempt % 15)) -eq 0 ] && [ $attempt -gt 0 ]; then
+            log_info "Still waiting for Mnesia on $node_name ($attempt/${max_attempts}s) - status: $status"
+        fi
+        
         attempt=$((attempt + 1))
         sleep 1
     done
-    log_error "Mnesia not ready on $node_name after ${max_attempts}s"
+    log_error "Mnesia not ready on $node_name after ${max_attempts}s (last status: $status)"
     return 1
 }
 
@@ -144,7 +168,7 @@ check_all_cores_ready() {
         fi
         
         if wait_for_epmd "$container" 30; then
-            if wait_for_mnesia "$container" "$node" 45; then
+            if wait_for_mnesia "$container" "$node" 90; then
                 ready_count=$((ready_count + 1))
             else
                 failed_cores="$failed_cores $container"
@@ -563,7 +587,7 @@ main() {
         expected_nodes=2
     fi
     
-    if ! wait_for_mnesia_cluster 90 "$expected_nodes"; then
+    if ! wait_for_mnesia_cluster 120 "$expected_nodes"; then
         log_warn "Mnesia cluster may not have all nodes - continuing anyway"
     fi
     
