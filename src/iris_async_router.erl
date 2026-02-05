@@ -236,13 +236,14 @@ handle_cast({route_sequenced, User, {sequenced_msg, SeqNo, Msg}, _SeqNo}, State)
                     incr_metric(route_success),
                     {noreply, State#state{routed_local = State#state.routed_local + 1}};
                 false ->
-                    %% Stale entry - store offline with sequence number
+                    %% Stale entry - try remote routing first
                     ets:delete(?LOCAL_PRESENCE, User),
-                    store_offline_sequenced(User, Msg, SeqNo, State)
+                    route_sequenced_remote(User, Msg, SeqNo, State)
             end;
         [] ->
-            %% User not online - store offline with sequence number
-            store_offline_sequenced(User, Msg, SeqNo, State)
+            %% User not on THIS edge - try remote routing (cross-edge delivery)
+            %% FIX: Was storing offline directly; now routes to remote edges/cores
+            route_sequenced_remote(User, Msg, SeqNo, State)
     end;
 
 handle_cast(_Msg, State) ->
@@ -269,6 +270,63 @@ route_to_remote(User, Msg, MsgId, State) ->
         gen_server:cast(Self, {route_complete, Result})
     end),
     {noreply, State}.
+
+%% FIX: Sequenced remote routing - routes across edges/cores with sequence number
+%% This was missing, causing cross-edge messages to be stored offline directly
+route_sequenced_remote(User, Msg, SeqNo, State) ->
+    Self = self(),
+    spawn(fun() ->
+        Result = do_sequenced_remote_route(User, Msg, SeqNo),
+        gen_server:cast(Self, {route_complete, Result})
+    end),
+    {noreply, State}.
+
+do_sequenced_remote_route(User, Msg, SeqNo) ->
+    case get_shard_nodes(User) of
+        [] ->
+            %% No shard nodes - query all cores for user
+            do_sequenced_route_fallback(User, Msg, SeqNo);
+        [Primary | Fallbacks] ->
+            case route_to_node(Primary, User, Msg, Fallbacks) of
+                ok ->
+                    {success, remote};
+                {ok, offline} ->
+                    {success, offline};
+                {error, _Reason} ->
+                    %% Fallback - store offline with sequence number
+                    store_offline_sequenced_sync(User, Msg, SeqNo),
+                    {success, offline}
+            end
+    end.
+
+do_sequenced_route_fallback(User, Msg, SeqNo) ->
+    %% Query all connected cores to find user
+    AllCores = get_discovery_nodes(),
+    case find_user_across_cores(AllCores, User) of
+        {ok, UserPid} when is_pid(UserPid) ->
+            UserPid ! {deliver_msg, Msg},
+            {success, remote};
+        not_found ->
+            %% User not online - store offline
+            store_offline_sequenced_sync(User, Msg, SeqNo),
+            {success, offline}
+    end.
+
+store_offline_sequenced_sync(User, Msg, SeqNo) ->
+    CoreNode = get_any_core_node(),
+    case CoreNode of
+        undefined ->
+            logger:error("No core node available for offline storage of ~p", [User]);
+        Node ->
+            %% Store with SeqNo as timestamp for ordering
+            rpc:call(Node, iris_core, store_offline_durable, [User, {SeqNo, Msg}], 5000)
+    end.
+
+get_any_core_node() ->
+    case get_discovery_nodes() of
+        [] -> undefined;
+        [Node | _] -> Node
+    end.
 
 %% FORENSIC_AUDIT_FIX: Extracted blocking logic into separate function
 %% This runs in a spawned process, not blocking the shard GenServer
@@ -389,7 +447,12 @@ route_to_node(Node, User, Msg, Fallbacks) ->
     case find_user_across_cores(AllCores, User) of
         {ok, UserPid} when is_pid(UserPid) ->
             %% User found ONLINE - deliver directly
-            UserPid ! {deliver_msg, Msg},
+            %% FIX: Unwrap sequenced messages for delivery (wrapper is for offline storage)
+            DeliverMsg = case Msg of
+                {sequenced_msg, _SeqNo, RealMsg} -> RealMsg;
+                _ -> Msg
+            end,
+            UserPid ! {deliver_msg, DeliverMsg},
             ok;
         not_found ->
             %% User not online on any core - store offline

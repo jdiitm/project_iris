@@ -231,7 +231,7 @@ _seq = [0]
 
 
 def send_message(sock, target: str, content: str) -> bool:
-    """Send message using opcode 0x07."""
+    """Send message using opcode 0x07 (fire-and-forget, no ACK expected)."""
     target_bytes = target.encode()
     msg_bytes = content.encode()
     _seq[0] += 1
@@ -243,9 +243,8 @@ def send_message(sock, target: str, content: str) -> bool:
     
     try:
         sock.sendall(packet)
-        sock.settimeout(5)
-        response = sock.recv(1024)
-        return len(response) > 0
+        time.sleep(0.01)  # Brief delay to ensure TCP flush
+        return True  # Fire-and-forget - no ACK expected
     except Exception:
         return False
 
