@@ -203,12 +203,61 @@ wait_for_mnesia_cluster() {
             log_info "Waiting... ($attempt/$max_attempts) - current db_nodes: $db_nodes"
         fi
         
+        # At 30s and 60s, try to force any isolated nodes to join
+        if [ $attempt -eq 30 ] || [ $attempt -eq 60 ]; then
+            log_info "Attempting to connect isolated nodes to cluster..."
+            force_nodes_to_join_cluster
+        fi
+        
         attempt=$((attempt + 1))
         sleep 1
     done
     
     log_error "Mnesia cluster did not form with $expected_nodes nodes after ${max_attempts}s"
     return 1
+}
+
+# Force any isolated Mnesia nodes to join the cluster
+force_nodes_to_join_cluster() {
+    local cores=("core-east-1" "core-east-2" "core-west-1" "core-west-2" "core-eu-1" "core-eu-2")
+    local nodes=("core_east_1@coreeast1" "core_east_2@coreeast2" "core_west_1@corewest1" 
+                 "core_west_2@corewest2" "core_eu_1@coreeu1" "core_eu_2@coreeu2")
+    
+    for i in "${!cores[@]}"; do
+        local container="${cores[$i]}"
+        local node="${nodes[$i]}"
+        
+        if ! docker ps --format '{{.Names}}' | grep -q "^${container}$"; then
+            continue
+        fi
+        
+        # Check if this node is isolated (not in cluster's db_nodes)
+        docker exec "$container" sh -c "erl -noshell -sname force_join_$RANDOM -setcookie iris_secret -eval \"
+            %% Connect to the main cluster via core-east-1
+            MainNode = 'core_east_1@coreeast1',
+            case net_adm:ping(MainNode) of
+                pong ->
+                    %% Get current db_nodes from main cluster
+                    DbNodes = rpc:call(MainNode, mnesia, system_info, [db_nodes], 5000),
+                    LocalNode = '$node',
+                    case DbNodes of
+                        Nodes when is_list(Nodes) ->
+                            case lists:member(LocalNode, Nodes) of
+                                true -> 
+                                    ok;  %% Already in cluster
+                                false ->
+                                    %% Force join the cluster
+                                    io:format('Forcing $node to join cluster~n'),
+                                    mnesia:change_config(extra_db_nodes, [MainNode]),
+                                    timer:sleep(2000)
+                            end;
+                        _ -> ok
+                    end;
+                pang -> ok
+            end,
+            halt(0).
+        \"" 2>/dev/null || true
+    done
 }
 
 verify_mnesia_cluster_membership() {
