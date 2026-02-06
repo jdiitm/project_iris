@@ -91,9 +91,18 @@ def packet_login(user):
     return b'\x01' + user.encode('utf-8')
 
 
-def packet_msg(target, payload):
+def packet_msg(target, payload, seq_no):
+    """
+    Build a sequenced message packet (opcode 0x07).
+    
+    RFC-001-AMENDMENT-001 v1.0: Opcode 0x02 (plaintext) is REJECTED.
+    Must use 0x07 (sequenced) for all messages.
+    
+    Wire format: 0x07 | TargetLen(16) | Target | SeqNo(64) | MsgLen(16) | Msg
+    """
     t_bytes = target.encode('utf-8')
-    return b'\x02' + struct.pack('>H', len(t_bytes)) + t_bytes + struct.pack('>H', len(payload)) + payload
+    return (b'\x07' + struct.pack('>H', len(t_bytes)) + t_bytes +
+            struct.pack('>Q', seq_no) + struct.pack('>H', len(payload)) + payload)
 
 
 def benchmark_worker(results, errors, pid):
@@ -112,13 +121,13 @@ def benchmark_worker(results, errors, pid):
             sock.close()
             return
         
-        # Send messages
+        # Send messages using RFC-compliant opcode 0x07 (sequenced)
         target = "recipient_0"
         payload = b"X" * 50
-        pkt = packet_msg(target, payload)
         
         start = time.time()
-        for _ in range(MSG_COUNT):
+        for j in range(MSG_COUNT):
+            pkt = packet_msg(target, payload, j + 1)
             sock.sendall(pkt)
         dur = time.time() - start
         
@@ -218,7 +227,7 @@ def main() -> int:
     
     start_time = time.time()
     for i in range(THREADS):
-        t = threading.Thread(target=benchmark_worker, args=(durations, errors, i))
+        t = threading.Thread(target=benchmark_worker, args=(durations, errors, i), daemon=True)
         t.start()
         threads.append(t)
     

@@ -289,31 +289,29 @@ def verify_results():
 
     # 2. Check a few Normal Users
     log("Checking Normal User Samples...")
-    errors = 0
     for i in range(1, 6): # Check first 5
         user = f"normal_{i}"
-        s = create_socket('localhost', get_port(1), timeout=5.0)
-        s.sendall(packet_login(user))
-        s.recv(1024)
-        
-        norm_data = b""
-        s.settimeout(1.0)
-        while True:
-            try:
-                chunk = s.recv(4096)
-                if not chunk: break
-                norm_data += chunk
-            except:
-                break
-        s.close()
-        
-        # Verify
-        # We don't track exact sent per normal user, but we sent SOME.
-        # Should have received SOME if randomly selected.
-        # Just logging for inspection.
-        d = norm_data.decode('utf-8', errors='ignore')
-        c = d.count("NORM_")
-        log(f"User {user}: Received {c} messages")
+        try:
+            s = create_socket('localhost', get_port(1), timeout=5.0)
+            s.sendall(packet_login(user))
+            s.recv(1024)
+            
+            norm_data = b""
+            s.settimeout(1.0)
+            while True:
+                try:
+                    chunk = s.recv(4096)
+                    if not chunk: break
+                    norm_data += chunk
+                except:
+                    break
+            s.close()
+            
+            d = norm_data.decode('utf-8', errors='ignore')
+            c = d.count("NORM_")
+            log(f"User {user}: Received {c} messages")
+        except Exception as e:
+            log(f"User {user}: Could not check ({e})")
 
 def run_simulation():
     """Run the stress simulation (shared by CI and local paths)."""
@@ -326,8 +324,11 @@ def run_simulation():
     suffix = os.environ.get("IRIS_NODE_SUFFIX", "")
     core_node_name = f"iris_core{suffix}@{hostname}"
     
+    # Use PATH-resolved 'erl' — on CI, Erlang is installed via erlef/setup-beam
+    # which places erl in PATH but NOT at /usr/bin/erl
+    erl_path = "erl"
     promote_cmd = [
-        "/usr/bin/erl", "-sname", "client_promote", "-setcookie", "iris_secret", "-noshell",
+        erl_path, "-sname", "client_promote", "-setcookie", "iris_secret", "-noshell",
         "-eval", f"rpc:call('{core_node_name}', iris_core, set_bucket_count, [<<\"{VIP_USER}\">>, {VIP_BUCKET_COUNT}], 5000), init:stop()."
     ]
     try:
@@ -336,6 +337,10 @@ def run_simulation():
         log("WARNING: Promotion command timed out!")
     except subprocess.CalledProcessError as e:
         log(f"WARNING: Promotion command failed: {e}")
+    except FileNotFoundError:
+        log("WARNING: 'erl' not found in PATH — VIP promotion skipped")
+    except Exception as e:
+        log(f"WARNING: Promotion failed unexpectedly: {e}")
     
     log(f"--- Starting Simulation ({DURATION}s) ---")
     threads = []

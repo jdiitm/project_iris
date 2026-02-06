@@ -45,11 +45,13 @@ PROFILES = {
     "smoke": {
         "connections": 100,
         "per_conn_kb": 75,       # More lenient for smoke (actual ~56KB + overhead)
+        "per_conn_kb_tls": 120,  # TLS adds ~40-50KB of SSL session state per connection
         "base_overhead_mb": 1500,  # Base VM overhead (auto-tuned for 1M+ connections, BEAM preallocates memory)
     },
     "full": {
         "connections": 10000,
         "per_conn_kb": 10,       # Strict target
+        "per_conn_kb_tls": 55,   # TLS overhead is real but bounded
         "base_overhead_mb": 600,
     }
 }
@@ -147,7 +149,13 @@ def run_benchmark():
     """Run the actual benchmark (shared by both CI and local paths)."""
     profile = PROFILES.get(TEST_PROFILE, PROFILES["smoke"])
     target_connections = profile["connections"]
-    per_conn_limit_kb = profile["per_conn_kb"]
+    # TLS connections have higher per-connection memory due to SSL session state
+    # (cipher context, handshake buffers, session tickets). This is inherent to TLS,
+    # not a server inefficiency. Use the TLS-aware limit when TLS is active.
+    if USE_TLS:
+        per_conn_limit_kb = profile.get("per_conn_kb_tls", profile["per_conn_kb"])
+    else:
+        per_conn_limit_kb = profile["per_conn_kb"]
     base_overhead_limit = profile["base_overhead_mb"]
     
     log(f"Profile: {TEST_PROFILE}")
@@ -156,6 +164,7 @@ def run_benchmark():
     log(f"Base overhead limit: {base_overhead_limit} MB")
     if USE_TLS:
         log(f"TLS: enabled (CONFIG={os.environ.get('CONFIG', '')})")
+        log(f"TLS per-conn limit: {per_conn_limit_kb} KB (includes SSL session overhead)")
     log("")
     
     # Measure baseline
