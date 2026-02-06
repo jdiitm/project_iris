@@ -14,8 +14,10 @@ import os
 import sys
 import time
 import socket
+import ssl
 import subprocess
 import threading
+from pathlib import Path
 
 # Add project root to path
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -25,9 +27,18 @@ if project_root not in sys.path:
 
 from tests.framework.cluster import ClusterManager
 
+# CI environment detection
+IS_CI = os.environ.get("CI") == "true" or os.environ.get("GITHUB_ACTIONS") == "true"
+
 # Configuration
 TEST_PROFILE = os.environ.get("TEST_PROFILE", "smoke")
 EDGE_PORT = 8085
+
+# TLS configuration — in CI, CONFIG=config/test_tls is set as env var,
+# so ClusterManager would start a TLS server. We detect this and create
+# TLS connections accordingly.
+CA_CERT = Path(project_root) / "certs" / "ca.pem"
+USE_TLS = bool(os.environ.get("CONFIG", "")) and "tls" in os.environ.get("CONFIG", "")
 
 # Profile-based thresholds
 PROFILES = {
@@ -62,11 +73,27 @@ def get_memory_mb():
 
 
 def create_connection(user_id):
-    """Create a single connection and login."""
+    """Create a single connection and login.
+    
+    Automatically uses TLS when CONFIG env var indicates TLS server,
+    which is the case in CI (CONFIG=config/test_tls set by ci.yml).
+    """
     try:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(5)
-        sock.connect(('localhost', EDGE_PORT))
+        raw_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        raw_sock.settimeout(10 if IS_CI else 5)
+        raw_sock.connect(('localhost', EDGE_PORT))
+        
+        if USE_TLS:
+            context = ssl.create_default_context()
+            if CA_CERT.exists():
+                context.load_verify_locations(str(CA_CERT))
+            else:
+                context.check_hostname = False
+                context.verify_mode = ssl.CERT_NONE
+            sock = context.wrap_socket(raw_sock, server_hostname='localhost')
+        else:
+            sock = raw_sock
+        
         # Login packet: 0x01 | username
         username = f"mem_user_{user_id}".encode()
         sock.sendall(b'\x01' + username)
@@ -116,11 +143,8 @@ def cleanup_connections(connections):
             pass
 
 
-def main():
-    log("=" * 60)
-    log("MEMORY BENCHMARK TEST")
-    log("=" * 60)
-    
+def run_benchmark():
+    """Run the actual benchmark (shared by both CI and local paths)."""
     profile = PROFILES.get(TEST_PROFILE, PROFILES["smoke"])
     target_connections = profile["connections"]
     per_conn_limit_kb = profile["per_conn_kb"]
@@ -130,69 +154,90 @@ def main():
     log(f"Target connections: {target_connections}")
     log(f"Per-connection limit: {per_conn_limit_kb} KB")
     log(f"Base overhead limit: {base_overhead_limit} MB")
+    if USE_TLS:
+        log(f"TLS: enabled (CONFIG={os.environ.get('CONFIG', '')})")
     log("")
     
-    with ClusterManager(project_root=project_root) as cluster:
-        # Measure baseline
-        baseline_mb = measure_baseline()
-        
-        # Create connections and measure
-        connections, total_mb = measure_with_connections(target_connections)
-        
-        # Calculate metrics
-        conn_count = len(connections)
-        if conn_count > 0:
-            memory_increase = total_mb - baseline_mb
-            per_conn_kb = (memory_increase * 1024) / conn_count
-        else:
-            memory_increase = 0
-            per_conn_kb = 0
-        
-        # Cleanup
-        cleanup_connections(connections)
-        
-        # Results
-        log("")
-        log("=" * 60)
-        log("RESULTS")
-        log("=" * 60)
-        log(f"  Baseline memory: {baseline_mb:.1f} MB")
-        log(f"  Total memory: {total_mb:.1f} MB")
-        log(f"  Memory increase: {memory_increase:.1f} MB")
-        log(f"  Connections created: {conn_count}")
-        log(f"  Per-connection memory: {per_conn_kb:.2f} KB")
-        log("")
-        
-        # Assertions
-        passed = True
-        
-        if baseline_mb > base_overhead_limit:
-            log(f"  ❌ Base overhead exceeded: {baseline_mb:.1f} MB > {base_overhead_limit} MB")
+    # Measure baseline
+    baseline_mb = measure_baseline()
+    
+    # Create connections and measure
+    connections, total_mb = measure_with_connections(target_connections)
+    
+    # Calculate metrics
+    conn_count = len(connections)
+    if conn_count > 0:
+        memory_increase = total_mb - baseline_mb
+        per_conn_kb = (memory_increase * 1024) / conn_count
+    else:
+        memory_increase = 0
+        per_conn_kb = 0
+    
+    # Cleanup
+    cleanup_connections(connections)
+    
+    # Results
+    log("")
+    log("=" * 60)
+    log("RESULTS")
+    log("=" * 60)
+    log(f"  Baseline memory: {baseline_mb:.1f} MB")
+    log(f"  Total memory: {total_mb:.1f} MB")
+    log(f"  Memory increase: {memory_increase:.1f} MB")
+    log(f"  Connections created: {conn_count}")
+    log(f"  Per-connection memory: {per_conn_kb:.2f} KB")
+    log("")
+    
+    # Assertions — identical for CI and local
+    passed = True
+    
+    if baseline_mb > base_overhead_limit:
+        log(f"  ❌ Base overhead exceeded: {baseline_mb:.1f} MB > {base_overhead_limit} MB")
+        passed = False
+    else:
+        log(f"  ✅ Base overhead OK: {baseline_mb:.1f} MB <= {base_overhead_limit} MB")
+    
+    if per_conn_kb > per_conn_limit_kb and conn_count > 0:
+        log(f"  ❌ Per-connection memory exceeded: {per_conn_kb:.2f} KB > {per_conn_limit_kb} KB")
+        passed = False
+    else:
+        log(f"  ✅ Per-connection memory OK: {per_conn_kb:.2f} KB <= {per_conn_limit_kb} KB")
+    
+    if conn_count < target_connections * 0.9:
+        log(f"  ⚠️ Connection count low: {conn_count} < {int(target_connections * 0.9)}")
+        # Don't fail for this in smoke profile
+        if TEST_PROFILE != "smoke":
             passed = False
-        else:
-            log(f"  ✅ Base overhead OK: {baseline_mb:.1f} MB <= {base_overhead_limit} MB")
-        
-        if per_conn_kb > per_conn_limit_kb and conn_count > 0:
-            log(f"  ❌ Per-connection memory exceeded: {per_conn_kb:.2f} KB > {per_conn_limit_kb} KB")
-            passed = False
-        else:
-            log(f"  ✅ Per-connection memory OK: {per_conn_kb:.2f} KB <= {per_conn_limit_kb} KB")
-        
-        if conn_count < target_connections * 0.9:
-            log(f"  ⚠️ Connection count low: {conn_count} < {int(target_connections * 0.9)}")
-            # Don't fail for this in smoke profile
-            if TEST_PROFILE != "smoke":
-                passed = False
-        else:
-            log(f"  ✅ Connection count OK: {conn_count}")
-        
-        log("")
-        if passed:
-            log("✅ All memory benchmarks passed!")
-            sys.exit(0)
-        else:
-            log("❌ Memory benchmark failed!")
-            sys.exit(1)
+    else:
+        log(f"  ✅ Connection count OK: {conn_count}")
+    
+    log("")
+    return passed
+
+
+def main():
+    log("=" * 60)
+    log("MEMORY BENCHMARK TEST")
+    log("=" * 60)
+    
+    if IS_CI:
+        # In CI, run_all_tests.sh already manages the server lifecycle.
+        # ClusterManager would kill the existing TLS server and start a fresh one,
+        # which is disruptive and slow on 2-vCPU CI runners.
+        # Instead, use the server that's already running.
+        log("CI mode: using server managed by run_all_tests.sh")
+        passed = run_benchmark()
+    else:
+        # Local: use ClusterManager for self-contained test execution
+        with ClusterManager(project_root=project_root) as cluster:
+            passed = run_benchmark()
+    
+    if passed:
+        log("✅ All memory benchmarks passed!")
+        sys.exit(0)
+    else:
+        log("❌ Memory benchmark failed!")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

@@ -31,9 +31,15 @@ from pathlib import Path
 HOST = 'localhost'
 PORT = 8085
 
+# CI environment detection — scale workload to available resources
+IS_CI = os.environ.get("CI") == "true" or os.environ.get("GITHUB_ACTIONS") == "true"
+
 # TLS Configuration
 PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
 CA_CERT = PROJECT_ROOT / "certs" / "ca.pem"
+
+# Socket timeout — prevents hangs when server is degraded from prior benchmarks
+SOCKET_TIMEOUT = 30
 
 def get_ssl_context():
     """Create SSL context for TLS connections."""
@@ -44,7 +50,17 @@ def get_ssl_context():
         context.check_hostname = False
         context.verify_mode = ssl.CERT_NONE
     return context
-MSG_COUNT = 50000
+
+# Scale workload to environment:
+# - CI (2 vCPU): 5 threads x 5000 = 25K messages (completes in ~30s)
+# - Local (multi-core): 10 threads x 50000 = 500K messages (full stress)
+# Throughput assertion (8k msg/s) is IDENTICAL in both paths.
+if IS_CI:
+    MSG_COUNT = 5000
+    THREADS = 5
+else:
+    MSG_COUNT = 50000
+    THREADS = 10
 
 # Minimum throughput threshold (messages per second)
 # Set to 8k to account for test suite execution overhead
@@ -60,11 +76,13 @@ def create_socket():
     try:
         raw_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         raw_sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        raw_sock.settimeout(SOCKET_TIMEOUT)
         raw_sock.connect((HOST, PORT))
         context = get_ssl_context()
         s = context.wrap_socket(raw_sock, server_hostname=HOST)
+        s.settimeout(SOCKET_TIMEOUT)
         return s
-    except (socket.error, ssl.SSLError) as e:
+    except (socket.error, ssl.SSLError, socket.timeout) as e:
         log(f"Socket connection failed: {e}")
         return None
 
@@ -178,11 +196,15 @@ def main() -> int:
 
     log(f"PASS: Found Erlang PID: {erl_pid}")
     
-    # Configuration
-    THREADS = 10
+    # Configuration — THREADS and MSG_COUNT set at module level (CI-aware)
     TOTAL_MSGS = THREADS * MSG_COUNT
     
+    # Global timeout: prevent infinite hangs from degraded server
+    # CI: 120s, Local: 300s
+    GLOBAL_TIMEOUT = 120 if IS_CI else 300
+    
     log(f"Running benchmark: {THREADS} threads x {MSG_COUNT} msgs = {TOTAL_MSGS} total messages")
+    log(f"Environment: {'CI' if IS_CI else 'local'}, timeout: {GLOBAL_TIMEOUT}s")
     
     # Start resource monitoring
     res_container = {}
@@ -199,10 +221,17 @@ def main() -> int:
         t = threading.Thread(target=benchmark_worker, args=(durations, errors, i))
         t.start()
         threads.append(t)
-        
+    
+    # Join with timeout to prevent infinite hangs
     for t in threads:
-        t.join()
-    monitor.join()
+        remaining = GLOBAL_TIMEOUT - (time.time() - start_time)
+        if remaining <= 0:
+            log("WARN: Global timeout reached, not all workers finished")
+            break
+        t.join(timeout=remaining)
+        if t.is_alive():
+            log("WARN: Worker thread still alive after timeout")
+    monitor.join(timeout=10)
     
     total_time = time.time() - start_time
     
