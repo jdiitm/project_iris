@@ -99,6 +99,12 @@ case "$1" in
     --docker-only) DOCKER_ONLY=true ;;
 esac
 
+# Export CONFIG so Python tests know the server is TLS-enabled.
+# Without this, tests using ClusterManager would start non-TLS servers (killing
+# the TLS server run_all_tests.sh manages), and tests detecting USE_TLS via
+# os.environ.get("CONFIG") would fall back to plain TCP against a TLS server.
+export CONFIG=config/test_tls
+
 # Log directory
 LOG_DIR="$PROJECT_ROOT/tests/artifacts/full_run_$(date +%Y%m%d_%H%M%S)"
 mkdir -p "$LOG_DIR"

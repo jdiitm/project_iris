@@ -84,13 +84,17 @@ def get_cpu_percent():
 
 
 def create_connection(user_id):
-    """Create a TLS connection and login."""
+    """Create a TLS connection and login.
+    
+    TLS is MANDATORY per RFC NFR-14.
+    Uses wrap-then-connect for atomic TCP+TLS handshake.
+    """
     try:
         raw_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         raw_sock.settimeout(5)
-        raw_sock.connect(('localhost', EDGE_PORT))
         context = get_ssl_context()
         sock = context.wrap_socket(raw_sock, server_hostname='localhost')
+        sock.connect(('localhost', EDGE_PORT))
         username = f"cpu_user_{user_id}".encode()
         sock.sendall(b'\x01' + username)
         sock.setblocking(False)
@@ -99,13 +103,24 @@ def create_connection(user_id):
         return None
 
 
+_msg_seq = [0]  # Thread-safe enough for a counter in this context
+
 def send_message(sock, target, msg):
-    """Send a message through the connection."""
+    """Send a sequenced message through the connection.
+    
+    RFC-001-AMENDMENT-001 v1.0: Opcode 0x02 (plaintext) is REJECTED.
+    Must use 0x07 (sequenced) for all messages.
+    Wire format: 0x07 | TargetLen(16) | Target | SeqNo(64) | MsgLen(16) | Msg
+    """
     try:
         target_bytes = target.encode() if isinstance(target, str) else target
         msg_bytes = msg.encode() if isinstance(msg, str) else msg
-        packet = b'\x02' + len(target_bytes).to_bytes(2, 'big') + target_bytes + \
-                 len(msg_bytes).to_bytes(2, 'big') + msg_bytes
+        _msg_seq[0] += 1
+        seq_no = _msg_seq[0]
+        packet = (b'\x07' +
+                  len(target_bytes).to_bytes(2, 'big') + target_bytes +
+                  seq_no.to_bytes(8, 'big') +
+                  len(msg_bytes).to_bytes(2, 'big') + msg_bytes)
         sock.sendall(packet)
         return True
     except Exception:
@@ -189,76 +204,94 @@ def main():
     log(f"Load CPU limit: {profile['load_cpu_max']}%")
     log("")
     
-    with ClusterManager(project_root=project_root) as cluster:
-        # Measure idle CPU first
-        idle_cpu = measure_idle_cpu(duration=5)
-        
-        # Create connections
-        log(f"Creating {profile['connections']} connections...")
-        connections = []
-        for i in range(profile['connections']):
-            sock = create_connection(i)
-            if sock:
-                connections.append(sock)
-        log(f"  Created {len(connections)} connections")
-        
-        # Let connections stabilize
-        time.sleep(2)
-        
-        # Measure CPU under load
-        avg_cpu, peak_cpu, actual_rate = measure_load_cpu(
-            connections,
-            profile['messages_per_sec'],
-            profile['duration_sec']
-        )
-        
-        # Cleanup
-        for sock in connections:
-            try:
-                sock.close()
-            except Exception:
-                pass
-        
-        # Results
-        log("")
-        log("=" * 60)
-        log("RESULTS")
-        log("=" * 60)
-        log(f"  Idle CPU: {idle_cpu:.1f}%")
-        log(f"  Load CPU (avg): {avg_cpu:.1f}%")
-        log(f"  Load CPU (peak): {peak_cpu:.1f}%")
-        log(f"  Actual message rate: {actual_rate:.1f} msg/s")
-        log("")
-        
-        # Assertions
-        passed = True
-        
-        if idle_cpu > profile['idle_cpu_max']:
-            log(f"  ❌ Idle CPU exceeded: {idle_cpu:.1f}% > {profile['idle_cpu_max']}%")
-            passed = False
-        else:
-            log(f"  ✅ Idle CPU OK: {idle_cpu:.1f}% <= {profile['idle_cpu_max']}%")
-        
-        if avg_cpu > profile['load_cpu_max']:
-            log(f"  ❌ Load CPU exceeded: {avg_cpu:.1f}% > {profile['load_cpu_max']}%")
-            passed = False
-        else:
-            log(f"  ✅ Load CPU OK: {avg_cpu:.1f}% <= {profile['load_cpu_max']}%")
-        
-        # Message rate check (informational in smoke)
-        rate_target = profile['messages_per_sec'] * 0.5  # At least 50% of target
-        if actual_rate < rate_target:
-            log(f"  ⚠️ Message rate low: {actual_rate:.1f} < {rate_target:.1f} msg/s")
-        else:
-            log(f"  ✅ Message rate OK: {actual_rate:.1f} >= {rate_target:.1f} msg/s")
-        
-        log("")
-        if passed:
-            log("✅ All CPU utilization tests passed!")
-            sys.exit(0)
-        else:
-            log("❌ CPU utilization test failed!")
-            sys.exit(1)
+    # Check if server is already running (managed by run_all_tests.sh).
+    # If so, skip ClusterManager to avoid killing the existing TLS server.
+    server_running = False
+    try:
+        probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        probe.settimeout(2)
+        probe.connect(('localhost', 8085))
+        probe.close()
+        server_running = True
+    except Exception:
+        pass
+    
+    if server_running:
+        log("Server already running — using existing server")
+    else:
+        log("No server detected — starting via ClusterManager")
+        cluster = ClusterManager(project_root=project_root)
+        cluster.start()
+    
+    # Measure idle CPU first
+    idle_cpu = measure_idle_cpu(duration=5)
+    
+    # Create connections
+    log(f"Creating {profile['connections']} connections...")
+    connections = []
+    for i in range(profile['connections']):
+        sock = create_connection(i)
+        if sock:
+            connections.append(sock)
+    log(f"  Created {len(connections)} connections")
+    
+    # Let connections stabilize
+    time.sleep(2)
+    
+    # Measure CPU under load
+    avg_cpu, peak_cpu, actual_rate = measure_load_cpu(
+        connections,
+        profile['messages_per_sec'],
+        profile['duration_sec']
+    )
+    
+    # Cleanup
+    for sock in connections:
+        try:
+            sock.close()
+        except Exception:
+            pass
+    
+    # Results
+    log("")
+    log("=" * 60)
+    log("RESULTS")
+    log("=" * 60)
+    log(f"  Idle CPU: {idle_cpu:.1f}%")
+    log(f"  Load CPU (avg): {avg_cpu:.1f}%")
+    log(f"  Load CPU (peak): {peak_cpu:.1f}%")
+    log(f"  Actual message rate: {actual_rate:.1f} msg/s")
+    log("")
+    
+    # Assertions
+    passed = True
+    
+    if idle_cpu > profile['idle_cpu_max']:
+        log(f"  ❌ Idle CPU exceeded: {idle_cpu:.1f}% > {profile['idle_cpu_max']}%")
+        passed = False
+    else:
+        log(f"  ✅ Idle CPU OK: {idle_cpu:.1f}% <= {profile['idle_cpu_max']}%")
+    
+    if avg_cpu > profile['load_cpu_max']:
+        log(f"  ❌ Load CPU exceeded: {avg_cpu:.1f}% > {profile['load_cpu_max']}%")
+        passed = False
+    else:
+        log(f"  ✅ Load CPU OK: {avg_cpu:.1f}% <= {profile['load_cpu_max']}%")
+    
+    # Message rate check (informational in smoke)
+    rate_target = profile['messages_per_sec'] * 0.5  # At least 50% of target
+    if actual_rate < rate_target:
+        log(f"  ⚠️ Message rate low: {actual_rate:.1f} < {rate_target:.1f} msg/s")
+    else:
+        log(f"  ✅ Message rate OK: {actual_rate:.1f} >= {rate_target:.1f} msg/s")
+    
+    log("")
+    if passed:
+        log("✅ All CPU utilization tests passed!")
+        sys.exit(0)
+    else:
+        log("❌ CPU utilization test failed!")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

@@ -383,7 +383,8 @@ def main():
             log(f"Starting {config['user_count']} users with extreme_load mode")
             
             # Use extreme_load mode - this actually sends messages between users
-            load_cmd = f"/usr/bin/erl +P 2000000 -setcookie iris_secret -sname loader -hidden -noshell -pa ebin -eval \"iris_extreme_gen:start({config['user_count']}, {config['duration'] + 60}, extreme_load), timer:sleep(infinity).\""
+            erl_path = "erl"  # Use PATH-resolved erl (CI installs via erlef/setup-beam, not /usr/bin)
+            load_cmd = f"{erl_path} +P 2000000 -setcookie iris_secret -sname loader -hidden -noshell -pa ebin -eval \"iris_extreme_gen:start({config['user_count']}, {config['duration'] + 60}, extreme_load), timer:sleep(infinity).\""
             processes.append(run_cmd(load_cmd, async_run=True))
             
             time.sleep(2)  # Let connections establish

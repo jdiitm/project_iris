@@ -345,7 +345,19 @@ def main() -> int:
     parser.add_argument('--skip-restart', action='store_true', help='Skip cluster restart (ignored)')
     args = parser.parse_args()
     
-    # Use ClusterManager to ensure cluster is running
+    # If server is already running (e.g. started by run_all_tests.sh), use it directly.
+    # ClusterManager.force_stop() would kill the externally-managed TLS server.
+    try:
+        probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        probe.settimeout(2)
+        probe.connect((HOST, PORT))
+        probe.close()
+        print(f"[INFO] Server already running on {HOST}:{PORT} — skipping ClusterManager")
+        return run_test(args)
+    except Exception:
+        pass
+
+    # No server running — use ClusterManager to start one
     with ClusterManager(project_root=project_root) as cluster:
         return run_test(args)
 

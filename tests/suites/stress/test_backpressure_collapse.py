@@ -519,16 +519,16 @@ def main():
     print("Per PRINCIPAL_AUDIT_REPORT.md Section 6.3")
     print("=" * 70)
     
-    # Use ClusterManager to ensure cluster is running
-    with ClusterManager(project_root=project_root) as cluster:
+    def _run_test():
+        """Run the backpressure test logic."""
         # Check prerequisites
         if not check_server_available():
             print(f"\nFAIL: Server not available at {SERVER_HOST}:{SERVER_PORT}")
             sys.exit(1)
-        
+
         # Run test
         result = run_backpressure_test()
-        
+
         # Check if cluster was properly set up
         # Note: Low success rates during warmup may indicate:
         # 1. Cluster meshing failure (<10% - skip as infra issue)
@@ -543,10 +543,10 @@ def main():
                 print(f"  This indicates edge-core connection failure.")
                 print(f"  Run with a fresh cluster: make start")
                 sys.exit(1)
-        
+
         # Analyze and report
         passed = analyze_results(result)
-        
+
         print("\n" + "=" * 70)
         if passed:
             print("RESULT: PASSED - System handles backpressure gracefully")
@@ -554,6 +554,20 @@ def main():
         else:
             print("RESULT: FAILED - Backpressure handling inadequate")
             sys.exit(1)
+
+    # If server is already running (e.g. started by run_all_tests.sh), use it directly.
+    # ClusterManager.force_stop() would kill the externally-managed TLS server.
+    try:
+        probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        probe.settimeout(2)
+        probe.connect((SERVER_HOST, SERVER_PORT))
+        probe.close()
+        print(f"[INFO] Server already running on {SERVER_HOST}:{SERVER_PORT} — skipping ClusterManager")
+        _run_test()
+    except socket.error:
+        # No server running — use ClusterManager to start one
+        with ClusterManager(project_root=project_root) as cluster:
+            _run_test()
 
 
 if __name__ == "__main__":

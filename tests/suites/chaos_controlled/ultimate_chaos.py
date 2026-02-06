@@ -387,9 +387,9 @@ def main():
         time.sleep(2)
         
         # Build
-        erl_path = "/usr/bin/erl" if os.path.exists("/usr/bin/erl") else "erl"
+        erl_path = "erl"  # Use PATH-resolved erl (CI installs via erlef/setup-beam, not /usr/bin)
         suffix = os.environ.get("IRIS_NODE_SUFFIX", "")
-        make_cmd = f"PATH=/usr/bin:$PATH NODE_SUFFIX={suffix} make ERL={erl_path}"
+        make_cmd = f"NODE_SUFFIX={suffix} make ERL={erl_path}"
         
         log("Building project...")
         run_cmd(f"{make_cmd} all")
@@ -445,7 +445,7 @@ def main():
         print_section("PHASE 1: RAMP UP")
         log(f"Starting {CONFIG['user_count']} users with extreme_load mode")
         
-        load_cmd = f"/usr/bin/erl +P 2000000 -setcookie iris_secret -sname loader -hidden -noshell -pa ebin -eval \"iris_extreme_gen:start({CONFIG['user_count']}, {CONFIG['duration'] + 60}, extreme_load), timer:sleep(infinity).\""
+        load_cmd = f"erl +P 2000000 -setcookie iris_secret -sname loader -hidden -noshell -pa ebin -eval \"iris_extreme_gen:start({CONFIG['user_count']}, {CONFIG['duration'] + 60}, extreme_load), timer:sleep(infinity).\""
         processes.append(run_cmd(load_cmd, async_run=True))
         
         time.sleep(2)

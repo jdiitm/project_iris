@@ -34,11 +34,8 @@ IS_CI = os.environ.get("CI") == "true" or os.environ.get("GITHUB_ACTIONS") == "t
 TEST_PROFILE = os.environ.get("TEST_PROFILE", "smoke")
 EDGE_PORT = 8085
 
-# TLS configuration — in CI, CONFIG=config/test_tls is set as env var,
-# so ClusterManager would start a TLS server. We detect this and create
-# TLS connections accordingly.
+# TLS is MANDATORY per RFC NFR-14 — no plain TCP connections.
 CA_CERT = Path(project_root) / "certs" / "ca.pem"
-USE_TLS = bool(os.environ.get("CONFIG", "")) and "tls" in os.environ.get("CONFIG", "")
 
 # Profile-based thresholds
 PROFILES = {
@@ -96,23 +93,23 @@ def get_memory_mb():
 _conn_errors = []  # Track connection errors for diagnostics
 
 def create_connection(user_id):
-    """Create a single connection and login.
+    """Create a single TLS connection and login.
     
-    Automatically uses TLS when CONFIG env var indicates TLS server,
-    which is the case in CI (CONFIG=config/test_tls set by ci.yml).
+    TLS is MANDATORY per RFC NFR-14. No plain TCP fallback.
+    
+    Uses wrap-then-connect pattern (TCP+TLS handshake atomically) for
+    robustness with the Erlang SSL acceptor. This matches create_tls_socket()
+    from chaos_dist/utils.py.
     """
     raw_sock = None
     try:
         raw_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         raw_sock.settimeout(10 if IS_CI else 5)
-        raw_sock.connect(('localhost', EDGE_PORT))
         
-        if USE_TLS:
-            context = get_ssl_context()
-            sock = context.wrap_socket(raw_sock, server_hostname='localhost')
-        else:
-            sock = raw_sock
-            raw_sock = None  # Prevent double-close
+        # Wrap BEFORE connect — TCP+TLS handshake happens atomically.
+        context = get_ssl_context()
+        sock = context.wrap_socket(raw_sock, server_hostname='localhost')
+        sock.connect(('localhost', EDGE_PORT))
         
         # Login packet: 0x01 | username
         username = f"mem_user_{user_id}".encode()
@@ -202,22 +199,17 @@ def run_benchmark():
     """Run the actual benchmark (shared by both CI and local paths)."""
     profile = PROFILES.get(TEST_PROFILE, PROFILES["smoke"])
     target_connections = profile["connections"]
+    # TLS is mandatory — always use TLS-aware per-connection limits.
     # TLS connections have higher per-connection memory due to SSL session state
     # (cipher context, handshake buffers, session tickets). This is inherent to TLS,
-    # not a server inefficiency. Use the TLS-aware limit when TLS is active.
-    if USE_TLS:
-        per_conn_limit_kb = profile.get("per_conn_kb_tls", profile["per_conn_kb"])
-    else:
-        per_conn_limit_kb = profile["per_conn_kb"]
+    # not a server inefficiency.
+    per_conn_limit_kb = profile.get("per_conn_kb_tls", profile["per_conn_kb"])
     base_overhead_limit = profile["base_overhead_mb"]
     
     log(f"Profile: {TEST_PROFILE}")
     log(f"Target connections: {target_connections}")
-    log(f"Per-connection limit: {per_conn_limit_kb} KB")
+    log(f"Per-connection limit: {per_conn_limit_kb} KB (TLS)")
     log(f"Base overhead limit: {base_overhead_limit} MB")
-    if USE_TLS:
-        log(f"TLS: enabled (CONFIG={os.environ.get('CONFIG', '')})")
-        log(f"TLS per-conn limit: {per_conn_limit_kb} KB (includes SSL session overhead)")
     log("")
     
     # Measure baseline
@@ -286,23 +278,35 @@ def run_benchmark():
     return passed
 
 
+def is_server_running():
+    """Check if an Iris server is already running on the test port."""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(2)
+        s.connect(('localhost', EDGE_PORT))
+        s.close()
+        return True
+    except Exception:
+        return False
+
+
 def main():
     log("=" * 60)
     log("MEMORY BENCHMARK TEST")
     log("=" * 60)
-    log(f"IS_CI={IS_CI}, USE_TLS={USE_TLS}, CONFIG={os.environ.get('CONFIG', '')}")
+    log(f"IS_CI={IS_CI}, TLS=mandatory, CA_CERT exists={CA_CERT.exists()}")
     log(f"CA_CERT exists: {CA_CERT.exists()}")
     
     try:
-        if IS_CI:
-            # In CI, run_all_tests.sh already manages the server lifecycle.
-            # ClusterManager would kill the existing TLS server and start a fresh one,
-            # which is disruptive and slow on 2-vCPU CI runners.
-            # Instead, use the server that's already running.
-            log("CI mode: using server managed by run_all_tests.sh")
+        if is_server_running():
+            # Server already running (managed by run_all_tests.sh or started manually).
+            # Do NOT use ClusterManager — it would kill the existing server and start
+            # a new one, disrupting subsequent tests in the test suite.
+            log("Server already running — using existing server")
             passed = run_benchmark()
         else:
-            # Local: use ClusterManager for self-contained test execution
+            # No server detected — start via ClusterManager for standalone execution
+            log("No server detected — starting via ClusterManager")
             with ClusterManager(project_root=project_root) as cluster:
                 passed = run_benchmark()
     except Exception as e:

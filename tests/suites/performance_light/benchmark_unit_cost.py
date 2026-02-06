@@ -51,6 +51,7 @@ def get_ssl_context():
         context.verify_mode = ssl.CERT_NONE
     return context
 
+
 # Scale workload to environment:
 # - CI (2 vCPU): 5 threads x 5000 = 25K messages (completes in ~30s)
 # - Local (multi-core): 10 threads x 50000 = 500K messages (full stress)
@@ -64,7 +65,7 @@ else:
 
 # Minimum throughput threshold (messages per second)
 # Full system benchmark (NFR-2) requires 30k+ msg/s.
-# Local (multi-core, plain TCP or TLS): 8k msg/s — accounts for test suite overhead.
+# Local (multi-core, TLS): 8k msg/s — accounts for test suite overhead.
 # CI (2-vCPU, TLS): 3k msg/s — TLS encryption adds significant per-message CPU cost
 # on a constrained runner. This still validates the system handles concurrent load.
 if IS_CI:
@@ -77,18 +78,48 @@ def log(msg):
     print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
 
 
+_ssl_context_cache = None
+
+
+def _get_cached_ssl_context():
+    """Get or create a cached SSL context for benchmark connections.
+    
+    Creating ssl.create_default_context() is expensive (loads all system CAs).
+    Cache it for reuse across all worker threads.
+    """
+    global _ssl_context_cache
+    if _ssl_context_cache is None:
+        _ssl_context_cache = get_ssl_context()
+    return _ssl_context_cache
+
+
 def create_socket():
+    """Create a TLS connection to the Iris server.
+    
+    TLS is MANDATORY per RFC NFR-14. No plain TCP fallback.
+    
+    Uses wrap-then-connect pattern (same as chaos_dist/utils.create_tls_socket)
+    which performs TCP+TLS handshake atomically. This is critical after heavy benchmarks
+    where the Erlang SSL acceptor may have in-flight state that causes connect-then-wrap
+    to hang (the server accepted TCP but never responds to the late SSL ClientHello).
+    """
     try:
+        context = _get_cached_ssl_context()
         raw_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         raw_sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         raw_sock.settimeout(SOCKET_TIMEOUT)
-        raw_sock.connect((HOST, PORT))
-        context = get_ssl_context()
-        s = context.wrap_socket(raw_sock, server_hostname=HOST)
-        s.settimeout(SOCKET_TIMEOUT)
-        return s
+        # Wrap BEFORE connect — TCP+TLS handshake happens atomically in connect().
+        # This matches create_tls_socket() from chaos_dist/utils.py which all other
+        # tests use successfully.
+        tls_sock = context.wrap_socket(raw_sock, server_hostname=HOST)
+        tls_sock.connect((HOST, PORT))
+        return tls_sock
     except (socket.error, ssl.SSLError, socket.timeout) as e:
-        log(f"Socket connection failed: {e}")
+        log(f"TLS connection failed: {e}")
+        try:
+            raw_sock.close()
+        except Exception:
+            pass
         return None
 
 
@@ -181,6 +212,8 @@ def main() -> int:
         0 if benchmark passed, 1 if failed
     """
     log("--- UNIT COST BENCHMARK ---")
+    log(f"  IS_CI={IS_CI}, TLS=mandatory, CA_CERT exists={CA_CERT.exists()}")
+    log(f"  THREADS={THREADS}, MSG_COUNT={MSG_COUNT}, MIN_THROUGHPUT={MIN_THROUGHPUT}")
     
     passed = True
     
@@ -198,16 +231,26 @@ def main() -> int:
         log("Please start the cluster before running benchmarks")
         return 1
     
-    # Verify TLS works with full handshake
-    try:
-        test_sock = create_socket()
-        if test_sock:
-            test_sock.close()
-            log("PASS: TLS connection verified")
-        else:
-            log("WARN: TLS connection failed — server may be non-TLS")
-    except Exception:
-        log("WARN: TLS probe failed — continuing anyway")
+    # Verify TLS/connection works with full handshake (retry up to 3 times)
+    # After heavy benchmarks, the server's SSL acceptor may need a moment to stabilise.
+    conn_ok = False
+    for attempt in range(3):
+        try:
+            test_sock = create_socket()
+            if test_sock:
+                test_sock.close()
+                log(f"PASS: TLS connection verified (attempt {attempt + 1})")
+                conn_ok = True
+                break
+            else:
+                log(f"WARN: Connection attempt {attempt + 1}/3 failed — retrying in 2s")
+                time.sleep(2)
+        except Exception:
+            log(f"WARN: Connection probe attempt {attempt + 1}/3 raised exception — retrying in 2s")
+            time.sleep(2)
+    if not conn_ok:
+        log("FAIL: Could not establish any connection after 3 attempts")
+        return 1
     
     # Find beam pid
     erl_pid = None

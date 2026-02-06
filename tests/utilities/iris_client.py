@@ -25,34 +25,36 @@ DEFAULT_CA_CERT = PROJECT_ROOT / "certs" / "ca.pem"
 class IrisClient:
     def __init__(self, host='localhost', port=8085, use_tls=True):
         """
-        Create an Iris client connection.
+        Create an Iris client connection with mandatory TLS.
+        
+        TLS is MANDATORY per RFC NFR-14. The use_tls parameter is accepted
+        for backward compatibility but ignored — TLS is always used.
+        
+        Uses wrap-then-connect pattern for atomic TCP+TLS handshake.
         
         Args:
             host: Server hostname
             port: Server port
-            use_tls: Whether to use TLS (default True for RFC compliance)
+            use_tls: Ignored (TLS is always used). Kept for API compatibility.
         """
         raw_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         raw_sock.settimeout(10.0)
         
-        if use_tls:
-            # Create TLS context
-            context = ssl.create_default_context()
-            
-            # Load CA certificate if available
-            ca_cert = os.environ.get('IRIS_CA_CERT', str(DEFAULT_CA_CERT))
-            if os.path.exists(ca_cert):
-                context.load_verify_locations(ca_cert)
-            else:
-                # For testing: disable cert verification if no CA available
-                context.check_hostname = False
-                context.verify_mode = ssl.CERT_NONE
-            
-            raw_sock.connect((host, port))
-            self.sock = context.wrap_socket(raw_sock, server_hostname=host)
+        # TLS is mandatory — create context and wrap before connect
+        context = ssl.create_default_context()
+        
+        # Load CA certificate if available
+        ca_cert = os.environ.get('IRIS_CA_CERT', str(DEFAULT_CA_CERT))
+        if os.path.exists(ca_cert):
+            context.load_verify_locations(ca_cert)
         else:
-            raw_sock.connect((host, port))
-            self.sock = raw_sock
+            # For testing: disable cert verification if no CA available
+            context.check_hostname = False
+            context.verify_mode = ssl.CERT_NONE
+        
+        # Wrap BEFORE connect — TCP+TLS handshake happens atomically
+        self.sock = context.wrap_socket(raw_sock, server_hostname=host)
+        self.sock.connect((host, port))
         
         self.sock.settimeout(5.0)
         self.buffer = b''

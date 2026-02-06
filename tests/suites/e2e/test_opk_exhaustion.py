@@ -63,7 +63,8 @@ halt(0).
             capture_output=True,
             text=True,
             timeout=timeout,
-            cwd=project_root
+            cwd=project_root,
+            errors='replace'  # Erlang io:format(~p) of binary keys can emit non-UTF-8 bytes
         )
         return result.returncode == 0, result.stdout, result.stderr
     finally:

@@ -525,19 +525,19 @@ def main():
     print("Per PRINCIPAL_AUDIT_REPORT.md Section 3.3")
     print("=" * 70)
     
-    # Use ClusterManager to ensure cluster is running
-    with ClusterManager(project_root=project_root) as cluster:
+    def _run_test():
+        """Run the hot-shard test logic."""
         # Check prerequisites
         if not check_server_available():
             print(f"\nFAIL: Server not available at {SERVER_HOST}:{SERVER_PORT}")
             sys.exit(1)
-        
+
         # Run test
         result = run_hot_shard_test()
-        
+
         # Analyze and report
         passed = analyze_results(result)
-        
+
         print("\n" + "=" * 70)
         if passed:
             print("RESULT: PASSED - Hot-shard handling within acceptable limits")
@@ -545,6 +545,20 @@ def main():
         else:
             print("RESULT: FAILED - Hot-shard test failed")
             sys.exit(1)
+
+    # If server is already running (e.g. started by run_all_tests.sh), use it directly.
+    # ClusterManager.force_stop() would kill the externally-managed TLS server.
+    try:
+        probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        probe.settimeout(2)
+        probe.connect((SERVER_HOST, SERVER_PORT))
+        probe.close()
+        print(f"[INFO] Server already running on {SERVER_HOST}:{SERVER_PORT} — skipping ClusterManager")
+        _run_test()
+    except socket.error:
+        # No server running — use ClusterManager to start one
+        with ClusterManager(project_root=project_root) as cluster:
+            _run_test()
 
 
 if __name__ == "__main__":

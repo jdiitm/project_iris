@@ -40,7 +40,7 @@ def check_erlang_available():
     try:
         result = subprocess.run(
             ["erl", "-noshell", "-eval", "io:format(ok), halt(0)."],
-            capture_output=True, text=True, timeout=10
+            capture_output=True, text=True, timeout=10, errors='replace'
         )
         return result.returncode == 0
     except Exception:
@@ -63,7 +63,8 @@ def run_all_ratchet_eunit_tests():
     
     try:
         result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=TIMEOUT, cwd=project_root
+            cmd, capture_output=True, text=True, timeout=TIMEOUT, cwd=project_root,
+            errors='replace'
         )
         
         # Check for test results in output
@@ -165,7 +166,7 @@ advance_100({A, B}, N) ->
         # Compile
         compile_result = subprocess.run(
             ["erlc", "-o", os.path.join(project_root, "ebin"), erl_file],
-            capture_output=True, text=True, timeout=30
+            capture_output=True, text=True, timeout=30, errors='replace'
         )
         
         if compile_result.returncode != 0:
@@ -179,7 +180,8 @@ advance_100({A, B}, N) ->
         ]
         
         result = subprocess.run(
-            run_cmd, capture_output=True, text=True, timeout=TIMEOUT, cwd=project_root
+            run_cmd, capture_output=True, text=True, timeout=TIMEOUT, cwd=project_root,
+            errors='replace'
         )
         
         if result.returncode == 0 and "PCS_PASS" in result.stdout:

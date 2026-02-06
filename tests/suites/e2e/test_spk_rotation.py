@@ -58,7 +58,8 @@ def run_erlang_command(code, timeout=TIMEOUT):
         ["bash", "-c", full_code],
         capture_output=True,
         text=True,
-        timeout=timeout
+        timeout=timeout,
+        errors='replace'  # Erlang io:format(~p) of binary keys can emit non-UTF-8 bytes
     )
     return result.returncode == 0, result.stdout, result.stderr
 

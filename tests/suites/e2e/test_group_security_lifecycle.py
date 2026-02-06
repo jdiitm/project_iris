@@ -705,28 +705,28 @@ def test_forward_secrecy_within_epoch():
 # =============================================================================
 
 def check_server_available() -> bool:
-    """Check if server is available for testing."""
+    """Check if server is available for testing (TLS mandatory)."""
     import ssl
+    from pathlib import Path
     host = os.environ.get("IRIS_HOST", "localhost")
-    port = int(os.environ.get("IRIS_PORT", "8080"))
+    port = int(os.environ.get("IRIS_PORT", "8085"))
     
     try:
-        # Try TLS first, then plaintext
-        for use_tls in [True, False]:
-            try:
-                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                sock.settimeout(2.0)
-                if use_tls:
-                    ctx = ssl.create_default_context()
-                    ctx.check_hostname = False
-                    ctx.verify_mode = ssl.CERT_NONE
-                    sock = ctx.wrap_socket(sock)
-                sock.connect((host, port))
-                sock.close()
-                return True
-            except (ConnectionRefusedError, socket.timeout, ssl.SSLError, OSError) as e:
-                # Expected errors when server is not running
-                continue
+        # TLS is mandatory per RFC NFR-14
+        raw_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        raw_sock.settimeout(3.0)
+        ctx = ssl.create_default_context()
+        ca_cert = Path(__file__).parent.parent.parent.parent / "certs" / "ca.pem"
+        if ca_cert.exists():
+            ctx.load_verify_locations(str(ca_cert))
+        else:
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+        sock = ctx.wrap_socket(raw_sock, server_hostname=host)
+        sock.connect((host, port))
+        sock.close()
+        return True
+    except (ConnectionRefusedError, socket.timeout, ssl.SSLError, OSError):
         return False
     except PermissionError:
         # Sandbox or permission restrictions - treat as no server

@@ -172,10 +172,29 @@ def main():
     # RAM limit is fixed per profile - no dynamic adjustment
     limit_ram = profile["ram_mb"]
     
-    with ClusterManager(project_root=project_root) as cluster:
+    # If server is already running (e.g. started by run_all_tests.sh), use it directly.
+    # ClusterManager.force_stop() would kill the externally-managed TLS server.
+    server_running = False
+    try:
+        probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        probe.settimeout(2)
+        probe.connect(('localhost', 8085))
+        probe.close()
+        server_running = True
+        log("Server already running on port 8085 — skipping ClusterManager")
+    except Exception:
+        pass
+
+    class _NoOpCluster:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    cluster_mgr = _NoOpCluster() if server_running else ClusterManager(project_root=project_root)
+
+    with cluster_mgr as cluster:
         # Recompile the extreme generator
         subprocess.run("erlc -o ebin test_utils/iris_extreme_gen.erl", shell=True, check=True)
-        
+
         # Verify edge is alive before starting
         if not verify_edge_alive():
             log("CRITICAL: Edge node not responding on port 8085!")

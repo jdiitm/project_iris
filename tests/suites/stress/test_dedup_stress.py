@@ -77,25 +77,11 @@ USE_TLS = None
 
 def check_server_available() -> bool:
     """Check if server is available. Auto-detects TLS mode."""
-    global USE_TLS
-    
-    # Try TLS first
+    # TLS is mandatory — connect with TLS
     try:
-        client = IrisClient(use_tls=True)
+        client = IrisClient()
         client.login(unique_user("dedup_check"))
         client.close()
-        USE_TLS = True
-        return True
-    except Exception:
-        pass
-    
-    # Try non-TLS
-    try:
-        client = IrisClient(use_tls=False)
-        client.login(unique_user("dedup_check"))
-        client.close()
-        USE_TLS = False
-        log("  (Server running without TLS)")
         return True
     except Exception as e:
         log(f"Server not available: {e}")
@@ -103,8 +89,8 @@ def check_server_available() -> bool:
 
 
 def get_client() -> IrisClient:
-    """Get a client with correct TLS setting."""
-    return IrisClient(use_tls=USE_TLS if USE_TLS is not None else True)
+    """Get a TLS client. TLS is mandatory per RFC NFR-14."""
+    return IrisClient()
 
 
 def get_dedup_stats() -> dict:
