@@ -150,7 +150,7 @@ class IrisClient:
                         raise Exception("Connection closed")
                     self.buffer += data
                 except socket.timeout:
-                    raise Exception("Timeout waiting for message")
+                    raise
             
             # Check opcode
             if len(self.buffer) > 0 and self.buffer[0] != 0x10:

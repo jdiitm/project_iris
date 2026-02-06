@@ -142,7 +142,9 @@ handle_packet({login, LoginData}, _Current, TransportPid, _Mod) ->
     {User, MaybeToken} = parse_login_data(LoginData),
     
     %% AUDIT3 FIX: Protect against session memory bloat
-    process_flag(max_heap_size, #{size => 100000, kill => true}), %% ~800KB limit
+    %% NFR-26 FIX: Increased from 100000 to 1000000 words to support 1000-member groups
+    %% 1000000 words = ~8MB, sufficient for large group roster/fanout operations
+    process_flag(max_heap_size, #{size => 1000000, kill => true}), %% ~8MB limit
     
     %% Rate limiting check
     case rate_limit_check(User) of
@@ -436,6 +438,33 @@ handle_packet({group_create, GroupName}, User, _Pid, _Mod) when User =/= undefin
     end;
 
 handle_packet({group_create, _GroupName}, undefined, _Pid, _Mod) ->
+    {ok, undefined, []};
+
+%% =============================================================================
+%% Group Join/Add Member (RFC-001-AMENDMENT-001, FR-18)
+%% =============================================================================
+%% Packet 0x31 can be sent by client to add a member to a group.
+%% Only group admins can add members.
+
+handle_packet({group_join, GroupId, MemberName}, User, _Pid, _Mod) when User =/= undefined ->
+    %% Add a member to a group (must be admin)
+    case is_group_service_available() of
+        false ->
+            {ok, User, [{send, encode_error(group_service_unavailable)}]};
+        true ->
+            case call_iris_group(add_member, [GroupId, MemberName, User]) of
+                ok ->
+                    %% Send join notification back to confirm
+                    JoinPacket = iris_proto:encode_group_join(GroupId, MemberName),
+                    {ok, User, [{send, JoinPacket}]};
+                {error, Reason} ->
+                    logger:warning("Group add_member failed: ~p adding ~p to ~p: ~p", 
+                                 [User, MemberName, GroupId, Reason]),
+                    {ok, User, [{send, encode_error(Reason)}]}
+            end
+    end;
+
+handle_packet({group_join, _GroupId, _MemberName}, undefined, _Pid, _Mod) ->
     {ok, undefined, []};
 
 handle_packet({group_leave, GroupId}, User, _Pid, _Mod) when User =/= undefined ->

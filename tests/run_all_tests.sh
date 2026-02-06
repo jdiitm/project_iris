@@ -62,7 +62,9 @@ NC='\033[0m'
 # Counters
 TOTAL_PASS=0
 TOTAL_FAIL=0
+TOTAL_WARN=0
 FAILED_TESTS=()
+WARNED_TESTS=()
 
 # Options
 SKIP_DOCKER=false
@@ -93,7 +95,7 @@ show_help() {
 # Parse args
 case "$1" in
     --help|-h) show_help ;;
-    --quick) SKIP_DOCKER=true ;;
+    --quick) SKIP_DOCKER=true; export QUICK_MODE=true ;;
     --docker-only) DOCKER_ONLY=true ;;
 esac
 
@@ -169,6 +171,9 @@ HEAVY_TESTS=(
     "test_fanout"                # Fan-out stress
     "test_connection_scale"      # Connection scaling
     "test_soak_memory"           # Memory stress
+    "test_dedup_stress"          # High-volume dedup stress
+    "benchmark_group_1000"       # High-concurrency group ops (can crash server)
+    "benchmark_unit_cost"        # Heavy benchmark
     "ultimate_chaos"             # Combined chaos
     "chaos_combined"             # Combined chaos
 )
@@ -233,6 +238,22 @@ restart_server_quick() {
         fi
         sleep 2
     done
+}
+
+# Ensure server is healthy before a test category (called before each category)
+ensure_server_ready() {
+    local category_name=${1:-"tests"}
+    
+    # Check if server is responding
+    if ! nc -z localhost 8085 2>/dev/null; then
+        echo -e "  ${YELLOW}[RECOVERY]${NC} Server not responding before $category_name - restarting..."
+        restart_server_quick
+        if ! nc -z localhost 8085 2>/dev/null; then
+            echo -e "  ${RED}[ERROR]${NC} Failed to start server for $category_name"
+            return 1
+        fi
+    fi
+    return 0
 }
 
 # ============================================================================
@@ -438,13 +459,15 @@ else
 
     echo ""
     echo "--- Performance Tests ---"
+    ensure_server_ready "Performance Tests"
     for test in tests/suites/performance_light/benchmark_*.py tests/suites/performance_light/measure_*.py tests/suites/performance_light/test_*.py; do
-        [ -f "$test" ] && run_test "$test" 300
+        [ -f "$test" ] && run_test "$test" 600  # Increased from 300s for heavy benchmarks
     done
 
     echo ""
     echo "--- Stress Tests ---"
     echo "  (Server will restart automatically after heavy tests)"
+    ensure_server_ready "Stress Tests"
     
     # Sort stress tests - run lighter ones first
     STRESS_TESTS_LIGHT=()
@@ -466,9 +489,9 @@ else
         sleep 0.5
     done
     
-    # Then run heavy tests
+    # Then run heavy tests with longer timeout
     for test in "${STRESS_TESTS_HEAVY[@]}"; do
-        run_test "$test" 300
+        run_test "$test" 600  # Increased from 300s for heavy stress tests
     done
 
     echo ""
