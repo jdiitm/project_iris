@@ -19,6 +19,9 @@
 #   Tier 0: Every commit + every PR     (~25 min)
 #   Tier 1: Nightly + main push         (~2 hours)
 #   Tier 2: Manual / pre-release        (~24 hours)
+#
+# Concurrency: Only one CI run per branch at a time. New pushes cancel
+# in-progress runs to prevent duplicate push+pull_request flakiness.
 # =============================================================================
 
 name: CI
@@ -39,6 +42,20 @@ on:
         type: choice
         options: ['0', '1', '2']
 
+# ---------------------------------------------------------------------------
+# CONCURRENCY: Prevent duplicate runs for the same branch.
+#
+# Problem: Pushing to a branch with an open PR triggers BOTH push and
+# pull_request events, causing two identical tier0 runs. The second may
+# fail due to resource contention, appearing as "flaky."
+#
+# Fix: Group by branch name (head_ref for PRs, ref_name for pushes).
+# cancel-in-progress ensures only the latest push runs.
+# ---------------------------------------------------------------------------
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
 env:
   ERLANG_VERSION: '26'
   PYTHON_VERSION: '3.11'
@@ -53,11 +70,14 @@ jobs:
   # Covers: Unit, Integration, E2E, Contract, Compatibility, Security,
   #         Resilience, Performance, Stress, ClusterManager (chaos_controlled)
   # Skips:  Docker chaos tests only (no Docker daemon needed)
+  #
+  # Skip when tier=2 dispatch — Tier 2 is a superset that runs everything.
   # ===========================================================================
   tier0:
     name: "Tier 0 - All Non-Docker Tests"
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    if: github.event.inputs.tier != '2'
 
     steps:
       - name: Checkout
@@ -80,14 +100,12 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ebin
-          key: ebin-${{ hashFiles('src/**/*.erl') }}
+          key: ebin-${{ hashFiles('src/**/*.erl', 'test_utils/**/*.erl') }}
 
       - name: Run Quick Tests (non-Docker)
         run: |
           chmod +x tests/run_all_tests.sh
           ./tests/run_all_tests.sh --quick
-        env:
-          CONFIG: config/test_tls
 
       - name: Upload Artifacts
         if: failure()
@@ -102,6 +120,12 @@ jobs:
   # Runs: run_all_tests.sh --docker-only
   # Covers: 18 Docker chaos tests (fresh cluster per test) + NFR-15 mTLS
   # Requires: Docker daemon (ubuntu-latest provides this)
+  #
+  # Triggers:
+  #   - Nightly schedule
+  #   - Push to main/master (post-merge validation)
+  #   - Explicit tier=1 dispatch
+  # Skip when tier=2 dispatch — Tier 2 is a superset.
   # ===========================================================================
   tier1-docker:
     name: "Tier 1 - Docker Chaos Tests"
@@ -109,9 +133,12 @@ jobs:
     timeout-minutes: 120
     needs: tier0
     if: |
-      github.event_name == 'schedule' || 
-      github.event.inputs.tier >= '1' ||
-      (github.event_name == 'push' && github.ref == 'refs/heads/main')
+      github.event.inputs.tier != '2' &&
+      (
+        github.event_name == 'schedule' ||
+        github.event.inputs.tier == '1' ||
+        (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'))
+      )
 
     steps:
       - name: Checkout
@@ -172,13 +199,15 @@ jobs:
   # TIER 2: Full Suite (Manual / Pre-Release)
   # ===========================================================================
   # Runs: run_all_tests.sh (no flags — ALL phases)
-  # Covers: Everything in Tier 0 + Tier 1 in a single run, with full profile
+  # Covers: Everything (Tier 0 + Tier 1 scope) in a single run at full profile
+  #
+  # Standalone — no dependency on Tier 0 or Tier 1. When tier=2 is dispatched,
+  # Tier 0 and Tier 1 are skipped (they would be redundant).
   # ===========================================================================
   tier2-full:
     name: "Tier 2 - Full Suite"
     runs-on: ubuntu-latest
     timeout-minutes: 1440  # 24 hours
-    needs: tier1-docker
     if: github.event.inputs.tier == '2'
 
     steps:
@@ -222,18 +251,53 @@ jobs:
   # ===========================================================================
   # Quality Gate (merge blocker)
   # ===========================================================================
+  # Passes if the relevant tier for this run succeeded:
+  #   - Normal push/PR: tier0 must pass
+  #   - Tier 2 dispatch: tier2-full must pass (tier0 is skipped)
+  #   - Nightly: tier0 + tier1 must pass
+  # ===========================================================================
   quality-gate:
     name: Quality Gate
     runs-on: ubuntu-latest
-    needs: [tier0]
+    needs: [tier0, tier1-docker, tier2-full]
     if: always()
 
     steps:
-      - name: Check Tier 0
-        if: needs.tier0.result != 'success'
+      - name: Evaluate Results
         run: |
-          echo "::error::Tier 0 failed - merge blocked"
-          exit 1
+          tier0="${{ needs.tier0.result }}"
+          tier1="${{ needs.tier1-docker.result }}"
+          tier2="${{ needs.tier2-full.result }}"
+          echo "Results: tier0=$tier0, tier1=$tier1, tier2=$tier2"
 
-      - name: Gate Passed
-        run: echo "All quality gates passed"
+          failed=false
+
+          # Tier 0: must pass when it runs (skip is OK if tier2 handles it)
+          if [[ "$tier0" == "failure" || "$tier0" == "cancelled" ]]; then
+            echo "::error::Tier 0 failed ($tier0) — merge blocked"
+            failed=true
+          fi
+
+          # Tier 1: must pass when it runs (skip is OK — only nightly/main)
+          if [[ "$tier1" == "failure" || "$tier1" == "cancelled" ]]; then
+            echo "::error::Tier 1 Docker tests failed ($tier1)"
+            failed=true
+          fi
+
+          # Tier 2: must pass when it runs (skip is OK — only manual)
+          if [[ "$tier2" == "failure" || "$tier2" == "cancelled" ]]; then
+            echo "::error::Tier 2 full suite failed ($tier2)"
+            failed=true
+          fi
+
+          # At least one tier must have run
+          if [[ "$tier0" == "skipped" && "$tier1" == "skipped" && "$tier2" == "skipped" ]]; then
+            echo "::error::No test tiers ran — pipeline misconfiguration"
+            failed=true
+          fi
+
+          if [[ "$failed" == "true" ]]; then
+            exit 1
+          fi
+
+          echo "Quality gate passed"
