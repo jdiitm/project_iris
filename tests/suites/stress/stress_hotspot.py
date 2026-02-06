@@ -104,9 +104,17 @@ def login(sock, user):
     if b"LOGIN_OK" not in ack:
         raise Exception("Login Failed")
 
-def make_packet(target, msg):
+def make_packet(target, msg, seq_no=1):
+    """Build RFC-compliant sequenced message (opcode 0x07).
+    
+    RFC-001-AMENDMENT-001 v1.0: opcode 0x02 (plaintext) is REJECTED.
+    Must use 0x07 (sequenced) for all messages.
+    
+    Wire: 0x07 | TargetLen(16) | Target | SeqNo(64) | MsgLen(16) | Msg
+    """
     target_bytes = target.encode('utf-8')
-    return b'\x02' + struct.pack('>H', len(target_bytes)) + target_bytes + struct.pack('>H', len(msg)) + msg
+    return (b'\x07' + struct.pack('>H', len(target_bytes)) + target_bytes +
+            struct.pack('>Q', seq_no) + struct.pack('>H', len(msg)) + msg)
 
 # ============================================================================
 # Basic Mode: Flood Test
@@ -121,26 +129,14 @@ def send_burst(sender_id, count):
     sent = 0
     try:
         login(sock, f"fan_{sender_id}")
-        packet = make_packet(MESSI_USER, b"GOAL! " * 2)
         
-        for _ in range(count):
+        for i in range(count):
+            packet = make_packet(MESSI_USER, b"GOAL! " * 2, seq_no=i + 1)
             t0 = time.perf_counter()
             sock.sendall(packet)
-            # We don't wait for ACK per message in burst mode usually?
-            # Basic mode: just floods.
-            # But to measure LATENCY we need ACK or some feedback.
-            # Protocol: 1 login -> ... 
-            # If we don't read ACK, we measure TCP send time which is fast.
-            # Real latency is RTT. Let's assume we read 1 byte ack?
-            # The server doesn't ACK messages by default in this protocol unless configured?
-            # Packet Op 2 (Msg) -> Server relays. No ACK to sender.
-            # So send latency is just network buffer time.
-            # Better to measure "Login Latency" as proxy for system health?
-            # OR modify protocol to support ping/pong?
-            # Let's log 'send_time' (TCP buffer push).
             sent += 1
             t1 = time.perf_counter()
-            log_latency(t1-t0, "send_ack_simulated") # Technically just send time
+            log_latency(t1-t0, "send")
     except:
         pass
     finally:
@@ -233,9 +229,11 @@ def sender_worker(worker_id, stop_event):
     local_sent = 0
     try:
         login(sock, f"fan_{worker_id}")
-        packet = make_packet(MESSI_USER, b"G" * 10)
+        seq = 0
         
         while not stop_event.is_set():
+            seq += 1
+            packet = make_packet(MESSI_USER, b"G" * 10, seq_no=seq)
             sock.sendall(packet)
             local_sent += 1
             time.sleep(0.02)  # ~50 RPS per sender
@@ -373,14 +371,41 @@ def run_lifecycle_mode(args):
 # Main
 # ============================================================================
 
+def is_server_running(port=PORT, timeout=2.0):
+    """Check if server is already running on the expected port."""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(timeout)
+        result = s.connect_ex(('localhost', port))
+        s.close()
+        return result == 0
+    except Exception:
+        return False
+
+
 def main():
+    # Detect QUICK_MODE (set by run_all_tests.sh --quick) or CI
+    is_quick = os.environ.get("QUICK_MODE") == "true"
+    is_ci = os.environ.get("CI") == "true" or os.environ.get("GITHUB_ACTIONS") == "true"
+    
+    # Scale defaults for quick/CI mode to avoid timeout
+    if is_quick or is_ci:
+        default_fans = 500
+        default_msgs = 10
+        default_threads = 20
+    else:
+        default_fans = 50000
+        default_msgs = 20
+        default_threads = 200
+    
     parser = argparse.ArgumentParser(description='Messi Hotspot Stress Test')
     parser.add_argument('--mode', choices=['basic', 'lifecycle'], default='basic',
                         help='Test mode')
-    parser.add_argument('--fans', type=int, default=50000, help='Number of fans')
-    parser.add_argument('--msgs', type=int, default=20, help='Messages per fan (basic mode)')
-    parser.add_argument('--threads', type=int, default=200, help='Sender threads (basic mode)')
-    parser.add_argument('--scale', type=float, default=1.0, help='Time scale (lifecycle mode)')
+    parser.add_argument('--fans', type=int, default=default_fans, help='Number of fans')
+    parser.add_argument('--msgs', type=int, default=default_msgs, help='Messages per fan (basic mode)')
+    parser.add_argument('--threads', type=int, default=default_threads, help='Sender threads (basic mode)')
+    parser.add_argument('--scale', type=float, default=0.2 if (is_quick or is_ci) else 1.0,
+                        help='Time scale (lifecycle mode)')
     parser.add_argument('--skip-restart', action='store_true', help='Skip cluster restart')
     args = parser.parse_args()
     
@@ -388,18 +413,26 @@ def main():
     os.chdir(project_root)
     
     print(f"--- MESSI HOTSPOT TEST ({args.mode.upper()}) ---")
+    print(f"Environment: {'quick' if is_quick else 'CI' if is_ci else 'full'}")
+    print(f"Params: fans={args.fans}, msgs={args.msgs}, threads={args.threads}")
     init_csv()
     
     result = 0
     
-    if args.skip_restart:
-        # Just run
+    # Skip ClusterManager if server is already running (from run_all_tests.sh)
+    # ClusterManager kills the running TLS server and starts a non-TLS one,
+    # causing create_socket's TLS auto-detection to timeout (10s per connection).
+    server_up = is_server_running()
+    
+    if args.skip_restart or server_up:
+        if server_up:
+            print("[INFO] Server already running — skipping ClusterManager")
         if args.mode == 'basic':
             run_basic_mode(args)
         else:
             result = run_lifecycle_mode(args)
     else:
-        # Use ClusterManager to restart
+        # Standalone: use ClusterManager to start server
         with ClusterManager(project_root=project_root) as cluster:
             if args.mode == 'basic':
                 run_basic_mode(args)

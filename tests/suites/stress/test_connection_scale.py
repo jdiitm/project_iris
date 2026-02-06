@@ -432,38 +432,70 @@ def print_results(result: TestResult):
 # Main
 # =============================================================================
 
+def is_server_running(host=EDGE_HOST, port=EDGE_PORT, timeout=2.0):
+    """Check if server is already running on the expected port."""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(timeout)
+        result = s.connect_ex((host, port))
+        s.close()
+        return result == 0
+    except Exception:
+        return False
+
+
 def main():
+    # Detect QUICK_MODE (set by run_all_tests.sh --quick) or CI
+    is_quick = os.environ.get("QUICK_MODE") == "true"
+    is_ci = os.environ.get("CI") == "true" or os.environ.get("GITHUB_ACTIONS") == "true"
+    
+    # Reduce hold duration for quick/CI mode
+    if is_quick or is_ci:
+        default_hold = 10  # 10s instead of 30s
+    else:
+        default_hold = HOLD_DURATION
+    
     parser = argparse.ArgumentParser(description="Connection Scale Test")
     parser.add_argument("--target", type=int, default=TARGET_CONNECTIONS,
                         help=f"Target connections (default: {TARGET_CONNECTIONS})")
     parser.add_argument("--rate", type=int, default=RAMP_RATE,
                         help=f"Ramp rate/sec (default: {RAMP_RATE})")
-    parser.add_argument("--hold", type=int, default=HOLD_DURATION,
-                        help=f"Hold duration sec (default: {HOLD_DURATION})")
+    parser.add_argument("--hold", type=int, default=default_hold,
+                        help=f"Hold duration sec (default: {default_hold})")
     args = parser.parse_args()
     
     print(f"[INFO] Connection Scale Test")
     print(f"[INFO] Profile: {TEST_PROFILE}, Seed: {TEST_SEED}")
-    print(f"[INFO] Target: {args.target:,} connections @ {args.rate}/sec")
+    print(f"[INFO] Environment: {'quick' if is_quick else 'CI' if is_ci else 'full'}")
+    print(f"[INFO] Target: {args.target:,} connections @ {args.rate}/sec, hold {args.hold}s")
     
-    # Use ClusterManager to ensure server is running
-    with ClusterManager(project_root=PROJECT_ROOT) as cluster:
-        # Verify server is available
-        if not check_server_available():
-            print(f"\n[FAIL] Server not available at {EDGE_HOST}:{EDGE_PORT} after cluster start")
-            sys.exit(1)
-        
-        # Run test
+    # Skip ClusterManager if server is already running (from run_all_tests.sh).
+    # ClusterManager kills the running TLS server and starts a non-TLS one,
+    # causing create_socket's TLS auto-detection to timeout (10s per connection)
+    # since the non-TLS server ignores TLS ClientHello.
+    server_up = is_server_running()
+    
+    if server_up:
+        print(f"[INFO] Server already running on {EDGE_HOST}:{EDGE_PORT} — skipping ClusterManager")
         result = run_load_test(args.target, args.rate, args.hold)
-        
-        # Print results
         print_results(result)
-        
-        # Exit with appropriate code
         if result.passed:
             sys.exit(0)
         else:
             sys.exit(1)
+    else:
+        # Standalone: use ClusterManager to start server
+        with ClusterManager(project_root=PROJECT_ROOT) as cluster:
+            if not check_server_available():
+                print(f"\n[FAIL] Server not available at {EDGE_HOST}:{EDGE_PORT} after cluster start")
+                sys.exit(1)
+            
+            result = run_load_test(args.target, args.rate, args.hold)
+            print_results(result)
+            if result.passed:
+                sys.exit(0)
+            else:
+                sys.exit(1)
 
 
 if __name__ == "__main__":
