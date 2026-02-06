@@ -255,12 +255,15 @@ jobs:
   #   - Normal push/PR: tier0 must pass
   #   - Tier 2 dispatch: tier2-full must pass (tier0 is skipped)
   #   - Nightly: tier0 + tier1 must pass
+  #
+  # Uses !cancelled() instead of always() so that runs cancelled by the
+  # concurrency group don't produce a misleading "Quality Gate failed."
   # ===========================================================================
   quality-gate:
     name: Quality Gate
     runs-on: ubuntu-latest
     needs: [tier0, tier1-docker, tier2-full]
-    if: always()
+    if: ${{ !cancelled() }}
 
     steps:
       - name: Evaluate Results
