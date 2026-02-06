@@ -19,13 +19,23 @@ CA_CERT = PROJECT_ROOT / "certs" / "ca.pem"
 DEFAULT_TIMEOUT = 10
 
 
+_tls_context_cache: Optional[ssl.SSLContext] = None
+
 def get_tls_context() -> ssl.SSLContext:
     """
-    Create an SSL context for TLS connections to the Docker cluster.
+    Get a cached SSL context for TLS connections.
+    
+    The context is created once and reused for all connections. This avoids
+    the overhead of loading system CAs + test CA for every connection, which
+    is critical for stress tests creating thousands of connections.
     
     Returns:
         ssl.SSLContext configured for TLS with CA verification
     """
+    global _tls_context_cache
+    if _tls_context_cache is not None:
+        return _tls_context_cache
+    
     context = ssl.create_default_context()
     
     if CA_CERT.exists():
@@ -35,6 +45,7 @@ def get_tls_context() -> ssl.SSLContext:
         context.check_hostname = False
         context.verify_mode = ssl.CERT_NONE
     
+    _tls_context_cache = context
     return context
 
 

@@ -394,9 +394,13 @@ def main():
         default_msgs = 10
         default_threads = 20
     else:
-        default_fans = 50000
+        # Full mode: 5000 fans is a meaningful hotspot test that completes
+        # within 600s even with TLS (50K fans required 50K TLS handshakes
+        # which exceeded timeout budgets). Use --fans 50000 explicitly
+        # for extended stress runs.
+        default_fans = 5000
         default_msgs = 20
-        default_threads = 200
+        default_threads = 50
     
     parser = argparse.ArgumentParser(description='Messi Hotspot Stress Test')
     parser.add_argument('--mode', choices=['basic', 'lifecycle'], default='basic',

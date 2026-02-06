@@ -19,6 +19,7 @@ import os
 import sys
 import time
 import socket
+import ssl
 import random
 import struct
 import threading
@@ -168,22 +169,33 @@ class IrisConnection:
         self.connected = False
     
     def is_alive(self) -> bool:
-        """Check if connection is still alive."""
+        """Check if connection is still alive.
+        
+        For TLS sockets, non-blocking recv raises ssl.SSLWantReadError
+        (not BlockingIOError) when there's no data available. This is
+        the TLS equivalent of "connection open, no data ready."
+        """
         if not self.sock or not self.connected:
             return False
         try:
-            # Send a small ping (empty read with peek)
             self.sock.setblocking(False)
             try:
                 data = self.sock.recv(1, socket.MSG_PEEK | socket.MSG_DONTWAIT)
-                return True  # Data available or connection open
+                return True  # Data available — connection open
             except BlockingIOError:
-                return True  # No data but connection open
-            except:
-                return False
+                return True  # No data but connection open (plain TCP)
+            except ssl.SSLWantReadError:
+                return True  # No data but connection open (TLS)
+            except ssl.SSLWantWriteError:
+                return True  # TLS renegotiation pending — still alive
+            except (ConnectionResetError, BrokenPipeError, OSError):
+                return False  # Actual connection failure
         finally:
             if self.sock:
-                self.sock.setblocking(True)
+                try:
+                    self.sock.setblocking(True)
+                except OSError:
+                    pass  # Socket may have been closed
 
 
 class ConnectionPool:
