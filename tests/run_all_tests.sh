@@ -533,6 +533,16 @@ else
     echo "============================================================================"
     echo "  (Each test manages its own cluster - server restart between tests)"
 
+    # Unset CONFIG for Phase 3: chaos_controlled tests start their OWN cluster
+    # via ClusterManager or direct `make` calls. The Erlang load generator
+    # (iris_extreme_gen) connects via gen_tcp (plain TCP, not SSL) because
+    # Erlang's ssl:connect requires additional setup that iris_extreme_gen
+    # doesn't implement. Without unsetting CONFIG, the child `make start_*`
+    # commands inherit CONFIG=config/test_tls and start TLS-only servers,
+    # causing iris_extreme_gen's gen_tcp:connect to fail silently (0 messages).
+    # Phase 2 TLS testing is already complete at this point.
+    unset CONFIG
+
     for test in tests/suites/chaos_controlled/*.py; do
         if [ -f "$test" ]; then
             # Full cleanup before each chaos_controlled test

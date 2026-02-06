@@ -178,9 +178,11 @@ fan_in_loop(Sock, Id, StatsPid, EndTime) ->
              if Now >= EndTime -> ok;
              true ->
                  %% Send 1 message to vip_messi
+                 %% RFC FR-5: Use opcode 0x07 (sequenced) — 0x02 is REJECTED by v1.0
                  Target = <<"vip_messi">>,
                  Msg = <<"GOAL">>,
-                 Packet = <<2, (byte_size(Target)):16, Target/binary, (byte_size(Msg)):16, Msg/binary>>,
+                 SeqNo = erlang:unique_integer([monotonic, positive]),
+                 Packet = <<7, (byte_size(Target)):16, Target/binary, SeqNo:64, (byte_size(Msg)):16, Msg/binary>>,
                  gen_tcp:send(Sock, Packet),
                  StatsPid ! {add, 1, 0},
                  
@@ -208,6 +210,9 @@ handle_incoming(_Sock, _Data, StatsPid) ->
     StatsPid ! {add, 0, 1}.
 
 %% Send message and store timestamp for latency measurement
+%% RFC-001-AMENDMENT-001: Opcode 0x02 (plaintext) is REJECTED by v1.0 servers.
+%% Must use opcode 0x07 (sequenced) for FIFO ordering (RFC FR-5).
+%% Wire format: 0x07 | TargetLen(16) | Target | SeqNo(64) | MsgLen(16) | Msg
 send_msg_with_timestamp(Sock, TargetId, StatsPid) ->
     Target = list_to_binary("user_" ++ integer_to_list(TargetId)),
     Msg = <<"X">>,
@@ -219,7 +224,9 @@ send_msg_with_timestamp(Sock, TargetId, StatsPid) ->
     %% Store send timestamp
     ets:insert(?PENDING_MSGS, {MsgId, SendTime}),
     
-    Packet = <<2, (byte_size(Target)):16, Target/binary, (byte_size(Msg)):16, Msg/binary>>,
+    %% Sequence number for FIFO ordering
+    SeqNo = erlang:unique_integer([monotonic, positive]),
+    Packet = <<7, (byte_size(Target)):16, Target/binary, SeqNo:64, (byte_size(Msg)):16, Msg/binary>>,
     gen_tcp:send(Sock, Packet),
     StatsPid ! {add, 1, 0}.
 

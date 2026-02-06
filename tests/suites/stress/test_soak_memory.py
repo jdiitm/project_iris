@@ -66,19 +66,9 @@ def log(msg):
 
 
 def create_socket(host, port, timeout=5.0):
-    """Create socket with TLS auto-detection."""
-    # Try TLS first (standard for CI and production)
-    try:
-        from tests.suites.chaos_dist.utils import create_tls_socket
-        return create_tls_socket(host, port, timeout=timeout)
-    except Exception:
-        pass
-    
-    # Fallback to non-TLS (for local development without certs)
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.settimeout(timeout)
-    s.connect((host, port))
-    return s
+    """Create TLS socket. TLS is MANDATORY per RFC NFR-14."""
+    from tests.suites.chaos_dist.utils import create_tls_socket
+    return create_tls_socket(host, port, timeout=timeout)
 
 
 class MemorySample:
@@ -90,13 +80,26 @@ class MemorySample:
         self.ets_memory_mb = ets_memory_mb
 
 
+IS_CI = os.environ.get("CI") == "true" or os.environ.get("GITHUB_ACTIONS") == "true"
+QUICK_MODE = os.environ.get("QUICK_MODE") == "true"
+
+
 class SoakTestConfig:
     """Configuration for soak test."""
     def __init__(self):
-        # Default to 5 minutes for CI, use SOAK_DURATION_HOURS=1 for full hour test
-        # Use SOAK_DURATION_HOURS=24 for nightly runs
-        self.duration_hours = float(os.environ.get('SOAK_DURATION_HOURS', '0.08'))  # ~5 min default
-        self.connections = int(os.environ.get('SOAK_CONNECTIONS', '100'))
+        # CI/quick mode: 3 minutes with 50 connections — fits in 300s heavy timeout
+        #   Wall clock: 180s duration + 15s shutdown = 195s (105s margin)
+        # Local: 5 minutes with 100 connections
+        # Nightly: SOAK_DURATION_HOURS=24 for full run
+        if IS_CI or QUICK_MODE:
+            default_duration = '0.05'   # 3 minutes
+            default_conns = '50'
+        else:
+            default_duration = '0.08'   # ~5 minutes
+            default_conns = '100'
+        
+        self.duration_hours = float(os.environ.get('SOAK_DURATION_HOURS', default_duration))
+        self.connections = int(os.environ.get('SOAK_CONNECTIONS', default_conns))
         self.msg_rate = float(os.environ.get('SOAK_MSG_RATE', '10'))
         self.sample_interval = int(os.environ.get('SOAK_SAMPLE_INTERVAL', '30'))  # 30s for quick runs
         self.host = os.environ.get('IRIS_HOST', 'localhost')
@@ -337,12 +340,24 @@ class LoadGenerator:
         log(f"Load generator started with {self.config.connections} clients")
     
     def stop(self):
-        """Stop load generation."""
+        """Stop load generation.
+        
+        Uses a total shutdown deadline (10s) instead of per-thread timeout
+        to prevent 100 threads × 5s = 500s worst-case shutdown.
+        """
         self.running = False
         
-        # Wait for threads to finish
+        # Total shutdown budget: 10 seconds for ALL threads
+        deadline = time.time() + 10
         for thread in self.threads:
-            thread.join(timeout=5)
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                break
+            thread.join(timeout=max(remaining, 0.1))
+        
+        alive = sum(1 for t in self.threads if t.is_alive())
+        if alive > 0:
+            log(f"Warning: {alive} worker threads still alive after shutdown deadline")
         
         log(f"Load generator stopped. Stats: {self.stats}")
     
@@ -466,9 +481,12 @@ def test_soak_24h():
         # Main loop - run until duration expires
         last_report = datetime.now()
         report_interval = timedelta(minutes=15)
+        # Quick/CI: check every 15s for faster exit (60s sleep can overshoot 300s timeout)
+        # Full: check every 60s (plenty of margin in 600s timeout)
+        check_interval = 15 if (IS_CI or QUICK_MODE) else 60
         
         while datetime.now() < end_time:
-            time.sleep(60)  # Check every minute
+            time.sleep(check_interval)
             
             # Periodic progress report
             if datetime.now() - last_report > report_interval:
