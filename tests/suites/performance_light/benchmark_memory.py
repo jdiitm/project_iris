@@ -45,8 +45,10 @@ PROFILES = {
     "smoke": {
         "connections": 100,
         "per_conn_kb": 75,       # More lenient for smoke (actual ~56KB + overhead)
-        "per_conn_kb_tls": 200,  # TLS: ssl process + cipher state + session tickets; BEAM allocator
-                                  # carrier overhead doesn't amortize well at only 100 connections
+        "per_conn_kb_tls": 300,  # TLS: ssl process + cipher state + session tickets + BEAM allocator
+                                  # carrier overhead (doesn't amortize at 100 conns). CI runners with
+                                  # auto-tuned allocators (+MBas aoffcbf +MMmcs 30) preallocate
+                                  # larger carriers, inflating per-conn measurements at small scale.
         "base_overhead_mb": 1500,  # Base VM overhead (auto-tuned for 1M+ connections, BEAM preallocates memory)
     },
     "full": {
@@ -131,11 +133,21 @@ def create_connection(user_id):
 
 
 def measure_baseline():
-    """Measure baseline memory with no connections."""
+    """Measure baseline memory with no connections.
+    
+    Takes 3 samples over 4 seconds and uses the minimum to avoid
+    measuring transient GC spikes from prior tests.
+    """
     log("Measuring baseline memory (no connections)...")
-    time.sleep(2)  # Let system stabilize
-    baseline = get_memory_mb()
-    log(f"  Baseline: {baseline:.1f} MB")
+    time.sleep(2)  # Let system stabilize after prior test
+    samples = []
+    for _ in range(3):
+        s = get_memory_mb()
+        if s > 0:
+            samples.append(s)
+        time.sleep(1)
+    baseline = min(samples) if samples else 0
+    log(f"  Baseline: {baseline:.1f} MB (samples: {[f'{s:.1f}' for s in samples]})")
     return baseline
 
 
@@ -164,8 +176,15 @@ def measure_with_connections(count):
     # Let memory stabilize (GC, SSL session finalization)
     time.sleep(5 if IS_CI else 3)
     
-    memory = get_memory_mb()
-    log(f"  Memory with connections: {memory:.1f} MB")
+    # Take 3 samples and use the minimum — BEAM GC can cause transient spikes
+    samples = []
+    for _ in range(3):
+        s = get_memory_mb()
+        if s > 0:
+            samples.append(s)
+        time.sleep(1)
+    memory = min(samples) if samples else 0
+    log(f"  Memory with connections: {memory:.1f} MB (samples: {[f'{s:.1f}' for s in samples]})")
     
     return connections, memory
 
