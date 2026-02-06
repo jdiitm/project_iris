@@ -471,46 +471,48 @@ else
     done
 
     # ======================================================================
-    # STRESS TESTS — skipped in --quick mode (Tier 2/3 material)
+    # STRESS TESTS — all tests run, no skipping
     # ======================================================================
-    # Stress tests generate extreme load (50K+ connections, 1M+ messages)
-    # that is not meaningful on a 2-vCPU CI runner with a 15-25min budget.
-    # They run in Tier 3 (manual/nightly, 24h budget) with full resources.
+    # Quick mode: stress tests use CI-scaled parameters (QUICK_MODE env var
+    # detected by each test) with tighter timeouts. Full mode: original scale.
+    echo ""
+    echo "--- Stress Tests ---"
+    echo "  (Server will restart automatically after heavy tests)"
+    ensure_server_ready "Stress Tests"
+    
+    # Quick mode: 180s per light test, 300s per heavy test (CI-scaled workloads)
+    # Full mode:  300s per light test, 600s per heavy test
+    stress_light_timeout=300
+    stress_heavy_timeout=600
     if [ "$QUICK_MODE" = "true" ]; then
-        echo ""
-        echo "--- Stress Tests --- SKIPPED (--quick mode, Tier 2/3)"
-        echo "  Use './tests/run_all_tests.sh' (no flags) for stress tests"
-    else
-        echo ""
-        echo "--- Stress Tests ---"
-        echo "  (Server will restart automatically after heavy tests)"
-        ensure_server_ready "Stress Tests"
-        
-        # Sort stress tests - run lighter ones first
-        STRESS_TESTS_LIGHT=()
-        STRESS_TESTS_HEAVY=()
-        for test in tests/suites/stress/stress_*.py tests/suites/stress/test_*.py; do
-            if [ -f "$test" ]; then
-                test_name=$(basename "$test" .py)
-                if is_heavy_test "$test_name"; then
-                    STRESS_TESTS_HEAVY+=("$test")
-                else
-                    STRESS_TESTS_LIGHT+=("$test")
-                fi
-            fi
-        done
-        
-        # Run light tests first
-        for test in "${STRESS_TESTS_LIGHT[@]}"; do
-            run_test "$test" 300
-            sleep 0.5
-        done
-        
-        # Then run heavy tests with longer timeout
-        for test in "${STRESS_TESTS_HEAVY[@]}"; do
-            run_test "$test" 600  # Increased from 300s for heavy stress tests
-        done
+        stress_light_timeout=180
+        stress_heavy_timeout=300
     fi
+    
+    # Sort stress tests - run lighter ones first
+    STRESS_TESTS_LIGHT=()
+    STRESS_TESTS_HEAVY=()
+    for test in tests/suites/stress/stress_*.py tests/suites/stress/test_*.py; do
+        if [ -f "$test" ]; then
+            test_name=$(basename "$test" .py)
+            if is_heavy_test "$test_name"; then
+                STRESS_TESTS_HEAVY+=("$test")
+            else
+                STRESS_TESTS_LIGHT+=("$test")
+            fi
+        fi
+    done
+    
+    # Run light tests first
+    for test in "${STRESS_TESTS_LIGHT[@]}"; do
+        run_test "$test" "$stress_light_timeout"
+        sleep 0.5
+    done
+    
+    # Then run heavy tests with longer timeout
+    for test in "${STRESS_TESTS_HEAVY[@]}"; do
+        run_test "$test" "$stress_heavy_timeout"
+    done
 
     echo ""
     echo "Stopping standalone server..."
@@ -518,29 +520,22 @@ else
     sleep 3
 
     # ==========================================================================
-    # PHASE 3: CLUSTERMANAGER TESTS — skipped in --quick mode
+    # PHASE 3: CLUSTERMANAGER TESTS
     # ==========================================================================
-    if [ "$QUICK_MODE" = "true" ]; then
-        echo ""
-        echo -e "${BLUE}[PHASE 3]${NC} ClusterManager Tests - SKIPPED (--quick mode)"
-        echo "============================================================================"
-        echo "  These tests manage their own clusters and are Tier 2+ material."
-    else
-        echo ""
-        echo -e "${BLUE}[PHASE 3]${NC} ClusterManager Tests (self-managed)"
-        echo "============================================================================"
-        echo "  (Each test manages its own cluster - server restart between tests)"
+    echo ""
+    echo -e "${BLUE}[PHASE 3]${NC} ClusterManager Tests (self-managed)"
+    echo "============================================================================"
+    echo "  (Each test manages its own cluster - server restart between tests)"
 
-        for test in tests/suites/chaos_controlled/*.py; do
-            if [ -f "$test" ]; then
-                # Full cleanup before each chaos_controlled test
-                pkill -9 beam.smp 2>/dev/null || true
-                sleep 2
-                rm -rf Mnesia.* MnesiaCore.* 2>/dev/null || true
-                run_test "$test" 300
-            fi
-        done
-    fi
+    for test in tests/suites/chaos_controlled/*.py; do
+        if [ -f "$test" ]; then
+            # Full cleanup before each chaos_controlled test
+            pkill -9 beam.smp 2>/dev/null || true
+            sleep 2
+            rm -rf Mnesia.* MnesiaCore.* 2>/dev/null || true
+            run_test "$test" 300
+        fi
+    done
 
     pkill -9 beam.smp 2>/dev/null || true
     echo ""
