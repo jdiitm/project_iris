@@ -6,33 +6,31 @@ All notable changes to Iris Messaging System.
 
 ### Changed
 
-#### Test Runner Refactor (2026-02-03)
+#### Test Infrastructure Consolidation (2026-02-05)
 
-**Phase-based test execution for efficient server lifecycle management.**
+**Unified test execution using proven scripts.**
 
-- **Refactored `run_tests.py`** (1860→660 lines):
+- **Consolidated to single test runner**: `tests/run_all_tests.sh`
   - Phase 1: Unit tests (no server needed)
-  - Phase 2: Standalone server tests (shared TLS server started once)
+  - Phase 2: Standalone server tests (shared TLS server)
   - Phase 3: ClusterManager tests (self-managed per test)
-  - Phase 4: Docker chaos tests (Docker global cluster)
+  - Phase 4: Docker chaos tests (fresh cluster per test via cluster.sh)
 
-- **CI Tiers now independent** (no duplicate test runs):
-  - Tier 0: unit, integration
-  - Tier 1: e2e, contract, compatibility, security, resilience
-  - Tier 2: performance_light, stress, chaos_controlled
+- **Proven cluster management scripts**:
+  - `docker/global-cluster/cluster.sh` - Docker cluster up/down
+  - `docker/global-cluster/init_cluster.sh` - Mnesia initialization
+  - `docker/global-cluster/run_chaos_tests.sh` - Chaos tests with isolation
 
-- **New flags**:
-  - `--skip-docker`: Skip Docker chaos tests for faster runs
-  - `--nuke`: Kill all processes (cleanup)
+- **Test modes**:
+  - `./tests/run_all_tests.sh` - Full test suite
+  - `./tests/run_all_tests.sh --quick` - Non-Docker tests only
+  - `./tests/run_all_tests.sh --docker-only` - Docker chaos tests only
 
-- **CI Workflow simplified** (413→263 lines):
-  - Single `--tier N` call per job instead of multiple `--suite` calls
-  - Server lifecycle managed internally by test runner
-  - Separate `tier2-docker` job for chaos_dist tests
+- **Removed obsolete scripts**: `run_tests.py`, `run_failing_tests.sh`
 
-- **Updated Erlang version**: 25 → 26
+- **Updated CI pipeline** to use proven scripts
 
-**Results**: 75 tests across 11 suites, 100% pass rate
+**Results**: 75+ tests, reliable execution with fresh cluster per Docker test
 
 ---
 

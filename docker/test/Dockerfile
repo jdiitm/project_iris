@@ -11,7 +11,8 @@
 
 FROM erlang:25-alpine
 
-# Install Python and dependencies
+# Install Python, dependencies, and clock manipulation tools
+# libfaketime is REQUIRED for NFR-16 (Clock Skew Tolerance) testing
 RUN apk add --no-cache \
     python3 \
     py3-pip \
@@ -19,6 +20,7 @@ RUN apk add --no-cache \
     curl \
     procps \
     coreutils \
+    libfaketime \
     && rm -rf /var/cache/apk/*
 
 # Create app directory
@@ -47,7 +49,7 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD erl -noshell -eval "io:format('ok'), init:stop()." && python3 --version
 
 # Default command: run all tests
-CMD ["python3", "-u", "tests/run_tests.py", "--all"]
+CMD ["./tests/run_all_tests.sh"]
 
 # Labels
 LABEL maintainer="Project Iris"

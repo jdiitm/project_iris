@@ -1,5 +1,5 @@
 -module(iris_router).
--export([start_link/0, route/2, get_stats/0]).
+-export([start_link/0, route/2, route_sequenced/3, get_stats/0]).
 
 %% Note: start_link is removed/unused as this is not a process anymore, 
 %% but we keep it returning ignore or ok if supervisors call it.
@@ -20,6 +20,18 @@ route(User, Msg) ->
             %% Multi-region mode - check presence first, then fall back to hash
             route_multiregion(User, Msg, Regions)
     end.
+
+%% =============================================================================
+%% RFC FR-5: Sequenced routing for FIFO ordering
+%% =============================================================================
+%% AUDIT FIX: Client provides sequence number to guarantee message ordering.
+%% The sequence number is used as the storage timestamp, ensuring messages
+%% from the same sender are delivered in order regardless of parallel processing.
+route_sequenced(User, Msg, SeqNo) ->
+    %% Use async router for delivery (same as regular route)
+    %% Pass sequence number via wrapped message for offline storage
+    WrappedMsg = {sequenced_msg, SeqNo, Msg},
+    iris_async_router:route_sequenced(User, WrappedMsg, SeqNo).
 
 %% Multi-region routing: presence-based with hash fallback
 route_multiregion(User, Msg, _Regions) ->

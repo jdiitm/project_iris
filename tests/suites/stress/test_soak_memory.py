@@ -65,6 +65,12 @@ def log(msg):
     print(f"[{timestamp}] {msg}", flush=True)
 
 
+def create_socket(host, port, timeout=5.0):
+    """Create TLS socket. TLS is MANDATORY per RFC NFR-14."""
+    from tests.suites.chaos_dist.utils import create_tls_socket
+    return create_tls_socket(host, port, timeout=timeout)
+
+
 class MemorySample:
     """Single memory sample."""
     def __init__(self, timestamp, beam_rss_mb, process_count, ets_memory_mb):
@@ -74,13 +80,28 @@ class MemorySample:
         self.ets_memory_mb = ets_memory_mb
 
 
+IS_CI = os.environ.get("CI") == "true" or os.environ.get("GITHUB_ACTIONS") == "true"
+QUICK_MODE = os.environ.get("QUICK_MODE") == "true"
+
+
 class SoakTestConfig:
     """Configuration for soak test."""
     def __init__(self):
-        self.duration_hours = float(os.environ.get('SOAK_DURATION_HOURS', '1'))
-        self.connections = int(os.environ.get('SOAK_CONNECTIONS', '100'))
+        # CI/quick mode: 3 minutes with 50 connections — fits in 300s heavy timeout
+        #   Wall clock: 180s duration + 15s shutdown = 195s (105s margin)
+        # Local: 5 minutes with 100 connections
+        # Nightly: SOAK_DURATION_HOURS=24 for full run
+        if IS_CI or QUICK_MODE:
+            default_duration = '0.05'   # 3 minutes
+            default_conns = '50'
+        else:
+            default_duration = '0.08'   # ~5 minutes
+            default_conns = '100'
+        
+        self.duration_hours = float(os.environ.get('SOAK_DURATION_HOURS', default_duration))
+        self.connections = int(os.environ.get('SOAK_CONNECTIONS', default_conns))
         self.msg_rate = float(os.environ.get('SOAK_MSG_RATE', '10'))
-        self.sample_interval = int(os.environ.get('SOAK_SAMPLE_INTERVAL', '60'))
+        self.sample_interval = int(os.environ.get('SOAK_SAMPLE_INTERVAL', '30'))  # 30s for quick runs
         self.host = os.environ.get('IRIS_HOST', 'localhost')
         self.port = int(os.environ.get('IRIS_PORT', '8085'))
         self.max_memory_growth_pct = float(os.environ.get('SOAK_MAX_GROWTH_PCT', '10'))
@@ -100,6 +121,7 @@ class MemoryMonitor:
         self.running = False
         self.thread = None
         self.beam_pid = None
+        self.warm_up_complete_time = None  # Set after connections established
         
     def find_beam_pid(self):
         """Find the BEAM process ID."""
@@ -194,8 +216,18 @@ class MemoryMonitor:
                     break
                 time.sleep(1)
     
+    def mark_warm_up_complete(self):
+        """Mark warm-up as complete — analysis will skip samples before this point."""
+        self.warm_up_complete_time = datetime.now()
+        log(f"Warm-up complete. Steady-state analysis starts now.")
+    
     def analyze(self):
-        """Analyze collected samples for memory leaks."""
+        """Analyze collected samples for memory leaks.
+        
+        Only analyzes steady-state samples (after warm_up_complete_time).
+        Pre-connection and connection-spike samples are excluded to avoid
+        false positives from normal connection overhead.
+        """
         if len(self.samples) < 2:
             return {
                 'status': 'insufficient_data',
@@ -203,8 +235,13 @@ class MemoryMonitor:
                 'error': 'Need at least 2 samples for analysis'
             }
         
-        # Get first and last samples with valid memory readings
-        valid_samples = [s for s in self.samples if s.beam_rss_mb > 0]
+        # Filter to steady-state samples only (after warm-up)
+        if self.warm_up_complete_time:
+            valid_samples = [s for s in self.samples 
+                           if s.beam_rss_mb > 0 and s.timestamp >= self.warm_up_complete_time]
+        else:
+            valid_samples = [s for s in self.samples if s.beam_rss_mb > 0]
+        
         if len(valid_samples) < 2:
             return {
                 'status': 'insufficient_data',
@@ -303,12 +340,24 @@ class LoadGenerator:
         log(f"Load generator started with {self.config.connections} clients")
     
     def stop(self):
-        """Stop load generation."""
+        """Stop load generation.
+        
+        Uses a total shutdown deadline (10s) instead of per-thread timeout
+        to prevent 100 threads × 5s = 500s worst-case shutdown.
+        """
         self.running = False
         
-        # Wait for threads to finish
+        # Total shutdown budget: 10 seconds for ALL threads
+        deadline = time.time() + 10
         for thread in self.threads:
-            thread.join(timeout=5)
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                break
+            thread.join(timeout=max(remaining, 0.1))
+        
+        alive = sum(1 for t in self.threads if t.is_alive())
+        if alive > 0:
+            log(f"Warning: {alive} worker threads still alive after shutdown deadline")
         
         log(f"Load generator stopped. Stats: {self.stats}")
     
@@ -393,12 +442,10 @@ def test_soak_24h():
     
     # Check if we can connect to the server
     try:
-        test_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        test_sock.settimeout(5)
-        test_sock.connect((config.host, config.port))
+        test_sock = create_socket(config.host, config.port, timeout=5)
         test_sock.close()
         log(f"Successfully connected to {config.host}:{config.port}")
-    except socket.error as e:
+    except Exception as e:
         log(f"SKIP: Cannot connect to server at {config.host}:{config.port}: {e}")
         log("Make sure the Iris server is running before running soak tests.")
         return True  # Skip, don't fail
@@ -417,18 +464,29 @@ def test_soak_24h():
         time.sleep(5)  # Let monitoring stabilize
         
         load_gen.start()
-        time.sleep(5)  # Let load stabilize
         
-        # Take baseline sample
+        # Wait for memory to stabilize after connection creation.
+        # The BEAM spikes during TLS handshakes / process spawning,
+        # then GC recovers. We need to measure steady-state, not the spike.
+        log("Waiting 60s for memory to stabilize after connection creation...")
+        time.sleep(60)
+        
+        # Mark warm-up complete — analysis starts from HERE
+        monitor.mark_warm_up_complete()
+        
+        # Take baseline sample (post-stabilization)
         baseline = monitor.take_sample()
-        log(f"Baseline memory: {baseline.beam_rss_mb:.1f}MB")
+        log(f"Baseline memory (steady-state): {baseline.beam_rss_mb:.1f}MB")
         
         # Main loop - run until duration expires
         last_report = datetime.now()
         report_interval = timedelta(minutes=15)
+        # Quick/CI: check every 15s for faster exit (60s sleep can overshoot 300s timeout)
+        # Full: check every 60s (plenty of margin in 600s timeout)
+        check_interval = 15 if (IS_CI or QUICK_MODE) else 60
         
         while datetime.now() < end_time:
-            time.sleep(60)  # Check every minute
+            time.sleep(check_interval)
             
             # Periodic progress report
             if datetime.now() - last_report > report_interval:

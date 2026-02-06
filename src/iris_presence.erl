@@ -82,6 +82,7 @@ unregister(User) ->
 
 %% @doc Lookup a user's presence (Cluster-aware: RPC to Shard Owner)
 %% Strategy: Check local (fast/consistent for local users) -> Check Shard Owner (authoritative)
+%% FIX: Falls back to all cluster nodes when shard has no assigned nodes
 -spec lookup(binary()) -> {ok, node(), pid()} | {error, not_found | expired}.
 lookup(User) ->
     %% 1. Local Optimization (Read your own write)
@@ -90,8 +91,28 @@ lookup(User) ->
         _ ->
             %% 2. Remote Lookup (RPC to Shard Owner)
             ShardId = iris_shard:get_shard(User),
-            Nodes = iris_shard:get_shard_nodes(ShardId),
-            lookup_any_node(Nodes, User)
+            ShardNodes = iris_shard:get_shard_nodes(ShardId),
+            case ShardNodes of
+                [] ->
+                    %% FIX: Fallback to all cluster nodes when shard is unassigned
+                    %% This handles cases where not all shards have assigned nodes
+                    AllNodes = get_all_cluster_nodes(),
+                    lookup_any_node(AllNodes, User);
+                Nodes ->
+                    lookup_any_node(Nodes, User)
+            end
+    end.
+
+%% @doc Get all nodes in the cluster (for fallback when shard is unassigned)
+get_all_cluster_nodes() ->
+    %% Get Mnesia db_nodes as authoritative cluster membership
+    case catch mnesia:system_info(running_db_nodes) of
+        Nodes when is_list(Nodes) -> 
+            %% Exclude self since we already checked local
+            [N || N <- Nodes, N =/= node()];
+        _ -> 
+            %% Fallback to nodes()
+            nodes()
     end.
 
 %% @doc Lookup user on specific nodes (try until success)

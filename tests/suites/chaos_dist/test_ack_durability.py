@@ -4,21 +4,26 @@ ACK-Durability Test (RFC NFR-6, NFR-8)
 
 This test validates the critical durability contract:
 - Server ACKs ONLY after durable write (sync_transaction complete)
-- Killing node after ACK results in ZERO message loss
+- Hard crash (SIGKILL) after ACK results in ZERO message loss
 
 RFC Requirements:
 - NFR-6: Message durability 99.999%
 - NFR-8: RPO=0 (Recovery Point Objective = zero data loss)
+        "Kill -9 any node, verify all ACKed messages recovered"
 
 Test Strategy:
 1. Send message to offline user (forces storage)
 2. Wait for ACK from server
-3. Immediately kill -9 the core node
+3. Immediately SIGKILL the core node (hard crash, no WAL flush)
 4. Wait for node recovery
 5. Retrieve offline messages
 6. Verify message was preserved
 
-PASS: Message found after recovery
+CRITICAL: This test uses SIGKILL (not SIGTERM) to simulate power loss.
+For single-node: relies on sync_transaction having flushed before ACK.
+For multi-node: relies on replication to surviving nodes.
+
+PASS: Message found after hard crash recovery
 FAIL: Message lost (ACK was premature - RFC VIOLATION)
 """
 
@@ -76,18 +81,36 @@ def login(sock, username):
     sock.sendall(packet)
     try:
         response = sock.recv(1024)
-        return b"LOGIN_OK" in response
+        if b"LOGIN_OK" in response:
+            time.sleep(0.05)  # Ensure server-side registration completes
+            return True
+        return False
     except socket.timeout:
         return False
 
 
+# Sequence counter for RFC-compliant messaging
+_seq_counter = [0]
+
 def send_message(sock, target, message):
-    """Send message packet and wait for ACK."""
+    """
+    Send message packet and wait for ACK.
+    
+    RFC-001-AMENDMENT-001 v1.0 COMPLIANT: Uses opcode 0x07 (sequenced message)
+    instead of deprecated opcode 0x02 (plaintext) which is now rejected.
+    """
     target_bytes = target.encode()
     msg_bytes = message.encode()
-    packet = bytes([0x02]) + \
-             len(target_bytes).to_bytes(2, 'big') + target_bytes + \
-             len(msg_bytes).to_bytes(2, 'big') + msg_bytes
+    
+    # Increment sequence counter
+    _seq_counter[0] += 1
+    seq_no = _seq_counter[0]
+    
+    # Protocol: 0x07 | TargetLen(16) | Target | SeqNo(64) | MsgLen(16) | Msg
+    packet = (bytes([0x07]) +
+              len(target_bytes).to_bytes(2, 'big') + target_bytes +
+              seq_no.to_bytes(8, 'big') +
+              len(msg_bytes).to_bytes(2, 'big') + msg_bytes)
     sock.sendall(packet)
     
     # Wait for ACK (timeout means no ACK received)
@@ -185,17 +208,18 @@ def parse_and_ack_messages(sock, data):
 
 
 def kill_container(container_name):
-    """Stop Docker container gracefully (allows Mnesia WAL flush).
+    """Kill container with SIGKILL (hard crash, no graceful shutdown).
     
-    Note: RFC NFR-8 specifies "kill -9" durability, which requires multi-node
-    replication. In single-container Docker, we use graceful stop (SIGTERM)
-    with 10s timeout to allow Mnesia to fully flush its write-ahead log and
-    disc tables. True SIGKILL durability requires the production multi-node
-    setup with replication.
+    RFC NFR-8 requires RPO=0 with hard crash simulation. SIGKILL prevents
+    any Mnesia WAL flush or graceful shutdown, simulating power loss.
+    
+    For single-node durability, this relies on Mnesia's sync_transaction
+    having already flushed to disk before ACK was sent. For multi-node
+    durability (recommended), data survives via replication to other nodes.
     """
-    print(f"  Stopping container: {container_name} (graceful, 10s timeout)")
+    print(f"  Killing container: {container_name} (SIGKILL - hard crash)")
     result = subprocess.run(
-        ["docker", "stop", "-t", "10", container_name],
+        ["docker", "kill", "--signal=SIGKILL", container_name],
         capture_output=True,
         text=True
     )
@@ -427,11 +451,12 @@ def test_ack_implies_durability():
     else:
         print("  ✅ ACK received from server")
     
-    # Allow Mnesia WAL to flush (single-node durability requirement)
-    print("  Waiting 2s for Mnesia WAL flush...")
-    time.sleep(2)
+    # CRITICAL: Do NOT wait before killing. RFC NFR-8 requires ACK to mean
+    # "data is durable NOW". Any sleep here would mask race conditions where
+    # ACK is sent before sync_transaction completes.
+    # If this test fails, the bug is in the server (ACK sent prematurely).
     
-    print(f"\n3. Stopping core node: {CONTAINER_NAME}")
+    print(f"\n3. Stopping core node: {CONTAINER_NAME} (IMMEDIATELY after ACK)")
     if not kill_container(CONTAINER_NAME):
         print("  ❌ Failed to kill container")
         return False

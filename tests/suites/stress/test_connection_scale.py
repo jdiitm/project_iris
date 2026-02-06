@@ -19,6 +19,7 @@ import os
 import sys
 import time
 import socket
+import ssl
 import random
 import struct
 import threading
@@ -65,6 +66,29 @@ else:
     RAMP_RATE = 100
     HOLD_DURATION = 30
     TIMEOUT_PER_CONN = 5.0
+
+
+def create_socket(host, port, timeout=5.0):
+    """Create socket with TLS auto-detection."""
+    # Try TLS first (standard for CI and production)
+    try:
+        from tests.suites.chaos_dist.utils import create_tls_socket
+        s = create_tls_socket(host, port, timeout=timeout)
+        # TCP_NODELAY may not work on TLS sockets, skip if it fails
+        try:
+            s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        except:
+            pass
+        return s
+    except Exception:
+        pass
+    
+    # Fallback to non-TLS (for local development without certs)
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.settimeout(timeout)
+    s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+    s.connect((host, port))
+    return s
 
 
 # =============================================================================
@@ -122,10 +146,7 @@ class IrisConnection:
     def connect(self, host: str, port: int, timeout: float) -> bool:
         """Establish connection and login."""
         try:
-            self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.sock.settimeout(timeout)
-            self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-            self.sock.connect((host, port))
+            self.sock = create_socket(host, port, timeout=timeout)
             
             # Send login packet: 0x01 | username
             login_packet = bytes([0x01]) + self.user_id.encode('utf-8')
@@ -148,22 +169,20 @@ class IrisConnection:
         self.connected = False
     
     def is_alive(self) -> bool:
-        """Check if connection is still alive."""
+        """Check if connection is still alive.
+        
+        Python's ssl.SSLSocket does NOT support flags (MSG_PEEK, MSG_DONTWAIT)
+        in recv() — it raises ValueError. Use getpeername() instead, which
+        works for both plain TCP and TLS sockets. It raises OSError if the
+        socket is disconnected or closed.
+        """
         if not self.sock or not self.connected:
             return False
         try:
-            # Send a small ping (empty read with peek)
-            self.sock.setblocking(False)
-            try:
-                data = self.sock.recv(1, socket.MSG_PEEK | socket.MSG_DONTWAIT)
-                return True  # Data available or connection open
-            except BlockingIOError:
-                return True  # No data but connection open
-            except:
-                return False
-        finally:
-            if self.sock:
-                self.sock.setblocking(True)
+            self.sock.getpeername()
+            return True
+        except OSError:
+            return False
 
 
 class ConnectionPool:
@@ -230,11 +249,9 @@ class ConnectionPool:
 def check_server_available() -> bool:
     """Check if server is accepting connections."""
     try:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(2)
-        result = sock.connect_ex((EDGE_HOST, EDGE_PORT))
+        sock = create_socket(EDGE_HOST, EDGE_PORT, timeout=2)
         sock.close()
-        return result == 0
+        return True
     except:
         return False
 
@@ -414,38 +431,70 @@ def print_results(result: TestResult):
 # Main
 # =============================================================================
 
+def is_server_running(host=EDGE_HOST, port=EDGE_PORT, timeout=2.0):
+    """Check if server is already running on the expected port."""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(timeout)
+        result = s.connect_ex((host, port))
+        s.close()
+        return result == 0
+    except Exception:
+        return False
+
+
 def main():
+    # Detect QUICK_MODE (set by run_all_tests.sh --quick) or CI
+    is_quick = os.environ.get("QUICK_MODE") == "true"
+    is_ci = os.environ.get("CI") == "true" or os.environ.get("GITHUB_ACTIONS") == "true"
+    
+    # Reduce hold duration for quick/CI mode
+    if is_quick or is_ci:
+        default_hold = 10  # 10s instead of 30s
+    else:
+        default_hold = HOLD_DURATION
+    
     parser = argparse.ArgumentParser(description="Connection Scale Test")
     parser.add_argument("--target", type=int, default=TARGET_CONNECTIONS,
                         help=f"Target connections (default: {TARGET_CONNECTIONS})")
     parser.add_argument("--rate", type=int, default=RAMP_RATE,
                         help=f"Ramp rate/sec (default: {RAMP_RATE})")
-    parser.add_argument("--hold", type=int, default=HOLD_DURATION,
-                        help=f"Hold duration sec (default: {HOLD_DURATION})")
+    parser.add_argument("--hold", type=int, default=default_hold,
+                        help=f"Hold duration sec (default: {default_hold})")
     args = parser.parse_args()
     
     print(f"[INFO] Connection Scale Test")
     print(f"[INFO] Profile: {TEST_PROFILE}, Seed: {TEST_SEED}")
-    print(f"[INFO] Target: {args.target:,} connections @ {args.rate}/sec")
+    print(f"[INFO] Environment: {'quick' if is_quick else 'CI' if is_ci else 'full'}")
+    print(f"[INFO] Target: {args.target:,} connections @ {args.rate}/sec, hold {args.hold}s")
     
-    # Use ClusterManager to ensure server is running
-    with ClusterManager(project_root=PROJECT_ROOT) as cluster:
-        # Verify server is available
-        if not check_server_available():
-            print(f"\n[FAIL] Server not available at {EDGE_HOST}:{EDGE_PORT} after cluster start")
-            sys.exit(1)
-        
-        # Run test
+    # Skip ClusterManager if server is already running (from run_all_tests.sh).
+    # ClusterManager kills the running TLS server and starts a non-TLS one,
+    # causing create_socket's TLS auto-detection to timeout (10s per connection)
+    # since the non-TLS server ignores TLS ClientHello.
+    server_up = is_server_running()
+    
+    if server_up:
+        print(f"[INFO] Server already running on {EDGE_HOST}:{EDGE_PORT} — skipping ClusterManager")
         result = run_load_test(args.target, args.rate, args.hold)
-        
-        # Print results
         print_results(result)
-        
-        # Exit with appropriate code
         if result.passed:
             sys.exit(0)
         else:
             sys.exit(1)
+    else:
+        # Standalone: use ClusterManager to start server
+        with ClusterManager(project_root=PROJECT_ROOT) as cluster:
+            if not check_server_available():
+                print(f"\n[FAIL] Server not available at {EDGE_HOST}:{EDGE_PORT} after cluster start")
+                sys.exit(1)
+            
+            result = run_load_test(args.target, args.rate, args.hold)
+            print_results(result)
+            if result.passed:
+                sys.exit(0)
+            else:
+                sys.exit(1)
 
 
 if __name__ == "__main__":

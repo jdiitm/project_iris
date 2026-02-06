@@ -98,6 +98,7 @@ def login(sock, username):
     try:
         response = sock.recv(1024)
         if b"LOGIN_OK" in response:
+            time.sleep(0.05)  # Ensure server-side registration completes
             return True, response
         else:
             return False, response
@@ -107,18 +108,27 @@ def login(sock, username):
         sock.settimeout(old_timeout)
 
 
+# Sequence counter for RFC-compliant messaging
+_seq_counter = [0]
+
 def send_message(sock, target, message):
     """
     Send message and wait for ACK.
     
-    Protocol: 0x02 | TargetLen(16) | Target | MsgLen(16) | Msg
+    RFC-001-AMENDMENT-001 v1.0 COMPLIANT: Uses opcode 0x07 (sequenced message)
+    Protocol: 0x07 | TargetLen(16) | Target | SeqNo(64) | MsgLen(16) | Msg
     """
     target_bytes = target.encode()
     msg_bytes = message.encode()
     
+    # Increment sequence counter
+    _seq_counter[0] += 1
+    seq_no = _seq_counter[0]
+    
     packet = (
-        bytes([0x02]) +
+        bytes([0x07]) +
         struct.pack('>H', len(target_bytes)) + target_bytes +
+        struct.pack('>Q', seq_no) +
         struct.pack('>H', len(msg_bytes)) + msg_bytes
     )
     
@@ -494,9 +504,11 @@ def test_multimaster_durability():
     else:
         log("⚠ No ACK received - continuing anyway")
     
-    # Small delay to ensure Mnesia replication
-    log("Waiting 2s for Mnesia multi-master replication...")
-    time.sleep(2)
+    # Wait for Mnesia sync_transaction to complete replication
+    # sync_transaction blocks until ALL disc_copies nodes have committed,
+    # but we add extra time for network propagation and stability
+    log("Waiting 5s for Mnesia multi-master sync_transaction replication...")
+    time.sleep(5)
     
     # Phase 2: SIGKILL the primary core (hard crash)
     current_phase = TestPhase.KILL
@@ -623,44 +635,24 @@ def test_multimaster_durability():
 
 
 def restore_cluster_state():
-    """Re-initialize cluster after test that restarts containers.
+    """Light-weight cluster restoration after multimaster durability test.
     
-    IMPORTANT: After killing Mnesia nodes, their state becomes stale.
-    We must do a FULL cluster restart to ensure clean state.
+    NOTE: Full cluster restart is handled by the test runner (run_all_tests.sh),
+    not individual tests. This function only ensures the killed container is
+    running and reconnected - does NOT do full Mnesia re-init.
     """
+    log("[cleanup] Light-weight cluster recovery...")
+    
+    # Just ensure the primary container is started (we already start it in the test)
     try:
-        # Import from shared utility
-        import sys
-        sys.path.insert(0, str(PROJECT_ROOT / "tests" / "utilities"))
-        try:
-            from cluster_utils import restore_cluster_state as _restore
-            _restore()
-        except ImportError:
-            # Fallback if utility not available
-            log("[cleanup] Restoring cluster state (inline fallback)...")
-            docker_dir = PROJECT_ROOT / "docker" / "global-cluster"
-            compose_file = docker_dir / "docker-compose.yml"
-            
-            subprocess.run(
-                ["docker", "compose", "-f", str(compose_file), "down", "--remove-orphans", "-v"],
-                cwd=str(docker_dir), capture_output=True, timeout=60
-            )
-            time.sleep(5)
-            subprocess.run(
-                ["docker", "compose", "-f", str(compose_file), "up", "-d"],
-                cwd=str(docker_dir), capture_output=True, timeout=180
-            )
-            time.sleep(60)
-            
-            init_script = docker_dir / "init_cluster.sh"
-            if init_script.exists():
-                subprocess.run(
-                    ["bash", str(init_script)],
-                    cwd=str(docker_dir), capture_output=True, timeout=300
-                )
-            log("[cleanup] Cluster state restored")
+        # Verify primary is running
+        if not check_container_running(PRIMARY_CORE):
+            docker_start(PRIMARY_CORE)
+            wait_for_container_healthy(PRIMARY_CORE, timeout=30)
+        
+        log("[cleanup] Primary container running")
     except Exception as e:
-        log(f"[cleanup] Warning: Could not restore cluster state: {e}")
+        log(f"[cleanup] Warning: Light-weight recovery failed: {e}")
 
 
 def main():

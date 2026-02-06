@@ -21,9 +21,19 @@ CHAOS = True
 HOST = 'localhost'
 PORT = 8085
 
-def create_socket(port=8085):
+def create_socket(port=8085, timeout=10.0):
+    """Create socket with TLS auto-detection."""
+    # Try TLS first (standard for CI and production)
+    try:
+        from tests.suites.chaos_dist.utils import create_tls_socket
+        return create_tls_socket(HOST, port, timeout=timeout)
+    except Exception:
+        pass
+    
+    # Fallback to non-TLS (for local development without certs)
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(timeout)
         s.connect((HOST, port))
         return s
     except:

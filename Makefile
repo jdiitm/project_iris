@@ -41,29 +41,19 @@ test-verbose: $(BEAM_FILES)
 	@$(ERL) -pa ebin -noshell -eval "case eunit:test([iris_session_tests, iris_proto_tests, iris_shard_tests, iris_ingress_guard_tests], [verbose]) of ok -> init:stop(0); error -> init:stop(1) end."
 
 # Run all tests via unified test runner
-# Uses stdbuf -oL to force line-buffered output for real-time visibility
 test-all: $(BEAM_FILES)
 	@echo "Running all tests..."
-	@stdbuf -oL python3 -u tests/run_tests.py --all
+	@./tests/run_all_tests.sh
 
-# Run CI Tier 0 tests (required on every merge)
-test-tier0: $(BEAM_FILES)
-	@echo "Running Tier 0 tests..."
-	@stdbuf -oL python3 -u tests/run_tests.py --tier 0
+# Run non-Docker tests only (faster)
+test-quick: $(BEAM_FILES)
+	@echo "Running quick tests (non-Docker)..."
+	@./tests/run_all_tests.sh --quick
 
-# Run CI Tier 1 tests (nightly/manual)
-test-tier1: $(BEAM_FILES)
-	@echo "Running Tier 1 tests..."
-	@stdbuf -oL python3 -u tests/run_tests.py --tier 1
-
-# Run integration tests only
-test-integration: $(BEAM_FILES)
-	@echo "Running integration tests..."
-	@stdbuf -oL python3 -u tests/run_tests.py --suite integration
-
-# List available tests
-test-list:
-	@python3 tests/run_tests.py --list
+# Run Docker chaos tests only
+test-docker-chaos: $(BEAM_FILES)
+	@echo "Running Docker chaos tests..."
+	@./tests/run_all_tests.sh --docker-only
 
 # Run property-based tests (PropEr-style)
 test-proper: $(BEAM_FILES)
@@ -215,7 +205,7 @@ test-docker-suite:
 		-e TEST_SEED=$${TEST_SEED:-42} \
 		-e CI=true \
 		iris-test \
-		python3 tests/run_tests.py --suite $(SUITE)
+		./tests/run_all_tests.sh --docker-only
 
 # Run full cluster tests in Docker
 test-docker-cluster:

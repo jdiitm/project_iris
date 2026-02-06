@@ -15,6 +15,7 @@ Expected duration: <120s
 import sys
 import os
 import time
+import socket
 import threading
 import statistics
 
@@ -25,6 +26,18 @@ sys.path.insert(0, PROJECT_ROOT)
 from tests.framework import TestLogger, ClusterManager, ResourceMonitor
 from tests.utilities import IrisClient
 from tests.utilities.helpers import unique_user
+
+
+def is_server_running(port=8085):
+    """Check if an Iris server is already running on the given port."""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(2)
+        s.connect(('localhost', port))
+        s.close()
+        return True
+    except Exception:
+        return False
 
 
 def benchmark_single_connection():
@@ -263,9 +276,15 @@ def benchmark_latency():
 
 def main():
     """Run all throughput benchmarks."""
-    cluster = ClusterManager()
     
-    if not cluster.is_healthy():
+    if is_server_running():
+        # Server already running (managed by run_all_tests.sh or started manually).
+        # Do NOT use ClusterManager — it would kill the existing TLS server and
+        # start a new one, disrupting subsequent tests in the test suite.
+        print("[SETUP] Server already running — using existing server")
+    else:
+        # No server running — start via ClusterManager for standalone execution
+        cluster = ClusterManager()
         print("[SETUP] Starting cluster...")
         if not cluster.start():
             print("[ERROR] Failed to start cluster")

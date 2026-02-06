@@ -99,6 +99,22 @@ def log(msg: str):
     print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
 
 
+def create_socket(host, port, timeout=10.0):
+    """Create socket with TLS auto-detection."""
+    # Try TLS first (standard for CI and production)
+    try:
+        from tests.suites.chaos_dist.utils import create_tls_socket
+        return create_tls_socket(host, port, timeout=timeout)
+    except Exception:
+        pass
+    
+    # Fallback to non-TLS (for local development without certs)
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.settimeout(timeout)
+    s.connect((host, port))
+    return s
+
+
 def phash2(data: bytes, n: int) -> int:
     """
     Python approximation of Erlang's erlang:phash2/2.
@@ -154,9 +170,7 @@ def generate_cold_shard_usernames(count: int, avoid_shard: int = 0, shard_count:
 def connect_and_login(username: str, timeout: float = TIMEOUT) -> Optional[socket.socket]:
     """Connect to server and login."""
     try:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(timeout)
-        sock.connect((SERVER_HOST, SERVER_PORT))
+        sock = create_socket(SERVER_HOST, SERVER_PORT, timeout=timeout)
         
         # Login
         packet = bytes([0x01]) + username.encode()
@@ -178,10 +192,14 @@ def connect_and_login(username: str, timeout: float = TIMEOUT) -> Optional[socke
         return None
 
 
+# Sequence counter for RFC-compliant messaging
+_hot_shard_seq_counter = [0]
+
 def send_message(sock: socket.socket, target: str, message: str) -> Tuple[bool, float]:
     """
     Send a message and measure latency.
     
+    RFC-001-AMENDMENT-001 v1.0 COMPLIANT: Uses opcode 0x07 (sequenced message)
     For stress testing, we measure the time to complete the socket write,
     which represents the time for the system to accept the message.
     Fire-and-forget semantics - server queues for delivery.
@@ -192,9 +210,15 @@ def send_message(sock: socket.socket, target: str, message: str) -> Tuple[bool, 
         target_bytes = target.encode()
         msg_bytes = message.encode()
         
+        # Increment sequence counter
+        _hot_shard_seq_counter[0] += 1
+        seq_no = _hot_shard_seq_counter[0]
+        
+        # Protocol: 0x07 | TargetLen(16) | Target | SeqNo(64) | MsgLen(16) | Msg
         packet = (
-            bytes([0x02]) +
+            bytes([0x07]) +
             struct.pack('>H', len(target_bytes)) + target_bytes +
+            struct.pack('>Q', seq_no) +
             struct.pack('>H', len(msg_bytes)) + msg_bytes
         )
         
@@ -269,9 +293,7 @@ def get_mailbox_lengths() -> dict:
 def check_server_available() -> bool:
     """Check if the server is reachable."""
     try:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(5)
-        sock.connect((SERVER_HOST, SERVER_PORT))
+        sock = create_socket(SERVER_HOST, SERVER_PORT, timeout=5)
         sock.close()
         return True
     except Exception:
@@ -503,19 +525,19 @@ def main():
     print("Per PRINCIPAL_AUDIT_REPORT.md Section 3.3")
     print("=" * 70)
     
-    # Use ClusterManager to ensure cluster is running
-    with ClusterManager(project_root=project_root) as cluster:
+    def _run_test():
+        """Run the hot-shard test logic."""
         # Check prerequisites
         if not check_server_available():
             print(f"\nFAIL: Server not available at {SERVER_HOST}:{SERVER_PORT}")
             sys.exit(1)
-        
+
         # Run test
         result = run_hot_shard_test()
-        
+
         # Analyze and report
         passed = analyze_results(result)
-        
+
         print("\n" + "=" * 70)
         if passed:
             print("RESULT: PASSED - Hot-shard handling within acceptable limits")
@@ -523,6 +545,20 @@ def main():
         else:
             print("RESULT: FAILED - Hot-shard test failed")
             sys.exit(1)
+
+    # If server is already running (e.g. started by run_all_tests.sh), use it directly.
+    # ClusterManager.force_stop() would kill the externally-managed TLS server.
+    try:
+        probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        probe.settimeout(2)
+        probe.connect((SERVER_HOST, SERVER_PORT))
+        probe.close()
+        print(f"[INFO] Server already running on {SERVER_HOST}:{SERVER_PORT} — skipping ClusterManager")
+        _run_test()
+    except socket.error:
+        # No server running — use ClusterManager to start one
+        with ClusterManager(project_root=project_root) as cluster:
+            _run_test()
 
 
 if __name__ == "__main__":

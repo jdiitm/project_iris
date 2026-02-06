@@ -248,6 +248,194 @@ def test_presence_cache():
         return False
 
 
+# RFC FR-6/FR-7 SLA Threshold
+PRESENCE_PROPAGATION_SLA_SECONDS = 30.0
+
+
+def test_presence_propagation_sla():
+    """
+    Test RFC FR-6/FR-7: Presence propagation SLA of 30 seconds.
+    
+    RFC Requirements:
+    - FR-6: Online status propagation ≤30 seconds
+    - FR-7: Last seen timestamp update ≤30 seconds
+    
+    This test measures actual propagation time and asserts it meets the SLA.
+    
+    NO SKIPS, NO FALLBACKS - binary pass/fail only.
+    """
+    with TestLogger("test_presence_propagation_sla", "integration") as log:
+        
+        log.info("sla", f"Testing presence propagation SLA: ≤{PRESENCE_PROPAGATION_SLA_SECONDS}s")
+        
+        # Set up observer first (to be ready to receive updates)
+        observer = create_client_with_retry()
+        observer_user = f"sla_observer_{int(time.time())}"
+        observer.login(observer_user)
+        log.connection_event("login", observer_user)
+        
+        time.sleep(1)  # Stabilize
+        
+        # Target user - we'll measure how long until observer sees them
+        target_user = f"sla_target_{int(time.time())}"
+        
+        # Record start time BEFORE target logs in
+        start_time = time.monotonic()
+        
+        # Target comes online
+        target = create_client_with_retry()
+        target.login(target_user)
+        login_time = time.monotonic()
+        log.connection_event("login", target_user)
+        log.info("timing", f"Target login at T+{login_time - start_time:.3f}s")
+        
+        # Now poll until observer sees target as online
+        propagation_time = None
+        poll_interval = 0.5  # Check every 500ms
+        max_wait = 60.0  # Wait up to 60s (2x SLA)
+        
+        while time.monotonic() - start_time < max_wait:
+            try:
+                query_packet = create_get_status_packet(target_user)
+                observer.sock.sendall(query_packet)
+                
+                observer.sock.settimeout(2.0)
+                response = observer.sock.recv(1024)
+                
+                status = parse_status_response(response)
+                
+                if status.get("online"):
+                    propagation_time = time.monotonic() - login_time
+                    log.info("sla_met", f"Presence propagated in {propagation_time:.3f}s")
+                    break
+                    
+            except socket.timeout:
+                pass
+            except Exception as e:
+                log.info("poll_error", f"Query error: {e}")
+            
+            time.sleep(poll_interval)
+        
+        # Cleanup
+        target.close()
+        observer.close()
+        
+        # SLA Assertion
+        if propagation_time is None:
+            log.error("sla_violation", f"Presence never propagated (waited {max_wait}s)")
+            log.error("result", "FAIL: RFC FR-6/FR-7 SLA VIOLATED (no propagation)")
+            return False
+        elif propagation_time <= PRESENCE_PROPAGATION_SLA_SECONDS:
+            log.info("sla_pass", 
+                    f"RFC FR-6/FR-7: Presence propagation {propagation_time:.2f}s ≤ {PRESENCE_PROPAGATION_SLA_SECONDS}s")
+            log.info("result", "PASS: Presence SLA met")
+            return True
+        else:
+            log.error("sla_violation", 
+                     f"Presence propagation {propagation_time:.2f}s > {PRESENCE_PROPAGATION_SLA_SECONDS}s SLA")
+            log.error("result", "FAIL: RFC FR-6/FR-7 SLA VIOLATED")
+            return False
+
+
+def test_last_seen_update_sla():
+    """
+    Test RFC FR-7: Last seen timestamp update SLA of 30 seconds.
+    
+    When a user goes offline, their last_seen timestamp must be updated
+    and visible to observers within 30 seconds.
+    """
+    with TestLogger("test_last_seen_update_sla", "integration") as log:
+        
+        log.info("sla", f"Testing last_seen update SLA: ≤{PRESENCE_PROPAGATION_SLA_SECONDS}s")
+        
+        # Target comes online first
+        target_user = f"lastseen_target_{int(time.time())}"
+        target = create_client_with_retry()
+        target.login(target_user)
+        log.connection_event("login", target_user)
+        
+        time.sleep(2)  # Let presence propagate
+        
+        # Observer
+        observer = create_client_with_retry()
+        observer_user = f"lastseen_observer_{int(time.time())}"
+        observer.login(observer_user)
+        log.connection_event("login", observer_user)
+        
+        time.sleep(1)
+        
+        # Verify target shows as online
+        query_packet = create_get_status_packet(target_user)
+        observer.sock.sendall(query_packet)
+        observer.sock.settimeout(3.0)
+        response = observer.sock.recv(1024)
+        initial_status = parse_status_response(response)
+        
+        if not initial_status.get("online"):
+            log.error("setup", "Target not showing as online - cannot test last_seen")
+            observer.close()
+            target.close()
+            return False
+        
+        log.info("setup", "Target verified online, measuring offline propagation...")
+        
+        # Record time before disconnect
+        disconnect_start = time.monotonic()
+        
+        # Target goes offline
+        target.close()
+        log.connection_event("disconnect", target_user)
+        
+        # Poll until last_seen is updated (shows offline)
+        propagation_time = None
+        max_wait = 60.0
+        poll_interval = 0.5
+        
+        while time.monotonic() - disconnect_start < max_wait:
+            try:
+                query_packet = create_get_status_packet(target_user)
+                observer.sock.sendall(query_packet)
+                
+                observer.sock.settimeout(2.0)
+                response = observer.sock.recv(1024)
+                
+                status = parse_status_response(response)
+                
+                # Check if offline (last_seen updated)
+                if not status.get("online", True):
+                    propagation_time = time.monotonic() - disconnect_start
+                    log.info("offline_detected", 
+                            f"User shows offline after {propagation_time:.3f}s")
+                    
+                    # Verify last_seen is recent
+                    last_seen = status.get("last_seen", 0)
+                    if last_seen > 0:
+                        log.info("last_seen", f"Last seen timestamp: {last_seen}")
+                    break
+                    
+            except socket.timeout:
+                pass
+            except Exception as e:
+                log.info("poll_error", f"Query error: {e}")
+            
+            time.sleep(poll_interval)
+        
+        observer.close()
+        
+        # SLA Assertion
+        if propagation_time is None:
+            log.error("sla_violation", f"Offline status never propagated (waited {max_wait}s)")
+            return False
+        elif propagation_time <= PRESENCE_PROPAGATION_SLA_SECONDS:
+            log.info("sla_pass", 
+                    f"RFC FR-7: Last seen updated in {propagation_time:.2f}s ≤ {PRESENCE_PROPAGATION_SLA_SECONDS}s")
+            return True
+        else:
+            log.error("sla_violation", 
+                     f"Last seen update {propagation_time:.2f}s > {PRESENCE_PROPAGATION_SLA_SECONDS}s SLA")
+            return False
+
+
 def main():
     """Run all presence tests."""
     cluster = ClusterManager()
@@ -261,7 +449,9 @@ def main():
     tests = [
         test_online_user_status,
         test_offline_user_status,
-        test_presence_cache
+        test_presence_cache,
+        test_presence_propagation_sla,  # RFC FR-6/FR-7: 30s SLA
+        test_last_seen_update_sla,       # RFC FR-7: Last seen SLA
     ]
     
     passed = 0

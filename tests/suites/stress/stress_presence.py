@@ -65,6 +65,22 @@ def log(msg):
     print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
 
 
+def create_socket(host, port, timeout=10.0):
+    """Create socket with TLS auto-detection."""
+    # Try TLS first (standard for CI and production)
+    try:
+        from tests.suites.chaos_dist.utils import create_tls_socket
+        return create_tls_socket(host, port, timeout=timeout)
+    except Exception:
+        pass
+    
+    # Fallback to non-TLS (for local development without certs)
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.settimeout(timeout)
+    s.connect((host, port))
+    return s
+
+
 # ============================================================================
 # Protocol Helpers
 # ============================================================================
@@ -83,9 +99,7 @@ def packet_get_status(target):
 def hotspot_worker(idx, duration):
     """Worker that exclusively polls a hotspot user."""
     try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.settimeout(10)
-        s.connect((HOST, PORT))
+        s = create_socket(HOST, PORT, timeout=10)
         s.sendall(packet_login(f"fan_{idx}"))
         resp = s.recv(1024)
         
@@ -132,9 +146,7 @@ def global_worker(idx, duration, hotspot_ratio=0.10):
     worker_random = random.Random(TEST_SEED + idx)
     
     try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.settimeout(10)
-        s.connect((HOST, PORT))
+        s = create_socket(HOST, PORT, timeout=10)
         s.sendall(packet_login(f"user_{idx}"))
         resp = s.recv(1024)
         
@@ -200,13 +212,8 @@ def run_test(args) -> int:
     
     # Check cluster is running
     try:
-        test_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        test_sock.settimeout(5)
-        result = test_sock.connect_ex((HOST, PORT))
+        test_sock = create_socket(HOST, PORT, timeout=5)
         test_sock.close()
-        if result != 0:
-            log("FAIL: Server not running on port 8085")
-            return 1
     except Exception as e:
         log(f"FAIL: Could not connect to server - {e}")
         return 1
@@ -215,9 +222,7 @@ def run_test(args) -> int:
     
     # Login the hotspot user
     try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.settimeout(10)
-        s.connect((HOST, PORT))
+        s = create_socket(HOST, PORT, timeout=10)
         s.sendall(packet_login(TARGET_HOTSPOT))
         resp = s.recv(1024)
         if b"LOGIN_OK" not in resp:
@@ -340,7 +345,19 @@ def main() -> int:
     parser.add_argument('--skip-restart', action='store_true', help='Skip cluster restart (ignored)')
     args = parser.parse_args()
     
-    # Use ClusterManager to ensure cluster is running
+    # If server is already running (e.g. started by run_all_tests.sh), use it directly.
+    # ClusterManager.force_stop() would kill the externally-managed TLS server.
+    try:
+        probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        probe.settimeout(2)
+        probe.connect((HOST, PORT))
+        probe.close()
+        print(f"[INFO] Server already running on {HOST}:{PORT} — skipping ClusterManager")
+        return run_test(args)
+    except Exception:
+        pass
+
+    # No server running — use ClusterManager to start one
     with ClusterManager(project_root=project_root) as cluster:
         return run_test(args)
 

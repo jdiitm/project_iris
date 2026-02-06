@@ -12,7 +12,7 @@
 %% 5. CLUSTER DURABILITY: Parallel write to secondary node for true RPO=0
 %% =============================================================================
 
--export([start_link/1, store/3, store_batch/4]).
+-export([start_link/1, store/3, store/4, store_batch/4]).
 -export([get_stats/0, force_flush/0]).
 %% Cluster durability exports
 -export([get_durability_mode/0, get_secondary_node/0]).
@@ -25,6 +25,16 @@
 %% P1-H6 FIX: WAL directory is now configurable via iris_core.wal_directory
 %% Default changed from /tmp (often tmpfs) to data/wal (persistent)
 -define(DEFAULT_WAL_DIR, "data/wal").
+
+%% CRITICAL: Use HLC for proper message ordering (RFC FR-5)
+%% os:system_time(millisecond) has insufficient precision for rapid-fire messages
+get_timestamp() ->
+    case whereis(iris_hlc) of
+        undefined ->
+            os:system_time(nanosecond);
+        _Pid ->
+            iris_hlc:to_integer(iris_hlc:send())
+    end.
 
 -record(state, {
     shard_id :: integer(),
@@ -55,8 +65,14 @@ start_link(ShardId) ->
 %% Returns immediately after WAL sync (not after Mnesia replication)
 -spec store(binary(), binary(), integer()) -> ok | {error, term()}.
 store(User, Msg, BucketCount) ->
+    store(User, Msg, BucketCount, undefined).
+
+%% RFC FR-5: Store with client-provided sequence number for FIFO ordering
+%% When MaybeSeqNo is provided, it is used as the timestamp to guarantee ordering
+-spec store(binary(), binary(), integer(), integer() | undefined) -> ok | {error, term()}.
+store(User, Msg, BucketCount, MaybeSeqNo) ->
     ShardId = select_shard(User),
-    gen_server:call(shard_name(ShardId), {store, User, Msg, BucketCount}, 10000).
+    gen_server:call(shard_name(ShardId), {store, User, Msg, BucketCount, MaybeSeqNo}, 10000).
 
 %% Store batch with write-ahead durability
 -spec store_batch(binary(), [binary()], integer(), map()) -> ok | {error, term()}.
@@ -188,8 +204,9 @@ check_tmpfs_mounts(Path, [Line | Rest]) ->
             check_tmpfs_mounts(Path, Rest)
     end.
 
-handle_call({store, User, Msg, BucketCount}, _From, State) ->
-    case do_wal_write(User, Msg, BucketCount, State) of
+%% RFC FR-5: Handle store with optional MaybeSeqNo for FIFO ordering
+handle_call({store, User, Msg, BucketCount, MaybeSeqNo}, _From, State) ->
+    case do_wal_write(User, Msg, BucketCount, State, MaybeSeqNo) of
         {ok, NewState} ->
             %% Check if we should flush immediately
             FinalState = maybe_flush(NewState),
@@ -197,6 +214,10 @@ handle_call({store, User, Msg, BucketCount}, _From, State) ->
         {error, Reason} ->
             {reply, {error, Reason}, State}
     end;
+
+%% Backward compatibility: 4-tuple delegates to 5-tuple with undefined SeqNo
+handle_call({store, User, Msg, BucketCount}, From, State) ->
+    handle_call({store, User, Msg, BucketCount, undefined}, From, State);
 
 handle_call({store_batch, User, Msgs, BucketCount}, _From, State) ->
     case do_wal_write_batch(User, Msgs, BucketCount, State) of
@@ -260,13 +281,23 @@ terminate(_Reason, State) ->
 %% Internal: Write-Ahead Log
 %% =============================================================================
 
-do_wal_write(User, Msg, BucketCount, State = #state{wal_log = undefined}) ->
+%% Backward compatibility: 4-arity delegates to 5-arity with undefined SeqNo
+do_wal_write(User, Msg, BucketCount, State) ->
+    do_wal_write(User, Msg, BucketCount, State, undefined).
+
+%% RFC FR-5: WAL write with optional client sequence number for FIFO ordering
+do_wal_write(User, Msg, BucketCount, State = #state{wal_log = undefined}, MaybeSeqNo) ->
     %% No WAL - fall back to direct Mnesia (less safe but works)
-    do_direct_mnesia_write(User, Msg, BucketCount),
+    do_direct_mnesia_write(User, Msg, BucketCount, MaybeSeqNo),
     {ok, State#state{writes_mnesia = State#state.writes_mnesia + 1}};
 
-do_wal_write(User, Msg, BucketCount, State = #state{wal_log = Log, seq_no = SeqNo}) ->
-    Timestamp = os:system_time(millisecond),
+do_wal_write(User, Msg, BucketCount, State = #state{wal_log = Log, seq_no = SeqNo}, MaybeSeqNo) ->
+    %% RFC FR-5: Use client's SeqNo as timestamp for FIFO ordering when provided
+    %% If no SeqNo, fallback to HLC (maintains causality)
+    Timestamp = case MaybeSeqNo of
+        ClientSeq when is_integer(ClientSeq) -> ClientSeq;
+        undefined -> get_timestamp()
+    end,
     BucketID = erlang:phash2(Msg, BucketCount),
     Key = {User, BucketID},
     NewSeqNo = SeqNo + 1,
@@ -403,7 +434,7 @@ do_wal_write_batch(User, Msgs, BucketCount, State = #state{wal_log = undefined})
     {ok, State#state{writes_mnesia = State#state.writes_mnesia + length(Msgs)}};
 
 do_wal_write_batch(User, Msgs, BucketCount, State = #state{wal_log = Log, seq_no = SeqNo}) ->
-    Timestamp = os:system_time(millisecond),
+    Timestamp = get_timestamp(),
     
     %% Build entries
     {Entries, FinalSeqNo, NewPending} = lists:foldl(fun(Msg, {AccE, AccSeq, AccP}) ->
@@ -433,8 +464,17 @@ do_wal_write_batch(User, Msgs, BucketCount, State = #state{wal_log = Log, seq_no
             {error, wal_write_failed}
     end.
 
+%% Backward compatibility wrapper
 do_direct_mnesia_write(User, Msg, BucketCount) ->
-    Timestamp = os:system_time(millisecond),
+    do_direct_mnesia_write(User, Msg, BucketCount, undefined).
+
+%% RFC FR-5: Direct Mnesia write with optional client sequence number
+do_direct_mnesia_write(User, Msg, BucketCount, MaybeSeqNo) ->
+    %% Use client's SeqNo as timestamp for FIFO ordering when provided
+    Timestamp = case MaybeSeqNo of
+        ClientSeq when is_integer(ClientSeq) -> ClientSeq;
+        undefined -> get_timestamp()
+    end,
     BucketID = erlang:phash2(Msg, BucketCount),
     Key = {User, BucketID},
     F = fun() -> mnesia:write({offline_msg, Key, Timestamp, Msg}) end,

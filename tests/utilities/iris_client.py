@@ -2,11 +2,14 @@
 """
 Iris Client Library - Handles the reliable messaging protocol.
 
-Protocol:
+Protocol (RFC-001-AMENDMENT-001 v1.0 compliant):
 - Login: 0x01 | User
-- Send: 0x02 | TargetLen(16) | Target | MsgLen(16) | Msg
+- Send (sequenced): 0x07 | TargetLen(16) | Target | SeqNo(64) | MsgLen(16) | Msg
 - ACK: 0x03 | MsgId
 - Reliable Message: 0x10 | IdLen(16) | MsgId | MsgLen(32) | Msg
+
+NOTE: Opcode 0x02 (plaintext) is DEPRECATED and REJECTED in v1.0.
+      Use send_msg() which now uses opcode 0x07 (sequenced messages).
 """
 
 import socket
@@ -22,38 +25,41 @@ DEFAULT_CA_CERT = PROJECT_ROOT / "certs" / "ca.pem"
 class IrisClient:
     def __init__(self, host='localhost', port=8085, use_tls=True):
         """
-        Create an Iris client connection.
+        Create an Iris client connection with mandatory TLS.
+        
+        TLS is MANDATORY per RFC NFR-14. The use_tls parameter is accepted
+        for backward compatibility but ignored — TLS is always used.
+        
+        Uses wrap-then-connect pattern for atomic TCP+TLS handshake.
         
         Args:
             host: Server hostname
             port: Server port
-            use_tls: Whether to use TLS (default True for RFC compliance)
+            use_tls: Ignored (TLS is always used). Kept for API compatibility.
         """
         raw_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         raw_sock.settimeout(10.0)
         
-        if use_tls:
-            # Create TLS context
-            context = ssl.create_default_context()
-            
-            # Load CA certificate if available
-            ca_cert = os.environ.get('IRIS_CA_CERT', str(DEFAULT_CA_CERT))
-            if os.path.exists(ca_cert):
-                context.load_verify_locations(ca_cert)
-            else:
-                # For testing: disable cert verification if no CA available
-                context.check_hostname = False
-                context.verify_mode = ssl.CERT_NONE
-            
-            raw_sock.connect((host, port))
-            self.sock = context.wrap_socket(raw_sock, server_hostname=host)
+        # TLS is mandatory — create context and wrap before connect
+        context = ssl.create_default_context()
+        
+        # Load CA certificate if available
+        ca_cert = os.environ.get('IRIS_CA_CERT', str(DEFAULT_CA_CERT))
+        if os.path.exists(ca_cert):
+            context.load_verify_locations(ca_cert)
         else:
-            raw_sock.connect((host, port))
-            self.sock = raw_sock
+            # For testing: disable cert verification if no CA available
+            context.check_hostname = False
+            context.verify_mode = ssl.CERT_NONE
+        
+        # Wrap BEFORE connect — TCP+TLS handshake happens atomically
+        self.sock = context.wrap_socket(raw_sock, server_hostname=host)
+        self.sock.connect((host, port))
         
         self.sock.settimeout(5.0)
         self.buffer = b''
         self.user = None
+        self._seq_counter = 0  # Auto-incrementing sequence number for send_msg()
     
     def login(self, user):
         """Login to the server."""
@@ -72,18 +78,60 @@ class IrisClient:
             extra = ack[idx + len(b"LOGIN_OK"):]
             if extra:
                 self.buffer = extra
+        
+        # Small delay to ensure server-side registration completes
+        # This prevents race conditions where messages are sent before
+        # the recipient is fully registered in the presence table
+        import time
+        time.sleep(0.05)  # 50ms is enough for ETS propagation
+        
         return True
     
     def send_msg(self, target, msg):
-        """Send a message to target user."""
+        """
+        Send a message to target user.
+        
+        RFC-001-AMENDMENT-001 v1.0 COMPLIANT: Uses opcode 0x07 (sequenced message)
+        instead of deprecated opcode 0x02 (plaintext) which is now rejected.
+        
+        Protocol: 0x07 | TargetLen(16) | Target | SeqNo(64) | MsgLen(16) | Msg
+        """
         target_bytes = target.encode('utf-8')
         if isinstance(msg, str):
             msg_bytes = msg.encode('utf-8')
         else:
             msg_bytes = msg
         
-        # Protocol: 0x02 | TargetLen(16) | Target | MsgLen(16) | Msg
-        payload = b'\x02' + struct.pack('>H', len(target_bytes)) + target_bytes + struct.pack('>H', len(msg_bytes)) + msg_bytes
+        # Auto-increment sequence number for ordering
+        self._seq_counter += 1
+        seq_no = self._seq_counter
+        
+        # Protocol: 0x07 | TargetLen(16) | Target | SeqNo(64) | MsgLen(16) | Msg
+        payload = (b'\x07' + 
+                   struct.pack('>H', len(target_bytes)) + target_bytes +
+                   struct.pack('>Q', seq_no) +
+                   struct.pack('>H', len(msg_bytes)) + msg_bytes)
+        self.sock.sendall(payload)
+    
+    def send_msg_seq(self, target, msg, seq_no):
+        """
+        Send a message with client-provided sequence number (RFC FR-5).
+        
+        The sequence number guarantees FIFO ordering even under parallel processing.
+        Use this when message ordering is critical.
+        
+        Protocol: 0x07 | TargetLen(16) | Target | SeqNo(64) | MsgLen(16) | Msg
+        """
+        target_bytes = target.encode('utf-8')
+        if isinstance(msg, str):
+            msg_bytes = msg.encode('utf-8')
+        else:
+            msg_bytes = msg
+        
+        payload = (b'\x07' + 
+                   struct.pack('>H', len(target_bytes)) + target_bytes +
+                   struct.pack('>Q', seq_no) +
+                   struct.pack('>H', len(msg_bytes)) + msg_bytes)
         self.sock.sendall(payload)
     
     def recv_msg(self, timeout=5.0):
@@ -104,7 +152,7 @@ class IrisClient:
                         raise Exception("Connection closed")
                     self.buffer += data
                 except socket.timeout:
-                    raise Exception("Timeout waiting for message")
+                    raise
             
             # Check opcode
             if len(self.buffer) > 0 and self.buffer[0] != 0x10:

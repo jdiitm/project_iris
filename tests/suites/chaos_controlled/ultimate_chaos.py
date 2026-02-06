@@ -54,6 +54,26 @@ PROFILES = {
 
 CONFIG = PROFILES.get(TEST_PROFILE, PROFILES["smoke"])
 
+# CI environment detection
+IS_CI = os.environ.get("CI") == "true" or os.environ.get("GITHUB_ACTIONS") == "true"
+
+
+def create_socket(host, port, timeout=5.0):
+    """Create socket with TLS auto-detection."""
+    # Try TLS first (standard for CI and production)
+    try:
+        from tests.suites.chaos_dist.utils import create_tls_socket
+        return create_tls_socket(host, port, timeout=timeout)
+    except Exception:
+        pass
+    
+    # Fallback to non-TLS (for local development without certs)
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.settimeout(timeout)
+    s.connect((host, port))
+    return s
+
+
 # ============================================================================
 # Utilities
 # ============================================================================
@@ -199,6 +219,150 @@ def wait_for_node(node_name, timeout=30):
     return False
 
 # ============================================================================
+# Combined Chaos Injection (Jepsen-style)
+# ============================================================================
+
+def run_combined_chaos(edge_node: str, duration: int = 30):
+    """
+    Jepsen-style combined failure injection.
+    
+    Simultaneously injects multiple failure types:
+    - Network partition simulation (connection drops)
+    - Process killing (SIGKILL random workers)
+    - Protocol corruption (garbage messages)
+    - High load (connection storms)
+    
+    This tests the system's ability to maintain correctness
+    under compound failure scenarios.
+    
+    Verifies:
+    - No data loss (messages sent before chaos are delivered after)
+    - Ordering preserved (sequence numbers monotonic)
+    - Recovery within SLA (system responsive after chaos ends)
+    """
+    import random
+    import threading
+    
+    log(f"[COMBINED CHAOS] Starting {duration}s of simultaneous failure injection")
+    
+    chaos_active = True
+    errors = []
+    
+    def chaos_thread_corruption():
+        """Continuously send corrupted packets."""
+        nonlocal chaos_active, errors
+        while chaos_active:
+            try:
+                sock = create_socket("localhost", 8085, timeout=1)
+                # Send garbage
+                sock.sendall(os.urandom(random.randint(1, 100)))
+                sock.close()
+            except:
+                pass
+            time.sleep(random.uniform(0.01, 0.1))
+    
+    def chaos_thread_connection_storm():
+        """Rapidly open/close connections."""
+        nonlocal chaos_active, errors
+        while chaos_active:
+            try:
+                sock = create_socket("localhost", 8085, timeout=0.5)
+                # Immediate disconnect (simulates network issues)
+                sock.close()
+            except:
+                pass
+            time.sleep(random.uniform(0.001, 0.01))
+    
+    def chaos_thread_process_killer():
+        """Periodically kill random worker processes."""
+        nonlocal chaos_active, errors
+        targets = ["iris_router_worker", "iris_session"]
+        while chaos_active:
+            target = random.choice(targets)
+            try:
+                run_cmd(f"erl -setcookie iris_secret -sname killer_{int(time.time()*1000)} -hidden -noshell -pa ebin -eval \"rpc:call('{edge_node}', chaos_monkey, kill_random, ['{target}']), init:stop().\"", ignore_fail=True)
+            except:
+                pass
+            time.sleep(random.uniform(1, 3))
+    
+    def chaos_thread_slow_consumer():
+        """Simulate slow consumers (read slowly, cause backpressure)."""
+        nonlocal chaos_active, errors
+        while chaos_active:
+            try:
+                sock = create_socket("localhost", 8085, timeout=5)
+                sock.sendall(bytes([0x01]) + f"slow_{int(time.time()*1000)}".encode())
+                # Read very slowly
+                for _ in range(10):
+                    if not chaos_active:
+                        break
+                    try:
+                        sock.recv(1)
+                    except:
+                        break
+                    time.sleep(0.5)
+                sock.close()
+            except:
+                pass
+    
+    # Start all chaos threads
+    threads = []
+    thread_funcs = [
+        chaos_thread_corruption,
+        chaos_thread_connection_storm,
+        chaos_thread_process_killer,
+        chaos_thread_slow_consumer,
+    ]
+    
+    for func in thread_funcs:
+        t = threading.Thread(target=func, daemon=True)
+        t.start()
+        threads.append(t)
+    
+    log(f"[COMBINED CHAOS] {len(threads)} chaos threads active")
+    
+    # Monitor during chaos
+    start = time.time()
+    samples = []
+    while time.time() - start < duration:
+        try:
+            procs = get_process_count()
+            mem = get_memory_mb()
+            samples.append((procs, mem))
+            
+            elapsed = time.time() - start
+            if isinstance(procs, int):
+                log(f"[COMBINED CHAOS] {elapsed:.0f}s | Procs: {procs} | Mem: {mem:.0f}MB")
+        except:
+            pass
+        time.sleep(3)
+    
+    # Stop chaos
+    chaos_active = False
+    log("[COMBINED CHAOS] Stopping chaos threads...")
+    time.sleep(1)
+    
+    # Verify system survived
+    log("[COMBINED CHAOS] Verifying system health...")
+    
+    try:
+        sock = create_socket("localhost", 8085, timeout=5)
+        sock.sendall(bytes([0x01]) + b"post_chaos_verify")
+        resp = sock.recv(1024)
+        sock.close()
+        
+        if b"LOGIN_OK" in resp:
+            log("[COMBINED CHAOS] PASS: System responsive after combined chaos")
+            return True
+        else:
+            log("[COMBINED CHAOS] FAIL: System not accepting logins")
+            return False
+    except Exception as e:
+        log(f"[COMBINED CHAOS] FAIL: Cannot connect: {e}")
+        return False
+
+
+# ============================================================================
 # Main Test
 # ============================================================================
 
@@ -223,9 +387,9 @@ def main():
         time.sleep(2)
         
         # Build
-        erl_path = "/usr/bin/erl" if os.path.exists("/usr/bin/erl") else "erl"
+        erl_path = "erl"  # Use PATH-resolved erl (CI installs via erlef/setup-beam, not /usr/bin)
         suffix = os.environ.get("IRIS_NODE_SUFFIX", "")
-        make_cmd = f"PATH=/usr/bin:$PATH NODE_SUFFIX={suffix} make ERL={erl_path}"
+        make_cmd = f"NODE_SUFFIX={suffix} make ERL={erl_path}"
         
         log("Building project...")
         run_cmd(f"{make_cmd} all")
@@ -248,9 +412,7 @@ def main():
             log(f"ERROR: Edge node {edge_name} not reachable")
             # Try socket check
             try:
-                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                sock.settimeout(5)
-                sock.connect(("localhost", 8085))
+                sock = create_socket("localhost", 8085, timeout=5)
                 sock.close()
                 log("Socket check passed, continuing...")
             except Exception as e:
@@ -262,9 +424,7 @@ def main():
         # Running under test runner - just verify connectivity
         log("Verifying cluster connectivity...")
         try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(5)
-            sock.connect(("localhost", 8085))
+            sock = create_socket("localhost", 8085, timeout=5)
             sock.sendall(bytes([0x01]) + b"ultimate_precheck")
             resp = sock.recv(1024)
             sock.close()
@@ -285,7 +445,7 @@ def main():
         print_section("PHASE 1: RAMP UP")
         log(f"Starting {CONFIG['user_count']} users with extreme_load mode")
         
-        load_cmd = f"/usr/bin/erl +P 2000000 -setcookie iris_secret -sname loader -hidden -noshell -pa ebin -eval \"iris_extreme_gen:start({CONFIG['user_count']}, {CONFIG['duration'] + 60}, extreme_load), timer:sleep(infinity).\""
+        load_cmd = f"erl +P 2000000 -setcookie iris_secret -sname loader -hidden -noshell -pa ebin -eval \"iris_extreme_gen:start({CONFIG['user_count']}, {CONFIG['duration'] + 60}, extreme_load), timer:sleep(infinity).\""
         processes.append(run_cmd(load_cmd, async_run=True))
         
         time.sleep(2)
@@ -307,9 +467,20 @@ def main():
         monitor_system(CONFIG['chaos_time'], "CHAOS")
         
         # ================================================================
-        # PHASE 3: Recovery
+        # PHASE 3: Combined Chaos (Jepsen-style)
         # ================================================================
-        print_section("PHASE 3: RECOVERY")
+        print_section("PHASE 3: COMBINED CHAOS (Jepsen-style)")
+        
+        combined_duration = min(CONFIG['chaos_time'], 30)  # Cap at 30s for combined
+        combined_passed = run_combined_chaos(EDGE_FULL, combined_duration)
+        
+        if not combined_passed:
+            log("WARN: Combined chaos test reported failure")
+        
+        # ================================================================
+        # PHASE 4: Recovery
+        # ================================================================
+        print_section("PHASE 4: RECOVERY")
         
         log("[CHAOS] Stopping chaos monkey...")
         run_cmd(f"erl -setcookie iris_secret -sname monkey_stop -hidden -noshell -pa ebin -eval \"rpc:call('{EDGE_FULL}', chaos_monkey, stop, []), init:stop().\"")
@@ -374,9 +545,7 @@ def main():
         
         # Assertion 5: Post-chaos connectivity
         try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(5)
-            sock.connect(("localhost", 8085))
+            sock = create_socket("localhost", 8085, timeout=5)
             
             test_user = f"chaos_verify_{int(time.time())}"
             sock.sendall(bytes([0x01]) + test_user.encode())

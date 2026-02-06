@@ -348,12 +348,25 @@ class LatencySender:
         print(f"  ✓ Sender logged in as {self.username}")
     
     def send_message(self, target, msg_id):
-        """Send message and record send time."""
+        """
+        Send message and record send time.
+        
+        RFC-001-AMENDMENT-001 v1.0 COMPLIANT: Uses opcode 0x07 (sequenced message)
+        """
         target_bytes = target.encode()
         msg_bytes = msg_id.encode()
-        packet = bytes([0x02]) + \
-                 len(target_bytes).to_bytes(2, 'big') + target_bytes + \
-                 len(msg_bytes).to_bytes(2, 'big') + msg_bytes
+        
+        # Get next sequence number (use class-level counter)
+        if not hasattr(self, '_seq_counter'):
+            self._seq_counter = 0
+        self._seq_counter += 1
+        seq_no = self._seq_counter
+        
+        # Protocol: 0x07 | TargetLen(16) | Target | SeqNo(64) | MsgLen(16) | Msg
+        packet = (bytes([0x07]) +
+                  len(target_bytes).to_bytes(2, 'big') + target_bytes +
+                  seq_no.to_bytes(8, 'big') +
+                  len(msg_bytes).to_bytes(2, 'big') + msg_bytes)
         
         send_time = time.time()
         self.sock.sendall(packet)

@@ -371,9 +371,13 @@ class MessageReceiver:
         return set(self.received)
 
 
+# Sequence counter for RFC-compliant messaging
+_chaos_seq_counter = [0]
+
 def send_message(port: int, sender: str, target: str, msg_id: str) -> bool:
     """Send a single message and return whether it was accepted.
     
+    RFC-001-AMENDMENT-001 v1.0 COMPLIANT: Uses opcode 0x07 (sequenced message)
     Note: Messages use fire-and-forget semantics - successful socket write
     means the message was accepted by the edge node.
     """
@@ -391,13 +395,21 @@ def send_message(port: int, sender: str, target: str, msg_id: str) -> bool:
         if b"LOGIN_OK" not in login_response:
             return False
         
-        # Send message
+        time.sleep(0.05)  # Ensure server-side registration completes
+        
+        # Send message with sequence number
         target_bytes = target.encode()
         msg_bytes = msg_id.encode()
         
+        # Increment sequence counter
+        _chaos_seq_counter[0] += 1
+        seq_no = _chaos_seq_counter[0]
+        
+        # Protocol: 0x07 | TargetLen(16) | Target | SeqNo(64) | MsgLen(16) | Msg
         packet = (
-            bytes([0x02]) +
+            bytes([0x07]) +
             struct.pack('>H', len(target_bytes)) + target_bytes +
+            struct.pack('>Q', seq_no) +
             struct.pack('>H', len(msg_bytes)) + msg_bytes
         )
         

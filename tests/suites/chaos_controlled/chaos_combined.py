@@ -40,6 +40,26 @@ if project_root not in sys.path:
 
 from tests.framework.cluster import ClusterManager
 
+# CI environment detection
+IS_CI = os.environ.get("CI") == "true" or os.environ.get("GITHUB_ACTIONS") == "true"
+
+
+def create_socket(host, port, timeout=5.0):
+    """Create socket with TLS auto-detection."""
+    # Try TLS first (standard for CI and production)
+    try:
+        from tests.suites.chaos_dist.utils import create_tls_socket
+        return create_tls_socket(host, port, timeout=timeout)
+    except Exception:
+        pass
+    
+    # Fallback to non-TLS (for local development without certs)
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.settimeout(timeout)
+    s.connect((host, port))
+    return s
+
+
 # ============================================================================
 # Configuration Presets
 # ============================================================================
@@ -344,9 +364,7 @@ def main():
             # ================================================================
             log("Verifying cluster connectivity...")
             try:
-                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                sock.settimeout(5)
-                sock.connect(("localhost", 8085))
+                sock = create_socket("localhost", 8085, timeout=5)
                 sock.sendall(bytes([0x01]) + b"chaos_precheck")
                 resp = sock.recv(1024)
                 sock.close()
@@ -365,7 +383,8 @@ def main():
             log(f"Starting {config['user_count']} users with extreme_load mode")
             
             # Use extreme_load mode - this actually sends messages between users
-            load_cmd = f"/usr/bin/erl +P 2000000 -setcookie iris_secret -sname loader -hidden -noshell -pa ebin -eval \"iris_extreme_gen:start({config['user_count']}, {config['duration'] + 60}, extreme_load), timer:sleep(infinity).\""
+            erl_path = "erl"  # Use PATH-resolved erl (CI installs via erlef/setup-beam, not /usr/bin)
+            load_cmd = f"{erl_path} +P 2000000 -setcookie iris_secret -sname loader -hidden -noshell -pa ebin -eval \"iris_extreme_gen:start({config['user_count']}, {config['duration'] + 60}, extreme_load), timer:sleep(infinity).\""
             processes.append(run_cmd(load_cmd, async_run=True))
             
             time.sleep(2)  # Let connections establish
@@ -465,9 +484,7 @@ def main():
             
             # Assertion 5: Post-chaos connectivity
             try:
-                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                sock.settimeout(5)
-                sock.connect(("localhost", 8085))
+                sock = create_socket("localhost", 8085, timeout=5)
                 
                 test_user = f"chaos_verify_{int(time.time())}"
                 sock.sendall(bytes([0x01]) + test_user.encode())

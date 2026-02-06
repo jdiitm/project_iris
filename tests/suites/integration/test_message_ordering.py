@@ -71,9 +71,15 @@ def test_message_ordering():
         timeout = 10.0  # 10 second timeout
         
         while len(received_sequence) < num_messages and (time.time() - start_time) < timeout:
-            msg = receiver.recv_msg(timeout=1.0)
-            if msg:
-                received_sequence.append(msg)
+            try:
+                msg = receiver.recv_msg(timeout=1.0)
+                if msg:
+                    received_sequence.append(msg)
+            except socket.timeout:
+                # Timeout on individual recv - keep trying until outer timeout
+                continue
+            except Exception:
+                break
         
         print(f"✓ Received {len(received_sequence)}/{num_messages} messages")
         
@@ -157,16 +163,26 @@ def test_interleaved_conversations():
         # Receive at B
         b_msgs = []
         for _ in range(5):
-            msg = receiver_b.recv_msg(timeout=0.5)
-            if msg:
-                b_msgs.append(msg)
+            try:
+                msg = receiver_b.recv_msg(timeout=1.0)
+                if msg:
+                    b_msgs.append(msg)
+            except socket.timeout:
+                break
+            except Exception:
+                break
         
         # Receive at C
         c_msgs = []
         for _ in range(5):
-            msg = receiver_c.recv_msg(timeout=0.5)
-            if msg:
-                c_msgs.append(msg)
+            try:
+                msg = receiver_c.recv_msg(timeout=1.0)
+                if msg:
+                    c_msgs.append(msg)
+            except socket.timeout:
+                break
+            except Exception:
+                break
         
         print(f"✓ B received {len(b_msgs)} messages, C received {len(c_msgs)} messages")
         

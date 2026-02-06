@@ -20,6 +20,7 @@
 -export([record_success/1, record_failure/1]).
 -export([get_level/0, get_stats/0]).
 -export([track_destination/2, get_destination_priority/1]).
+-export([track_request/0, track_request/1]).  %% RFC 7.4 FIX: request rate tracking
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
 -define(SERVER, ?MODULE).
@@ -41,8 +42,22 @@
 -define(CPU_WARNING, 0.70).    %% 70% - start throttling
 -define(CPU_CRITICAL, 0.90).   %% 90% - critical overload
 
+%% RFC 7.4 FIX: Request rate thresholds for throughput-based degradation
+%% These trigger degradation under high message load before resources are exhausted
+%% Thresholds lowered to trigger early enough to protect server stability
+-define(RATE_WARNING, 1000).   %% 1K req/s - start throttling (SLOW)
+-define(RATE_SHED, 2000).      %% 2K req/s - shed non-critical (SHED)
+-define(RATE_CRITICAL, 5000).  %% 5K req/s - critical overload
+
+%% RFC 7.4 FIX: Connection count thresholds
+%% Triggers degradation based on active connection count
+-define(CONN_WARNING, 50).     %% 50 connections - start throttling
+-define(CONN_SHED, 100).       %% 100 connections - shed non-critical
+-define(CONN_CRITICAL, 200).   %% 200 connections - critical
+
 %% Intervals
--define(CHECK_INTERVAL_MS, 1000).
+%% RFC 7.4 FIX: Faster check interval for quicker reaction to load spikes
+-define(CHECK_INTERVAL_MS, 200).   %% 200ms for fast degradation response
 -define(DECAY_INTERVAL_MS, 5000).
 
 %% AUDIT FIX: Sharded ETS for lockfree admission checks at ALL levels
@@ -56,6 +71,14 @@
     %% Resource tracking
     memory_percent = 0.0 :: float(),
     cpu_percent = 0.0 :: float(),
+    
+    %% RFC 7.4 FIX: Request rate tracking for throughput-based degradation
+    %% This triggers degradation under high message load even when CPU/memory are low
+    request_rate = 0 :: integer(),        %% requests per second
+    last_admitted = 0 :: integer(),       %% last snapshot of admitted count
+    
+    %% RFC 7.4 FIX: Connection count tracking for connection-based degradation
+    connection_count = 0 :: integer(),    %% active connections
     
     %% Downstream health tracking
     core_health = #{} :: map(),  %% Node -> {successes, failures, last_check_time}
@@ -166,6 +189,25 @@ get_destination_priority(User) ->
         [] -> normal
     end.
 
+%% RFC 7.4 FIX: Track request for rate-based degradation
+%% Called on each message processed to track throughput
+%% Lockfree: directly updates sharded ETS counter
+-spec track_request() -> ok.
+track_request() ->
+    track_request(<<>>).
+
+-spec track_request(binary()) -> ok.
+track_request(User) ->
+    try
+        Shard = erlang:phash2(User, ?SHARD_COUNT),
+        ets:update_counter(?FLOW_ETS, {admitted, Shard}, 1, {{admitted, Shard}, 0}),
+        ok
+    catch
+        error:badarg ->
+            %% ETS table not yet created (startup race)
+            ok
+    end.
+
 %% Get current pressure level (lockfree)
 get_level() ->
     case ets:lookup(?FLOW_ETS, level) of
@@ -218,6 +260,7 @@ handle_call(get_stats, _From, State) ->
         level => level_name(State#state.level),
         memory_percent => State#state.memory_percent,
         cpu_percent => State#state.cpu_percent,  %% AUDIT FIX (Finding #5)
+        request_rate => State#state.request_rate,  %% RFC 7.4 FIX
         cascade_detected => State#state.cascade_detected,
         admitted => TotalAdmitted,
         rejected => TotalRejected,
@@ -353,7 +396,30 @@ update_resource_metrics(State) ->
     %% cpu_sup:util() returns percentage or {error, _} if not available
     CpuPercent = get_cpu_percent(),
     
-    State#state{memory_percent = MemPercent, cpu_percent = CpuPercent}.
+    %% RFC 7.4 FIX: Request rate calculation
+    %% Count requests since last check to compute rate
+    {CurrentAdmitted, _, _} = aggregate_shard_stats(),
+    LastAdmitted = State#state.last_admitted,
+    RequestRate = CurrentAdmitted - LastAdmitted,  %% requests per CHECK_INTERVAL_MS
+    
+    %% RFC 7.4 FIX: Get connection count from ingress guard
+    ConnCount = get_connection_count(),
+    
+    State#state{
+        memory_percent = MemPercent, 
+        cpu_percent = CpuPercent,
+        request_rate = RequestRate,
+        last_admitted = CurrentAdmitted,
+        connection_count = ConnCount
+    }.
+
+%% RFC 7.4 FIX: Get active connection count from ingress guard
+get_connection_count() ->
+    try
+        iris_ingress_guard:get_active_count()
+    catch
+        _:_ -> 0
+    end.
 
 %% AUDIT FIX (Finding #5): Get CPU utilization percentage
 get_cpu_percent() ->
@@ -408,14 +474,29 @@ get_max_memory() ->
     end.
 
 %% AUDIT FIX (Finding #5): Include CPU in level calculation
+%% RFC 7.4 FIX: Include request rate AND connection count for throughput-based degradation
 %% Prevents CPU starvation from small packet floods that don't consume memory
-calculate_level(#state{memory_percent = Mem, cpu_percent = Cpu, cascade_detected = Cascade}) ->
+%% Also triggers degradation under high message load or connection count before resources exhaust
+calculate_level(#state{memory_percent = Mem, cpu_percent = Cpu, 
+                       request_rate = Rate, connection_count = Conns,
+                       cascade_detected = Cascade}) ->
     if
-        Mem > ?MEMORY_CRITICAL orelse Cpu > ?CPU_CRITICAL -> ?LEVEL_CRITICAL;
-        Cascade -> ?LEVEL_SHED;  %% Cascade failure detected
-        Mem > ?MEMORY_SHED orelse Cpu > ?CPU_WARNING -> ?LEVEL_SHED;
-        Mem > ?MEMORY_WARNING -> ?LEVEL_SLOW;
-        true -> ?LEVEL_NORMAL
+        %% Critical: any critical threshold triggers critical level
+        Mem > ?MEMORY_CRITICAL orelse Cpu > ?CPU_CRITICAL orelse 
+        Rate > ?RATE_CRITICAL orelse Conns > ?CONN_CRITICAL -> 
+            ?LEVEL_CRITICAL;
+        %% Cascade failure always triggers shed
+        Cascade -> 
+            ?LEVEL_SHED;
+        %% Shed: high memory/CPU OR high request rate OR high connection count
+        Mem > ?MEMORY_SHED orelse Cpu > ?CPU_WARNING orelse 
+        Rate > ?RATE_SHED orelse Conns > ?CONN_SHED -> 
+            ?LEVEL_SHED;
+        %% Slow: moderate memory OR moderate request rate OR moderate connections
+        Mem > ?MEMORY_WARNING orelse Rate > ?RATE_WARNING orelse Conns > ?CONN_WARNING -> 
+            ?LEVEL_SLOW;
+        true -> 
+            ?LEVEL_NORMAL
     end.
 
 %% =============================================================================

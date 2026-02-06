@@ -5,7 +5,7 @@ Test Idempotency / Exactly-Once Delivery - P0 Safety Critical
 This test validates message handling under retry conditions at the integration level.
 
 IMPORTANT: The server-side dedup (iris_dedup) operates on explicit message IDs
-in the reliable message protocol. Standard message sends (opcode 0x02) do NOT
+in the reliable message protocol. Standard message sends (opcode 0x07) do NOT
 carry message IDs and are therefore NOT deduplicated.
 
 This test validates:
@@ -72,6 +72,7 @@ class IdempotencyTestClient(IrisClient):
         """
         Send a message with a specific message ID.
         
+        RFC-001-AMENDMENT-001 v1.0 COMPLIANT: Uses opcode 0x07 (sequenced message)
         The server-side dedup uses the message content hash or explicit msg_id
         in reliable message format. For testing, we embed the msg_id in the
         message content to track it.
@@ -81,8 +82,17 @@ class IdempotencyTestClient(IrisClient):
         full_msg = f"{msg_id}:{msg_content}"
         msg_bytes = full_msg.encode('utf-8')
         
-        # Standard message format: 0x02 | TargetLen(16) | Target | MsgLen(16) | Msg
-        payload = b'\x02' + struct.pack('>H', len(target_bytes)) + target_bytes + struct.pack('>H', len(msg_bytes)) + msg_bytes
+        # Use instance sequence counter
+        if not hasattr(self, '_idempotency_seq'):
+            self._idempotency_seq = 0
+        self._idempotency_seq += 1
+        seq_no = self._idempotency_seq
+        
+        # Sequenced message format: 0x07 | TargetLen(16) | Target | SeqNo(64) | MsgLen(16) | Msg
+        payload = (b'\x07' + 
+                   struct.pack('>H', len(target_bytes)) + target_bytes +
+                   struct.pack('>Q', seq_no) +
+                   struct.pack('>H', len(msg_bytes)) + msg_bytes)
         self.sock.sendall(payload)
     
     def recv_messages_until_timeout(self, timeout=1.0, max_messages=100):
@@ -114,7 +124,7 @@ def test_same_msgid_once():
     """
     Test: System handles repeated sends gracefully.
     
-    NOTE: Standard message protocol (0x02) does NOT include message IDs,
+    NOTE: Standard message protocol (0x07) does NOT include message IDs,
     so each send is treated as a unique message. This test verifies:
     1. System doesn't crash under repeated sends
     2. Messages are delivered reliably

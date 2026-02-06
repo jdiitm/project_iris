@@ -48,9 +48,20 @@ LIMIT_P=$(echo "$MAX_CONNS * 1.2" | bc | cut -d. -f1)
 LIMIT_Q=$LIMIT_P
 
 # 5. Safety Check: ulimit -n
+# Erlang VM requires minimum +P of 1024, so we need ulimit >= 2048 to be safe
+MIN_ERLANG_PROCS=1024
+MIN_ULIMIT_REQUIRED=2048
+
 OS_ULIMIT=$(ulimit -n)
 if [ "$OS_ULIMIT" != "unlimited" ]; then
-    if [ "$LIMIT_Q" -gt "$OS_ULIMIT" ]; then
+    if [ "$OS_ULIMIT" -lt "$MIN_ULIMIT_REQUIRED" ]; then
+        echo "[AUTO-TUNE] ERROR: ulimit -n ($OS_ULIMIT) is too low!" >&2
+        echo "[AUTO-TUNE] Erlang requires at least $MIN_ULIMIT_REQUIRED file descriptors." >&2
+        echo "[AUTO-TUNE] Fix with: ulimit -n 65536 (or run with sudo)" >&2
+        # Set to minimum that Erlang will accept
+        LIMIT_P=$MIN_ERLANG_PROCS
+        LIMIT_Q=$MIN_ERLANG_PROCS
+    elif [ "$LIMIT_Q" -gt "$OS_ULIMIT" ]; then
         echo "[AUTO-TUNE] WARNING: ulimit -n ($OS_ULIMIT) is lower than target ($LIMIT_Q)." >&2
         echo "[AUTO-TUNE] Capping +P/+Q to $OS_ULIMIT (minus buffer) to prevent crash." >&2
         if [ "$OS_ULIMIT" -gt 6000 ]; then
@@ -58,8 +69,9 @@ if [ "$OS_ULIMIT" != "unlimited" ]; then
         else
             SAFE_LIMIT=$((OS_ULIMIT - 100))
         fi
-        if [ "$SAFE_LIMIT" -lt 256 ]; then
-            SAFE_LIMIT=256
+        # Ensure we never go below Erlang's minimum
+        if [ "$SAFE_LIMIT" -lt "$MIN_ERLANG_PROCS" ]; then
+            SAFE_LIMIT=$MIN_ERLANG_PROCS
         fi
         LIMIT_Q=$SAFE_LIMIT
         LIMIT_P=$SAFE_LIMIT

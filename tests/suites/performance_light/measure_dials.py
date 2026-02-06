@@ -73,12 +73,16 @@ class MetricResult:
 
 
 def connect_and_login(user_id: str) -> ssl.SSLSocket:
-    """Create TLS connection and login."""
+    """Create TLS connection and login.
+    
+    TLS is MANDATORY per RFC NFR-14.
+    Uses wrap-then-connect pattern for atomic TCP+TLS handshake.
+    """
     raw_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     raw_sock.settimeout(5)
-    raw_sock.connect((SERVER_HOST, SERVER_PORT))
     context = get_ssl_context()
     sock = context.wrap_socket(raw_sock, server_hostname=SERVER_HOST)
+    sock.connect((SERVER_HOST, SERVER_PORT))
     sock.sendall(bytes([0x01]) + user_id.encode())
     sock.recv(1024)  # LOGIN_OK
     return sock
@@ -163,14 +167,17 @@ def measure_throughput() -> MetricResult:
     for i in range(NUM_MESSAGES):
         try:
             payload = f"throughput_msg_{i}".encode()
-            # Build packet: opcode(1) + target_len(2) + target + msg_len(2) + msg
-            packet = bytes([0x02]) + \
-                     len(target).to_bytes(2, 'big') + target + \
-                     len(payload).to_bytes(2, 'big') + payload
+            # RFC-001-AMENDMENT-001 v1.0 COMPLIANT: opcode 0x07 (sequenced)
+            # Protocol: 0x07 | target_len(2) | target | seq_no(8) | msg_len(2) | msg
+            seq_no = i + 1
+            packet = (bytes([0x07]) +
+                      len(target).to_bytes(2, 'big') + target +
+                      seq_no.to_bytes(8, 'big') +
+                      len(payload).to_bytes(2, 'big') + payload)
             sock.sendall(packet)
             sent += 1
         except Exception as e:
-            print(f"  ⚠️ Send error at msg {i}: {e}")
+            print(f"  Send error at msg {i}: {e}")
             break
     
     duration = time.time() - start_time
@@ -214,9 +221,12 @@ def measure_latency() -> MetricResult:
     for i in range(NUM_LATENCY_SAMPLES):
         try:
             payload = f"latency_{i}_{time.time()}".encode()
-            packet = bytes([0x02]) + \
-                     len(target).to_bytes(2, 'big') + target + \
-                     len(payload).to_bytes(2, 'big') + payload
+            # RFC-001-AMENDMENT-001 v1.0 COMPLIANT: opcode 0x07 (sequenced)
+            seq_no = i + 1
+            packet = (bytes([0x07]) +
+                      len(target).to_bytes(2, 'big') + target +
+                      seq_no.to_bytes(8, 'big') +
+                      len(payload).to_bytes(2, 'big') + payload)
             
             start = time.time()
             sock.setblocking(True)
@@ -265,13 +275,16 @@ def measure_latency() -> MetricResult:
 
 
 def check_server():
-    """Verify server is running (with TLS)."""
+    """Verify server is running (with TLS).
+    
+    Uses wrap-then-connect for atomic TCP+TLS handshake.
+    """
     try:
         raw_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        raw_sock.settimeout(2)
-        raw_sock.connect((SERVER_HOST, SERVER_PORT))
+        raw_sock.settimeout(5)
         context = get_ssl_context()
         sock = context.wrap_socket(raw_sock, server_hostname=SERVER_HOST)
+        sock.connect((SERVER_HOST, SERVER_PORT))
         sock.close()
         return True
     except:
@@ -292,37 +305,43 @@ def main():
     print(f"  Throughput: >{MIN_THROUGHPUT_MSG_SEC} msg/s")
     print(f"  P99 Latency: <{MAX_P99_LATENCY_MS}ms")
     
-    # Use ClusterManager to ensure cluster is running with TLS
-    with ClusterManager(project_root=project_root, tls_enabled=True, config_path="config/test_tls") as cluster:
+    # Check if server is already running (managed by run_all_tests.sh).
+    # If so, skip ClusterManager to avoid killing the existing TLS server.
+    if not check_server():
+        print("[SETUP] No server detected — starting via ClusterManager")
+        cluster = ClusterManager(project_root=project_root, tls_enabled=True, config_path="config/test_tls")
+        cluster.start()
         if not check_server():
             print("\n❌ Server not available after cluster start")
             sys.exit(1)
-        
-        results: List[MetricResult] = []
-        
-        # Run measurements
-        results.append(measure_connection_overhead())
-        results.append(measure_throughput())
-        results.append(measure_latency())
-        
-        # Summary
-        print("\n" + "=" * 60)
-        print("RESULTS")
-        print("=" * 60)
-        
-        all_passed = True
-        for result in results:
-            print(f"  {result}")
-            if not result.passed:
-                all_passed = False
-        
-        if all_passed:
-            print("\n✅ All performance metrics within thresholds")
-            sys.exit(0)
-        else:
-            print("\n❌ Some metrics below threshold")
-            print("   Note: Full RFC compliance requires dedicated hardware")
-            sys.exit(1)
+    else:
+        print("[SETUP] Server already running — using existing server")
+    
+    results: List[MetricResult] = []
+    
+    # Run measurements
+    results.append(measure_connection_overhead())
+    results.append(measure_throughput())
+    results.append(measure_latency())
+    
+    # Summary
+    print("\n" + "=" * 60)
+    print("RESULTS")
+    print("=" * 60)
+    
+    all_passed = True
+    for result in results:
+        print(f"  {result}")
+        if not result.passed:
+            all_passed = False
+    
+    if all_passed:
+        print("\n✅ All performance metrics within thresholds")
+        sys.exit(0)
+    else:
+        print("\n❌ Some metrics below threshold")
+        print("   Note: Full RFC compliance requires dedicated hardware")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

@@ -92,13 +92,27 @@ def login(sock, username):
     time.sleep(0.1)
 
 
+# Sequence counter for RFC-compliant messaging
+_seq_counter = [0]
+
 def send_and_wait(sock, target, message, timeout=2):
-    """Send message and wait for response."""
+    """
+    Send message and wait for response.
+    
+    RFC-001-AMENDMENT-001 v1.0 COMPLIANT: Uses opcode 0x07 (sequenced message)
+    """
     target_bytes = target.encode()
     msg_bytes = message.encode()
-    packet = bytes([0x02]) + \
-             len(target_bytes).to_bytes(2, 'big') + target_bytes + \
-             len(msg_bytes).to_bytes(2, 'big') + msg_bytes
+    
+    # Increment sequence counter
+    _seq_counter[0] += 1
+    seq_no = _seq_counter[0]
+    
+    # Protocol: 0x07 | TargetLen(16) | Target | SeqNo(64) | MsgLen(16) | Msg
+    packet = (bytes([0x07]) +
+              len(target_bytes).to_bytes(2, 'big') + target_bytes +
+              seq_no.to_bytes(8, 'big') +
+              len(msg_bytes).to_bytes(2, 'big') + msg_bytes)
     
     try:
         sock.settimeout(timeout)

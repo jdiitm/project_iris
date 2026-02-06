@@ -25,6 +25,7 @@ Prerequisites:
 import os
 import sys
 import socket
+import ssl
 import struct
 import time
 import threading
@@ -41,6 +42,10 @@ if project_root not in sys.path:
 
 from tests.framework.cluster import ClusterManager
 from tests.utilities.helpers import unique_user
+
+# CI environment detection
+IS_CI = os.environ.get("CI") == "true" or os.environ.get("GITHUB_ACTIONS") == "true"
+QUICK_MODE = os.environ.get("QUICK_MODE") == "true"
 
 # Configuration
 SERVER_HOST = os.environ.get("IRIS_HOST", "localhost")
@@ -116,7 +121,7 @@ class FanOutResult:
 
 
 class IrisClient:
-    """Simple Iris protocol client."""
+    """Simple Iris protocol client with TLS auto-detection."""
     
     def __init__(self, host: str, port: int):
         self.host = host
@@ -129,7 +134,16 @@ class IrisClient:
         self._recv_thread: Optional[threading.Thread] = None
     
     def connect(self) -> bool:
-        """Connect to server."""
+        """Connect to server with TLS auto-detection."""
+        # Try TLS first (standard for CI and production)
+        try:
+            from tests.suites.chaos_dist.utils import create_tls_socket
+            self.sock = create_tls_socket(self.host, self.port, timeout=TIMEOUT)
+            return True
+        except Exception:
+            pass
+        
+        # Fallback to non-TLS (for local development without certs)
         try:
             self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.sock.settimeout(TIMEOUT)
@@ -151,13 +165,25 @@ class IrisClient:
             return False
     
     def send_message(self, target: str, message: str) -> bool:
-        """Send message to target user."""
+        """
+        Send message to target user.
+        
+        RFC-001-AMENDMENT-001 v1.0 COMPLIANT: Uses opcode 0x07 (sequenced message)
+        """
         target_bytes = target.encode()
         msg_bytes = message.encode()
         
+        # Use instance sequence counter
+        if not hasattr(self, '_seq_counter'):
+            self._seq_counter = 0
+        self._seq_counter += 1
+        seq_no = self._seq_counter
+        
+        # Protocol: 0x07 | TargetLen(16) | Target | SeqNo(64) | MsgLen(16) | Msg
         packet = (
-            bytes([0x02]) +
+            bytes([0x07]) +
             struct.pack('>H', len(target_bytes)) + target_bytes +
+            struct.pack('>Q', seq_no) +
             struct.pack('>H', len(msg_bytes)) + msg_bytes
         )
         
@@ -180,7 +206,12 @@ class IrisClient:
             self._recv_thread.join(timeout=2)
     
     def _receive_loop(self):
-        """Background receive loop."""
+        """Background receive loop.
+        
+        Python's ssl.SSLSocket raises ssl.SSLWantReadError (not BlockingIOError)
+        when no data is available on a non-blocking socket. Both must be caught
+        to avoid breaking the loop on TLS connections.
+        """
         self.sock.setblocking(False)
         
         while self._running:
@@ -191,7 +222,10 @@ class IrisClient:
                 if data:
                     self.buffer += data
                     self._parse_messages(recv_time)
-            except BlockingIOError:
+                else:
+                    # EOF — peer closed
+                    break
+            except (BlockingIOError, ssl.SSLWantReadError):
                 time.sleep(0.001)
             except Exception:
                 break
@@ -458,67 +492,84 @@ def test_burst_fanout():
     )
 
 
+def is_server_running(host: str = SERVER_HOST, port: int = SERVER_PORT) -> bool:
+    """Check if the Iris server is already running."""
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(2)
+        result = sock.connect_ex((host, port))
+        sock.close()
+        return result == 0
+    except Exception:
+        return False
+
+
+def run_tests():
+    """Run all fan-out tests and return exit code."""
+    # Check connectivity
+    if not is_server_running():
+        print(f"\n✗ Cannot connect to {SERVER_HOST}:{SERVER_PORT}")
+        return 1
+
+    results = []
+
+    # Run tests in order of complexity
+    tests = [
+        ("Small (10 recipients)", test_small_fanout),
+        ("Medium (100 recipients)", test_medium_fanout),
+        # Large and burst tests are resource-intensive
+        # Uncomment for production hardware
+        # ("Large (1000 recipients)", test_large_fanout),
+        # ("Burst (100 @ 10K/sec)", test_burst_fanout),
+    ]
+
+    for name, test_fn in tests:
+        try:
+            passed, result = test_fn()
+            results.append((name, passed, result))
+        except Exception as e:
+            print(f"\n✗ Test {name} crashed: {e}")
+            results.append((name, False, None))
+
+    # Summary
+    print("\n" + "=" * 70)
+    print("SUMMARY")
+    print("=" * 70)
+
+    passed_count = sum(1 for _, p, _ in results if p)
+    total_count = len(results)
+
+    print(f"\nTests run: {total_count}")
+    print(f"Passed: {passed_count}")
+    print(f"Failed: {total_count - passed_count}")
+
+    for name, passed, result in results:
+        status = "✓ PASS" if passed else "✗ FAIL"
+        print(f"  {status}: {name}")
+
+    if passed_count == total_count:
+        print("\n✓ All fan-out tests passed!")
+        return 0
+    else:
+        print(f"\n✗ {total_count - passed_count} test(s) failed")
+        return 1
+
+
 def main():
     print("\n" + "=" * 70)
     print("Fan-Out Performance Tests (Plan Section 4.2)")
+    print(f"  IS_CI={IS_CI}, QUICK_MODE={QUICK_MODE}")
     print("=" * 70)
-    
-    # Ensure cluster is running (handles recovery from previous test crashes)
+
+    # If server is already running (e.g. started by run_all_tests.sh), use it directly.
+    # ClusterManager.force_stop() would kill the externally-managed TLS server.
+    if is_server_running():
+        print(f"  Server already running on {SERVER_HOST}:{SERVER_PORT} — skipping ClusterManager")
+        return run_tests()
+
+    # No server running — use ClusterManager to start one
     with ClusterManager(project_root=project_root) as cluster:
-        # Check connectivity
-        try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(2)
-            sock.connect((SERVER_HOST, SERVER_PORT))
-            sock.close()
-        except Exception as e:
-            print(f"\n✗ Cannot connect to {SERVER_HOST}:{SERVER_PORT}")
-            print(f"  Error: {e}")
-            print(f"  Cluster manager should have started the server.")
-            return 1
-        
-        results = []
-        
-        # Run tests in order of complexity
-        tests = [
-            ("Small (10 recipients)", test_small_fanout),
-            ("Medium (100 recipients)", test_medium_fanout),
-            # Large and burst tests are resource-intensive
-            # Uncomment for production hardware
-            # ("Large (1000 recipients)", test_large_fanout),
-            # ("Burst (100 @ 10K/sec)", test_burst_fanout),
-        ]
-        
-        for name, test_fn in tests:
-            try:
-                passed, result = test_fn()
-                results.append((name, passed, result))
-            except Exception as e:
-                print(f"\n✗ Test {name} crashed: {e}")
-                results.append((name, False, None))
-        
-        # Summary
-        print("\n" + "=" * 70)
-        print("SUMMARY")
-        print("=" * 70)
-        
-        passed_count = sum(1 for _, p, _ in results if p)
-        total_count = len(results)
-        
-        print(f"\nTests run: {total_count}")
-        print(f"Passed: {passed_count}")
-        print(f"Failed: {total_count - passed_count}")
-        
-        for name, passed, result in results:
-            status = "✓ PASS" if passed else "✗ FAIL"
-            print(f"  {status}: {name}")
-        
-        if passed_count == total_count:
-            print("\n✓ All fan-out tests passed!")
-            return 0
-        else:
-            print(f"\n✗ {total_count - passed_count} test(s) failed")
-            return 1
+        return run_tests()
 
 
 if __name__ == "__main__":

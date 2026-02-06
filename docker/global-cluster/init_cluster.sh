@@ -47,26 +47,50 @@ wait_for_epmd() {
 wait_for_mnesia() {
     local container=$1
     local node_name=$2
-    local max_attempts=${3:-60}
+    local max_attempts=${3:-90}  # Increased from 60 to 90 seconds
     local attempt=0
     
     log_info "Waiting for Mnesia on $node_name..."
+    
+    # Initial delay to let the Erlang app start (Docker healthcheck only verifies EPMD)
+    sleep 5
+    
     while [ $attempt -lt $max_attempts ]; do
+        # Use a shorter RPC timeout and check both Mnesia running AND app started
         local status=$(docker exec "$container" erl -noshell -sname probe_$RANDOM \
             -setcookie "$COOKIE" -eval "
-            case rpc:call('$node_name', mnesia, system_info, [is_running], 5000) of
-                yes -> io:format(\"ready\"), halt(0);
-                _ -> halt(1)
+            case net_adm:ping('$node_name') of
+                pang -> io:format(\"node_down\"), halt(1);
+                pong ->
+                    case rpc:call('$node_name', mnesia, system_info, [is_running], 5000) of
+                        yes -> 
+                            %% Also verify iris_core is started
+                            case rpc:call('$node_name', application, which_applications, [], 5000) of
+                                Apps when is_list(Apps) ->
+                                    case lists:keymember(iris_core, 1, Apps) of
+                                        true -> io:format(\"ready\"), halt(0);
+                                        false -> io:format(\"app_not_started\"), halt(1)
+                                    end;
+                                _ -> io:format(\"app_check_failed\"), halt(1)
+                            end;
+                        _ -> io:format(\"mnesia_not_running\"), halt(1)
+                    end
             end." 2>/dev/null || echo "not_ready")
         
         if [ "$status" = "ready" ]; then
             log_info "Mnesia ready on $node_name"
             return 0
         fi
+        
+        # Log progress every 15 seconds
+        if [ $((attempt % 15)) -eq 0 ] && [ $attempt -gt 0 ]; then
+            log_info "Still waiting for Mnesia on $node_name ($attempt/${max_attempts}s) - status: $status"
+        fi
+        
         attempt=$((attempt + 1))
         sleep 1
     done
-    log_error "Mnesia not ready on $node_name after ${max_attempts}s"
+    log_error "Mnesia not ready on $node_name after ${max_attempts}s (last status: $status)"
     return 1
 }
 
@@ -144,7 +168,7 @@ check_all_cores_ready() {
         fi
         
         if wait_for_epmd "$container" 30; then
-            if wait_for_mnesia "$container" "$node" 45; then
+            if wait_for_mnesia "$container" "$node" 90; then
                 ready_count=$((ready_count + 1))
             else
                 failed_cores="$failed_cores $container"
@@ -203,12 +227,103 @@ wait_for_mnesia_cluster() {
             log_info "Waiting... ($attempt/$max_attempts) - current db_nodes: $db_nodes"
         fi
         
+        # At 30s and 60s, try to force any isolated nodes to join
+        if [ $attempt -eq 30 ] || [ $attempt -eq 60 ]; then
+            log_info "Attempting to connect isolated nodes to cluster..."
+            force_nodes_to_join_cluster
+        fi
+        
         attempt=$((attempt + 1))
         sleep 1
     done
     
     log_error "Mnesia cluster did not form with $expected_nodes nodes after ${max_attempts}s"
     return 1
+}
+
+# Force any isolated Mnesia nodes to join the cluster
+# This requires stopping Mnesia, deleting schema, and restarting with cluster
+force_nodes_to_join_cluster() {
+    local cores=("core-east-1" "core-east-2" "core-west-1" "core-west-2" "core-eu-1" "core-eu-2")
+    local nodes=("core_east_1@coreeast1" "core_east_2@coreeast2" "core_west_1@corewest1" 
+                 "core_west_2@corewest2" "core_eu_1@coreeu1" "core_eu_2@coreeu2")
+    
+    # First, identify which nodes are NOT in the cluster
+    local isolated_containers=()
+    local isolated_nodes=()
+    
+    for i in "${!cores[@]}"; do
+        local container="${cores[$i]}"
+        local node="${nodes[$i]}"
+        
+        if ! docker ps --format '{{.Names}}' | grep -q "^${container}$"; then
+            continue
+        fi
+        
+        # Skip core-east-1 as it's the reference node
+        if [ "$container" = "core-east-1" ]; then
+            continue
+        fi
+        
+        # Check if this node is in the cluster
+        local in_cluster=$(docker exec core-east-1 sh -c "erl -noshell -sname check_$RANDOM -setcookie iris_secret -eval \"
+            pong = net_adm:ping('core_east_1@coreeast1'),
+            DbNodes = rpc:call('core_east_1@coreeast1', mnesia, system_info, [db_nodes], 5000),
+            case DbNodes of
+                Nodes when is_list(Nodes) ->
+                    case lists:member('$node', Nodes) of
+                        true -> io:format(\\\"yes\\\");
+                        false -> io:format(\\\"no\\\")
+                    end;
+                _ -> io:format(\\\"error\\\")
+            end,
+            halt(0).
+        \"" 2>/dev/null || echo "error")
+        
+        if [ "$in_cluster" = "no" ]; then
+            isolated_containers+=("$container")
+            isolated_nodes+=("$node")
+            log_info "Node $node is isolated - will force join"
+        fi
+    done
+    
+    # Force isolated nodes to join by restarting the container
+    # This is the most reliable way - the node will rejoin on startup
+    for i in "${!isolated_containers[@]}"; do
+        local container="${isolated_containers[$i]}"
+        local node="${isolated_nodes[$i]}"
+        
+        log_info "Restarting $container to force Mnesia rejoin..."
+        
+        # Delete Mnesia schema directory in the container
+        docker exec "$container" sh -c "rm -rf /opt/iris/data/mnesia/*" 2>/dev/null || true
+        
+        # Restart the container
+        docker restart "$container" 2>/dev/null || true
+    done
+    
+    # Wait for restarted containers to be healthy
+    if [ ${#isolated_containers[@]} -gt 0 ]; then
+        log_info "Waiting 15s for restarted nodes to rejoin..."
+        sleep 15
+        
+        # Now try change_config on the restarted nodes
+        for i in "${!isolated_containers[@]}"; do
+            local container="${isolated_containers[$i]}"
+            local node="${isolated_nodes[$i]}"
+            
+            docker exec "$container" sh -c "erl -noshell -sname force_$RANDOM -setcookie iris_secret -eval \"
+                MainNode = 'core_east_1@coreeast1',
+                case net_adm:ping(MainNode) of
+                    pong ->
+                        mnesia:change_config(extra_db_nodes, [MainNode]),
+                        timer:sleep(3000);
+                    pang -> ok
+                end,
+                halt(0).
+            \"" 2>/dev/null || true
+        done
+    fi
 }
 
 verify_mnesia_cluster_membership() {
@@ -303,11 +418,15 @@ verify_replication() {
     
     # Use RPC to query the existing core node (not start a new node)
     # Check ram_copies + disc_copies for total replicas
-    # Returns exit code 0 if all tables have >= 2 copies, 1 otherwise
+    # Returns exit code 0 if all REQUIRED tables have >= 2 copies
+    # Bridge tables (cross_region_*) are OPTIONAL - created lazily by iris_region_bridge
     docker exec core-east-1 sh -c 'erl -noshell -sname verify_helper_$RANDOM -setcookie iris_secret -eval "
         pong = net_adm:ping('"'"'core_east_1@coreeast1'"'"'),
-        Tables = [presence, offline_msg, user_status, user_meta],
-        Results = lists:map(fun(T) ->
+        
+        %% Required tables - must have >= 2 copies
+        RequiredTables = [presence, offline_msg, user_status, user_meta],
+        
+        CheckTable = fun(T) ->
             Ram = rpc:call('"'"'core_east_1@coreeast1'"'"', mnesia, table_info, [T, ram_copies]),
             Disc = rpc:call('"'"'core_east_1@coreeast1'"'"', mnesia, table_info, [T, disc_copies]),
             case {Ram, Disc} of
@@ -326,9 +445,11 @@ verify_replication() {
                     io:format(\"  ~p: NOT FOUND~n\", [T]),
                     false
             end
-        end, Tables),
+        end,
         
+        Results = lists:map(CheckTable, RequiredTables),
         AllOk = lists:all(fun(X) -> X end, Results),
+        
         case AllOk of
             true -> 
                 io:format(\"~n  All tables have >= 2 copies - REPLICATION OK~n\"),
@@ -472,7 +593,7 @@ main() {
         expected_nodes=2
     fi
     
-    if ! wait_for_mnesia_cluster 90 "$expected_nodes"; then
+    if ! wait_for_mnesia_cluster 120 "$expected_nodes"; then
         log_warn "Mnesia cluster may not have all nodes - continuing anyway"
     fi
     

@@ -1,11 +1,11 @@
 # Project Iris: WhatsApp-Class Messaging Engine
 
-[![Tests](https://img.shields.io/badge/tests-75%20|%20100%25%20passing-brightgreen)](tests/run_tests.py)
+[![Tests](https://img.shields.io/badge/tests-75%2B%20passing-brightgreen)](tests/run_all_tests.sh)
 [![TLS](https://img.shields.io/badge/TLS-enforced-green)](docs/DEPLOYMENT.md)
 [![Erlang](https://img.shields.io/badge/Erlang-OTP%2026%2B-blue)](https://www.erlang.org/)
 
 > **Current Status**: Development. Tested at **10K concurrent connections** locally.  
-> Full test suite (75 tests) passing with TLS enforced.  
+> Full test suite (75+ tests) passing with TLS enforced.  
 > Architecture designed for 1M+ users per region (see [Scalability Analysis](docs/SCALABILITY_ANALYSIS.md)).  
 > Planet-scale deployment (2B+ users) requires multi-region infrastructure.
 
@@ -87,19 +87,19 @@ make clean && make
 # Start local cluster
 make start
 
-# Run tests
-python3 tests/run_tests.py --all
+# Run ALL tests
+./tests/run_all_tests.sh
 ```
 
 ### Docker Cluster
 
 ```bash
-# Start 5-region simulation
+# Start 5-region cluster (6 cores, 11 edges)
 cd docker/global-cluster
 ./cluster.sh up
 
-# Run distributed tests
-python3 tests/run_tests.py --all
+# Run distributed chaos tests
+./run_chaos_tests.sh
 
 # Stop
 ./cluster.sh down
@@ -107,37 +107,31 @@ python3 tests/run_tests.py --all
 
 ## Testing
 
-**Status**: 75 tests pass (100%) | **Last Verified**: 2026-02-03
-
-The test runner uses phase-based execution for efficient server lifecycle management:
+**Status**: 75+ tests passing | **Last Verified**: 2026-02-05
 
 ```bash
-# Run all tests (handles server lifecycle automatically)
-python3 tests/run_tests.py --all
+# Run ALL tests (recommended)
+./tests/run_all_tests.sh
 
-# Run all tests, skip Docker chaos tests (faster)
-python3 tests/run_tests.py --all --skip-docker
+# Run non-Docker tests only (faster)
+./tests/run_all_tests.sh --quick
 
-# CI Tiers (independent, no overlap)
-python3 tests/run_tests.py --tier 0   # unit, integration (~3 min)
-python3 tests/run_tests.py --tier 1   # e2e, security, resilience (~5 min)
-python3 tests/run_tests.py --tier 2   # performance, stress (~10 min)
+# Run Docker chaos tests only
+./tests/run_all_tests.sh --docker-only
 
-# Run specific suite
-python3 tests/run_tests.py --suite integration
-
-# List all tests
-python3 tests/run_tests.py --list
+# Run single chaos test
+cd docker/global-cluster
+./cluster.sh down && ./cluster.sh up && python3 ../../tests/suites/chaos_dist/test_network_partition.py
 ```
 
-| Suite | Tests | Suite | Tests |
-|-------|-------|-------|-------|
-| unit | 2 | security | 7 |
-| integration | 22 | performance_light | 6 |
-| stress | 14 | e2e | 5 |
-| chaos_dist | 12 | resilience | 3 |
-| compatibility | 1 | contract | 1 |
-| chaos_controlled | 2 | **TOTAL** | **75** |
+### Proven Test Scripts
+
+| Script | Purpose |
+|--------|---------|
+| `tests/run_all_tests.sh` | Main test runner |
+| `docker/global-cluster/cluster.sh` | Cluster up/down |
+| `docker/global-cluster/init_cluster.sh` | Mnesia initialization |
+| `docker/global-cluster/run_chaos_tests.sh` | Chaos tests with fresh cluster |
 
 See [TESTING.md](docs/TESTING.md) for details.
 
@@ -166,15 +160,6 @@ iris_store:put(Table, Key, Value, #{durability => best_effort}).
 ]}.
 ```
 
-### CP Mode (Raft) - EXPERIMENTAL
-
-> **Status**: Experimental. Full linearizable consistency requires storage layer changes planned for future releases. See [DECISIONS.md](docs/DECISIONS.md) Section 7 for roadmap.
-
-```erlang
-%% Enable linearizable consistency for critical data (EXPERIMENTAL)
-{iris_core, [{consistency_mode, cp}]}.
-```
-
 ## Security Features
 
 | Feature | Status |
@@ -195,7 +180,7 @@ iris_store:put(Table, Key, Value, #{durability => best_effort}).
 |-------|-------------|
 | [DEPLOYMENT.md](docs/DEPLOYMENT.md) | Setup, configuration, cluster management |
 | [OPERATIONS.md](docs/OPERATIONS.md) | Incident response, failover, scaling |
-| [TESTING.md](docs/TESTING.md) | Test suite, determinism, coverage |
+| [TESTING.md](docs/TESTING.md) | Test suite, proven scripts, coverage |
 | [DECISIONS.md](docs/DECISIONS.md) | Architecture decisions |
 | [RFC-001](docs/rfc/RFC-001-SYSTEM-REQUIREMENTS.md) | System requirements spec |
 
@@ -206,7 +191,7 @@ project_iris/
 ├── src/                    # Erlang source modules (46 modules)
 ├── test_utils/             # Erlang test utilities and unit tests
 ├── tests/
-│   ├── run_tests.py        # Unified test runner
+│   ├── run_all_tests.sh    # Main test runner (PROVEN)
 │   ├── suites/             # Test suites (12 categories)
 │   │   ├── unit/           # Property-based tests
 │   │   ├── integration/    # Core message flow tests
@@ -220,10 +205,13 @@ project_iris/
 │   │   └── performance_light/ # CPU/resource tests
 │   ├── framework/          # ClusterManager, assertions
 │   └── utilities/          # IrisClient (TLS-enabled)
-├── config/                 # Erlang config files (inc. test_tls.config)
-├── certs/                  # TLS certificates (CA, server, client)
+├── config/                 # Erlang config files
+├── certs/                  # TLS certificates
 ├── docker/
-│   └── global-cluster/     # Docker cluster simulation (6 cores, 11 edges)
+│   └── global-cluster/     # Docker cluster (PROVEN scripts)
+│       ├── cluster.sh      # Cluster management
+│       ├── init_cluster.sh # Mnesia initialization
+│       └── run_chaos_tests.sh  # Chaos test runner
 ├── docs/                   # Documentation
 └── Makefile                # Build and test commands
 ```

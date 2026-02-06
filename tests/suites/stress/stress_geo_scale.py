@@ -82,6 +82,23 @@ def log_latency(duration_sec, msg_type):
 def log(msg):
     print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
 
+
+def create_socket(host, port, timeout=10.0):
+    """Create socket with TLS auto-detection."""
+    # Try TLS first (standard for CI and production)
+    try:
+        from tests.suites.chaos_dist.utils import create_tls_socket
+        return create_tls_socket(host, port, timeout=timeout)
+    except Exception:
+        pass
+    
+    # Fallback to non-TLS (for local development without certs)
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.settimeout(timeout)
+    s.connect((host, port))
+    return s
+
+
 def packet_login(user):
     return b'\x01' + user.encode('utf-8')
 
@@ -104,9 +121,7 @@ def client_worker(region_id, user_id, mode):
     my_user = f"user_r{region_id}_{user_id}"
     
     try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.settimeout(10.0) # Set timeout for connect and login
-        s.connect((host, port))
+        s = create_socket(host, port, timeout=10.0)
         s.sendall(packet_login(my_user))
         s.recv(1024) # Ack
         

@@ -52,7 +52,7 @@
 make cluster-up
 
 # Run tests
-python3 tests/run_tests.py --all
+./tests/run_all_tests.sh
 
 # Stop
 make cluster-down

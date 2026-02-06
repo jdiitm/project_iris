@@ -1,77 +1,70 @@
 # Test Suite
 
-**Status**: 75 tests pass (100%) | **TLS Enforced** | [Full Documentation](../docs/TESTING.md)
+**Status**: 75+ tests | **TLS Enforced** | [Full Documentation](../docs/TESTING.md)
 
 ## Quick Start
 
 ```bash
-# Run all tests (server lifecycle managed automatically)
-python3 tests/run_tests.py --all
+# Run ALL tests (recommended)
+./tests/run_all_tests.sh
 
-# Run all tests, skip Docker (faster)
-python3 tests/run_tests.py --all --skip-docker
+# Run non-Docker tests only (faster)
+./tests/run_all_tests.sh --quick
 
-# CI Tiers (independent, no overlap between tiers)
-python3 tests/run_tests.py --tier 0   # unit, integration
-python3 tests/run_tests.py --tier 1   # e2e, security, resilience
-python3 tests/run_tests.py --tier 2   # performance, stress, chaos_controlled
+# Run Docker chaos tests only
+./tests/run_all_tests.sh --docker-only
 
-# Run specific suite
-python3 tests/run_tests.py --suite integration
+# Show help
+./tests/run_all_tests.sh --help
+```
 
-# List all tests
-python3 tests/run_tests.py --list
+## Proven Scripts
 
-# Kill all processes (cleanup)
-python3 tests/run_tests.py --nuke
+| Script | Purpose |
+|--------|---------|
+| `tests/run_all_tests.sh` | Main test runner |
+| `docker/global-cluster/cluster.sh` | Cluster up/down |
+| `docker/global-cluster/init_cluster.sh` | Mnesia initialization |
+| `docker/global-cluster/run_chaos_tests.sh` | Batch chaos runner |
+
+## Single Docker Test
+
+```bash
+cd docker/global-cluster
+./cluster.sh down && ./cluster.sh up && python3 ../../tests/suites/chaos_dist/<test>.py
 ```
 
 ## Phase-Based Execution
 
-The test runner organizes tests into phases based on infrastructure requirements:
-
 | Phase | Tests | Server Management |
 |-------|-------|-------------------|
-| Phase 1 | Unit tests (2) | No server needed |
+| Phase 1 | Unit tests | No server needed |
 | Phase 2 | Integration, E2E, Security, etc. | Shared TLS server |
-| Phase 3 | ClusterManager tests (14) | Self-managed per test |
-| Phase 4 | Docker chaos_dist (12) | Docker global cluster |
-
-This eliminates redundant server restarts and ensures proper test isolation.
+| Phase 3 | ClusterManager tests | Self-managed per test |
+| Phase 4 | Docker chaos_dist | Fresh cluster per test |
 
 ## Structure
 
 ```
 tests/
-├── run_tests.py        # Unified test runner (phase-based)
-├── run_all_tests.sh    # Shell script alternative
+├── run_all_tests.sh    # Main test runner (proven)
 ├── framework/          # ClusterManager, assertions
 ├── suites/
-│   ├── unit/           # Property-based tests (2 files)
-│   ├── integration/    # Core message flow (22 tests)
-│   ├── e2e/            # End-to-end scenarios (5 tests)
-│   ├── security/       # TLS, auth, rate limiting (7 tests)
-│   ├── resilience/     # Fault tolerance (3 tests)
-│   ├── stress/         # Load testing (14 tests)
-│   ├── performance_light/  # Benchmarks (6 tests)
-│   ├── chaos_dist/     # Docker-based chaos (12 tests)
-│   ├── chaos_controlled/   # Controlled chaos (2 tests)
-│   ├── compatibility/  # Protocol versions (1 test)
-│   └── contract/       # Edge-core contract (1 test)
+│   ├── unit/           # Property-based tests
+│   ├── integration/    # Core message flow
+│   ├── e2e/            # End-to-end scenarios
+│   ├── security/       # TLS, auth, rate limiting
+│   ├── resilience/     # Fault tolerance
+│   ├── stress/         # Load testing
+│   ├── performance_light/  # Benchmarks
+│   ├── chaos_dist/     # Docker-based chaos
+│   ├── chaos_controlled/   # Controlled chaos
+│   ├── compatibility/  # Protocol versions
+│   └── contract/       # Edge-core contract
 └── utilities/
     ├── iris_client.py  # TLS-enabled client (default)
     └── tls_connection.py  # TLS helpers
 ```
-
-## CI Tiers
-
-Each tier runs **only** its own suites (no overlap):
-
-| Tier | Suites | Trigger |
-|------|--------|---------|
-| 0 | unit, integration | Every commit |
-| 1 | e2e, contract, compatibility, security, resilience | Every PR |
-| 2 | performance_light, stress, chaos_controlled | Nightly |
 
 ## Writing Tests
 

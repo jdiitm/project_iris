@@ -147,9 +147,9 @@ connected(info, {deliver_msg, Msg}, Data = #data{socket = Socket, transport = Tr
             case send(Socket, Transport, Packet) of
                 ok -> 
                     {keep_state, Data#data{pending_acks = NewPending, timeouts = 0, last_activity = Now}};
-                {error, _} ->
+                {error, Reason} ->
                     %% DURABILITY FIX: Use store_offline_durable for RPO=0 guarantee
-                    logger:warning("Send failed for ~p. Storing offline.", [User]),
+                    logger:warning("Send failed for ~p (reason: ~p). Storing offline.", [User, Reason]),
                     iris_circuit_breaker:call(get_core_node(), iris_core, store_offline_durable, [User, Msg]),
                     {keep_state, Data#data{last_activity = Now}}
             end

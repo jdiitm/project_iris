@@ -11,14 +11,11 @@ make test-docker
 # Run with custom seed for reproduction
 TEST_SEED=12345 make test-docker
 
-# Run specific tier
-python3 tests/run_tests.py --tier 0
+# Run quick tests (non-Docker)
+./tests/run_all_tests.sh --quick
 
-# Run all tests, skip Docker chaos tests
-python3 tests/run_tests.py --all --skip-docker
-
-# Run specific suite
-python3 tests/run_tests.py --suite unit
+# Run Docker chaos tests only
+./tests/run_all_tests.sh --docker-only
 ```
 
 ## Files
@@ -36,7 +33,6 @@ python3 tests/run_tests.py --suite unit
 | `TEST_RUN_ID` | `docker_run` | Unique identifier for this test run |
 | `IRIS_COOKIE` | `iris_secret` | Erlang distribution cookie |
 | `CI` | `true` | Enables CI-specific behaviors |
-| `TEST_SUITE` | (all) | Specific suite to run |
 
 ## Architecture
 
@@ -60,7 +56,7 @@ python3 tests/run_tests.py --suite unit
 │                │                                            │
 │  ┌─────────────────────────────────────────────────┐       │
 │  │              test-runner                         │       │
-│  │  (runs tests/run_tests.py --all)                │       │
+│  │  (runs ./tests/run_all_tests.sh)                │       │
 │  └─────────────────────────────────────────────────┘       │
 │                                                             │
 └─────────────────────────────────────────────────────────────┘
@@ -94,8 +90,8 @@ docker run --rm iris-test
 # Run with custom seed
 docker run --rm -e TEST_SEED=12345 iris-test
 
-# Run specific suite
-docker run --rm iris-test python3 tests/run_tests.py --suite unit
+# Run Docker-only tests
+docker run --rm iris-test ./tests/run_all_tests.sh --docker-only
 
 # Interactive debugging
 docker run --rm -it iris-test bash

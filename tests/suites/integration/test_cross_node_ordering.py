@@ -9,170 +9,120 @@ RFC Requirements:
 - FR-5: Messages between two users MUST be delivered in order
 
 Test Strategy:
-1. Sender sends M1, M2, M3, ... M20 with sequence numbers
-2. Receiver connects and collects messages
-3. Verify messages arrive in order (by sequence number)
+1. SEQUENTIAL TEST: Send M1..M20 sequentially (no artificial delays)
+2. CONCURRENT TEST: 4 threads send 25 messages each simultaneously
+3. Receiver collects messages and verifies HLC ordering
 
-PASS: All messages in order (allow duplicates, reject reordering)
+CRITICAL: NO artificial time.sleep() delays between messages.
+The HLC implementation must ensure ordering, not wall-clock timing.
+
+PASS: All messages from same sender arrive in order
 FAIL: Any out-of-order delivery detected
 """
 
-import socket
-import ssl
 import time
 import sys
 import os
-from pathlib import Path
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+# Add project root to path
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
+sys.path.insert(0, PROJECT_ROOT)
+
+from tests.utilities import IrisClient, unique_user
 
 # Configuration
-SERVER_HOST = os.environ.get("IRIS_HOST", "localhost")
-SERVER_PORT = int(os.environ.get("IRIS_PORT", "8085"))
 MESSAGE_COUNT = 20
 TIMEOUT = 10
 
-# TLS Configuration
-PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
-CA_CERT = PROJECT_ROOT / "certs" / "ca.pem"
-
-
-def connect():
-    """Create TLS connection."""
-    context = ssl.create_default_context()
-    if CA_CERT.exists():
-        context.load_verify_locations(str(CA_CERT))
-    else:
-        context.check_hostname = False
-        context.verify_mode = ssl.CERT_NONE
-    
-    raw_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    raw_sock.settimeout(TIMEOUT)
-    raw_sock.connect((SERVER_HOST, SERVER_PORT))
-    sock = context.wrap_socket(raw_sock, server_hostname=SERVER_HOST)
-    return sock
-
-
-def login(sock, username):
-    """Send login packet."""
-    packet = bytes([0x01]) + username.encode()
-    sock.sendall(packet)
-    time.sleep(0.1)
-
-
-def send_message(sock, target, message):
-    """Send message packet."""
-    target_bytes = target.encode()
-    msg_bytes = message.encode()
-    packet = bytes([0x02]) + \
-             len(target_bytes).to_bytes(2, 'big') + target_bytes + \
-             len(msg_bytes).to_bytes(2, 'big') + msg_bytes
-    sock.sendall(packet)
-
-
-def receive_all(sock, timeout=5):
-    """Receive all available data until timeout or connection closes."""
-    sock.settimeout(timeout)
-    data = b""
-    while True:
-        try:
-            chunk = sock.recv(4096)
-            if not chunk:
-                break
-            data += chunk
-        except socket.timeout:
-            # Normal termination - no more data within timeout
-            break
-        except ConnectionResetError:
-            # Server closed connection - return what we collected
-            print(f"   Connection reset after receiving {len(data)} bytes")
-            break
-        except BrokenPipeError:
-            print(f"   Broken pipe after receiving {len(data)} bytes")
-            break
-        except OSError as e:
-            print(f"   OS error ({e}) after receiving {len(data)} bytes")
-            break
-    return data
-
-
-def extract_sequence_numbers(data, prefix):
-    """Extract sequence numbers from received data."""
-    sequences = []
-    text = data.decode(errors='ignore')
-    
-    # Look for our test message pattern: PREFIX_SEQ_timestamp
-    import re
-    pattern = rf'{prefix}_(\d+)_'
-    matches = re.findall(pattern, text)
-    
-    for match in matches:
-        sequences.append(int(match))
-    
-    return sequences
-
 
 def test_message_ordering():
-    """Test that messages are delivered in order."""
+    """Test that messages are delivered in order (sequential, no delays)."""
     print("\n" + "=" * 60)
     print("Cross-Node Message Ordering Test (RFC FR-5)")
     print("=" * 60)
-    print(f"Target: {SERVER_HOST}:{SERVER_PORT}")
     
     test_id = int(time.time())
-    sender = f"order_sender_{test_id}"
-    receiver = f"order_receiver_{test_id}"
+    sender_name = unique_user(f"order_sender_{test_id}")
+    receiver_name = unique_user(f"order_recv_{test_id}")
     prefix = f"ORDER_{test_id}"
     
-    print(f"\n1. Connecting as sender: {sender}")
+    print(f"\n1. Connecting as sender: {sender_name}")
     try:
-        sender_sock = connect()
-        login(sender_sock, sender)
+        sender = IrisClient()
+        sender.login(sender_name)
     except Exception as e:
-        print(f"  ❌ Connection failed: {e}")
-        print("  This is a TEST FAILURE - server should be reachable")
-        return False  # Connection failure = FAIL, not skip
-    
-    print(f"\n2. Sending {MESSAGE_COUNT} ordered messages...")
-    for seq in range(1, MESSAGE_COUNT + 1):
-        msg = f"{prefix}_{seq}_{time.time()}"
-        send_message(sender_sock, receiver, msg)
-        print(f"   Sent: seq={seq}")
-        time.sleep(0.05)  # Small delay between messages
-    
-    sender_sock.close()
-    print("   ✅ All messages sent")
-    
-    print("\n3. Waiting for messages to be stored...")
-    time.sleep(2)
-    
-    print(f"\n4. Connecting as receiver: {receiver}")
-    try:
-        receiver_sock = connect()
-        login(receiver_sock, receiver)
-    except Exception as e:
-        print(f"  ❌ Connection failed: {e}")
-        print("  This is a TEST FAILURE - server should be reachable")
-        return False  # Connection failure = FAIL, not skip
-    
-    print("\n5. Receiving offline messages...")
-    time.sleep(1)  # Wait for delivery
-    data = receive_all(receiver_sock)
-    receiver_sock.close()
-    
-    print(f"   Received {len(data)} bytes")
-    
-    print("\n6. Extracting sequence numbers...")
-    sequences = extract_sequence_numbers(data, prefix)
-    print(f"   Found {len(sequences)} messages")
-    
-    if len(sequences) == 0:
-        print("\n❌ FAIL: No messages found")
-        print("  Offline storage is not working - this is a test failure")
+        print(f"  FAIL: Connection failed: {e}")
         return False
     
-    print(f"   Received sequences: {sequences}")
+    print(f"\n2. Sending {MESSAGE_COUNT} ordered messages (with sequence numbers)...")
+    # CRITICAL: Use send_msg_seq with client-provided sequence numbers
+    # This guarantees FIFO ordering per RFC FR-5
+    for seq in range(1, MESSAGE_COUNT + 1):
+        msg = f"{prefix}_{seq}_{time.time_ns()}"
+        sender.send_msg_seq(receiver_name, msg, seq)  # Use sequenced send
+        print(f"   Sent: seq={seq}")
+        # NO sleep here - sequence numbers ensure ordering
+    
+    sender.close()
+    print("   All messages sent (rapid-fire, with sequence numbers)")
+    
+    print("\n3. Waiting for messages to be stored...")
+    time.sleep(2)  # Give server time to store
+    
+    print(f"\n4. Connecting as receiver: {receiver_name}")
+    try:
+        receiver = IrisClient()
+        receiver.login(receiver_name)
+    except Exception as e:
+        print(f"  FAIL: Connection failed: {e}")
+        return False
+    
+    print("\n5. Receiving offline messages...")
+    sequences = []
+    received_count = 0
+    
+    # Try to receive all messages
+    for _ in range(MESSAGE_COUNT):
+        try:
+            msg = receiver.recv_msg(timeout=3.0)
+            received_count += 1
+            
+            # Extract sequence number from message
+            msg_str = msg.decode('utf-8', errors='ignore')
+            if prefix in msg_str:
+                parts = msg_str.split('_')
+                for i, p in enumerate(parts):
+                    if p == prefix.split('_')[-1] and i + 1 < len(parts):
+                        try:
+                            seq = int(parts[i + 1])
+                            sequences.append(seq)
+                        except ValueError:
+                            pass
+                        break
+        except Exception as e:
+            # No more messages
+            break
+    
+    receiver.close()
+    
+    print(f"   Received {received_count} messages")
+    print(f"   Extracted {len(sequences)} sequence numbers")
+    
+    if len(sequences) > 0:
+        print(f"   Sequences: {sequences[:10]}{'...' if len(sequences) > 10 else ''}")
+    
+    # Minimum threshold: need at least 50% of messages to validate ordering
+    MIN_THRESHOLD = MESSAGE_COUNT // 2
+    
+    if len(sequences) < MIN_THRESHOLD:
+        print(f"\nFAIL: Insufficient messages received ({len(sequences)}/{MESSAGE_COUNT})")
+        print(f"   Need at least {MIN_THRESHOLD} messages to validate ordering")
+        return False
     
     # Check ordering
-    print("\n7. Verifying order...")
+    print("\n6. Verifying order...")
     out_of_order = []
     prev_seq = 0
     
@@ -181,53 +131,249 @@ def test_message_ordering():
             out_of_order.append((i, prev_seq, seq))
         prev_seq = seq
     
-    # Also check for gaps (missing messages)
-    expected = set(range(1, MESSAGE_COUNT + 1))
-    received = set(sequences)
-    missing = expected - received
-    
+    # Results
     print("\n" + "=" * 60)
     print("RESULTS")
     print("=" * 60)
     print(f"  Messages sent: {MESSAGE_COUNT}")
     print(f"  Messages received: {len(sequences)}")
-    print(f"  Unique sequences: {len(received)}")
-    print(f"  Missing: {sorted(missing) if missing else 'None'}")
     print(f"  Out-of-order: {len(out_of_order)}")
     
     if out_of_order:
         print("\n  Out-of-order details:")
-        for pos, prev, curr in out_of_order[:5]:  # Show first 5
-            print(f"    Position {pos}: expected ≥{prev}, got {curr}")
-    
-    if out_of_order:
-        print(f"\n❌ FAIL: {len(out_of_order)} out-of-order messages detected")
+        for pos, prev, curr in out_of_order[:5]:
+            print(f"    Position {pos}: expected >= {prev}, got {curr}")
+        print(f"\nFAIL: {len(out_of_order)} out-of-order messages detected")
         print("   RFC FR-5: NON-COMPLIANT")
         return False
     else:
-        if len(received) == MESSAGE_COUNT:
-            print(f"\n✅ PASS: All {MESSAGE_COUNT} messages received in order")
-        else:
-            print(f"\n⚠️ PARTIAL: {len(received)}/{MESSAGE_COUNT} messages, but in order")
+        print(f"\nPASS: {len(sequences)} messages received in order")
         print("   RFC FR-5: COMPLIANT")
         return True
 
 
-def main():
-    result = test_message_ordering()
+def test_concurrent_ordering():
+    """
+    Test HLC ordering under concurrent contention.
+    
+    4 threads send 25 messages each simultaneously to the same receiver.
+    This tests the HLC implementation's ability to maintain causal ordering
+    when messages arrive from multiple sources within the same millisecond.
+    
+    RFC FR-5: Messages from the SAME sender must be ordered.
+    (Messages from different senders have no ordering guarantee)
+    
+    PASS: Per-sender ordering preserved (all seq from thread N are ordered)
+    FAIL: Any out-of-order delivery within same thread's messages
+    """
+    print("\n" + "=" * 60)
+    print("CONCURRENT Message Ordering Test (RFC FR-5)")
+    print("=" * 60)
+    print("Mode: 4 threads x 25 messages = 100 concurrent messages")
+    
+    test_id = int(time.time())
+    receiver_name = unique_user(f"conc_recv_{test_id}")
+    prefix = f"CONC_{test_id}"
+    
+    NUM_THREADS = 4
+    MSGS_PER_THREAD = 25
+    
+    # Track sent messages per thread
+    sent_by_thread = {i: [] for i in range(NUM_THREADS)}
+    send_lock = threading.Lock()
+    
+    def send_batch(thread_id: int) -> bool:
+        """Send messages from one thread. Returns True on success."""
+        try:
+            sender = IrisClient()
+            sender_name = unique_user(f"conc_sender_{test_id}_t{thread_id}")
+            sender.login(sender_name)
+            
+            for seq in range(MSGS_PER_THREAD):
+                # Message format: PREFIX_THREADID_SEQ_TIMESTAMP
+                msg = f"{prefix}_T{thread_id}_S{seq}_{time.time_ns()}"
+                # Use sequenced send with thread-local sequence
+                # Each thread's messages are ordered independently
+                global_seq = thread_id * 1000 + seq  # Unique per-thread sequence
+                sender.send_msg_seq(receiver_name, msg, global_seq)
+                with send_lock:
+                    sent_by_thread[thread_id].append(seq)
+                # NO sleep - sequence numbers ensure ordering
+            
+            sender.close()
+            return True
+        except Exception as e:
+            print(f"   Thread {thread_id} error: {e}")
+            return False
+    
+    print(f"\n1. Launching {NUM_THREADS} concurrent sender threads...")
+    
+    # Launch all threads simultaneously
+    with ThreadPoolExecutor(max_workers=NUM_THREADS) as executor:
+        futures = {executor.submit(send_batch, i): i for i in range(NUM_THREADS)}
+        
+        successful_threads = 0
+        for future in as_completed(futures, timeout=60):
+            thread_id = futures[future]
+            try:
+                if future.result():
+                    successful_threads += 1
+                    print(f"   Thread {thread_id}: sent {len(sent_by_thread[thread_id])} messages")
+                else:
+                    print(f"   Thread {thread_id}: FAILED")
+            except Exception as e:
+                print(f"   Thread {thread_id}: exception {e}")
+    
+    if successful_threads == 0:
+        print("\nFAIL: No threads could connect to send messages")
+        return False
+    
+    total_sent = sum(len(msgs) for msgs in sent_by_thread.values())
+    print(f"\n   Total messages sent: {total_sent}")
+    
+    print("\n2. Waiting for messages to be stored...")
+    time.sleep(3)
+    
+    print(f"\n3. Connecting as receiver: {receiver_name}")
+    try:
+        receiver = IrisClient()
+        receiver.login(receiver_name)
+    except Exception as e:
+        print(f"  FAIL: Connection failed: {e}")
+        return False
+    
+    print("\n4. Receiving messages...")
+    
+    # Extract thread ID and sequence for each message
+    received_by_thread = {i: [] for i in range(NUM_THREADS)}
+    
+    # Try to receive all messages
+    for _ in range(total_sent):
+        try:
+            msg = receiver.recv_msg(timeout=2.0)
+            msg_str = msg.decode('utf-8', errors='ignore')
+            
+            # Parse: PREFIX_T{thread}_S{seq}_timestamp
+            if f"{prefix}_T" in msg_str:
+                try:
+                    # Find T{n}_S{m} pattern
+                    idx = msg_str.find(f"{prefix}_T")
+                    if idx >= 0:
+                        rest = msg_str[idx + len(prefix) + 2:]  # Skip "PREFIX_T"
+                        thread_str = rest.split('_')[0]
+                        seq_part = rest.split('_')[1] if '_' in rest else ''
+                        seq_str = seq_part[1:] if seq_part.startswith('S') else ''
+                        
+                        thread_id = int(thread_str)
+                        seq = int(seq_str)
+                        
+                        if thread_id in received_by_thread:
+                            received_by_thread[thread_id].append(seq)
+                except (ValueError, IndexError):
+                    pass
+        except Exception:
+            break
+    
+    receiver.close()
+    
+    total_received = sum(len(msgs) for msgs in received_by_thread.values())
+    print(f"   Total messages received: {total_received}")
+    
+    for t in range(NUM_THREADS):
+        print(f"   Thread {t}: {len(received_by_thread[t])} messages")
+    
+    if total_received == 0:
+        print("\nFAIL: No messages received - offline storage not working")
+        return False
+    
+    # Minimum: need at least 2 messages per thread to verify ordering
+    MIN_PER_THREAD = 2
+    threads_with_enough = sum(1 for msgs in received_by_thread.values() if len(msgs) >= MIN_PER_THREAD)
+    
+    if threads_with_enough == 0:
+        print(f"\nFAIL: No thread has {MIN_PER_THREAD}+ messages to verify ordering")
+        print("   Cannot validate ordering with single messages per sender")
+        return False
+    
+    # Check per-thread ordering
+    print("\n5. Verifying per-sender ordering (RFC FR-5)...")
+    ordering_failures = []
+    
+    for thread_id in range(NUM_THREADS):
+        sequences = received_by_thread[thread_id]
+        if len(sequences) < 2:
+            continue
+        
+        # Check that sequences are monotonically increasing
+        prev_seq = -1
+        for i, seq in enumerate(sequences):
+            if seq < prev_seq:
+                ordering_failures.append({
+                    'thread': thread_id,
+                    'position': i,
+                    'expected_gte': prev_seq,
+                    'got': seq
+                })
+            prev_seq = seq
     
     print("\n" + "=" * 60)
-    if result is True:
-        print("RESULT: PASSED")
-        sys.exit(0)
-    elif result is False:
-        print("RESULT: FAILED")
-        sys.exit(1)
+    print("RESULTS")
+    print("=" * 60)
+    print(f"  Threads: {NUM_THREADS}")
+    print(f"  Messages per thread: {MSGS_PER_THREAD}")
+    print(f"  Total sent: {total_sent}")
+    print(f"  Total received: {total_received}")
+    print(f"  Ordering failures: {len(ordering_failures)}")
+    
+    if ordering_failures:
+        print("\n  Per-thread ordering violations:")
+        for fail in ordering_failures[:10]:
+            print(f"    Thread {fail['thread']} pos {fail['position']}: "
+                  f"expected >= {fail['expected_gte']}, got {fail['got']}")
+        
+        print(f"\nFAIL: {len(ordering_failures)} out-of-order messages detected")
+        print("   RFC FR-5: NON-COMPLIANT (HLC not preserving per-sender order)")
+        return False
     else:
-        # None = inconclusive (no messages received)
-        # This is a FAILURE - infrastructure should always work
-        print("RESULT: FAILED")
-        print("FAIL: No messages found - offline storage not working")
+        print(f"\nPASS: All {total_received} messages in per-sender order")
+        print("   RFC FR-5: COMPLIANT (HLC preserving causal ordering)")
+        return True
+
+
+def main():
+    """Run both sequential and concurrent ordering tests."""
+    print("\n" + "#" * 60)
+    print("# CROSS-NODE ORDERING TEST SUITE")
+    print("#" * 60)
+    
+    results = {}
+    
+    # Test 1: Sequential (rapid-fire, no delays)
+    print("\n>>> TEST 1: Sequential Ordering (rapid-fire)")
+    results['sequential'] = test_message_ordering()
+    
+    # Test 2: Concurrent (multiple threads)
+    print("\n>>> TEST 2: Concurrent Ordering (4 threads x 25 messages)")
+    results['concurrent'] = test_concurrent_ordering()
+    
+    # Summary
+    print("\n" + "#" * 60)
+    print("# FINAL SUMMARY")
+    print("#" * 60)
+    
+    all_passed = True
+    for test_name, result in results.items():
+        status = "PASS" if result else "FAIL"
+        print(f"  {test_name}: {status}")
+        if not result:
+            all_passed = False
+    
+    print("\n" + "=" * 60)
+    if all_passed:
+        print("RESULT: ALL TESTS PASSED")
+        sys.exit(0)
+    else:
+        print("RESULT: SOME TESTS FAILED")
         sys.exit(1)
 
 

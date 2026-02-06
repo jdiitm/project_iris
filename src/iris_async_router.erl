@@ -15,7 +15,7 @@
 %% - Zero silent message drops
 %% =============================================================================
 
--export([start_link/1, route/2, route/3, route_async/2]).
+-export([start_link/1, route/2, route/3, route_async/2, route_sequenced/3]).
 -export([register_local/2, unregister_local/1]).
 -export([get_local_count/0, get_stats/0, get_pool_size/0]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
@@ -89,6 +89,22 @@ route(User, Msg, Opts) ->
 -spec route_async(binary(), binary()) -> ok.
 route_async(User, Msg) ->
     route(User, Msg).
+
+%% =============================================================================
+%% RFC FR-5: Sequenced routing for FIFO ordering
+%% =============================================================================
+%% Route with client-provided sequence number for guaranteed ordering.
+%% The sequence number is used as the storage timestamp for offline messages.
+-spec route_sequenced(binary(), term(), non_neg_integer()) -> ok.
+route_sequenced(User, Msg, SeqNo) ->
+    incr_metric(route_attempt),
+    
+    PoolSize = get_pool_size(),
+    ShardId = (erlang:phash2(User, PoolSize) + 1),
+    Name = list_to_atom("iris_async_router_" ++ integer_to_list(ShardId)),
+    
+    gen_server:cast(Name, {route_sequenced, User, Msg, SeqNo}),
+    ok.
 
 %% Register is global (ETS is public), but we can track count locally if needed.
 %% For now, we don't track per-shard local count strictly, as ETS is the source of truth.
@@ -208,6 +224,28 @@ handle_cast({route_complete, {failure, _Reason}}, State) ->
     {noreply, State#state{routed_offline = State#state.routed_offline + 1,
                           route_failures = State#state.route_failures + 1}};
 
+%% =============================================================================
+%% RFC FR-5: Sequenced routing for FIFO ordering
+%% =============================================================================
+handle_cast({route_sequenced, User, {sequenced_msg, SeqNo, Msg}, _SeqNo}, State) ->
+    case ets:lookup(?LOCAL_PRESENCE, User) of
+        [{User, Pid}] when is_pid(Pid) ->
+            case is_process_alive(Pid) of
+                true ->
+                    Pid ! {deliver_msg, Msg},
+                    incr_metric(route_success),
+                    {noreply, State#state{routed_local = State#state.routed_local + 1}};
+                false ->
+                    %% Stale entry - try remote routing first
+                    ets:delete(?LOCAL_PRESENCE, User),
+                    route_sequenced_remote(User, Msg, SeqNo, State)
+            end;
+        [] ->
+            %% User not on THIS edge - try remote routing (cross-edge delivery)
+            %% FIX: Was storing offline directly; now routes to remote edges/cores
+            route_sequenced_remote(User, Msg, SeqNo, State)
+    end;
+
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
@@ -232,6 +270,124 @@ route_to_remote(User, Msg, MsgId, State) ->
         gen_server:cast(Self, {route_complete, Result})
     end),
     {noreply, State}.
+
+%% FIX: Sequenced remote routing - routes across edges/cores with sequence number
+%% This was missing, causing cross-edge messages to be stored offline directly
+route_sequenced_remote(User, Msg, SeqNo, State) ->
+    Self = self(),
+    spawn(fun() ->
+        Result = do_sequenced_remote_route(User, Msg, SeqNo),
+        gen_server:cast(Self, {route_complete, Result})
+    end),
+    {noreply, State}.
+
+do_sequenced_remote_route(User, Msg, SeqNo) ->
+    %% RFC FR-5 FIX: Re-wrap message with SeqNo for offline storage path
+    %% The handle_cast unwraps {sequenced_msg, SeqNo, Msg} for local delivery,
+    %% but we need the wrapper for store_offline_via_node to extract SeqNo
+    WrappedMsg = {sequenced_msg, SeqNo, Msg},
+    case get_shard_nodes(User) of
+        [] ->
+            %% No shard nodes - query all cores for user
+            do_sequenced_route_fallback(User, WrappedMsg, SeqNo);
+        [Primary | Fallbacks] ->
+            case route_to_node(Primary, User, WrappedMsg, Fallbacks) of
+                ok ->
+                    {success, remote};
+                {ok, offline} ->
+                    {success, offline};
+                {error, _Reason} ->
+                    %% Fallback - store offline with sequence number
+                    store_offline_sequenced_sync(User, Msg, SeqNo),
+                    {success, offline}
+            end
+    end.
+
+do_sequenced_route_fallback(User, Msg, SeqNo) ->
+    %% Query all connected cores to find user
+    AllCores = get_discovery_nodes(),
+    case find_user_across_cores(AllCores, User) of
+        {ok, UserPid} when is_pid(UserPid) ->
+            %% RFC FR-5: Unwrap for online delivery (wrapper is only for offline storage)
+            DeliverMsg = case Msg of
+                {sequenced_msg, _S, RealMsg} -> RealMsg;
+                _ -> Msg
+            end,
+            UserPid ! {deliver_msg, DeliverMsg},
+            {success, remote};
+        not_found ->
+            %% User not online - store offline
+            %% Msg may be wrapped as {sequenced_msg, SeqNo, RealMsg} - extract RealMsg for storage
+            RealMsg = case Msg of
+                {sequenced_msg, _S, RM} -> RM;
+                _ -> Msg
+            end,
+            store_offline_sequenced_sync(User, RealMsg, SeqNo),
+            {success, offline}
+    end.
+
+store_offline_sequenced_sync(User, Msg, SeqNo) ->
+    CoreNode = get_any_core_node(),
+    case CoreNode of
+        undefined ->
+            logger:error("No core node available for offline storage of ~p", [User]),
+            {error, no_core_available};
+        Node ->
+            %% Store with SeqNo as timestamp for ordering
+            Result = rpc:call(Node, iris_core, store_offline_durable, [User, {SeqNo, Msg}], 5000),
+            case Result of
+                ok ->
+                    logger:debug("Stored offline message for ~p on ~p (seq=~p)", [User, Node, SeqNo]),
+                    ok;
+                {error, Reason} ->
+                    logger:error("Failed to store offline message for ~p: ~p", [User, Reason]),
+                    {error, Reason};
+                {badrpc, Reason} ->
+                    logger:error("RPC failed storing offline message for ~p on ~p: ~p", [User, Node, Reason]),
+                    %% Try failover to another core
+                    store_offline_sequenced_failover(User, Msg, SeqNo, Node);
+                Other ->
+                    logger:warning("Unexpected result storing offline for ~p: ~p", [User, Other]),
+                    ok  %% Assume success for non-error responses
+            end
+    end.
+
+%% Failover: try other core nodes if primary fails
+store_offline_sequenced_failover(User, Msg, SeqNo, FailedNode) ->
+    OtherNodes = [N || N <- get_discovery_nodes(), N =/= FailedNode],
+    case OtherNodes of
+        [] ->
+            logger:error("All core nodes failed for offline storage of ~p", [User]),
+            {error, all_cores_failed};
+        [Node | _] ->
+            logger:info("Trying failover core ~p for offline storage of ~p", [Node, User]),
+            case rpc:call(Node, iris_core, store_offline_durable, [User, {SeqNo, Msg}], 5000) of
+                ok -> ok;
+                {error, R} -> {error, R};
+                {badrpc, R} -> 
+                    logger:error("Failover core ~p also failed: ~p", [Node, R]),
+                    {error, {badrpc, R}};
+                _ -> ok
+            end
+    end.
+
+get_any_core_node() ->
+    %% FIX: Filter out unreachable nodes to avoid RPC timeouts during partitions
+    %% This prevents message loss when some cores are partitioned
+    case get_discovery_nodes() of
+        [] -> undefined;
+        Nodes -> 
+            %% Find first reachable node (quick ping check)
+            find_first_reachable(Nodes)
+    end.
+
+%% Find first node that responds to ping (filters out partitioned nodes)
+find_first_reachable([]) -> undefined;
+find_first_reachable([Node | Rest]) ->
+    case net_adm:ping(Node) of
+        pong -> Node;
+        pang -> find_first_reachable(Rest)
+    end.
 
 %% FORENSIC_AUDIT_FIX: Extracted blocking logic into separate function
 %% This runs in a spawned process, not blocking the shard GenServer
@@ -352,7 +508,12 @@ route_to_node(Node, User, Msg, Fallbacks) ->
     case find_user_across_cores(AllCores, User) of
         {ok, UserPid} when is_pid(UserPid) ->
             %% User found ONLINE - deliver directly
-            UserPid ! {deliver_msg, Msg},
+            %% FIX: Unwrap sequenced messages for delivery (wrapper is for offline storage)
+            DeliverMsg = case Msg of
+                {sequenced_msg, _SeqNo, RealMsg} -> RealMsg;
+                _ -> Msg
+            end,
+            UserPid ! {deliver_msg, DeliverMsg},
             ok;
         not_found ->
             %% User not online on any core - store offline
@@ -363,23 +524,39 @@ route_to_node(Node, User, Msg, Fallbacks) ->
     end.
 
 %% Query all cores to find user (needed when Mnesia not replicated)
+%% FIX: Use net_adm:ping to filter out partitioned nodes before RPC
 find_user_across_cores([], _User) ->
     not_found;
 find_user_across_cores([Core | Rest], User) ->
-    case rpc:call(Core, iris_core, lookup_user, [User], 2000) of
-        {ok, _Node, UserPid} when is_pid(UserPid) ->
-            {ok, UserPid};
-        {error, not_found} ->
+    %% Quick connectivity check - skip unreachable nodes
+    case net_adm:ping(Core) of
+        pang ->
+            %% Node unreachable (partitioned) - skip
             find_user_across_cores(Rest, User);
-        {badrpc, _} ->
-            find_user_across_cores(Rest, User)
+        pong ->
+            case rpc:call(Core, iris_core, lookup_user, [User], 2000) of
+                {ok, _Node, UserPid} when is_pid(UserPid) ->
+                    {ok, UserPid};
+                {error, not_found} ->
+                    find_user_across_cores(Rest, User);
+                {badrpc, _} ->
+                    find_user_across_cores(Rest, User)
+            end
     end.
 
 store_offline_via_node(Node, User, Msg, Fallbacks) ->
     %% DURABILITY FIX: Use store_offline_durable for RPO=0 guarantee
+    %% RFC FR-5 FIX: Unwrap sequenced messages to pass SeqNo for FIFO ordering
+    StorableMsg = case Msg of
+        {sequenced_msg, SeqNo, RealMsg} when is_integer(SeqNo) ->
+            %% Pass as {SeqNo, RealMsg} tuple so iris_core uses SeqNo as timestamp
+            {SeqNo, RealMsg};
+        _ ->
+            Msg
+    end,
     case whereis(iris_circuit_breaker) of
         undefined ->
-            case rpc:call(Node, iris_core, store_offline_durable, [User, Msg], 5000) of
+            case rpc:call(Node, iris_core, store_offline_durable, [User, StorableMsg], 5000) of
                 {badrpc, _} -> try_route_fallbacks(Fallbacks, User, Msg);
                 ok -> ok;
                 {ok, _} -> ok;
@@ -387,7 +564,7 @@ store_offline_via_node(Node, User, Msg, Fallbacks) ->
             end;
         _ ->
             case iris_circuit_breaker:call_with_fallback(
-                    Node, iris_core, store_offline_durable, [User, Msg], Fallbacks) of
+                    Node, iris_core, store_offline_durable, [User, StorableMsg], Fallbacks) of
                 {error, circuit_open} -> try_route_fallbacks(Fallbacks, User, Msg);
                 {badrpc, _} -> try_route_fallbacks(Fallbacks, User, Msg);
                 ok -> ok;
@@ -402,11 +579,23 @@ try_route_fallbacks([Node | Rest], User, Msg) ->
     %% Try to lookup and deliver, or store offline
     case rpc:call(Node, iris_core, lookup_user, [User], 5000) of
         {ok, _UserNode, UserPid} when is_pid(UserPid) ->
-            UserPid ! {deliver_msg, Msg},
+            %% RFC FR-5: Unwrap sequenced messages for delivery
+            DeliverMsg = case Msg of
+                {sequenced_msg, _SeqNo, RealMsg} -> RealMsg;
+                _ -> Msg
+            end,
+            UserPid ! {deliver_msg, DeliverMsg},
             ok;
         {error, not_found} ->
             %% DURABILITY FIX: Use store_offline_durable for RPO=0 guarantee
-            case rpc:call(Node, iris_core, store_offline_durable, [User, Msg], 5000) of
+            %% RFC FR-5 FIX: Unwrap sequenced messages to pass SeqNo for FIFO ordering
+            StorableMsg = case Msg of
+                {sequenced_msg, SeqNo, RealMsg} when is_integer(SeqNo) ->
+                    {SeqNo, RealMsg};
+                _ ->
+                    Msg
+            end,
+            case rpc:call(Node, iris_core, store_offline_durable, [User, StorableMsg], 5000) of
                 {badrpc, _} -> try_route_fallbacks(Rest, User, Msg);
                 ok -> ok;
                 {ok, _} -> ok;
@@ -438,6 +627,37 @@ store_offline_any_node([Node | Rest], User, Msg) ->
         ok -> ok;
         {ok, _} -> ok;
         _ -> store_offline_any_node(Rest, User, Msg)
+    end.
+
+%% =============================================================================
+%% RFC FR-5: Sequenced offline storage for FIFO ordering
+%% =============================================================================
+%% Store message with client-provided sequence number as timestamp.
+%% This guarantees FIFO ordering on retrieval.
+store_offline_sequenced(User, Msg, SeqNo, State) ->
+    Nodes = get_discovery_nodes(),
+    case store_offline_sequenced_any_node(Nodes, User, Msg, SeqNo) of
+        ok ->
+            incr_metric(route_offline),
+            {noreply, State#state{routed_offline = State#state.routed_offline + 1}};
+        {error, _Reason} ->
+            %% Fallback to local storage with sequence
+            logger:warning("Sequenced offline storage failed for ~p, storing locally", [User]),
+            case catch iris_offline_storage:store_with_seq(User, Msg, SeqNo) of
+                ok -> ok;
+                _ -> ok  %% Best effort
+            end,
+            incr_metric(route_offline),
+            {noreply, State#state{routed_offline = State#state.routed_offline + 1}}
+    end.
+
+store_offline_sequenced_any_node([], _User, _Msg, _SeqNo) ->
+    {error, all_nodes_failed};
+store_offline_sequenced_any_node([Node | Rest], User, Msg, SeqNo) ->
+    case rpc:call(Node, iris_offline_storage, store_with_seq, [User, Msg, SeqNo], 5000) of
+        ok -> ok;
+        {ok, _} -> ok;
+        _ -> store_offline_sequenced_any_node(Rest, User, Msg, SeqNo)
     end.
 
 %% Local fallback storage

@@ -19,13 +19,23 @@ CA_CERT = PROJECT_ROOT / "certs" / "ca.pem"
 DEFAULT_TIMEOUT = 10
 
 
+_tls_context_cache: Optional[ssl.SSLContext] = None
+
 def get_tls_context() -> ssl.SSLContext:
     """
-    Create an SSL context for TLS connections to the Docker cluster.
+    Get a cached SSL context for TLS connections.
+    
+    The context is created once and reused for all connections. This avoids
+    the overhead of loading system CAs + test CA for every connection, which
+    is critical for stress tests creating thousands of connections.
     
     Returns:
         ssl.SSLContext configured for TLS with CA verification
     """
+    global _tls_context_cache
+    if _tls_context_cache is not None:
+        return _tls_context_cache
+    
     context = ssl.create_default_context()
     
     if CA_CERT.exists():
@@ -35,6 +45,7 @@ def get_tls_context() -> ssl.SSLContext:
         context.check_hostname = False
         context.verify_mode = ssl.CERT_NONE
     
+    _tls_context_cache = context
     return context
 
 
@@ -94,6 +105,11 @@ def tls_connect_and_login(host: str, port: int, username: str,
         response = sock.recv(1024)
         
         if b"LOGIN_OK" in response:
+            # Small delay to ensure server-side registration completes
+            # This prevents race conditions where messages are sent before
+            # the recipient is fully registered in the presence table
+            import time
+            time.sleep(0.05)
             return sock
         else:
             # Login failed - log the response for debugging
@@ -115,9 +131,15 @@ def tls_connect_and_login(host: str, port: int, username: str,
         return None
 
 
+# Sequence counter for RFC-compliant messaging
+_tls_seq_counter = [0]
+
 def tls_send_message(sock: ssl.SSLSocket, target: str, message: str) -> Tuple[bool, float]:
     """
     Send a message over a TLS socket.
+    
+    RFC-001-AMENDMENT-001 v1.0 COMPLIANT: Uses opcode 0x07 (sequenced message)
+    instead of deprecated opcode 0x02 (plaintext) which is now rejected.
     
     Args:
         sock: TLS socket from tls_connect_and_login()
@@ -134,10 +156,15 @@ def tls_send_message(sock: ssl.SSLSocket, target: str, message: str) -> Tuple[bo
         target_bytes = target.encode('utf-8')
         msg_bytes = message.encode('utf-8')
         
-        # Message packet: opcode 0x02 + target_len(2) + target + msg_len(2) + msg
+        # Increment sequence counter
+        _tls_seq_counter[0] += 1
+        seq_no = _tls_seq_counter[0]
+        
+        # Message packet: 0x07 | target_len(2) | target | seq_no(8) | msg_len(2) | msg
         packet = (
-            bytes([0x02]) +
+            bytes([0x07]) +
             struct.pack('>H', len(target_bytes)) + target_bytes +
+            struct.pack('>Q', seq_no) +
             struct.pack('>H', len(msg_bytes)) + msg_bytes
         )
         
@@ -157,3 +184,41 @@ def close_socket(sock: Optional[ssl.SSLSocket]) -> None:
             sock.close()
         except Exception:
             pass
+
+
+def tls_connect_and_login_with_retry(host: str, port: int, username: str,
+                                      timeout: int = DEFAULT_TIMEOUT,
+                                      max_retries: int = 3,
+                                      retry_delay: float = 2.0) -> Optional[ssl.SSLSocket]:
+    """
+    Connect via TLS and perform login handshake with retry logic.
+    
+    After network partition heals, edge nodes may take time to re-establish
+    connectivity. This function retries login failures to handle transient
+    infrastructure issues.
+    
+    Args:
+        host: Hostname or IP address
+        port: Port number
+        username: Username for login
+        timeout: Connection timeout in seconds per attempt
+        max_retries: Maximum number of retry attempts (default 3)
+        retry_delay: Delay in seconds between retries (default 2.0)
+    
+    Returns:
+        ssl.SSLSocket if login successful, None if all retries exhausted
+    """
+    import time
+    
+    last_error = None
+    for attempt in range(max_retries + 1):
+        if attempt > 0:
+            print(f"  Retry {attempt}/{max_retries} for {username}...")
+            time.sleep(retry_delay)
+        
+        sock = tls_connect_and_login(host, port, username, timeout)
+        if sock:
+            return sock
+    
+    print(f"  All {max_retries + 1} login attempts failed for {username}")
+    return None

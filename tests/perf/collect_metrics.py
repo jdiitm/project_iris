@@ -89,9 +89,12 @@ def measure_message_latency(num_messages: int = 1000) -> Dict[str, float]:
         target_bytes = receiver_name.encode()
         msg_bytes = msg.encode()
         
+        # RFC-001-AMENDMENT-001 v1.0 COMPLIANT: opcode 0x07 (sequenced)
+        seq_no = i + 1
         packet = (
-            bytes([0x02]) +
+            bytes([0x07]) +
             struct.pack('>H', len(target_bytes)) + target_bytes +
+            struct.pack('>Q', seq_no) +
             struct.pack('>H', len(msg_bytes)) + msg_bytes
         )
         
@@ -153,13 +156,16 @@ def measure_throughput(duration_sec: int = 10) -> Dict[str, float]:
     end_time = start_time + duration_sec
     
     # Send as fast as possible
+    # RFC-001-AMENDMENT-001 v1.0 COMPLIANT: opcode 0x07 (sequenced)
     while time.time() < end_time:
         msg = f"tp_{messages_sent}"
         msg_bytes = msg.encode()
+        seq_no = messages_sent + 1
         
         packet = (
-            bytes([0x02]) +
+            bytes([0x07]) +
             struct.pack('>H', len(target_bytes)) + target_bytes +
+            struct.pack('>Q', seq_no) +
             struct.pack('>H', len(msg_bytes)) + msg_bytes
         )
         

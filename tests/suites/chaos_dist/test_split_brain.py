@@ -91,17 +91,28 @@ def connect_and_login(port: int, username: str) -> Optional[socket.socket]:
     return tls_connect_and_login(SERVER_HOST, port, username, timeout=TIMEOUT)
 
 
+# Sequence counter for RFC-compliant messaging
+_seq_counter = [0]
+
 def send_message_with_tracking(sock: socket.socket, target: str, message: str) -> Tuple[bool, str]:
     """
     Send message and track ACK.
     Returns (acked, response_info).
+    
+    RFC-001-AMENDMENT-001 v1.0 COMPLIANT: Uses opcode 0x07 (sequenced message)
     """
     target_bytes = target.encode()
     msg_bytes = message.encode()
     
+    # Increment sequence counter
+    _seq_counter[0] += 1
+    seq_no = _seq_counter[0]
+    
+    # Protocol: 0x07 | TargetLen(16) | Target | SeqNo(64) | MsgLen(16) | Msg
     packet = (
-        bytes([0x02]) +
+        bytes([0x07]) +
         struct.pack('>H', len(target_bytes)) + target_bytes +
+        struct.pack('>Q', seq_no) +
         struct.pack('>H', len(msg_bytes)) + msg_bytes
     )
     

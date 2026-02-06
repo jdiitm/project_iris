@@ -2,6 +2,7 @@
 -export([store/3, store_batch/3, retrieve/2]).
 -export([store_sync/3]).  %% Direct sync_transaction mode (for critical paths)
 -export([store_durable/3]).  %% AUDIT FIX: Guaranteed durable - ACK only after persistence
+-export([store_with_seq/3]).  %% AUDIT FIX: Store with client-provided sequence for FIFO
 %% PRINCIPAL_AUDIT_REPORT: Lockfree cursor-based retrieval (Hard Stop #2)
 -export([retrieve_cursor/3, delete_confirmed/4, retrieve_lockfree/2, delete_all_async/2]).
 
@@ -30,7 +31,16 @@ store(User, Msg, Count) ->
 
 %% Direct sync_transaction mode - guaranteed durable but slower
 store_sync(User, Msg, Count) ->
-    Timestamp = os:system_time(millisecond),
+    %% CRITICAL: Use HLC for proper message ordering (RFC FR-5)
+    %% os:system_time(millisecond) has insufficient precision for rapid-fire messages
+    Timestamp = case whereis(iris_hlc) of
+        undefined ->
+            %% Fallback to nanoseconds if HLC not started
+            os:system_time(nanosecond);
+        _Pid ->
+            %% Use HLC for guaranteed total ordering
+            iris_hlc:to_integer(iris_hlc:send())
+    end,
     BucketID = erlang:phash2(Msg, Count),
     Key = {User, BucketID},
     
@@ -75,6 +85,30 @@ store_durable(User, Msg, Count) ->
             {error, Reason}
     end.
 
+%% =============================================================================
+%% AUDIT FIX: Store with client-provided sequence number (RFC FR-5)
+%% =============================================================================
+%% This function uses the client-provided sequence number as the timestamp,
+%% guaranteeing FIFO ordering regardless of parallel processing or clock drift.
+%% =============================================================================
+store_with_seq(User, Msg, SeqNo) ->
+    %% Use sequence number directly as timestamp (guaranteed ordering)
+    Timestamp = SeqNo,
+    BucketID = 0,  %% Single bucket for sequenced messages to preserve order
+    Key = {User, BucketID},
+    
+    F = fun() ->
+        mnesia:write({offline_msg, Key, Timestamp, Msg})
+    end,
+    
+    case mnesia:activity(sync_transaction, F) of
+        ok -> ok;
+        {atomic, _} -> ok;
+        {aborted, Reason} ->
+            logger:error("Sequenced store failed for ~p: ~p", [User, Reason]),
+            {error, Reason}
+    end.
+
 store_batch(User, Msgs, Count) ->
     %% Use durable batcher if available, fallback to direct sync
     case whereis(iris_durable_batcher_1) of
@@ -88,7 +122,13 @@ store_batch(User, Msgs, Count) ->
 
 %% Direct sync_transaction mode for batch - guaranteed durable but slower
 store_batch_sync(User, Msgs, Count) ->
-    Timestamp = os:system_time(millisecond),
+    %% CRITICAL: Use HLC for proper message ordering (RFC FR-5)
+    Timestamp = case whereis(iris_hlc) of
+        undefined ->
+            os:system_time(nanosecond);
+        _Pid ->
+            iris_hlc:to_integer(iris_hlc:send())
+    end,
     %% Group messages by Bucket
     BucketedMsgs = lists:foldl(fun(Msg, Acc) ->
         Bucket = erlang:phash2(Msg, Count),
@@ -148,20 +188,28 @@ retrieve(User, Count) ->
 %% @doc Retrieve a batch of messages without global lock (dirty read)
 %% Returns {Messages, NextCursor} where NextCursor is used for pagination.
 %% Messages are NOT deleted - caller must confirm delivery then call delete_confirmed/3.
+%% RFC FR-5: Messages are sorted by Timestamp to guarantee FIFO ordering even when
+%% messages are spread across multiple buckets due to content-based hashing.
 -spec retrieve_cursor(binary(), integer(), integer()) -> {list(), integer()}.
 retrieve_cursor(User, Count, Cursor) ->
     %% Calculate batch range (e.g., buckets Cursor to Cursor+BatchSize)
     BatchSize = min(10, Count - Cursor),  %% Max 10 buckets per batch
     EndCursor = Cursor + BatchSize,
     
-    %% Dirty read (lockfree) from buckets
-    Msgs = lists:flatmap(fun(ID) ->
+    %% Dirty read (lockfree) from buckets - keep full records for sorting
+    Records = lists:flatmap(fun(ID) ->
         Key = {User, ID},
         case mnesia:dirty_read(offline_msg, Key) of
             [] -> [];
-            Records -> [Msg || {_, _, _, Msg} <- Records]
+            Recs -> Recs
         end
     end, lists:seq(Cursor, EndCursor - 1)),
+    
+    %% RFC FR-5 FIX: Sort by Timestamp (3rd element) to ensure FIFO ordering
+    %% This is critical because messages are bucketed by content hash, not arrival order.
+    %% Without sorting, messages would be returned in bucket-ID order, breaking FIFO.
+    Sorted = lists:sort(fun({_, _, Ts1, _}, {_, _, Ts2, _}) -> Ts1 =< Ts2 end, Records),
+    Msgs = [Msg || {_, _, _, Msg} <- Sorted],
     
     NextCursor = if
         EndCursor >= Count -> done;
@@ -210,6 +258,7 @@ delete_all_async(User, Count) ->
     ok.
 
 sort_and_extract(Records) ->
+    %% Sort by timestamp (SeqNo) for FIFO ordering (RFC FR-5)
     Sorted = lists:sort(fun({_, _, Ts1, _}, {_, _, Ts2, _}) -> Ts1 =< Ts2 end, Records),
     RawMsgs = [Msg || {_, _, _, Msg} <- Sorted],
     lists:flatten(RawMsgs).

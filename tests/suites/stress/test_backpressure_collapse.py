@@ -120,6 +120,22 @@ def log(msg: str):
     print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
 
 
+def create_socket(host, port, timeout=10.0):
+    """Create socket with TLS auto-detection."""
+    # Try TLS first (standard for CI and production)
+    try:
+        from tests.suites.chaos_dist.utils import create_tls_socket
+        return create_tls_socket(host, port, timeout=timeout)
+    except Exception:
+        pass
+    
+    # Fallback to non-TLS (for local development without certs)
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.settimeout(timeout)
+    s.connect((host, port))
+    return s
+
+
 class LoadGenerator:
     """Generates load at a configurable rate."""
     
@@ -136,9 +152,7 @@ class LoadGenerator:
     def _connect(self, username: str) -> Optional[socket.socket]:
         """Connect and login."""
         try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(TIMEOUT)
-            sock.connect((SERVER_HOST, SERVER_PORT))
+            sock = create_socket(SERVER_HOST, SERVER_PORT, timeout=TIMEOUT)
             
             packet = bytes([0x01]) + username.encode()
             sock.sendall(packet)
@@ -177,6 +191,7 @@ class LoadGenerator:
         Send message and return (status, latency_ms).
         Status: 'success', 'rejected', 'timeout', 'error'
         
+        RFC-001-AMENDMENT-001 v1.0 COMPLIANT: Uses opcode 0x07 (sequenced message)
         For backpressure testing, we consider the send successful if the
         socket write completes without error. The server queues messages
         for delivery to the target.
@@ -186,9 +201,17 @@ class LoadGenerator:
             target_bytes = target.encode()
             msg_bytes = message.encode()
             
+            # Use instance sequence counter
+            if not hasattr(self, '_seq_counter'):
+                self._seq_counter = 0
+            self._seq_counter += 1
+            seq_no = self._seq_counter
+            
+            # Protocol: 0x07 | TargetLen(16) | Target | SeqNo(64) | MsgLen(16) | Msg
             packet = (
-                bytes([0x02]) +
+                bytes([0x07]) +
                 struct.pack('>H', len(target_bytes)) + target_bytes +
+                struct.pack('>Q', seq_no) +
                 struct.pack('>H', len(msg_bytes)) + msg_bytes
             )
             
@@ -327,9 +350,7 @@ def check_for_oom() -> bool:
 def check_server_available() -> bool:
     """Check if server is reachable."""
     try:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(5)
-        sock.connect((SERVER_HOST, SERVER_PORT))
+        sock = create_socket(SERVER_HOST, SERVER_PORT, timeout=5)
         sock.close()
         return True
     except Exception:
@@ -498,16 +519,16 @@ def main():
     print("Per PRINCIPAL_AUDIT_REPORT.md Section 6.3")
     print("=" * 70)
     
-    # Use ClusterManager to ensure cluster is running
-    with ClusterManager(project_root=project_root) as cluster:
+    def _run_test():
+        """Run the backpressure test logic."""
         # Check prerequisites
         if not check_server_available():
             print(f"\nFAIL: Server not available at {SERVER_HOST}:{SERVER_PORT}")
             sys.exit(1)
-        
+
         # Run test
         result = run_backpressure_test()
-        
+
         # Check if cluster was properly set up
         # Note: Low success rates during warmup may indicate:
         # 1. Cluster meshing failure (<10% - skip as infra issue)
@@ -522,10 +543,10 @@ def main():
                 print(f"  This indicates edge-core connection failure.")
                 print(f"  Run with a fresh cluster: make start")
                 sys.exit(1)
-        
+
         # Analyze and report
         passed = analyze_results(result)
-        
+
         print("\n" + "=" * 70)
         if passed:
             print("RESULT: PASSED - System handles backpressure gracefully")
@@ -533,6 +554,20 @@ def main():
         else:
             print("RESULT: FAILED - Backpressure handling inadequate")
             sys.exit(1)
+
+    # If server is already running (e.g. started by run_all_tests.sh), use it directly.
+    # ClusterManager.force_stop() would kill the externally-managed TLS server.
+    try:
+        probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        probe.settimeout(2)
+        probe.connect((SERVER_HOST, SERVER_PORT))
+        probe.close()
+        print(f"[INFO] Server already running on {SERVER_HOST}:{SERVER_PORT} — skipping ClusterManager")
+        _run_test()
+    except socket.error:
+        # No server running — use ClusterManager to start one
+        with ClusterManager(project_root=project_root) as cluster:
+            _run_test()
 
 
 if __name__ == "__main__":
