@@ -271,18 +271,26 @@ def main():
     log("=" * 60)
     log("MEMORY BENCHMARK TEST")
     log("=" * 60)
+    log(f"IS_CI={IS_CI}, USE_TLS={USE_TLS}, CONFIG={os.environ.get('CONFIG', '')}")
+    log(f"CA_CERT exists: {CA_CERT.exists()}")
     
-    if IS_CI:
-        # In CI, run_all_tests.sh already manages the server lifecycle.
-        # ClusterManager would kill the existing TLS server and start a fresh one,
-        # which is disruptive and slow on 2-vCPU CI runners.
-        # Instead, use the server that's already running.
-        log("CI mode: using server managed by run_all_tests.sh")
-        passed = run_benchmark()
-    else:
-        # Local: use ClusterManager for self-contained test execution
-        with ClusterManager(project_root=project_root) as cluster:
+    try:
+        if IS_CI:
+            # In CI, run_all_tests.sh already manages the server lifecycle.
+            # ClusterManager would kill the existing TLS server and start a fresh one,
+            # which is disruptive and slow on 2-vCPU CI runners.
+            # Instead, use the server that's already running.
+            log("CI mode: using server managed by run_all_tests.sh")
             passed = run_benchmark()
+        else:
+            # Local: use ClusterManager for self-contained test execution
+            with ClusterManager(project_root=project_root) as cluster:
+                passed = run_benchmark()
+    except Exception as e:
+        log(f"UNEXPECTED ERROR: {type(e).__name__}: {e}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
     
     if passed:
         log("✅ All memory benchmarks passed!")

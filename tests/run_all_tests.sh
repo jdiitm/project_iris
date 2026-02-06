@@ -462,7 +462,7 @@ else
     ensure_server_ready "Performance Tests"
     # Quick mode: 300s per test (CI workloads are already scaled down)
     # Full mode: 600s per test (heavy benchmarks need more time)
-    local perf_timeout=600
+    perf_timeout=600
     if [ "$QUICK_MODE" = "true" ]; then
         perf_timeout=300
     fi
