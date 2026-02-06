@@ -118,6 +118,7 @@ class MemoryMonitor:
         self.running = False
         self.thread = None
         self.beam_pid = None
+        self.warm_up_complete_time = None  # Set after connections established
         
     def find_beam_pid(self):
         """Find the BEAM process ID."""
@@ -212,8 +213,18 @@ class MemoryMonitor:
                     break
                 time.sleep(1)
     
+    def mark_warm_up_complete(self):
+        """Mark warm-up as complete — analysis will skip samples before this point."""
+        self.warm_up_complete_time = datetime.now()
+        log(f"Warm-up complete. Steady-state analysis starts now.")
+    
     def analyze(self):
-        """Analyze collected samples for memory leaks."""
+        """Analyze collected samples for memory leaks.
+        
+        Only analyzes steady-state samples (after warm_up_complete_time).
+        Pre-connection and connection-spike samples are excluded to avoid
+        false positives from normal connection overhead.
+        """
         if len(self.samples) < 2:
             return {
                 'status': 'insufficient_data',
@@ -221,8 +232,13 @@ class MemoryMonitor:
                 'error': 'Need at least 2 samples for analysis'
             }
         
-        # Get first and last samples with valid memory readings
-        valid_samples = [s for s in self.samples if s.beam_rss_mb > 0]
+        # Filter to steady-state samples only (after warm-up)
+        if self.warm_up_complete_time:
+            valid_samples = [s for s in self.samples 
+                           if s.beam_rss_mb > 0 and s.timestamp >= self.warm_up_complete_time]
+        else:
+            valid_samples = [s for s in self.samples if s.beam_rss_mb > 0]
+        
         if len(valid_samples) < 2:
             return {
                 'status': 'insufficient_data',
@@ -433,11 +449,19 @@ def test_soak_24h():
         time.sleep(5)  # Let monitoring stabilize
         
         load_gen.start()
-        time.sleep(5)  # Let load stabilize
         
-        # Take baseline sample
+        # Wait for memory to stabilize after connection creation.
+        # The BEAM spikes during TLS handshakes / process spawning,
+        # then GC recovers. We need to measure steady-state, not the spike.
+        log("Waiting 60s for memory to stabilize after connection creation...")
+        time.sleep(60)
+        
+        # Mark warm-up complete — analysis starts from HERE
+        monitor.mark_warm_up_complete()
+        
+        # Take baseline sample (post-stabilization)
         baseline = monitor.take_sample()
-        log(f"Baseline memory: {baseline.beam_rss_mb:.1f}MB")
+        log(f"Baseline memory (steady-state): {baseline.beam_rss_mb:.1f}MB")
         
         # Main loop - run until duration expires
         last_report = datetime.now()
