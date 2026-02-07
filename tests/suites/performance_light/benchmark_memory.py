@@ -42,11 +42,12 @@ PROFILES = {
     "smoke": {
         "connections": 100,
         "per_conn_kb": 75,       # More lenient for smoke (actual ~56KB + overhead)
-        "per_conn_kb_tls": 500,  # TLS: ssl process + cipher state + session tickets + BEAM allocator
+        "per_conn_kb_tls": 800,  # TLS: ssl process + cipher state + session tickets + BEAM allocator
                                   # carrier overhead (doesn't amortize at 100 conns). CI runners with
                                   # auto-tuned allocators (+MBas aoffcbf +MMmcs 30) preallocate
                                   # larger carriers, inflating per-conn measurements at small scale.
-                                  # Observed: ~237 KB local, ~452 KB on GitHub Actions (2 vCPU).
+                                  # Observed: ~157-253 KB local, ~639 KB on GitHub Actions (2 vCPU).
+                                  # Real target is 55 KB/conn at 10K scale (full profile).
         "base_overhead_mb": 1500,  # Base VM overhead (auto-tuned for 1M+ connections, BEAM preallocates memory)
     },
     "full": {
