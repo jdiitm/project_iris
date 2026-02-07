@@ -1,6 +1,6 @@
 # RFC-001 Compliance Status
 
-**Status**: 75 tests pass (100%) | **TLS Enforced** | **Last Updated**: 2026-02-04
+**Status**: 75+ tests pass | **TLS Enforced** | **Last Updated**: 2026-02-07
 
 ## Verification Status Legend
 
@@ -72,7 +72,8 @@
 | `iris_presence.erl` | Versioned presence (race fix) |
 | `iris_hlc.erl` | Hybrid Logical Clocks |
 | `iris_limits.erl` | Configurable limits |
-| `iris_trace.erl` | Distributed tracing |
+| `iris_trace.erl` | Distributed tracing (with cross-RPC propagation) |
+| `iris_uuid.erl` | UUIDv7 idempotency key validation (RFC 9562) |
 
 ## Security Hardening
 
@@ -85,13 +86,23 @@
 | H2: Token revocation | Synchronous |
 | H3: Region router | Health probing |
 
+## RFC v4.0 Gap Closures (2026-02-07)
+
+| Audit Item | Gap | Fix | Test |
+|------------|-----|-----|------|
+| P1-7 UUIDv7 | No server-side validation of idempotency keys | `iris_uuid.erl` + CBOR path validation in `iris_session.erl` | `iris_uuid_tests.erl` (14 tests) |
+| Section 11.1 | No version/capability negotiation | Opcode 0x0C in `iris_proto.erl`, handler in `iris_session.erl` | `iris_proto_tests.erl` (3 new tests) |
+| NFR-30 | trace_id not propagated across Edge→Core RPCs | `traced_rpc/4` in `iris_session.erl`, `execute_with_context/4` in `iris_trace.erl` | `iris_trace_tests.erl` (2 new tests) |
+| Section 9.1 | JWT private key on all nodes (not isolated) | `auth_mode` config (signer/verifier) in `iris_auth.erl` | `iris_auth_key_isolation_tests.erl` (8 tests) |
+| Section 5.4 | No backward-compatible 64-bit HLC parsing | `from_binary/1` accepts 8-byte legacy format in `iris_hlc.erl` | `iris_hlc_tests.erl` (4 new tests) |
+
 ## Deferred / Partial
 
 | Item | Status | Notes |
 |------|--------|-------|
-| NFR-15 mTLS (inter-node) | Deferred | Requires PKI infrastructure |
+| NFR-15 mTLS (inter-node) | Deferred | Requires PKI infrastructure; test exists: `test_mtls_enforcement.py` |
 | NFR-16 Clock Skew | **VERIFIED** | HLC unit tests cover drift handling; Python tests cover protocol tolerance |
-| Section 9.1 Versioning | Deferred | Phase 2 (post-launch) |
+| Section 9.1 Versioning | **IMPLEMENTED** | Opcode 0x0C added; `signer`/`verifier` auth mode supported |
 | E2EE Crypto Validation | **VERIFIED** | Erlang unit tests cover Double Ratchet; Python tests cover primitives |
 | NFR-17 Distributed Rate Limit | Partial | Single-node tested; cross-node test requires Docker cluster |
 | FR-19 Group Size Limit | **VERIFIED** | 256-member limit test added to `test_group_membership.py` |

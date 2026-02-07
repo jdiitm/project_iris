@@ -40,6 +40,9 @@ iris_proto_test_() ->
      {"Encode PONG", fun test_encode_pong/0},
      {"Encode RESUME", fun test_encode_resume/0},
      {"Encode TOKEN_REFRESH", fun test_encode_token_refresh/0},
+     {"Encode VERSION_NEGOTIATE (0x0C)", fun test_encode_version_negotiate/0},
+     {"Decode VERSION_NEGOTIATE roundtrip", fun test_decode_version_negotiate/0},
+     {"Encode VERSION_RESPONSE", fun test_encode_version_response/0},
      {"Opcode 0x10 decodes as cbor_msg only", fun test_0x10_is_cbor_only/0},
      {"Reliable msg roundtrip (opcode 0x11)", fun test_reliable_msg_roundtrip_0x11/0},
      
@@ -560,6 +563,30 @@ test_encode_token_refresh() ->
     TLen = byte_size(Token),
     Expected = <<16#0B, TLen:16, Token/binary>>,
     ?assertEqual(Expected, Result).
+
+test_encode_version_negotiate() ->
+    %% RFC Section 11.1: Client sends supported versions and capabilities
+    Result = iris_proto:encode_version_negotiate([1], [<<"zstd">>, <<"e2ee">>]),
+    ?assert(is_binary(Result)),
+    %% Should start with opcode 0x0C
+    ?assertMatch(<<16#0C, _/binary>>, Result).
+
+test_decode_version_negotiate() ->
+    %% Roundtrip: encode then decode
+    Encoded = iris_proto:encode_version_negotiate([1, 2], [<<"zstd">>, <<"zlib">>]),
+    {Decoded, _Rem} = iris_proto:decode(Encoded),
+    ?assertMatch({version_negotiate, _, _}, Decoded),
+    {version_negotiate, Versions, Caps} = Decoded,
+    ?assert(lists:member(1, Versions)),
+    ?assert(lists:member(2, Versions)),
+    ?assert(lists:member(<<"zstd">>, Caps)),
+    ?assert(lists:member(<<"zlib">>, Caps)).
+
+test_encode_version_response() ->
+    %% Server response with negotiated version and capabilities
+    Result = iris_proto:encode_version_response(1, [<<"zstd">>]),
+    ?assert(is_binary(Result)),
+    ?assertMatch(<<16#0C, _/binary>>, Result).
 
 test_0x10_is_cbor_only() ->
     %% Opcode 0x10 must decode as CBOR_MSG, NOT reliable_msg

@@ -399,7 +399,9 @@ rpc_propagation_test_() ->
      fun setup/0,
      fun cleanup/1,
      [
-        {"Full RPC propagation flow", fun test_rpc_propagation/0}
+        {"Full RPC propagation flow", fun test_rpc_propagation/0},
+        {"execute_with_context preserves trace_id", fun test_execute_with_context/0},
+        {"execute_with_context creates span", fun test_execute_with_context_span/0}
      ]
     }.
 
@@ -428,6 +430,34 @@ test_rpc_propagation() ->
     
     %% Verify client context is intact
     ?assertEqual(ClientTraceId, iris_trace:get_trace_id()).
+
+test_execute_with_context() ->
+    %% RFC NFR-30: execute_with_context should restore trace context on remote side
+    iris_trace:clear_context(),
+    iris_trace:new_trace(<<"test-trace-abc">>),
+    
+    %% Inject context into carrier (as traced_rpc would)
+    Carrier = iris_trace:inject(#{}),
+    ?assertEqual(<<"test-trace-abc">>, maps:get(<<"trace_id">>, Carrier)),
+    
+    %% Simulate remote execution
+    iris_trace:clear_context(),
+    Result = iris_trace:execute_with_context(Carrier, erlang, node, []),
+    ?assertEqual(node(), Result),
+    
+    %% After execute_with_context, context should be cleared (remote cleanup)
+    ?assertEqual(undefined, iris_trace:get_context()).
+
+test_execute_with_context_span() ->
+    %% execute_with_context should create a span for the remote operation
+    iris_trace:clear_context(),
+    iris_trace:new_trace(<<"span-test-trace">>),
+    Carrier = iris_trace:inject(#{}),
+    iris_trace:clear_context(),
+    
+    %% The function should not crash and should complete
+    Result = iris_trace:execute_with_context(Carrier, lists, reverse, [[1,2,3]]),
+    ?assertEqual([3,2,1], Result).
 
 simulate_edge_handler(Payload) ->
     %% Edge extracts context

@@ -124,10 +124,23 @@ compare(#hlc{physical = PA, logical = LA, node_id = NA},
 to_binary(#hlc{physical = PT, logical = L, node_id = N}) ->
     <<PT:?PHYSICAL_BITS, L:?LOGICAL_BITS, N:?NODE_BITS>>.
 
-%% @doc Parse HLC from 10-byte binary.
+%% @doc Parse HLC from binary.
+%% Accepts both 10-byte (80-bit, v4.0) and 8-byte (64-bit, v3 legacy) formats.
+%% RFC Section 5.4: "Dual-write period where both 64-bit and 80-bit IDs are accepted."
 -spec from_binary(binary()) -> hlc() | {error, invalid_format}.
 from_binary(<<PT:?PHYSICAL_BITS, L:?LOGICAL_BITS, N:?NODE_BITS>>) ->
+    %% 10-byte (80-bit) format: 48-bit PT + 16-bit L + 16-bit N
     #hlc{physical = PT, logical = L, node_id = N};
+from_binary(<<PT:48, L:16>>) ->
+    %% 8-byte (64-bit) legacy format: 48-bit PT + 16-bit L, no node ID
+    %% Migration compatibility: node_id defaults to 0
+    DualWriteEnabled = application:get_env(iris_edge, hlc_dual_write, true),
+    case DualWriteEnabled of
+        true ->
+            #hlc{physical = PT, logical = L, node_id = 0};
+        false ->
+            {error, legacy_format_rejected}
+    end;
 from_binary(_) ->
     {error, invalid_format}.
 

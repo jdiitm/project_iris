@@ -15,7 +15,8 @@
     retry_timer :: reference() | undefined,
     last_activity :: integer(),   %% For hibernation
     hibernated = false :: boolean(),
-    session_id :: binary() | undefined  %% RFC Section 3.4: Connection resume
+    session_id :: binary() | undefined,  %% RFC Section 3.4: Connection resume
+    capabilities = [] :: list()  %% RFC Section 11.1: Negotiated capabilities
 }).
 
 %% Transport-agnostic setopts
@@ -276,6 +277,9 @@ process_buffer(Bin, Data = #data{socket = Socket, transport = Transport, user = 
                 ({set_session_id, SId}, D) ->
                     %% RFC Section 3.4: Store session_id for resume on disconnect
                     D#data{session_id = SId};
+                ({set_capabilities, Caps}, D) ->
+                    %% RFC Section 11.1: Store negotiated capabilities
+                    D#data{capabilities = Caps};
                 (close, _D) -> gen_statem:stop({shutdown, closed}), error(closed)
             end, Data, Actions),
             

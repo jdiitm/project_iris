@@ -31,6 +31,9 @@
 %% Internal exports for testing
 -export([generate_id/0]).
 
+%% RPC trace propagation (RFC NFR-30)
+-export([execute_with_context/4]).
+
 -define(TRACE_KEY, iris_trace_context).
 
 %% Trace context record
@@ -303,6 +306,31 @@ set_attribute(Key, Value) ->
             set_context(Ctx#trace_ctx{attributes = Attrs#{Key => Value}})
     end,
     ok.
+
+%%====================================================================
+%% RPC Trace Propagation (RFC NFR-30)
+%%====================================================================
+
+%% @doc Execute a function with propagated trace context.
+%% Called on the remote node via RPC to restore trace context.
+-spec execute_with_context(map(), module(), atom(), list()) -> term().
+execute_with_context(TraceCtx, Mod, Fun, Args) ->
+    %% Extract trace context on the remote side
+    _Ctx = extract(TraceCtx),
+    %% Create a span for the remote operation
+    SpanName = list_to_binary(io_lib:format("rpc:~s:~s", [Mod, Fun])),
+    new_span(SpanName),
+    try
+        Result = apply(Mod, Fun, Args),
+        end_span(SpanName),
+        Result
+    catch
+        Class:Reason:Stack ->
+            end_span(SpanName, {error, Reason}),
+            erlang:raise(Class, Reason, Stack)
+    after
+        clear_context()
+    end.
 
 %%====================================================================
 %% Internal Functions
