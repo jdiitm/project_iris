@@ -23,12 +23,16 @@
 -export([register/3, unregister/1, lookup/1, lookup_local/1, heartbeat/1]).
 -export([get_all_local/0, get_stats/0]).
 -export([broadcast_update/3, broadcast_removal/1]).
+%% PS-2: Presence privacy (RFC-001 v4.0 FR-8a)
+-export([set_privacy/2, lookup_with_privacy/2, add_contact/2]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
 -define(SERVER, ?MODULE).
 -define(ETS_TABLE, presence_local).
+-define(PRIVACY_TABLE, presence_privacy).     %% PS-2: {UserId, Level}
+-define(CONTACTS_TABLE, presence_contacts).   %% PS-2: {UserId, ContactId}
 -define(HEARTBEAT_INTERVAL_MS, 10000).  %% 10 seconds
 -define(EXPIRY_THRESHOLD_MS, 30000).    %% 30 seconds without heartbeat = offline
 -define(CLEANUP_INTERVAL_MS, 5000).     %% Cleanup check every 5 seconds
@@ -201,6 +205,45 @@ broadcast_removal(User) ->
     ok.
 
 %% =============================================================================
+%% PS-2: Presence Privacy API (RFC-001 v4.0 FR-8a)
+%% =============================================================================
+
+%% @doc Set privacy level for a user: everyone | contacts | nobody
+-spec set_privacy(binary(), everyone | contacts | nobody) -> ok.
+set_privacy(UserId, Level) when Level =:= everyone; Level =:= contacts; Level =:= nobody ->
+    ets:insert(?PRIVACY_TABLE, {UserId, Level}),
+    ok.
+
+%% @doc Add a contact for privacy-aware presence queries
+-spec add_contact(binary(), binary()) -> ok.
+add_contact(UserId, ContactId) ->
+    ets:insert(?CONTACTS_TABLE, {UserId, ContactId}),
+    ok.
+
+%% @doc Lookup presence with privacy check
+-spec lookup_with_privacy(binary(), binary()) -> {ok, term()} | {ok, unavailable}.
+lookup_with_privacy(UserId, RequesterId) ->
+    Level = case ets:lookup(?PRIVACY_TABLE, UserId) of
+        [{UserId, L}] -> L;
+        [] -> everyone
+    end,
+    case Level of
+        everyone ->
+            lookup(UserId);
+        nobody ->
+            {ok, unavailable};
+        contacts ->
+            IsContact = case ets:match(?CONTACTS_TABLE, {UserId, RequesterId}) of
+                [_|_] -> true;
+                [] -> false
+            end,
+            case IsContact of
+                true -> lookup(UserId);
+                false -> {ok, unavailable}
+            end
+    end.
+
+%% =============================================================================
 %% gen_server callbacks
 %% =============================================================================
 
@@ -218,6 +261,21 @@ init([]) ->
         {write_concurrency, true},
         {read_concurrency, true}
     ]),
+
+    %% PS-2: Privacy level table {UserId, Level :: everyone|contacts|nobody}
+    case ets:info(?PRIVACY_TABLE) of
+        undefined ->
+            ets:new(?PRIVACY_TABLE, [named_table, public, set,
+                                     {read_concurrency, true}]);
+        _ -> ok
+    end,
+    %% PS-2: Contacts table {UserId, ContactId}
+    case ets:info(?CONTACTS_TABLE) of
+        undefined ->
+            ets:new(?CONTACTS_TABLE, [named_table, public, bag,
+                                      {read_concurrency, true}]);
+        _ -> ok
+    end,
     
     %% Start cleanup timer
     TimerRef = erlang:send_after(?CLEANUP_INTERVAL_MS, self(), cleanup_expired),

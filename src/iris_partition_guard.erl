@@ -28,6 +28,7 @@
 
 -export([start_link/0]).
 -export([is_safe_for_writes/0, get_status/0, force_unsafe_mode/1]).
+-export([resolve_authority/4]).  %% FM-2: Split-brain resolution
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
 -define(SERVER, ?MODULE).
@@ -42,7 +43,8 @@
     last_quorum_loss :: integer() | undefined,
     quorum_threshold = 0.5 :: float(),  %% Must see >50% of expected nodes
     check_timer :: reference() | undefined,
-    partition_count = 0 :: integer()
+    partition_count = 0 :: integer(),
+    epoch = 0 :: non_neg_integer()  %% FM-2: Epoch counter for split-brain resolution
 }).
 
 %% =============================================================================
@@ -161,7 +163,8 @@ handle_call(get_status, _From, State) ->
         expected_nodes => State#state.expected_nodes,
         visible_nodes => State#state.visible_nodes,
         partition_count => State#state.partition_count,
-        last_quorum_loss => State#state.last_quorum_loss
+        last_quorum_loss => State#state.last_quorum_loss,
+        epoch => State#state.epoch  %% FM-2: Epoch for split-brain resolution
     },
     {reply, Status, State};
 
@@ -248,8 +251,9 @@ do_partition_check(State = #state{quorum_threshold = Threshold}) ->
 enter_safe_mode(State) ->
     Now = os:system_time(second),
     NewCount = State#state.partition_count + 1,
+    NewEpoch = State#state.epoch + 1,  %% FM-2: Increment epoch on partition
     
-    logger:error("=== PARTITION DETECTED ==="),
+    logger:error("=== PARTITION DETECTED (epoch ~p) ===", [NewEpoch]),
     logger:error("Expected nodes: ~p", [State#state.expected_nodes]),
     logger:error("Visible nodes: ~p", [State#state.visible_nodes]),
     logger:error("Entering SAFE MODE - writes will be rejected"),
@@ -261,7 +265,8 @@ enter_safe_mode(State) ->
     State#state{
         mode = safe_mode,
         last_quorum_loss = Now,
-        partition_count = NewCount
+        partition_count = NewCount,
+        epoch = NewEpoch
     }.
 
 maybe_exit_safe_mode(State = #state{last_quorum_loss = LastLoss}) ->
@@ -339,4 +344,23 @@ get_static_expected_nodes() ->
                 {ok, Seeds} when is_list(Seeds) -> Seeds;
                 _ -> []
             end
+    end.
+
+%% =============================================================================
+%% FM-2: Split-Brain Resolution
+%% RFC-001 v4.0 Section 7.1.1:
+%% Higher epoch wins; equal epoch ties broken by lowest node ID.
+%% =============================================================================
+
+-spec resolve_authority(non_neg_integer(), node(), non_neg_integer(), node()) ->
+    {authoritative, node()}.
+resolve_authority(EpochA, NodeA, EpochB, _NodeB) when EpochA > EpochB ->
+    {authoritative, NodeA};
+resolve_authority(EpochA, _NodeA, EpochB, NodeB) when EpochA < EpochB ->
+    {authoritative, NodeB};
+resolve_authority(_Epoch, NodeA, _Epoch2, NodeB) ->
+    %% Equal epoch: lowest node ID wins
+    case NodeA < NodeB of
+        true -> {authoritative, NodeA};
+        false -> {authoritative, NodeB}
     end.

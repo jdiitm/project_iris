@@ -21,6 +21,8 @@
 -export([is_auth_enabled/0]).
 -export([get_eddsa_public_key/0]).  %% P1-4: EdDSA public key retrieval
 -export([receive_revocation/2]).  %% P1-H2: Cross-node revocation propagation
+%% IA-3: Refresh token API (RFC-001 v4.0 FR-11a)
+-export([create_refresh_token/1, create_refresh_token/2, exchange_refresh_token/1]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
 -define(SERVER, ?MODULE).
@@ -258,10 +260,15 @@ do_validate(Token, Opts, State = #state{secret = Secret, issuer = ExpectedIssuer
             Alg = get_header_alg(Header),
             SigningInput = <<Header/binary, ".", Payload/binary>>,
             
+            %% IA-1: Check HMAC deprecation flag before validation
+            HmacAllowed = application:get_env(iris_edge, allow_hmac_jwt, true),
             SigValid = case Alg of
                 <<"EdDSA">> ->
                     %% P1-4: EdDSA verification
                     verify_eddsa_signature(SigningInput, Signature, State);
+                _ when HmacAllowed =:= false ->
+                    %% IA-1: HMAC deprecated - reject
+                    hmac_deprecated;
                 _ ->
                     %% Default: HMAC-SHA256
                     ExpectedSig = compute_signature(SigningInput, Secret),
@@ -280,6 +287,8 @@ do_validate(Token, Opts, State = #state{secret = Secret, issuer = ExpectedIssuer
                             end;
                         Error -> Error
                     end;
+                hmac_deprecated ->
+                    {error, hmac_deprecated};
                 false ->
                     {error, invalid_signature}
             end;
@@ -605,3 +614,77 @@ cleanup_fold(Key, Cutoff) ->
         _ -> ok
     end,
     cleanup_fold(Next, Cutoff).
+
+%% =============================================================================
+%% IA-3: Refresh Token Implementation (RFC-001 v4.0 FR-11a)
+%% =============================================================================
+
+-define(REFRESH_TABLE, refresh_tokens).
+-define(REFRESH_TTL, 2592000).  %% 30 days in seconds
+
+-spec create_refresh_token(binary()) -> {ok, binary()} | {error, term()}.
+create_refresh_token(UserId) ->
+    create_refresh_token(UserId, ?REFRESH_TTL).
+
+-spec create_refresh_token(binary(), non_neg_integer()) -> {ok, binary()} | {error, term()}.
+create_refresh_token(UserId, TTL) ->
+    TokenId = base64:encode(crypto:strong_rand_bytes(32)),
+    FamilyId = base64:encode(crypto:strong_rand_bytes(16)),
+    Now = os:system_time(second),
+    ExpiresAt = Now + TTL,
+    Record = {?REFRESH_TABLE, TokenId, UserId, FamilyId, false, Now, ExpiresAt},
+    try
+        mnesia:dirty_write(?REFRESH_TABLE, Record),
+        {ok, TokenId}
+    catch
+        _:Reason -> {error, Reason}
+    end.
+
+-spec exchange_refresh_token(binary()) -> {ok, binary(), binary()} | {error, term()}.
+exchange_refresh_token(TokenId) ->
+    Now = os:system_time(second),
+    case mnesia:dirty_read(?REFRESH_TABLE, TokenId) of
+        [] ->
+            {error, token_reused};
+        [{?REFRESH_TABLE, TokenId, UserId, FamilyId, Used, _CreatedAt, ExpiresAt}] ->
+            case ExpiresAt =< Now of
+                true ->
+                    {error, refresh_expired};
+                false ->
+                    case Used of
+                        true ->
+                            %% Token reuse detected - revoke entire family
+                            revoke_refresh_family(FamilyId),
+                            {error, token_reused};
+                        false ->
+                            %% Mark as used
+                            mnesia:dirty_write(?REFRESH_TABLE,
+                                {?REFRESH_TABLE, TokenId, UserId, FamilyId, true, Now, ExpiresAt}),
+                            %% Create new tokens
+                            {ok, NewAccess} = create_token(UserId),
+                            {ok, NewRefresh} = create_refresh_token_in_family(UserId, FamilyId),
+                            {ok, NewAccess, NewRefresh}
+                    end
+            end
+    end.
+
+create_refresh_token_in_family(UserId, FamilyId) ->
+    TokenId = base64:encode(crypto:strong_rand_bytes(32)),
+    Now = os:system_time(second),
+    ExpiresAt = Now + ?REFRESH_TTL,
+    Record = {?REFRESH_TABLE, TokenId, UserId, FamilyId, false, Now, ExpiresAt},
+    mnesia:dirty_write(?REFRESH_TABLE, Record),
+    {ok, TokenId}.
+
+revoke_refresh_family(FamilyId) ->
+    %% Mark all tokens in this family as used
+    try
+        AllTokens = mnesia:dirty_match_object(?REFRESH_TABLE,
+            {?REFRESH_TABLE, '_', '_', FamilyId, '_', '_', '_'}),
+        lists:foreach(fun({?REFRESH_TABLE, TId, UId, FId, _Used, CAt, EAt}) ->
+            mnesia:dirty_write(?REFRESH_TABLE,
+                {?REFRESH_TABLE, TId, UId, FId, true, CAt, EAt})
+        end, AllTokens)
+    catch
+        _:_ -> ok
+    end.

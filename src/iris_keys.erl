@@ -27,6 +27,9 @@
 -export([refill_one_time_prekeys/2]).
 -export([get_prekey_count/1]).
 
+%% Safety Number (EK-1: RFC-001-AMENDMENT-001 v1.3 Section 5.3.1)
+-export([compute_safety_number/2]).
+
 %% Admin API
 -export([delete_user_keys/1, list_users/0]).
 
@@ -516,3 +519,34 @@ get_opk_metrics() ->
     catch
         error:badarg -> #{}  %% Table not created yet
     end.
+
+%% =============================================================================
+%% Safety Number Computation (EK-1)
+%% RFC-001-AMENDMENT-001 v1.3 Section 5.3.1:
+%% SHA-256(sort(IK_A, IK_B))[:30] displayed as 12 groups of 5 digits
+%% =============================================================================
+
+-spec compute_safety_number(binary(), binary()) -> {ok, binary()} | {error, invalid_key}.
+compute_safety_number(IK_A, IK_B) when is_binary(IK_A), is_binary(IK_B),
+                                        byte_size(IK_A) >= 16, byte_size(IK_B) >= 16 ->
+    Sorted = lists:sort([IK_A, IK_B]),
+    Combined = erlang:iolist_to_binary(Sorted),
+    Hash = crypto:hash(sha256, Combined),
+    %% Take first 30 bytes -> 60 hex chars -> convert to 60 decimal digits
+    Trunc = binary:part(Hash, 0, 30),
+    Digits = format_safety_number_digits(Trunc),
+    {ok, Digits};
+compute_safety_number(_, _) ->
+    {error, invalid_key}.
+
+%% Convert 30 bytes to 60 decimal digits grouped as 12x5
+format_safety_number_digits(Bytes) ->
+    %% Convert each byte to 2-digit decimal (mod 100, zero-padded)
+    DigitList = lists:flatten([
+        io_lib:format("~2..0B", [B rem 100])
+        || <<B>> <= Bytes
+    ]),
+    DigitsBin = list_to_binary(DigitList),
+    %% Group into 12 groups of 5 digits
+    Groups = [binary:part(DigitsBin, I * 5, 5) || I <- lists:seq(0, 11)],
+    iolist_to_binary(lists:join(<<" ">>, Groups)).

@@ -354,6 +354,8 @@ DOCKER_CHAOS_TESTS=(
     "tests/suites/chaos_dist/test_disk_full.py"
     "tests/suites/chaos_dist/test_split_brain_convergence.py"
     "tests/suites/chaos_dist/test_outbox_queue_overflow.py"
+    "tests/suites/chaos_dist/test_outbox_overflow_enforcement.py"
+    "tests/suites/chaos_dist/test_split_brain_epoch_resolution.py"
 )
 
 # ============================================================================
