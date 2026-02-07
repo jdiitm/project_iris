@@ -80,9 +80,9 @@ def test_messaging_with_eddsa_only_mode():
         "{ok, _} = iris_auth:start_link(), "
         "application:set_env(iris_edge, allow_hmac_jwt, false), "
         "{ok, T} = iris_auth:create_token(<<\"test\">>), "
-        "R = iris_auth:validate_token(T), "
+        "Result = iris_auth:validate_token(T), "
         "application:unset_env(iris_edge, allow_hmac_jwt), "
-        "io:format(\"RESULT:~p~n\", [R])"
+        "io:format(\"RESULT:~p~n\", [Result])"
     )
     result = subprocess.run(
         ["erl", "-pa", "ebin", "-noshell", "-eval",
