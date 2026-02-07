@@ -67,7 +67,17 @@ def test_messaging_with_eddsa_only_mode():
     log("=" * 60)
 
     # Verify via Erlang that the config flag works
+    # Must set up Mnesia + iris_auth gen_server in the subprocess
     code = (
+        "application:stop(mnesia), "
+        "mnesia:delete_schema([node()]), "
+        "mnesia:create_schema([node()]), "
+        "mnesia:start(), "
+        "mnesia:create_table(revoked_tokens, [{ram_copies, [node()]}, {attributes, [token_id, timestamp]}]), "
+        "mnesia:wait_for_tables([revoked_tokens], 5000), "
+        "application:set_env(iris_edge, jwt_secret, <<\"test_secret_hmac_deprecation_key!\">>), "
+        "application:set_env(iris_edge, auth_enabled, true), "
+        "{ok, _} = iris_auth:start_link(), "
         "application:set_env(iris_edge, allow_hmac_jwt, false), "
         "{ok, T} = iris_auth:create_token(<<\"test\">>), "
         "R = iris_auth:validate_token(T), "
