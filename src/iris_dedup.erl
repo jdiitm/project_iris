@@ -49,6 +49,7 @@
     duplicates_caught = 0 :: integer(),
     bloom_hits = 0 :: integer(),
     bloom_false_positives = 0 :: integer(),  %% P0-FIX: Track false positives
+    bloom_checks = 0 :: integer(),           %% MO-2: Total bloom lookups for FPR
     evictions = 0 :: integer()
 }).
 
@@ -181,11 +182,23 @@ init(_Opts) ->
 handle_call(get_stats, _From, State) ->
     TableSize = ets:info(?TABLE, size),
     BloomPartitions = ets:info(?BLOOM_TABLE, size),
+    FP = State#state.bloom_false_positives,
+    Checks = State#state.bloom_checks,
+    Fpr = case Checks of
+        0 -> 0.0;
+        _ -> FP / Checks
+    end,
+    MaxFpr = application:get_env(iris_core, max_bloom_fpr, 0.01),
+    FprAlert = (FP > 0) andalso (Fpr > MaxFpr),
     Stats = #{
         hot_entries => TableSize,
         duplicates_caught => State#state.duplicates_caught,
         bloom_hits => State#state.bloom_hits,
-        bloom_false_positives => State#state.bloom_false_positives,
+        bloom_false_positives => FP,
+        bloom_checks => Checks,
+        bloom_fpr => Fpr,
+        max_bloom_fpr => MaxFpr,
+        fpr_alert => FprAlert,
         bloom_partitions => BloomPartitions,
         evictions => State#state.evictions,
         max_entries => ?MAX_ENTRIES,
@@ -199,8 +212,9 @@ handle_call(_Request, _From, State) ->
 
 handle_cast({new_entry, _Timestamp}, State) ->
     %% Track entry count for eviction
+    %% MO-2: Also count as a bloom check for FPR computation
     NewEntries = State#state.entries + 1,
-    {noreply, State#state{entries = NewEntries}};
+    {noreply, State#state{entries = NewEntries, bloom_checks = State#state.bloom_checks + 1}};
 
 handle_cast(duplicate_caught, State) ->
     {noreply, State#state{duplicates_caught = State#state.duplicates_caught + 1}};
@@ -213,8 +227,10 @@ handle_cast(bloom_hit, State) ->
 
 handle_cast({false_positive, _Timestamp}, State) ->
     %% P0-FIX: Track bloom filter false positives (messages that bloom said "duplicate" but weren't)
+    %% MO-2: Also count as a bloom check for FPR computation
     {noreply, State#state{
-        bloom_false_positives = State#state.bloom_false_positives + 1
+        bloom_false_positives = State#state.bloom_false_positives + 1,
+        bloom_checks = State#state.bloom_checks + 1
     }};
 
 handle_cast(_Msg, State) ->

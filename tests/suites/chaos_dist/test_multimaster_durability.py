@@ -189,9 +189,9 @@ def parse_and_ack_messages(sock, data):
     while idx < len(data):
         opcode = data[idx]
         
-        # Check for reliable message (opcode 16 = 0x10)
-        if opcode == 16:
-            # Format: 16 | IdLen(16) | MsgId | MsgLen(32) | Msg
+        # Check for reliable message (opcode 17 = 0x11, PROTOCOL_V1_FREEZE v1.1)
+        if opcode == 17:
+            # Format: 0x11 | IdLen(16) | MsgId | MsgLen(32) | Msg
             if idx + 3 > len(data):
                 break  # Need more data
             

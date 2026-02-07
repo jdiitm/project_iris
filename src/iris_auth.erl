@@ -15,10 +15,14 @@
 -export([start_link/0]).
 -export([validate_token/1, validate_token/2]).
 -export([create_token/1, create_token/2, create_token/3]).
+-export([create_eddsa_token/1, create_eddsa_token/2, create_eddsa_token/3]). %% P1-4: EdDSA JWT
 -export([revoke_token/1]).
 -export([get_user_from_token/1]).
 -export([is_auth_enabled/0]).
+-export([get_eddsa_public_key/0]).  %% P1-4: EdDSA public key retrieval
 -export([receive_revocation/2]).  %% P1-H2: Cross-node revocation propagation
+%% IA-3: Refresh token API (RFC-001 v4.0 FR-11a)
+-export([create_refresh_token/1, create_refresh_token/2, exchange_refresh_token/1]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
 -define(SERVER, ?MODULE).
@@ -28,7 +32,9 @@
 -record(state, {
     secret :: binary(),
     issuer :: binary(),
-    revoked_count = 0 :: integer()
+    revoked_count = 0 :: integer(),
+    eddsa_pub :: binary() | undefined,    %% P1-4: Ed25519 public key
+    eddsa_priv :: binary() | undefined    %% P1-4: Ed25519 private key
 }).
 
 %% =============================================================================
@@ -65,6 +71,24 @@ create_token(UserId, Claims) ->
 -spec create_token(binary(), map(), integer()) -> {ok, binary()} | {error, term()}.
 create_token(UserId, Claims, TTL) ->
     gen_server:call(?SERVER, {create, UserId, Claims, TTL}).
+
+%% @doc Create an EdDSA-signed JWT token (P1-4: RFC-001 v4.0 Section 6.3).
+-spec create_eddsa_token(binary()) -> {ok, binary()} | {error, term()}.
+create_eddsa_token(UserId) ->
+    create_eddsa_token(UserId, #{}).
+
+-spec create_eddsa_token(binary(), map()) -> {ok, binary()} | {error, term()}.
+create_eddsa_token(UserId, Claims) ->
+    create_eddsa_token(UserId, Claims, ?DEFAULT_TTL).
+
+-spec create_eddsa_token(binary(), map(), integer()) -> {ok, binary()} | {error, term()}.
+create_eddsa_token(UserId, Claims, TTL) ->
+    gen_server:call(?SERVER, {create_eddsa, UserId, Claims, TTL}).
+
+%% @doc Get the EdDSA public key for token verification.
+-spec get_eddsa_public_key() -> {ok, binary()} | {error, no_eddsa_key}.
+get_eddsa_public_key() ->
+    gen_server:call(?SERVER, get_eddsa_public_key).
 
 %% @doc Revoke a token by its JTI (extracted from token).
 -spec revoke_token(binary()) -> ok | {error, term()}.
@@ -150,8 +174,25 @@ init([]) ->
     %% Schedule cleanup of expired revocations
     erlang:send_after(3600000, self(), cleanup_revocations),
     
-    logger:info("JWT auth initialized (issuer: ~s)", [Issuer]),
-    {ok, #state{secret = Secret, issuer = Issuer}}.
+    %% P1-4: Generate or load EdDSA key pair
+    {EdDSAPub, EdDSAPriv} = case application:get_env(iris_edge, jwt_eddsa_private_key) of
+        {ok, PrivKeyBin} when is_binary(PrivKeyBin), byte_size(PrivKeyBin) =:= 32 ->
+            %% Derive public key from private key
+            PubKey = crypto:generate_key(eddsa, ed25519, PrivKeyBin),
+            case PubKey of
+                {Pub, _Priv} -> {Pub, PrivKeyBin};
+                _ -> {undefined, undefined}
+            end;
+        _ ->
+            %% Generate ephemeral key pair (for testing/non-production)
+            {Pub, Priv} = crypto:generate_key(eddsa, ed25519),
+            logger:info("JWT: Generated ephemeral EdDSA key pair (set jwt_eddsa_private_key for persistence)"),
+            {Pub, Priv}
+    end,
+
+    logger:info("JWT auth initialized (issuer: ~s, eddsa: ~s)", 
+                [Issuer, case EdDSAPub of undefined -> "disabled"; _ -> "enabled" end]),
+    {ok, #state{secret = Secret, issuer = Issuer, eddsa_pub = EdDSAPub, eddsa_priv = EdDSAPriv}}.
 
 handle_call({validate, Token, Opts}, _From, State) ->
     Result = do_validate(Token, Opts, State),
@@ -178,6 +219,16 @@ handle_call({revoke, TokenId}, _From, State = #state{revoked_count = Count}) ->
     
     {reply, ok, State#state{revoked_count = Count + 1}};
 
+handle_call({create_eddsa, UserId, ExtraClaims, TTL}, _From, State) ->
+    Result = do_create_eddsa_token(UserId, ExtraClaims, TTL, State),
+    {reply, Result, State};
+
+handle_call(get_eddsa_public_key, _From, State = #state{eddsa_pub = Pub}) ->
+    case Pub of
+        undefined -> {reply, {error, no_eddsa_key}, State};
+        _ -> {reply, {ok, Pub}, State}
+    end;
+
 handle_call(_Request, _From, State) ->
     {reply, {error, unknown_request}, State}.
 
@@ -202,14 +253,29 @@ terminate(_Reason, _State) ->
 %% Internal: JWT Validation
 %% =============================================================================
 
-do_validate(Token, Opts, #state{secret = Secret, issuer = ExpectedIssuer}) ->
+do_validate(Token, Opts, State = #state{secret = Secret, issuer = ExpectedIssuer}) ->
     case split_token(Token) of
         {ok, Header, Payload, Signature} ->
-            %% Verify signature
+            %% Determine algorithm from header
+            Alg = get_header_alg(Header),
             SigningInput = <<Header/binary, ".", Payload/binary>>,
-            ExpectedSig = compute_signature(SigningInput, Secret),
             
-            case constant_time_compare(Signature, ExpectedSig) of
+            %% IA-1: Check HMAC deprecation flag before validation
+            HmacAllowed = application:get_env(iris_edge, allow_hmac_jwt, true),
+            SigValid = case Alg of
+                <<"EdDSA">> ->
+                    %% P1-4: EdDSA verification
+                    verify_eddsa_signature(SigningInput, Signature, State);
+                _ when HmacAllowed =:= false ->
+                    %% IA-1: HMAC deprecated - reject
+                    hmac_deprecated;
+                _ ->
+                    %% Default: HMAC-SHA256
+                    ExpectedSig = compute_signature(SigningInput, Secret),
+                    constant_time_compare(Signature, ExpectedSig)
+            end,
+            
+            case SigValid of
                 true ->
                     %% Decode and validate claims
                     case decode_base64url(Payload) of
@@ -221,6 +287,8 @@ do_validate(Token, Opts, #state{secret = Secret, issuer = ExpectedIssuer}) ->
                             end;
                         Error -> Error
                     end;
+                hmac_deprecated ->
+                    {error, hmac_deprecated};
                 false ->
                     {error, invalid_signature}
             end;
@@ -342,6 +410,33 @@ do_create_token(UserId, ExtraClaims, TTL, #state{secret = Secret, issuer = Issue
     {ok, Token}.
 
 %% =============================================================================
+%% Internal: EdDSA Token Creation (P1-4)
+%% =============================================================================
+
+do_create_eddsa_token(UserId, ExtraClaims, TTL, #state{issuer = Issuer, eddsa_priv = PrivKey}) ->
+    case PrivKey of
+        undefined -> {error, no_eddsa_key};
+        _ ->
+            Now = os:system_time(second),
+            Jti = generate_jti(),
+            Claims = maps:merge(ExtraClaims, #{
+                <<"sub">> => UserId,
+                <<"iss">> => Issuer,
+                <<"iat">> => Now,
+                <<"exp">> => Now + TTL,
+                <<"jti">> => Jti
+            }),
+            Header = #{<<"alg">> => <<"EdDSA">>, <<"typ">> => <<"JWT">>},
+            HeaderB64 = encode_base64url(encode_json(Header)),
+            PayloadB64 = encode_base64url(encode_json(Claims)),
+            SigningInput = <<HeaderB64/binary, ".", PayloadB64/binary>>,
+            Sig = crypto:sign(eddsa, none, SigningInput, [PrivKey, ed25519]),
+            SigB64 = encode_base64url(Sig),
+            Token = <<SigningInput/binary, ".", SigB64/binary>>,
+            {ok, Token}
+    end.
+
+%% =============================================================================
 %% Internal: Crypto Helpers
 %% =============================================================================
 
@@ -349,6 +444,29 @@ compute_signature(Input, Secret) ->
     %% HMAC-SHA256
     Mac = crypto:mac(hmac, sha256, Secret, Input),
     encode_base64url(Mac).
+
+%% P1-4: Extract algorithm from JWT header
+get_header_alg(HeaderB64) ->
+    case decode_base64url(HeaderB64) of
+        {ok, Json} ->
+            case decode_json(Json) of
+                {ok, Map} -> maps:get(<<"alg">>, Map, <<"HS256">>);
+                _ -> <<"HS256">>
+            end;
+        _ -> <<"HS256">>
+    end.
+
+%% P1-4: Verify EdDSA signature
+verify_eddsa_signature(SigningInput, SigB64, #state{eddsa_pub = PubKey}) ->
+    case PubKey of
+        undefined -> false;
+        _ ->
+            case decode_base64url(SigB64) of
+                {ok, SigBytes} ->
+                    crypto:verify(eddsa, none, SigningInput, SigBytes, [PubKey, ed25519]);
+                _ -> false
+            end
+    end.
 
 generate_secret() ->
     %% Generate 32-byte random secret
@@ -496,3 +614,77 @@ cleanup_fold(Key, Cutoff) ->
         _ -> ok
     end,
     cleanup_fold(Next, Cutoff).
+
+%% =============================================================================
+%% IA-3: Refresh Token Implementation (RFC-001 v4.0 FR-11a)
+%% =============================================================================
+
+-define(REFRESH_TABLE, refresh_tokens).
+-define(REFRESH_TTL, 2592000).  %% 30 days in seconds
+
+-spec create_refresh_token(binary()) -> {ok, binary()} | {error, term()}.
+create_refresh_token(UserId) ->
+    create_refresh_token(UserId, ?REFRESH_TTL).
+
+-spec create_refresh_token(binary(), non_neg_integer()) -> {ok, binary()} | {error, term()}.
+create_refresh_token(UserId, TTL) ->
+    TokenId = base64:encode(crypto:strong_rand_bytes(32)),
+    FamilyId = base64:encode(crypto:strong_rand_bytes(16)),
+    Now = os:system_time(second),
+    ExpiresAt = Now + TTL,
+    Record = {?REFRESH_TABLE, TokenId, UserId, FamilyId, false, Now, ExpiresAt},
+    try
+        mnesia:dirty_write(?REFRESH_TABLE, Record),
+        {ok, TokenId}
+    catch
+        _:Reason -> {error, Reason}
+    end.
+
+-spec exchange_refresh_token(binary()) -> {ok, binary(), binary()} | {error, term()}.
+exchange_refresh_token(TokenId) ->
+    Now = os:system_time(second),
+    case mnesia:dirty_read(?REFRESH_TABLE, TokenId) of
+        [] ->
+            {error, token_reused};
+        [{?REFRESH_TABLE, TokenId, UserId, FamilyId, Used, _CreatedAt, ExpiresAt}] ->
+            case ExpiresAt =< Now of
+                true ->
+                    {error, refresh_expired};
+                false ->
+                    case Used of
+                        true ->
+                            %% Token reuse detected - revoke entire family
+                            revoke_refresh_family(FamilyId),
+                            {error, token_reused};
+                        false ->
+                            %% Mark as used
+                            mnesia:dirty_write(?REFRESH_TABLE,
+                                {?REFRESH_TABLE, TokenId, UserId, FamilyId, true, Now, ExpiresAt}),
+                            %% Create new tokens
+                            {ok, NewAccess} = create_token(UserId),
+                            {ok, NewRefresh} = create_refresh_token_in_family(UserId, FamilyId),
+                            {ok, NewAccess, NewRefresh}
+                    end
+            end
+    end.
+
+create_refresh_token_in_family(UserId, FamilyId) ->
+    TokenId = base64:encode(crypto:strong_rand_bytes(32)),
+    Now = os:system_time(second),
+    ExpiresAt = Now + ?REFRESH_TTL,
+    Record = {?REFRESH_TABLE, TokenId, UserId, FamilyId, false, Now, ExpiresAt},
+    mnesia:dirty_write(?REFRESH_TABLE, Record),
+    {ok, TokenId}.
+
+revoke_refresh_family(FamilyId) ->
+    %% Mark all tokens in this family as used
+    try
+        AllTokens = mnesia:dirty_match_object(?REFRESH_TABLE,
+            {?REFRESH_TABLE, '_', '_', FamilyId, '_', '_', '_'}),
+        lists:foreach(fun({?REFRESH_TABLE, TId, UId, FId, _Used, CAt, EAt}) ->
+            mnesia:dirty_write(?REFRESH_TABLE,
+                {?REFRESH_TABLE, TId, UId, FId, true, CAt, EAt})
+        end, AllTokens)
+    catch
+        _:_ -> ok
+    end.

@@ -1,5 +1,5 @@
 -module(iris_proto).
--export([decode/1, unpack_batch/1, encode_status/3, encode_reliable_msg/2]).
+-export([decode/1, unpack_batch/1, encode_status/3, encode_reliable_msg/2, decode_reliable_msg/1]).
 -export([encode_seq_msg/3]).  %% AUDIT FIX: Sequence-numbered message encoder (RFC FR-5)
 -export([generate_msg_id/0]). %% Unique message ID generator
 
@@ -16,6 +16,10 @@
 
 %% Read Receipts (Best-effort features, Opcodes 0x74-0x75)
 -export([encode_read_receipt/2, encode_read_receipt_relay/3]).
+
+%% Control Opcodes (PROTOCOL_V1_FREEZE v1.1, Opcodes 0x08-0x0B)
+-export([encode_ping/0, encode_pong/0]).
+-export([encode_resume/2, encode_token_refresh/1]).
 
 %% Group Messaging (RFC-001-AMENDMENT-001, Opcodes 0x30-0x36)
 -export([encode_group_create/1, encode_group_join/2]).
@@ -39,6 +43,10 @@
                 | {typing_start, binary()}     %% Typing indicator start (0x70)
                 | {typing_stop, binary()}      %% Typing indicator stop (0x71)
                 | {read_receipt, binary(), binary()}  %% Read receipt (0x74)
+                | ping                               %% Keepalive ping (0x08)
+                | pong                               %% Keepalive pong (0x09)
+                | {resume, binary(), non_neg_integer()} %% Connection resume (0x0A)
+                | {token_refresh, binary()}           %% Token refresh (0x0B)
                 | {ack, binary()}
                 | {error, term()}.
 
@@ -168,6 +176,48 @@ decode(<<7, TargetLen:16, Rest/binary>>) ->
             { {send_seq, Target, SeqNo, Msg}, Rem };
         _ ->
             {more, <<7, TargetLen:16, Rest/binary>>}
+    end;
+
+%% =============================================================================
+%% Control Opcodes (PROTOCOL_V1_FREEZE v1.1, Opcodes 0x08-0x0B)
+%% =============================================================================
+%% 0x08 -> ping          (Client keepalive)
+%% 0x09 -> pong          (Server keepalive response)
+%% 0x0A | SessionIdLen(16) | SessionId | LastSeq(64) -> {resume, SessionId, LastSeq}
+%% 0x0B | TokenLen(16) | Token -> {token_refresh, Token}
+
+decode(<<16#08>>) ->
+    {ping, <<>>};
+decode(<<16#08, Rest/binary>>) ->
+    {ping, Rest};
+
+decode(<<16#09>>) ->
+    {pong, <<>>};
+decode(<<16#09, Rest/binary>>) ->
+    {pong, Rest};
+
+decode(<<16#0A, _/binary>> = Bin) when byte_size(Bin) < 3 ->
+    {more, Bin};
+decode(<<16#0A, SessionIdLen:16, _/binary>>) when SessionIdLen > ?MAX_USERNAME_LEN ->
+    { {error, session_id_too_long}, <<>> };
+decode(<<16#0A, SessionIdLen:16, Rest/binary>>) ->
+    case Rest of
+        <<SessionId:SessionIdLen/binary, LastSeq:64, Rem/binary>> ->
+            { {resume, SessionId, LastSeq}, Rem };
+        _ ->
+            {more, <<16#0A, SessionIdLen:16, Rest/binary>>}
+    end;
+
+decode(<<16#0B, _/binary>> = Bin) when byte_size(Bin) < 3 ->
+    {more, Bin};
+decode(<<16#0B, TokenLen:16, _/binary>>) when TokenLen > ?MAX_MSG_LEN ->
+    { {error, token_too_long}, <<>> };
+decode(<<16#0B, TokenLen:16, Rest/binary>>) ->
+    case Rest of
+        <<Token:TokenLen/binary, Rem/binary>> ->
+            { {token_refresh, Token}, Rem };
+        _ ->
+            {more, <<16#0B, TokenLen:16, Rest/binary>>}
     end;
 
 %% =============================================================================
@@ -474,19 +524,21 @@ unpack_batch_loop(<<Len:16, Msg:Len/binary, Rest/binary>>, Acc, Count, Max) ->
 unpack_batch_loop(_, Acc, _Count, _Max) -> lists:reverse(Acc). %% Tolerant of trailing garbage
 
 %% Encode reliable message with proper framing (includes MsgLen)
+%% PROTOCOL_V1_FREEZE v1.1: Opcode moved from 0x10 to 0x11 to resolve
+%% collision with CBOR_MSG (P1-2).
 encode_reliable_msg(MsgId, Msg) ->
     IdLen = byte_size(MsgId),
     MsgLen = byte_size(Msg),
-    <<16, IdLen:16, MsgId/binary, MsgLen:32, Msg/binary>>.
+    <<16#11, IdLen:16, MsgId/binary, MsgLen:32, Msg/binary>>.
 
-%% Decode reliable message (opcode 16)
-decode_reliable_msg(<<16, IdLen:16, Rest/binary>>) when byte_size(Rest) >= IdLen + 4 ->
+%% Decode reliable message (opcode 0x11, PROTOCOL_V1_FREEZE v1.1)
+decode_reliable_msg(<<16#11, IdLen:16, Rest/binary>>) when byte_size(Rest) >= IdLen + 4 ->
     <<MsgId:IdLen/binary, MsgLen:32, Tail/binary>> = Rest,
     case Tail of
         <<Msg:MsgLen/binary, Rem/binary>> ->
             {{reliable_msg, MsgId, Msg}, Rem};
         _ ->
-            {more, <<16, IdLen:16, Rest/binary>>}
+            {more, <<16#11, IdLen:16, Rest/binary>>}
     end;
 decode_reliable_msg(Bin) ->
     {more, Bin}.
@@ -848,6 +900,32 @@ encode_typing_relay(Sender, IsTyping) when is_binary(Sender) ->
     SLen = byte_size(Sender),
     Status = case IsTyping of true -> 1; false -> 0 end,
     <<16#72, SLen:16, Sender/binary, Status:8>>.
+
+%% =============================================================================
+%% Control Opcode Encoding (PROTOCOL_V1_FREEZE v1.1, Opcodes 0x08-0x0B)
+%% =============================================================================
+
+%% @doc Encode PING keepalive (0x08) - Client to Server
+-spec encode_ping() -> binary().
+encode_ping() -> <<16#08>>.
+
+%% @doc Encode PONG keepalive response (0x09) - Server to Client
+-spec encode_pong() -> binary().
+encode_pong() -> <<16#09>>.
+
+%% @doc Encode RESUME request (0x0A) - Client to Server
+%% Format: 0x0A | SessionIdLen(16) | SessionId | LastSeqNo(64)
+-spec encode_resume(binary(), non_neg_integer()) -> binary().
+encode_resume(SessionId, LastSeqNo) when is_binary(SessionId), is_integer(LastSeqNo) ->
+    SLen = byte_size(SessionId),
+    <<16#0A, SLen:16, SessionId/binary, LastSeqNo:64>>.
+
+%% @doc Encode TOKEN_REFRESH request (0x0B) - Client to Server
+%% Format: 0x0B | TokenLen(16) | RefreshToken
+-spec encode_token_refresh(binary()) -> binary().
+encode_token_refresh(Token) when is_binary(Token) ->
+    TLen = byte_size(Token),
+    <<16#0B, TLen:16, Token/binary>>.
 
 %% =============================================================================
 %% Read Receipt Encoding (Best-effort, Opcodes 0x74-0x75)

@@ -27,7 +27,21 @@ iris_proto_test_() ->
      {"Encode status offline", fun test_encode_status_offline/0},
      {"Encode status long username", fun test_encode_status_long_user/0},
      {"Encode status unicode user", fun test_encode_status_unicode/0},
-     {"Encode reliable msg", fun test_encode_reliable_msg/0},
+     {"Encode reliable msg (opcode 0x11)", fun test_encode_reliable_msg/0},
+     
+     %% PROTOCOL_V1_FREEZE v1.1: New control opcode tests
+     {"Decode PING (0x08)", fun test_decode_ping/0},
+     {"Decode PONG (0x09)", fun test_decode_pong/0},
+     {"Decode RESUME (0x0A)", fun test_decode_resume/0},
+     {"Decode RESUME partial", fun test_decode_resume_partial/0},
+     {"Decode TOKEN_REFRESH (0x0B)", fun test_decode_token_refresh/0},
+     {"Decode TOKEN_REFRESH partial", fun test_decode_token_refresh_partial/0},
+     {"Encode PING", fun test_encode_ping/0},
+     {"Encode PONG", fun test_encode_pong/0},
+     {"Encode RESUME", fun test_encode_resume/0},
+     {"Encode TOKEN_REFRESH", fun test_encode_token_refresh/0},
+     {"Opcode 0x10 decodes as cbor_msg only", fun test_0x10_is_cbor_only/0},
+     {"Reliable msg roundtrip (opcode 0x11)", fun test_reliable_msg_roundtrip_0x11/0},
      
      %% Unpack batch tests
      {"Unpack batch multiple messages", fun test_unpack_batch_multiple/0},
@@ -185,7 +199,8 @@ test_encode_reliable_msg() ->
     
     IdLen = byte_size(MsgId),
     MsgLen = byte_size(Msg),
-    Expected = <<16, IdLen:16, MsgId/binary, MsgLen:32, Msg/binary>>,
+    %% PROTOCOL_V1_FREEZE v1.1: Opcode is 0x11 (17), not 0x10 (16)
+    Expected = <<16#11, IdLen:16, MsgId/binary, MsgLen:32, Msg/binary>>,
     ?assertEqual(Expected, Result).
 
 %% =============================================================================
@@ -310,7 +325,6 @@ test_sequential_decodes() ->
     %% Multiple packets in sequence
     Msg1 = <<3, "ack1">>,
     Msg2 = <<3, "ack2">>,
-    Combined = <<Msg1/binary, Msg2/binary>>,
     
     {{ack, <<"ack1">>}, Rest} = iris_proto:decode(Msg1),
     ?assertEqual(<<>>, Rest),
@@ -484,3 +498,88 @@ test_deep_batch() ->
     Result = iris_proto:unpack_batch(BatchBlob),
     ?assert(is_list(Result)),
     ?assertEqual(NumMsgs, length(Result)).
+
+%% =============================================================================
+%% PROTOCOL_V1_FREEZE v1.1: Control Opcode Tests (0x08-0x0B)
+%% =============================================================================
+
+test_decode_ping() ->
+    Result = iris_proto:decode(<<16#08>>),
+    ?assertEqual({ping, <<>>}, Result).
+
+test_decode_pong() ->
+    Result = iris_proto:decode(<<16#09>>),
+    ?assertEqual({pong, <<>>}, Result).
+
+test_decode_resume() ->
+    SessionId = <<"session_abc123">>,
+    SLen = byte_size(SessionId),
+    LastSeq = 42,
+    Input = <<16#0A, SLen:16, SessionId/binary, LastSeq:64>>,
+    Result = iris_proto:decode(Input),
+    ?assertEqual({{resume, SessionId, LastSeq}, <<>>}, Result).
+
+test_decode_resume_partial() ->
+    %% Only opcode and partial session ID length
+    Input = <<16#0A, 0>>,
+    Result = iris_proto:decode(Input),
+    ?assertMatch({more, _}, Result).
+
+test_decode_token_refresh() ->
+    Token = <<"eyJhbGciOiJFZERTQSJ9.test_refresh_token">>,
+    TLen = byte_size(Token),
+    Input = <<16#0B, TLen:16, Token/binary>>,
+    Result = iris_proto:decode(Input),
+    ?assertEqual({{token_refresh, Token}, <<>>}, Result).
+
+test_decode_token_refresh_partial() ->
+    %% Token length says 100 but only 5 bytes provided
+    Input = <<16#0B, 100:16, "short">>,
+    Result = iris_proto:decode(Input),
+    ?assertMatch({more, _}, Result).
+
+test_encode_ping() ->
+    Result = iris_proto:encode_ping(),
+    ?assertEqual(<<16#08>>, Result).
+
+test_encode_pong() ->
+    Result = iris_proto:encode_pong(),
+    ?assertEqual(<<16#09>>, Result).
+
+test_encode_resume() ->
+    SessionId = <<"sess_xyz">>,
+    LastSeq = 99,
+    Result = iris_proto:encode_resume(SessionId, LastSeq),
+    SLen = byte_size(SessionId),
+    Expected = <<16#0A, SLen:16, SessionId/binary, LastSeq:64>>,
+    ?assertEqual(Expected, Result).
+
+test_encode_token_refresh() ->
+    Token = <<"refresh_token_here">>,
+    Result = iris_proto:encode_token_refresh(Token),
+    TLen = byte_size(Token),
+    Expected = <<16#0B, TLen:16, Token/binary>>,
+    ?assertEqual(Expected, Result).
+
+test_0x10_is_cbor_only() ->
+    %% Opcode 0x10 must decode as CBOR_MSG, NOT reliable_msg
+    %% Construct a valid CBOR_MSG: 0x10 | TargetLen(16) | Target | CborLen(32) | CborPayload
+    Target = <<"bob">>,
+    TLen = byte_size(Target),
+    %% Minimal CBOR map: {}: A0 in CBOR = map with 0 entries
+    CborPayload = <<16#A0>>,
+    CLen = byte_size(CborPayload),
+    Input = <<16#10, TLen:16, Target/binary, CLen:32, CborPayload/binary>>,
+    Result = iris_proto:decode(Input),
+    ?assertMatch({{cbor_msg, <<"bob">>, _}, <<>>}, Result).
+
+test_reliable_msg_roundtrip_0x11() ->
+    MsgId = <<"msg_roundtrip_001">>,
+    Msg = <<"Hello, this is a reliable message">>,
+    %% Encode
+    Encoded = iris_proto:encode_reliable_msg(MsgId, Msg),
+    %% Verify opcode byte is 0x11
+    <<16#11, _/binary>> = Encoded,
+    %% Decode
+    {DecodedResult, <<>>} = iris_proto:decode_reliable_msg(Encoded),
+    ?assertEqual({reliable_msg, MsgId, Msg}, DecodedResult).

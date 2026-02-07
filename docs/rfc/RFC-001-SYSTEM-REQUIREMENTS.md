@@ -1,10 +1,10 @@
 # RFC-001: Project Iris — Global-Scale Messaging Platform
 
-**Status**: Draft v3  
+**Status**: Draft v4  
 **Authors**: System Architecture Team  
 **Created**: 2026-01-18  
-**Last Updated**: 2026-01-30  
-**Revision**: 3.0 (Canonical Architecture Alignment)
+**Last Updated**: 2026-02-06  
+**Revision**: 4.0 (Standards Audit Integration)
 
 ---
 
@@ -82,8 +82,10 @@ The network is adversarial. We guarantee **At-Least-Once** delivery.
 |----------------|-------------|
 | **Client** | Generate unique `idempotency_key` (UUIDv7) for every action |
 | **Client** | Retry indefinitely until durable ACK received |
+| **Server** | Validate `idempotency_key` format (16 bytes, version=0x7, variant=0b10); NACK if invalid |
 | **Server** | Atomically deduplicate by `(user_id, idempotency_key)` |
 | **Server** | Dedup window: 7 days minimum |
+| **Server** | Dedup MUST NOT use probabilistic structures as the sole drop decision (see Section 6.2) |
 
 ### 1.3 The End-to-End Invariant
 
@@ -141,16 +143,18 @@ The server is **Untrusted Storage**.
 | FR-6 | Online status | User visible as online after connect | ≤30 seconds |
 | FR-7 | Last seen | Timestamp updated on disconnect | ≤30 seconds |
 | FR-8 | Typing indicator | Real-time, best-effort | ≤2 seconds |
+| FR-8a | Presence privacy | User configures visibility: everyone / contacts / nobody | Restricted user returns `{status: "unavailable"}` |
 
-> **Note**: Presence is **pull-on-demand** or **interest-based subscription** to avoid O(N²) fan-out at scale.
+> **Note**: Presence is **pull-on-demand** or **interest-based subscription** to avoid O(N²) fan-out at scale. No distinction between "offline" and "presence hidden" (anti-enumeration).
 
 ### 3.3 Authentication [MUST]
 
 | ID | Requirement | Definition | SLA |
 |----|-------------|------------|-----|
-| FR-9 | Token-based auth | JWT with HMAC-SHA256 signature | Validate on every request |
-| FR-10 | Token expiry | Maximum 24-hour lifetime | Reject expired tokens |
-| FR-11 | Token revocation | Propagate to all nodes | ≤60 seconds globally |
+| FR-9 | Token-based auth | JWT with EdDSA (Ed25519) signature | Validate on every request |
+| FR-10 | Token expiry | Access token: 1 hour; Refresh token: 30 days | Reject expired tokens |
+| FR-11 | Token revocation | Push via `pg` group, ETS cache per node | ≤10 seconds globally |
+| FR-11a | Refresh tokens | Opaque, server-stored, rotated on each use | Detect theft via reuse |
 
 ### 3.4 Sync Protocol [MUST]
 
@@ -159,19 +163,24 @@ The Sync Protocol is the **primary** mechanism for message delivery.
 | Step | Client Action | Server Action |
 |------|---------------|---------------|
 | 1. Connect | Open TLS connection, send JWT | Validate, establish session |
+| 1a. Resume (alt) | Send `RESUME(session_id, last_seq)` | If cached (≤5 min): skip to Step 5, replay missed. Else: NACK → Step 2 |
 | 2. Hello | Send `(User_ID, Last_Known_Cursor)` | Query Inbox Log |
 | 3. Catchup | - | Stream: `SELECT * FROM Inbox WHERE ID > Cursor` |
 | 4. Paginate | ACK each page | Continue until caught up |
 | 5. Ready | Persist new cursor locally | Enter "Push Mode" |
 
-**Invariant**: If connection drops, client resumes from persisted `Last_Known_Cursor`. No messages lost.
+**Invariant**: If connection drops, client resumes from persisted `Last_Known_Cursor`. No messages lost. Session state cached in ETS for 5 minutes (≤100K sessions per edge node) to enable fast resume.
 
-### 3.5 Future Scope (See Amendment 001)
+### 3.5 Scope References
 
-The following are covered in RFC-001-AMENDMENT-001:
-- End-to-end encryption (FR-12 through FR-16)
-- Group messaging (FR-17 through FR-23)
-- Group E2EE with Sender Keys
+Covered in **RFC-001-AMENDMENT-001**: E2EE (FR-12–FR-16), Group Messaging (FR-17–FR-23), Sender Keys.
+
+**Deferred (post-launch)**:
+- Multi-device sync (RFC-002)
+- Message edit/delete (opcodes 0x40–0x43)
+- User blocking/reporting (opcodes 0x50–0x52)
+- Sealed sender, behavioral rate limiting, MFA, OAuth 2.0, key backup
+- Formal wire format grammar (CDDL + ABNF), feature flag system
 
 ---
 
@@ -310,12 +319,12 @@ The storage layer provides **log-centric** operations:
 Message IDs use **Hybrid Logical Clocks (HLC)** for cross-region ordering without coordination.
 
 ```
-┌────────────────────────────────────────────────────────────┐
-│                    HLC Message ID (64 bits)                 │
-├────────────────────┬──────────────┬────────────────────────┤
-│ Physical Time (ms) │ Logical Ctr  │ Node ID                │
-│     48 bits        │   8 bits     │    8 bits              │
-└────────────────────┴──────────────┴────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│                    HLC Message ID (80 bits)                       │
+├────────────────────┬──────────────────┬──────────────────────────┤
+│ Physical Time (ms) │ Logical Ctr      │ Node ID                  │
+│     48 bits        │   16 bits        │    16 bits               │
+└────────────────────┴──────────────────┴──────────────────────────┘
 ```
 
 | Property | Guarantee |
@@ -324,6 +333,10 @@ Message IDs use **Hybrid Logical Clocks (HLC)** for cross-region ordering withou
 | **Causal Order (cross-node)** | If A→B (happens-before), then `HLC[A] < HLC[B]` |
 | **No Coordinator** | Each node generates IDs independently |
 | **Clock Skew Tolerance** | Logical counter handles skew up to 30s |
+| **Node Capacity** | 65,536 nodes (16-bit), sufficient for 5B DAU across 20+ regions |
+| **Counter Capacity** | 65,536 msg/ms/node (16-bit), headroom above NFR-5 target |
+
+> **Migration (from v3 64-bit)**: Dual-write period where both 64-bit and 80-bit IDs are accepted. Version negotiation signals client ID format capability.
 
 ---
 
@@ -339,9 +352,12 @@ Message IDs use **Hybrid Logical Clocks (HLC)** for cross-region ordering withou
 
 ### 6.2 Dedup Window
 
-- **Hot Tier**: 5-minute ETS cache (instant lookup)
-- **Warm Tier**: 7-day bloom filter (probabilistic, space-efficient)
-- **Format**: `{user_id, idempotency_key}` → boolean
+- **Hot Tier**: 5-minute ETS cache (instant lookup, deterministic)
+- **Warm Tier**: 7-day Mnesia `dedup_log` (`disc_copies`, deterministic) — authoritative dedup decision
+- **Optimization Tier**: Bloom filter (negative cache only — "definitely not seen" fast path)
+- **Format**: `{user_id, idempotency_key}` → timestamp
+
+> **Invariant**: Bloom filter false positives are detected via `dedup_log` cross-check and tracked (`bloom_false_positives` counter). The bloom filter MUST NOT be the sole basis for dropping a message.
 
 ### 6.3 Durability Contract
 
@@ -364,6 +380,23 @@ Message IDs use **Hybrid Logical Clocks (HLC)** for cross-region ordering withou
 | **Storage crash** | Replication timeout | Read from replica | Zero (replicated) |
 | **Network partition** | Timeout (30s) | Buffer in Outbox Queue | Queued, delivered on restore |
 | **Region outage** | Monitoring alert | DNS failover | Queued in other regions |
+
+### 7.1.1 Split-Brain Resolution
+
+On partition healing after detection by `iris_partition_guard`:
+
+1. Each partition continues reads/writes during split (AP mode)
+2. Each node tracks an epoch counter, incremented on partition detection
+3. On healing: higher-epoch partition is authoritative; equal-epoch ties broken by lowest node ID
+4. Conflict resolution per data type:
+   - **Messages**: Union (append-only, dedup handles duplicates)
+   - **Presence**: Last-writer-wins (HLC timestamp)
+   - **Group membership**: Union of adds, latest-timestamp for removes
+   - **Key bundles**: Union (all bundles are valid)
+5. Reconciliation runs as throttled background process
+6. **Invariant**: No acknowledged message is lost during split-brain
+
+> **Mnesia**: Use `mnesia:set_master_nodes/2` to designate authoritative partition; `mnesia:force_load_table/1` on non-authoritative side. Append-only tables merge via union, not overwrite.
 
 ### 7.2 Network Partition Behavior
 
@@ -388,6 +421,15 @@ When Region A cannot communicate with Region B:
 │  (Temporary divergence acceptable; eventual delivery guaranteed)     │
 └─────────────────────────────────────────────────────────────────────┘
 ```
+
+**Outbox Queue Operational Parameters**:
+
+| Parameter | Value | Rationale |
+|-----------|-------|-----------|
+| Max size | 10,000 messages per destination region | Bound memory; backpressure on overflow |
+| Persistence | fsync before ACK | Survive node crash |
+| Overflow policy | NACK to sender with retry hint | Backpressure, not silent drop |
+| Monitoring | Queue depth per region as metric | Alert at 50% of max |
 
 ### 7.3 Catastrophic Failure (Region Loss)
 
@@ -433,9 +475,10 @@ These limits are enforced to maintain system stability at scale.
 | Eavesdropping | TLS 1.3 mandatory |
 | MITM | Certificate validation |
 | Replay attacks | Nonce + timestamp validation |
-| Token theft | Short expiry (24h) + revocation |
+| Token theft | Short expiry (1h access) + revocation (≤10s) + refresh rotation |
 | Internal lateral movement | mTLS between all nodes |
 | Server reads messages | E2EE (server never sees plaintext) |
+| Node compromise | Asymmetric JWT: only auth service holds private key; edge/core verify with public key only |
 
 ### 9.2 Trust Boundaries
 
@@ -457,6 +500,12 @@ These limits are enforced to maintain system stability at scale.
 │       (CANNOT decrypt user content)                         │
 └─────────────────────────────────────────────────────────────┘
 ```
+
+### 9.3 JWT Key Distribution
+
+- Auth service holds Ed25519 private key (never exported)
+- All nodes receive Ed25519 public key via config or JWKS endpoint
+- Key rotation: publish new public key, dual-verify for 24h, retire old
 
 ---
 
@@ -482,11 +531,17 @@ These limits are enforced to maintain system stability at scale.
 
 ## 11. Client Protocol
 
-### 11.1 Version Negotiation
+### 11.1 Version and Capability Negotiation
 
-1. Client sends: `{version: [1, 2], capabilities: [...]}`
-2. Server responds: `{version: 1, capabilities: [...]}`
-3. Both use negotiated version for session
+1. Client sends: `{version: [1, 2], capabilities: ["zstd", "e2ee", "groups"]}`
+2. Server responds: `{version: 1, capabilities: ["zstd", "e2ee"]}`
+3. Both use negotiated version and capabilities for session
+
+**Compression** (when `"zstd"` or `"zlib"` negotiated):
+- Payloads > 128 bytes are compressed
+- Compressed frame: `original_opcode | 0x80` flag + compressed payload
+- Decompressor MUST handle uncompressed frames gracefully
+- Supported: `zstd` (recommended), `zlib` (fallback), `none` (default)
 
 ### 11.2 Wire Format (v1)
 
@@ -495,6 +550,8 @@ These limits are enforced to maintain system stability at scale.
 | Opcode | 1 byte | Message type |
 | Length | 2 bytes | Payload length |
 | Payload | Variable | Opcode-specific |
+
+> Opcode table is canonical in **PROTOCOL_V1_FREEZE.md**. Key additions since v1.0: `0x08/0x09` PING/PONG (keepalive), `0x0A` RESUME (fast reconnect), `0x0B` TOKEN_REFRESH. Client SHOULD send PING every 30s when idle; server MUST PONG within 5s.
 
 ---
 
@@ -596,6 +653,7 @@ Core Nodes = Core Shards × 2 (primary + replica)
 | 2026-01-18 | 1.0 | Initial RFC |
 | 2026-01-18 | 2.0 | Post-critique revision: removed status, added sections |
 | 2026-01-30 | 3.0 | Canonical architecture alignment: added Design Philosophy, Inbox Log invariants, HLC, explicit failure behaviors, operational limits, observability NFRs |
+| 2026-02-06 | 4.0 | Standards Audit integration: 80-bit HLC (P1-1), EdDSA JWT (P1-4), 3-tier dedup (P1-3), UUIDv7 validation (P1-7), presence privacy (P2-8), refresh tokens (P2-7), 10s revocation (P2-6), connection resume (P2-4), compression negotiation (P2-5), split-brain resolution (P2-3), outbox queue params (P2-2), PING/PONG keepalive (P2-1) |
 
 ---
 

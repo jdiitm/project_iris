@@ -25,6 +25,7 @@ import ssl
 import time
 import threading
 import concurrent.futures
+import subprocess
 from pathlib import Path
 
 # Add project root to path
@@ -38,6 +39,28 @@ CA_CERT = Path(PROJECT_ROOT) / "certs" / "ca.pem"
 
 # Results tracking
 results = []
+
+
+def set_conn_rate_limit(limit):
+    """Temporarily set conn_rate_max on the running edge node via rpc:call."""
+    hostname = socket.gethostname()
+    node = f"iris_edge1@{hostname}"
+    ts = int(time.time() * 1000)
+    cmd = (
+        f"erl -setcookie iris_secret -sname rate_adj_{ts} -hidden -noshell "
+        f"-pa {PROJECT_ROOT}/ebin "
+        f"-eval \"rpc:call('{node}', application, set_env, "
+        f"[iris_edge, conn_rate_max, {limit}]), init:stop().\""
+    )
+    try:
+        result = subprocess.run(
+            cmd, shell=True, capture_output=True, text=True, timeout=10,
+            cwd=PROJECT_ROOT
+        )
+        return result.returncode == 0
+    except Exception as e:
+        log(f"  WARNING: Failed to set rate limit via rpc: {e}")
+        return False
 
 
 def log(msg):
@@ -122,9 +145,13 @@ def test_rapid_connections_throttled():
     
     RFC Section 10: Per-IP connection rate limiting at Edge
     
+    Uses concurrent connections to burst above the rate limit within a
+    1-second window. Sequential connections are bottlenecked by TLS
+    handshake time (~20ms each), so we must use parallelism.
+    
     Expected behavior:
-    - First N connections succeed quickly
-    - Subsequent connections are rejected/throttled
+    - Concurrent burst exceeds rate limit
+    - Some connections are closed/rejected by the server
     - Server remains stable (doesn't crash)
     """
     log("\n=== Test: Rapid Connections Throttled (RFC Section 10) ===")
@@ -134,69 +161,67 @@ def test_rapid_connections_throttled():
                 "FAIL: Server not available - cannot proceed")
         return False
     
-    NUM_CONNECTIONS = 100
+    # Temporarily lower the rate limit so the test can trigger it.
+    # The test config sets conn_rate_max=500 for stress tests; we need it low
+    # here to verify the mechanism works.
+    TEST_RATE_LIMIT = 10
+    log(f"  Setting conn_rate_max={TEST_RATE_LIMIT} via rpc...")
+    if not set_conn_rate_limit(TEST_RATE_LIMIT):
+        log("  WARNING: Could not set rate limit via rpc; testing with current limit")
     
-    log(f"  Attempting {NUM_CONNECTIONS} rapid connections from single IP...")
+    NUM_CONNECTIONS = 60
+    NUM_WORKERS = 50  # High parallelism to burst above rate limit
+    
+    log(f"  Bursting {NUM_CONNECTIONS} concurrent connections ({NUM_WORKERS} workers)...")
     
     successful = 0
-    refused = 0
-    timeout_count = 0
-    other_errors = 0
-    latencies = []
+    failed = 0
+    lock = threading.Lock()
     
-    for i in range(NUM_CONNECTIONS):
+    def burst_connect(_):
+        nonlocal successful, failed
         success, error_type, latency = attempt_connection()
+        with lock:
+            if success:
+                successful += 1
+            else:
+                failed += 1
+    
+    try:
+        start_time = time.time()
+        with concurrent.futures.ThreadPoolExecutor(max_workers=NUM_WORKERS) as executor:
+            futures = [executor.submit(burst_connect, i) for i in range(NUM_CONNECTIONS)]
+            concurrent.futures.wait(futures, timeout=30)
+        duration = time.time() - start_time
         
-        if success:
-            successful += 1
-            latencies.append(latency)
-        elif error_type == "refused":
-            refused += 1
-        elif error_type == "timeout":
-            timeout_count += 1
-        else:
-            other_errors += 1
+        rate = NUM_CONNECTIONS / duration if duration > 0 else 0
         
-        # Very short delay (still counts as "rapid")
-        time.sleep(0.01)
+        log(f"\n  Results:")
+        log(f"    Duration: {duration:.1f}s")
+        log(f"    Successful: {successful}")
+        log(f"    Failed/Closed: {failed}")
+        log(f"    Effective rate: {rate:.1f} conn/sec")
         
-        if (i + 1) % 20 == 0:
-            log(f"    Progress: {i+1}/{NUM_CONNECTIONS} - "
-                f"OK:{successful}, Refused:{refused}, Timeout:{timeout_count}")
-    
-    log(f"\n  Results:")
-    log(f"    Successful: {successful}")
-    log(f"    Refused: {refused}")
-    log(f"    Timeout: {timeout_count}")
-    log(f"    Other errors: {other_errors}")
-    
-    if latencies:
-        avg_latency = sum(latencies) / len(latencies)
-        log(f"    Avg latency (successful): {avg_latency:.1f}ms")
-    
-    # Rate limiting should cause some rejections or significant latency increase
-    # If ALL connections succeed instantly, rate limiting may not be working
-    
-    if refused > 0 or timeout_count > 0:
-        log_test("Rapid connection throttling", True,
-                f"Rate limiting active: {refused} refused, {timeout_count} timeout")
-        return True
-    elif successful < NUM_CONNECTIONS * 0.9:
-        log_test("Rapid connection throttling", True,
-                f"Some connections failed ({successful}/{NUM_CONNECTIONS})")
-        return True
-    else:
-        # All connections succeeded - check if server is still healthy
-        time.sleep(1)
-        if check_server_available():
-            log("  Note: All connections succeeded - rate limit may be high or disabled")
+        # AUDIT FIX: Rate limiting MUST cause some rejections.
+        # RFC Section 10: Per-IP connection rate limiting at Edge is MANDATORY.
+        
+        if failed > 0:
             log_test("Rapid connection throttling", True,
-                    "Server stable (rate limit may be configured for higher threshold)")
+                    f"Rate limiting active: {failed}/{NUM_CONNECTIONS} denied")
+            return True
+        elif successful < NUM_CONNECTIONS * 0.9:
+            log_test("Rapid connection throttling", True,
+                    f"Some connections failed ({successful}/{NUM_CONNECTIONS})")
             return True
         else:
             log_test("Rapid connection throttling", False,
-                    "Server became unavailable after connection flood")
+                    f"ALL {NUM_CONNECTIONS} connections succeeded at {rate:.0f}/sec -- "
+                    "rate limiting not active (RFC Section 10 violation)")
             return False
+    finally:
+        # Restore the high rate limit for subsequent tests
+        log(f"  Restoring conn_rate_max=500...")
+        set_conn_rate_limit(500)
 
 
 def test_concurrent_connection_flood():

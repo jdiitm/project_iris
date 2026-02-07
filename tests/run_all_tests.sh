@@ -230,15 +230,26 @@ run_test() {
 # Quick server restart (used after heavy tests)
 restart_server_quick() {
     pkill -9 beam.smp 2>/dev/null || true
-    sleep 2
+    # Wait for old beam.smp to actually exit (CI runners can be slow to reap)
+    # Without this, ps -C beam.smp sees both old and new processes, inflating
+    # memory measurements in benchmark_memory.
+    local wait_attempts=0
+    while pgrep -x beam.smp > /dev/null 2>&1; do
+        wait_attempts=$((wait_attempts + 1))
+        if [ $wait_attempts -ge 10 ]; then
+            echo -e "    ${YELLOW}Warning: beam.smp still in process table after 10s${NC}"
+            break
+        fi
+        sleep 1
+    done
     rm -rf Mnesia.* MnesiaCore.* 2>/dev/null || true
     CONFIG=config/test_tls make start > "$LOG_DIR/server_restart.log" 2>&1
     sleep 4
-    # Quick check that server is up
+    # Wait for server port to be accepting connections
     local attempts=0
     while ! nc -z localhost 8085 2>/dev/null; do
         attempts=$((attempts + 1))
-        if [ $attempts -ge 3 ]; then
+        if [ $attempts -ge 10 ]; then
             echo -e "    ${RED}Warning: Server may not have restarted properly${NC}"
             break
         fi
@@ -352,6 +363,12 @@ DOCKER_CHAOS_TESTS=(
     "tests/suites/chaos_dist/test_cascade_failure.py"
     "tests/suites/chaos_dist/test_split_brain.py"
     "tests/suites/chaos_dist/test_disk_full.py"
+    "tests/suites/chaos_dist/test_split_brain_convergence.py"
+    "tests/suites/chaos_dist/test_outbox_queue_overflow.py"
+    "tests/suites/chaos_dist/test_outbox_overflow_enforcement.py"
+    "tests/suites/chaos_dist/test_split_brain_epoch_resolution.py"
+    "tests/suites/chaos_dist/test_cross_region_node_kill.py"
+    "tests/suites/chaos_dist/test_quorum_write_failures.py"
 )
 
 # ============================================================================
@@ -455,6 +472,17 @@ else
         [ -f "$test" ] && run_test "$test" 300
     done
 
+    # Restart server before conformance tests (resilience tests may degrade it)
+    echo ""
+    echo -e "${YELLOW}[RECOVERY]${NC} Restarting server before conformance tests..."
+    restart_server_quick
+
+    echo ""
+    echo "--- Conformance Tests ---"
+    for test in tests/suites/conformance/test_*.py; do
+        [ -f "$test" ] && run_test "$test" 180
+    done
+
     # Restart server
     echo ""
     echo -e "${YELLOW}[RECOVERY]${NC} Restarting server..."
@@ -465,15 +493,42 @@ else
 
     echo ""
     echo "--- Performance Tests ---"
+    echo "  (Server will restart automatically after heavy tests)"
     ensure_server_ready "Performance Tests"
     # Quick mode: 300s per test (CI workloads are already scaled down)
     # Full mode: 600s per test (heavy benchmarks need more time)
     perf_timeout=600
+    perf_heavy_timeout=600
     if [ "$QUICK_MODE" = "true" ]; then
         perf_timeout=300
+        perf_heavy_timeout=600
     fi
+
+    # Sort performance tests: light first, heavy last.
+    # Heavy tests (e.g. benchmark_group_1000) trigger server restarts that
+    # destabilize subsequent memory measurements. Same pattern as integration
+    # and stress test sections.
+    PERF_TESTS_LIGHT=()
+    PERF_TESTS_HEAVY=()
     for test in tests/suites/performance_light/benchmark_*.py tests/suites/performance_light/measure_*.py tests/suites/performance_light/test_*.py; do
-        [ -f "$test" ] && run_test "$test" "$perf_timeout"
+        if [ -f "$test" ]; then
+            test_name=$(basename "$test" .py)
+            if is_heavy_test "$test_name"; then
+                PERF_TESTS_HEAVY+=("$test")
+            else
+                PERF_TESTS_LIGHT+=("$test")
+            fi
+        fi
+    done
+
+    # Run light tests first (includes benchmark_memory before any restart)
+    for test in "${PERF_TESTS_LIGHT[@]}"; do
+        run_test "$test" "$perf_timeout"
+    done
+
+    # Then run heavy tests (each will trigger server restart after)
+    for test in "${PERF_TESTS_HEAVY[@]}"; do
+        run_test "$test" "$perf_heavy_timeout"
     done
 
     # ======================================================================

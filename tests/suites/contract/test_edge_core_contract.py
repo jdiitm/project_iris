@@ -197,7 +197,7 @@ PROTOCOL_CONTRACTS = [
         schema={
             "type": "binary",
             "format": [
-                {"name": "opcode", "type": "uint8", "value": 0x10},
+                {"name": "opcode", "type": "uint8", "value": 0x11},
                 {"name": "id_len", "type": "uint16_be"},
                 {"name": "msg_id", "type": "bytes"},
                 {"name": "content_len", "type": "uint32_be"},
@@ -399,7 +399,7 @@ def test_reliable_message_contract():
     data = generate_protocol_data(contract, msg_id=msg_id, content=content)
     
     # Validate structure
-    assert data[0] == 0x10, "Opcode should be 0x10"
+    assert data[0] == 0x11, "Opcode should be 0x11 (RELIABLE_MSG per PROTOCOL_V1_FREEZE v1.1)"
     
     id_len = struct.unpack('>H', data[1:3])[0]
     assert id_len == len(msg_id), f"ID length mismatch"
@@ -510,33 +510,49 @@ def test_live_message_contract():
         # Small delay to ensure registration completes
         time.sleep(0.05)
         
-        # Send message per contract
-        msg_contract = next(c for c in PROTOCOL_CONTRACTS if c.name == "send_message")
+        # Send message using opcode 0x07 (SEND_SEQ) -- the active sequenced message opcode.
+        # Protocol: 0x07 | TargetLen(16) | Target | SeqNo(64) | MsgLen(16) | Msg
+        # NOTE: The send_message contract uses deprecated opcode 0x02 which is rejected.
+        # Live test must use the active protocol path.
         test_message = "contract_test_message"
-        msg_data = generate_protocol_data(msg_contract, target=recv_name, message=test_message)
+        target_bytes = recv_name.encode('utf-8')
+        msg_bytes = test_message.encode('utf-8')
+        seq_no = 1  # Sequence number required by 0x07 format
+        msg_data = (bytes([0x07])
+                    + struct.pack('>H', len(target_bytes)) + target_bytes
+                    + struct.pack('>Q', seq_no)
+                    + struct.pack('>H', len(msg_bytes)) + msg_bytes)
         
         sender_sock.sendall(msg_data)
         
         # Give time for delivery and use blocking receive with timeout
-        time.sleep(0.1)
+        time.sleep(0.3)
         
-        # Check receiver got message (use timeout instead of non-blocking)
+        # AUDIT FIX: Verify message was actually delivered -- timeout/unexpected format = FAIL
         recv_sock.settimeout(5.0)
         try:
             data = recv_sock.recv(4096)
             # Message should be delivered in reliable format
-            if data and data[0] == 0x10:  # Reliable message opcode
+            if data and data[0] == 0x11:  # Reliable message opcode (v1.1)
                 print("  ✓ live_message contract: VALID (reliable delivery)")
+                sender_sock.close()
+                recv_sock.close()
+                return True
             elif data and test_message.encode() in data:
                 print("  ✓ live_message contract: VALID (raw delivery)")
+                sender_sock.close()
+                recv_sock.close()
+                return True
             else:
-                print(f"  ⚠ live_message contract: Unexpected response format: {data[:20] if data else 'empty'}")
+                print(f"  ✗ live_message contract: Unexpected response format: {data[:20] if data else 'empty'}")
+                sender_sock.close()
+                recv_sock.close()
+                return False
         except socket.timeout:
-            print("  ⚠ live_message contract: No message received within timeout")
-        
-        sender_sock.close()
-        recv_sock.close()
-        return True
+            print("  ✗ live_message contract: No message received within timeout")
+            sender_sock.close()
+            recv_sock.close()
+            return False
     
     except socket.error as e:
         print(f"  ❌ FAIL: live_message contract failed (server not available: {e})")

@@ -6,10 +6,12 @@ Protocol (RFC-001-AMENDMENT-001 v1.0 compliant):
 - Login: 0x01 | User
 - Send (sequenced): 0x07 | TargetLen(16) | Target | SeqNo(64) | MsgLen(16) | Msg
 - ACK: 0x03 | MsgId
-- Reliable Message: 0x10 | IdLen(16) | MsgId | MsgLen(32) | Msg
+- Reliable Message: 0x11 | IdLen(16) | MsgId | MsgLen(32) | Msg
 
 NOTE: Opcode 0x02 (plaintext) is DEPRECATED and REJECTED in v1.0.
       Use send_msg() which now uses opcode 0x07 (sequenced messages).
+NOTE: PROTOCOL_V1_FREEZE v1.1 moved RELIABLE_MSG from 0x10 to 0x11
+      to resolve collision with CBOR_MSG.
 """
 
 import socket
@@ -139,7 +141,8 @@ class IrisClient:
         Receive a reliable message and send ACK.
         Returns the message payload.
         
-        Reliable Message Format: 0x10 | IdLen(16) | MsgId | MsgLen(32) | Msg
+        Reliable Message Format: 0x11 | IdLen(16) | MsgId | MsgLen(32) | Msg
+        (PROTOCOL_V1_FREEZE v1.1: moved from 0x10 to 0x11)
         """
         self.sock.settimeout(timeout)
         
@@ -154,13 +157,13 @@ class IrisClient:
                 except socket.timeout:
                     raise
             
-            # Check opcode
-            if len(self.buffer) > 0 and self.buffer[0] != 0x10:
+            # Check opcode — 0x11 is RELIABLE_MSG per PROTOCOL_V1_FREEZE v1.1
+            if len(self.buffer) > 0 and self.buffer[0] != 0x11:
                 # Not a reliable message, skip byte
                 self.buffer = self.buffer[1:]
                 continue
             
-            # Parse reliable message header: 0x10 | IdLen(16) | MsgId | MsgLen(32) | Msg
+            # Parse reliable message header: 0x11 | IdLen(16) | MsgId | MsgLen(32) | Msg
             if len(self.buffer) < 3:
                 continue
                 

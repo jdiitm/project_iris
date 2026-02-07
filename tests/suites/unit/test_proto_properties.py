@@ -62,9 +62,10 @@ def encode_message(target: str, content: bytes) -> bytes:
 
 
 def encode_reliable_message(msg_id: bytes, content: bytes) -> bytes:
-    """Encode reliable message: 0x10 | id_len(16) | msg_id | content_len(32) | content"""
+    """Encode reliable message: 0x11 | id_len(16) | msg_id | content_len(32) | content
+    (PROTOCOL_V1_FREEZE v1.1: moved from 0x10 to 0x11)"""
     return (
-        bytes([0x10]) +
+        bytes([0x11]) +
         struct.pack('>H', len(msg_id)) + msg_id +
         struct.pack('>I', len(content)) + content
     )
@@ -86,7 +87,7 @@ def decode_reliable_message(data: bytes) -> Tuple[Optional[bytes], Optional[byte
     if len(data) < 7:  # min: opcode(1) + id_len(2) + content_len(4)
         return None, None
     
-    if data[0] != 0x10:
+    if data[0] != 0x11:
         return None, None
     
     id_len = struct.unpack('>H', data[1:3])[0]

@@ -23,6 +23,7 @@
 -export([start_link/0]).
 -export([send_cross_region/3, send_cross_region/4]).
 -export([get_queue_depth/0, get_queue_depth/1]).
+-export([get_max_queue_size/0]).  %% FM-1: Expose limit for tests
 -export([get_stats/0, drain_region/1]).
 -export([init_tables/0]).
 %% GEO-001 FIX: Mesh health and auto-recovery
@@ -39,6 +40,7 @@
 -define(BASE_BACKOFF_MS, 1000).
 -define(MAX_BACKOFF_MS, 60000).
 -define(BATCH_SIZE, 100).
+-define(MAX_QUEUE_SIZE, 10000).  %% FM-1: Max messages per destination region
 %% GEO-001 FIX: Auto-reconnection constants
 -define(RECONNECT_INTERVAL_MS, 5000).   %% 5 seconds between reconnect attempts
 -define(HEALTH_CHECK_INTERVAL_MS, 10000). %% 10 seconds health check
@@ -91,8 +93,37 @@ start_link() ->
 send_cross_region(TargetRegion, UserId, Msg) ->
     send_cross_region(TargetRegion, UserId, Msg, #{}).
 
+%% @doc Get max queue size per destination region (FM-1: RFC-001 v4.0 Section 7.2)
+-spec get_max_queue_size() -> non_neg_integer().
+get_max_queue_size() ->
+    ?MAX_QUEUE_SIZE.
+
 -spec send_cross_region(binary(), binary(), binary(), map()) -> ok | {error, term()}.
 send_cross_region(TargetRegion, UserId, Msg, Opts) ->
+    %% FM-1: Check queue depth before accepting message (NACK on overflow)
+    case check_queue_overflow(TargetRegion) of
+        ok ->
+            do_send_cross_region(TargetRegion, UserId, Msg, Opts);
+        {error, _} = Err ->
+            Err
+    end.
+
+check_queue_overflow(TargetRegion) ->
+    try
+        Depth = get_queue_depth(TargetRegion),
+        case Depth >= ?MAX_QUEUE_SIZE of
+            true ->
+                logger:warning("Outbox queue overflow for region ~s: ~p/~p",
+                               [TargetRegion, Depth, ?MAX_QUEUE_SIZE]),
+                {error, {queue_overflow, #{retry_after => 5, depth => Depth, max => ?MAX_QUEUE_SIZE}}};
+            false ->
+                ok
+        end
+    catch
+        _:_ -> ok  %% If depth check fails, allow the message (fail-open)
+    end.
+
+do_send_cross_region(TargetRegion, UserId, Msg, Opts) ->
     MsgId = maps:get(msg_id, Opts, generate_msg_id()),
     Now = erlang:system_time(millisecond),
     
