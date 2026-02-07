@@ -1,13 +1,13 @@
 # =============================================================================
 # Project Iris - Cluster Node Image
 # =============================================================================
-# Extended erlang:25-alpine with tools required for testing:
+# Extended erlang:26-alpine with tools required for testing:
 # - libfaketime: Required for NFR-16 (Clock Skew Tolerance) testing
 # - procps: For process monitoring
 # - NET_ADMIN tools: For network partition testing
 # =============================================================================
 
-FROM erlang:25-alpine
+FROM erlang:26-alpine
 
 # Install testing tools
 # libfaketime is REQUIRED for RFC NFR-16 clock skew verification

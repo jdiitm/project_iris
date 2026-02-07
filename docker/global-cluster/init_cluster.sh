@@ -57,10 +57,14 @@ wait_for_mnesia() {
     
     while [ $attempt -lt $max_attempts ]; do
         # Use a shorter RPC timeout and check both Mnesia running AND app started
+        # NOTE: All branches use halt(0) so that docker exec returns 0 and the
+        # "|| echo not_ready" fallback only fires when docker exec itself fails
+        # (e.g., container not running). Previously halt(1) caused the fallback
+        # to append "not_ready" to the status string (e.g., "app_not_startednot_ready").
         local status=$(docker exec "$container" erl -noshell -sname probe_$RANDOM \
             -setcookie "$COOKIE" -eval "
             case net_adm:ping('$node_name') of
-                pang -> io:format(\"node_down\"), halt(1);
+                pang -> io:format(\"node_down\"), halt(0);
                 pong ->
                     case rpc:call('$node_name', mnesia, system_info, [is_running], 5000) of
                         yes -> 
@@ -69,11 +73,11 @@ wait_for_mnesia() {
                                 Apps when is_list(Apps) ->
                                     case lists:keymember(iris_core, 1, Apps) of
                                         true -> io:format(\"ready\"), halt(0);
-                                        false -> io:format(\"app_not_started\"), halt(1)
+                                        false -> io:format(\"app_not_started\"), halt(0)
                                     end;
-                                _ -> io:format(\"app_check_failed\"), halt(1)
+                                _ -> io:format(\"app_check_failed\"), halt(0)
                             end;
-                        _ -> io:format(\"mnesia_not_running\"), halt(1)
+                        _ -> io:format(\"mnesia_not_running\"), halt(0)
                     end
             end." 2>/dev/null || echo "not_ready")
         
