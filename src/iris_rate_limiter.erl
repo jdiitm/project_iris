@@ -18,6 +18,8 @@
 -export([check_destination/1, check_destination/2, get_destination_stats/1]).
 -export([promote_destination/2, is_destination_hot/1]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
+%% RFC NFR-17: Distributed rate limit gossip
+-export([merge_remote_counters/1]).
 
 -define(SERVER, ?MODULE).
 -define(TABLE, iris_rate_limit_buckets).
@@ -27,10 +29,15 @@
 -define(DEFAULT_BURST, 500).       %% Burst capacity
 -define(REFILL_INTERVAL, 100).     %% Refill every 100ms
 
+-define(GOSSIP_INTERVAL, 1000).    %% RFC NFR-17: Gossip every 1 second
+-define(GOSSIP_PG_GROUP, iris_rate_limit_gossip).
+
 -record(state, {
     refill_timer :: reference(),
+    gossip_timer :: reference() | undefined,
     total_allowed = 0 :: integer(),
-    total_rejected = 0 :: integer()
+    total_rejected = 0 :: integer(),
+    remote_counters = #{} :: map()  %% #{User => RemoteTokensUsed}
 }).
 
 -record(bucket, {
@@ -119,7 +126,15 @@ init(_Opts) ->
     %% Start periodic refill/cleanup timer
     TRef = erlang:send_after(?REFILL_INTERVAL * 10, self(), cleanup),
     
-    {ok, #state{refill_timer = TRef}}.
+    %% RFC NFR-17: Join pg group for distributed rate limit gossip
+    GossipTimer = try
+        pg:join(?GOSSIP_PG_GROUP, self()),
+        erlang:send_after(?GOSSIP_INTERVAL, self(), gossip_counters)
+    catch _:_ ->
+        undefined  %% pg not available (single-node mode)
+    end,
+    
+    {ok, #state{refill_timer = TRef, gossip_timer = GossipTimer}}.
 
 handle_call(get_stats, _From, State) ->
     BucketCount = ets:info(?TABLE, size),
@@ -141,6 +156,15 @@ handle_cast(allowed, State) ->
 handle_cast(rejected, State) ->
     {noreply, State#state{total_rejected = State#state.total_rejected + 1}};
 
+%% RFC NFR-17: Receive remote counters from another edge node
+handle_cast({remote_counters, RemoteNode, RemoteCounters}, State) ->
+    %% Merge remote counters: for each user, subtract remote usage from local bucket
+    %% This implements eventual-consistency distributed rate limiting
+    NewRemote = maps:merge(State#state.remote_counters,
+        maps:from_list([{User, Used} || {User, Used} <- RemoteCounters])),
+    apply_remote_counters(RemoteCounters),
+    {noreply, State#state{remote_counters = NewRemote}};
+
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
@@ -154,6 +178,24 @@ handle_info(cleanup, State) ->
     %% Reschedule
     TRef = erlang:send_after(?REFILL_INTERVAL * 10, self(), cleanup),
     {noreply, State#state{refill_timer = TRef}};
+
+%% RFC NFR-17: Periodic gossip of local rate counters to other edge nodes
+handle_info(gossip_counters, State) ->
+    %% Collect local counter snapshot (users with depleted tokens)
+    LocalCounters = collect_local_counters(),
+    
+    %% Broadcast to all other members in the pg group
+    try
+        Members = pg:get_members(?GOSSIP_PG_GROUP),
+        OtherMembers = [M || M <- Members, M =/= self()],
+        [gen_server:cast(M, {remote_counters, node(), LocalCounters}) || M <- OtherMembers]
+    catch _:_ ->
+        ok  %% pg not available
+    end,
+    
+    %% Reschedule
+    NewGossipTimer = erlang:send_after(?GOSSIP_INTERVAL, self(), gossip_counters),
+    {noreply, State#state{gossip_timer = NewGossipTimer}};
 
 handle_info(_Info, State) ->
     {noreply, State}.
@@ -239,6 +281,42 @@ cleanup_idle_fold(User, Cutoff) ->
             ok
     end,
     cleanup_idle_fold(Next, Cutoff).
+
+%% =============================================================================
+%% RFC NFR-17: Distributed Rate Limit Counter Gossip
+%% =============================================================================
+
+%% Collect local counters: list of {User, TokensUsed} for active users
+collect_local_counters() ->
+    collect_local_fold(ets:first(?TABLE), []).
+
+collect_local_fold('$end_of_table', Acc) ->
+    Acc;
+collect_local_fold(User, Acc) ->
+    Next = ets:next(?TABLE, User),
+    case ets:lookup(?TABLE, User) of
+        [#bucket{burst = Burst, tokens = Tokens}] when Burst - Tokens > 0 ->
+            collect_local_fold(Next, [{User, round(Burst - Tokens)} | Acc]);
+        _ ->
+            collect_local_fold(Next, Acc)
+    end.
+
+%% Apply remote counters to local buckets: reduce local tokens by remote usage
+apply_remote_counters([]) -> ok;
+apply_remote_counters([{User, RemoteUsed} | Rest]) ->
+    case ets:lookup(?TABLE, User) of
+        [Bucket = #bucket{tokens = Tokens}] ->
+            %% Reduce local tokens by remote usage (floor at 0)
+            NewTokens = max(0.0, Tokens - RemoteUsed),
+            save_bucket(Bucket#bucket{tokens = NewTokens});
+        [] ->
+            ok  %% User not active locally -- ignore
+    end,
+    apply_remote_counters(Rest).
+
+%% @doc Merge remote counters from another node (called via RPC or gossip)
+merge_remote_counters(RemoteCounters) ->
+    gen_server:cast(?SERVER, {remote_counters, unknown, RemoteCounters}).
 
 %% =============================================================================
 %% HOT-002 FIX: Destination Rate Limiting

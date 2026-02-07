@@ -466,6 +466,12 @@ init_db() ->
                 {ram_copies, [node()]},
                 {attributes, [user, node, pid]}
             ]),
+            %% RFC FR-11a: Ensure refresh_tokens table exists
+            ensure_table_exists(refresh_tokens, [
+                {disc_copies, [node()]},
+                {attributes, [token_id, user_id, family_id, used, created_at, expires_at]},
+                {type, set}
+            ]),
             logger:info("Mnesia recovery complete. Tables: ~p", [mnesia:system_info(tables)]);
             
         false ->
@@ -612,6 +618,12 @@ recreate_table(dedup_log) ->
         {attributes, [msg_id, timestamp]},
         {type, set}
     ]);
+recreate_table(refresh_tokens) ->
+    mnesia:create_table(refresh_tokens, [
+        {disc_copies, [node()]},
+        {attributes, [token_id, user_id, family_id, used, created_at, expires_at]},
+        {type, set}
+    ]);
 recreate_table(Table) ->
     logger:error("Unknown table to recreate: ~p", [Table]).
 
@@ -646,7 +658,13 @@ create_tables(Nodes) ->
         {attributes, [msg_id, timestamp]},
         {type, set}
     ]),
-    mnesia:wait_for_tables([presence, offline_msg, user_meta, user_status, revoked_tokens, dedup_log], 5000),
+    %% RFC FR-11a: Refresh token table for token refresh flow
+    mnesia:create_table(refresh_tokens, [
+        {disc_copies, Nodes},
+        {attributes, [token_id, user_id, family_id, used, created_at, expires_at]},
+        {type, set}
+    ]),
+    mnesia:wait_for_tables([presence, offline_msg, user_meta, user_status, revoked_tokens, dedup_log, refresh_tokens], 5000),
     logger:info("Tables created.").
 
 %% Legacy wrapper for specific node lists (unused now but kept for API compat)

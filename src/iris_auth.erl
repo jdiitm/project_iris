@@ -23,6 +23,7 @@
 -export([receive_revocation/2]).  %% P1-H2: Cross-node revocation propagation
 %% IA-3: Refresh token API (RFC-001 v4.0 FR-11a)
 -export([create_refresh_token/1, create_refresh_token/2, exchange_refresh_token/1]).
+-export([validate_and_rotate_refresh/1]).  %% Mnesia-only validation (for cross-node RPC)
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
 -define(SERVER, ?MODULE).
@@ -664,6 +665,32 @@ exchange_refresh_token(TokenId) ->
                             {ok, NewAccess} = create_token(UserId),
                             {ok, NewRefresh} = create_refresh_token_in_family(UserId, FamilyId),
                             {ok, NewAccess, NewRefresh}
+                    end
+            end
+    end.
+
+%% @doc Validate refresh token and rotate (mnesia-only, no gen_server dependency).
+%% Returns {ok, UserId, NewRefreshToken} so the caller can create access tokens locally.
+-spec validate_and_rotate_refresh(binary()) -> {ok, binary(), binary()} | {error, term()}.
+validate_and_rotate_refresh(TokenId) ->
+    Now = os:system_time(second),
+    case mnesia:dirty_read(?REFRESH_TABLE, TokenId) of
+        [] ->
+            {error, token_reused};
+        [{?REFRESH_TABLE, TokenId, UserId, FamilyId, Used, _CreatedAt, ExpiresAt}] ->
+            case ExpiresAt =< Now of
+                true ->
+                    {error, refresh_expired};
+                false ->
+                    case Used of
+                        true ->
+                            revoke_refresh_family(FamilyId),
+                            {error, token_reused};
+                        false ->
+                            mnesia:dirty_write(?REFRESH_TABLE,
+                                {?REFRESH_TABLE, TokenId, UserId, FamilyId, true, Now, ExpiresAt}),
+                            {ok, NewRefresh} = create_refresh_token_in_family(UserId, FamilyId),
+                            {ok, UserId, NewRefresh}
                     end
             end
     end.

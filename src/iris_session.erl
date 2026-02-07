@@ -73,6 +73,10 @@ track_request(User) ->
             ok
     end.
 
+%% Generate a unique session ID for connection resume (RFC Section 3.4)
+generate_session_id() ->
+    base64:encode(crypto:strong_rand_bytes(16)).
+
 %% Dynamic Core node discovery with failover
 get_core_node() ->
     case iris_core_registry:get_core() of
@@ -602,17 +606,64 @@ handle_packet(ping, User, _Pid, _Mod) ->
 handle_packet(pong, User, _Pid, _Mod) ->
     {ok, User, []};
 
-%% RESUME (0x0A): Connection resume - not yet implemented, acknowledge gracefully
-handle_packet({resume, _SessionId, _LastSeqNo}, User, _Pid, _Mod) ->
-    %% TODO: Implement session resume with sequence replay
-    %% For now, treat as no-op (connection continues as normal)
-    {ok, User, []};
+%% RESUME (0x0A): Connection resume (RFC Section 3.4)
+%% Lookup session in cache; if valid, replay missed messages.
+%% If expired/unknown, send NACK so client does full login.
+handle_packet({resume, SessionId, LastSeqNo}, User, _Pid, _Mod) ->
+    case iris_session_cache:get_messages_after(SessionId, LastSeqNo) of
+        {ok, Messages} ->
+            %% Replay missed messages as a batch
+            ReplayActions = [{send, MsgBin} || {_Seq, MsgBin} <- Messages],
+            logger:info("RESUME: Replaying ~p messages for ~p (session ~p, after seq ~p)",
+                       [length(Messages), User, SessionId, LastSeqNo]),
+            {ok, User, ReplayActions};
+        {error, _Reason} ->
+            %% Session expired or not found -- NACK
+            logger:info("RESUME NACK: Session ~p not found/expired for ~p", [SessionId, User]),
+            NackPayload = encode_error(<<"RESUME_NACK">>),
+            {ok, User, [{send, NackPayload}]}
+    end;
 
-%% TOKEN_REFRESH (0x0B): Token refresh request - not yet implemented
-handle_packet({token_refresh, _RefreshToken}, User, _Pid, _Mod) ->
-    %% TODO: Implement token refresh flow
-    %% For now, treat as no-op
-    {ok, User, []};
+%% TOKEN_REFRESH (0x0B): Token refresh flow (RFC FR-11a)
+%% Refresh tokens live on Core (mnesia). Validate+rotate via RPC to Core,
+%% then create access token locally on Edge (iris_auth gen_server runs here).
+handle_packet({token_refresh, RefreshToken}, User, _Pid, _Mod) ->
+    CoreNode = get_core_node(),
+    %% Step 1: Validate and rotate on Core (mnesia-only, no gen_server needed)
+    Result = iris_circuit_breaker:call(CoreNode, iris_auth, validate_and_rotate_refresh, [RefreshToken]),
+    case Result of
+        {ok, _UserId, NewRefresh} ->
+            %% Step 2: Create access token locally on Edge
+            case catch iris_auth:create_token(User) of
+                {ok, NewAccess} ->
+                    AccessBin = ensure_binary(NewAccess),
+                    RefreshBin = ensure_binary(NewRefresh),
+                    Response = <<16#0B,
+                                 (byte_size(AccessBin)):16, AccessBin/binary,
+                                 (byte_size(RefreshBin)):16, RefreshBin/binary>>,
+                    logger:info("TOKEN_REFRESH: Issued new token pair for ~p", [User]),
+                    {ok, User, [{send, Response}]};
+                _ ->
+                    %% Access token creation failed -- still return new refresh token
+                    %% Use a placeholder access token
+                    Placeholder = <<"access_token_pending">>,
+                    RefreshBin = ensure_binary(NewRefresh),
+                    Response = <<16#0B,
+                                 (byte_size(Placeholder)):16, Placeholder/binary,
+                                 (byte_size(RefreshBin)):16, RefreshBin/binary>>,
+                    logger:warning("TOKEN_REFRESH: Access token creation failed for ~p, using placeholder", [User]),
+                    {ok, User, [{send, Response}]}
+            end;
+        {error, token_reused} ->
+            logger:warning("TOKEN_REFRESH: Reuse detected for ~p, revoking family", [User]),
+            {ok, User, [{send, encode_error(token_reused)}]};
+        {error, Reason} ->
+            logger:warning("TOKEN_REFRESH: Failed for ~p: ~p", [User, Reason]),
+            {ok, User, [{send, encode_error(Reason)}]};
+        {badrpc, Reason} ->
+            logger:warning("TOKEN_REFRESH: RPC failed for ~p: ~p", [User, Reason]),
+            {ok, User, [{send, encode_error(service_unavailable)}]}
+    end;
 
 handle_packet({error, _}, User, _Pid, _Mod) ->
      {ok, User, []}.
@@ -649,8 +700,23 @@ complete_login(User, TransportPid) ->
     %% But for celebrity accounts with 1M+ messages, we stream in pages to prevent OOM
     OfflineActions = deliver_offline_messages(User),
     
-    %% Response: LOGIN_OK followed by any offline messages
-    {ok, User, [{send, <<3, "LOGIN_OK">>} | OfflineActions]}.
+    %% Generate session_id for connection resume (RFC Section 3.4)
+    SessionId = generate_session_id(),
+    iris_session_cache:store(SessionId, User),
+    
+    %% Generate refresh token (RFC FR-11a) -- best-effort via Core RPC
+    RefreshTokenPart = case catch iris_circuit_breaker:call(CoreNode, iris_auth, create_refresh_token, [User]) of
+        {ok, RT} ->
+            RTBin = ensure_binary(RT),
+            <<(byte_size(RTBin)):16, RTBin/binary>>;
+        _ ->
+            <<0:16>>  %% No refresh token available
+    end,
+    
+    %% Response: LOGIN_OK + SessionIdLen(16) + SessionId + RefreshTokenLen(16) + RefreshToken
+    SidLen = byte_size(SessionId),
+    LoginOkPayload = <<3, "LOGIN_OK", SidLen:16, SessionId/binary, RefreshTokenPart/binary>>,
+    {ok, User, [{send, LoginOkPayload}, {set_session_id, SessionId} | OfflineActions]}.
 
 %% =============================================================================
 %% HOT-001 FIX: Paginated Offline Delivery for Celebrity Hotspots
@@ -915,6 +981,10 @@ check_message_rate(User) ->
 encode_rate_limited(RetryAfter) ->
     %% Error response with retry-after hint
     <<16#FF, RetryAfter:32>>.
+
+ensure_binary(B) when is_binary(B) -> B;
+ensure_binary(L) when is_list(L) -> list_to_binary(L);
+ensure_binary(A) when is_atom(A) -> atom_to_binary(A, utf8).
 
 encode_error(Reason) when is_atom(Reason) ->
     ReasonBin = atom_to_binary(Reason, utf8),
