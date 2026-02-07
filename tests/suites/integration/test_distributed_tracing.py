@@ -79,7 +79,6 @@ def test_message_with_tracing():
 
         # Send a message that will exercise the trace path
         send_client.send_msg(receiver, f"traced_message_{TEST_SEED}")
-        time.sleep(0.5)
 
         # Verify receiver can get data
         received_data = False

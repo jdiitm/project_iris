@@ -30,6 +30,11 @@
 -define(REVOCATION_TABLE, iris_auth_revoked).
 -define(DEFAULT_TTL, 86400).  %% 24 hours in seconds
 
+%% RFC Section 10.1: Failed login rate limiting (10/hour per account)
+-define(FAILED_LOGIN_TABLE, iris_auth_failed_logins).
+-define(FAILED_LOGIN_MAX, 10).              %% Max 10 failures per window
+-define(FAILED_LOGIN_WINDOW_SECS, 3600).    %% 1-hour window
+
 -record(state, {
     secret :: binary(),
     issuer :: binary(),
@@ -41,6 +46,8 @@
 
 %% @doc Get current auth mode (signer or verifier).
 -export([get_auth_mode/0]).
+%% RFC Section 10.1: Failed login rate limiting
+-export([check_login_rate/1, record_failed_login/1]).
 
 %% =============================================================================
 %% API
@@ -182,6 +189,12 @@ init([]) ->
     %% Create revocation table
     ets:new(?REVOCATION_TABLE, [set, named_table, public, {read_concurrency, true}]),
     
+    %% RFC Section 10.1: Failed login tracking table
+    %% Format: {UserId, FailedCount, WindowStartTimestamp}
+    ets:new(?FAILED_LOGIN_TABLE, [set, named_table, public,
+                                   {read_concurrency, true},
+                                   {write_concurrency, true}]),
+    
     %% Schedule cleanup of expired revocations
     erlang:send_after(3600000, self(), cleanup_revocations),
     
@@ -273,6 +286,8 @@ handle_info(cleanup_revocations, State) ->
     Now = os:system_time(second),
     Cutoff = Now - 86400,
     cleanup_revoked(Cutoff),
+    %% Also clean expired failed-login windows
+    cleanup_failed_logins(Now),
     erlang:send_after(3600000, self(), cleanup_revocations),
     {noreply, State};
 
@@ -280,6 +295,85 @@ handle_info(_Info, State) ->
     {noreply, State}.
 
 terminate(_Reason, _State) ->
+    ok.
+
+%% =============================================================================
+%% RFC Section 10.1: Failed Login Rate Limiting
+%% =============================================================================
+
+%% @doc Check if a user is allowed to attempt login.
+%% Returns ok | {error, rate_limited}.
+%% Gracefully returns ok if the ETS table doesn't exist (iris_auth not started).
+-spec check_login_rate(binary()) -> ok | {error, rate_limited}.
+check_login_rate(UserId) ->
+    try
+        Now = os:system_time(second),
+        MaxFails = application:get_env(iris_core, failed_login_max, ?FAILED_LOGIN_MAX),
+        WindowSecs = application:get_env(iris_core, failed_login_window_secs, ?FAILED_LOGIN_WINDOW_SECS),
+        case ets:lookup(?FAILED_LOGIN_TABLE, UserId) of
+            [] ->
+                ok;
+            [{UserId, Count, WindowStart}] ->
+                case (Now - WindowStart) > WindowSecs of
+                    true ->
+                        %% Window expired, reset
+                        ets:delete(?FAILED_LOGIN_TABLE, UserId),
+                        ok;
+                    false ->
+                        case Count >= MaxFails of
+                            true ->
+                                {error, rate_limited};
+                            false ->
+                                ok
+                        end
+                end
+        end
+    catch
+        error:badarg ->
+            %% ETS table doesn't exist (iris_auth not started yet)
+            ok
+    end.
+
+%% @doc Record a failed login attempt for a user.
+%% Gracefully no-ops if the ETS table doesn't exist.
+-spec record_failed_login(binary()) -> ok.
+record_failed_login(UserId) ->
+    try
+        Now = os:system_time(second),
+        WindowSecs = application:get_env(iris_core, failed_login_window_secs, ?FAILED_LOGIN_WINDOW_SECS),
+        case ets:lookup(?FAILED_LOGIN_TABLE, UserId) of
+            [] ->
+                ets:insert(?FAILED_LOGIN_TABLE, {UserId, 1, Now});
+            [{UserId, Count, WindowStart}] ->
+                case (Now - WindowStart) > WindowSecs of
+                    true ->
+                        %% Window expired, start new window
+                        ets:insert(?FAILED_LOGIN_TABLE, {UserId, 1, Now});
+                    false ->
+                        %% Increment counter within window
+                        ets:insert(?FAILED_LOGIN_TABLE, {UserId, Count + 1, WindowStart})
+                end
+        end,
+        ok
+    catch
+        error:badarg ->
+            %% ETS table doesn't exist (iris_auth not started)
+            ok
+    end.
+
+%% @doc Clean up expired failed-login windows.
+cleanup_failed_logins(Now) ->
+    WindowSecs = application:get_env(iris_core, failed_login_window_secs, ?FAILED_LOGIN_WINDOW_SECS),
+    Cutoff = Now - WindowSecs,
+    %% Use ets:foldl to collect expired entries, then delete them
+    Expired = ets:foldl(
+        fun({UserId, _Count, WindowStart}, Acc) ->
+            case WindowStart < Cutoff of
+                true -> [UserId | Acc];
+                false -> Acc
+            end
+        end, [], ?FAILED_LOGIN_TABLE),
+    lists:foreach(fun(Id) -> ets:delete(?FAILED_LOGIN_TABLE, Id) end, Expired),
     ok.
 
 %% =============================================================================

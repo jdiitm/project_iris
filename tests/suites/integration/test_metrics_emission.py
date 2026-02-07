@@ -108,9 +108,7 @@ def test_msg_counter_increments():
                 send_count += 1
             except Exception:
                 pass
-            time.sleep(0.05)
 
-        time.sleep(0.5)
         client.close()
 
         if send_count >= 8:

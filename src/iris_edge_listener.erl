@@ -20,10 +20,11 @@
     tls_enabled :: boolean()
 }).
 
-%% Per-IP connection rate limiting (RFC Section 10)
+%% Per-IP connection rate limiting (RFC Section 10.1)
+%% RFC: 5 connections per minute per IP (configurable via app env)
 -define(CONN_RATE_TABLE, iris_conn_rate).
--define(CONN_RATE_WINDOW_MS, 1000).  %% 1-second sliding window
--define(CONN_RATE_MAX, 50).          %% Max 50 connections per IP per second
+-define(CONN_RATE_WINDOW_MS, 60000). %% 1-minute sliding window
+-define(CONN_RATE_MAX, 5).           %% Max 5 connections per IP per minute
 
 start_link(Port) ->
     start_link(Port, iris_edge_conn).

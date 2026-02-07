@@ -154,21 +154,31 @@ handle_packet({login, LoginData}, _Current, TransportPid, _Mod) ->
     %% 1000000 words = ~8MB, sufficient for large group roster/fanout operations
     process_flag(max_heap_size, #{size => 1000000, kill => true}), %% ~8MB limit
     
-    %% Rate limiting check
-    case rate_limit_check(User) of
-        {deny, RetryAfter} ->
-            logger:warning("Login rate limited for ~p", [User]),
-            Actions = [{send, <<"RATE_LIMITED">>}, close],
+    %% RFC Section 10.1: Check failed-login rate limit first
+    case iris_auth:check_login_rate(User) of
+        {error, rate_limited} ->
+            logger:warning("Failed-login rate limited for ~p (10/hour)", [User]),
+            Actions = [{send, <<"LOGIN_RATE_LIMITED">>}, close],
             {ok, undefined, Actions};
-        allow ->
-            %% Optional JWT authentication
-            case authenticate(User, MaybeToken) of
-                ok ->
-                    complete_login(User, TransportPid);
-                {error, Reason} ->
-                    logger:warning("Auth failed for ~p: ~p", [User, Reason]),
-                    Actions = [{send, <<"AUTH_FAILED">>}, close],
-                    {ok, undefined, Actions}
+        ok ->
+            %% Per-message rate limiting check
+            case rate_limit_check(User) of
+                {deny, _RetryAfter} ->
+                    logger:warning("Login rate limited for ~p", [User]),
+                    Actions = [{send, <<"RATE_LIMITED">>}, close],
+                    {ok, undefined, Actions};
+                allow ->
+                    %% Optional JWT authentication
+                    case authenticate(User, MaybeToken) of
+                        ok ->
+                            complete_login(User, TransportPid);
+                        {error, Reason} ->
+                            %% RFC Section 10.1: Record failed login attempt
+                            iris_auth:record_failed_login(User),
+                            logger:warning("Auth failed for ~p: ~p", [User, Reason]),
+                            Actions = [{send, <<"AUTH_FAILED">>}, close],
+                            {ok, undefined, Actions}
+                    end
             end
     end;
 

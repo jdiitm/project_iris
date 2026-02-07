@@ -369,6 +369,7 @@ DOCKER_CHAOS_TESTS=(
     "tests/suites/chaos_dist/test_split_brain_epoch_resolution.py"
     "tests/suites/chaos_dist/test_cross_region_node_kill.py"
     "tests/suites/chaos_dist/test_quorum_write_failures.py"
+    "tests/suites/chaos_dist/test_real_clock_skew.py"
 )
 
 # ============================================================================

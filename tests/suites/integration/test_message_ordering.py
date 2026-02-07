@@ -62,9 +62,6 @@ def test_message_ordering():
         
         print(f"✓ Sent {num_messages} messages in sequence")
         
-        # Give time for delivery
-        time.sleep(1.0)
-        
         # Receive messages
         received_sequence = []
         start_time = time.time()
@@ -157,8 +154,6 @@ def test_interleaved_conversations():
             sender.send_msg(c_name, f"to_c_{i}")
         
         print("✓ Sent 10 interleaved messages (5 to B, 5 to C)")
-        
-        time.sleep(1.0)
         
         # Receive at B
         b_msgs = []

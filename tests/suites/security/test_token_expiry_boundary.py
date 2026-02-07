@@ -93,16 +93,12 @@ def test_stale_session_handling():
         c1 = IrisClient()
         c1.login(user)
         c1.send_msg("target_stale", "msg1")
-        time.sleep(0.2)
         c1.close()
-
-        time.sleep(1)
 
         # Second session (same user)
         c2 = IrisClient()
         c2.login(user)
         c2.send_msg("target_stale", "msg2")
-        time.sleep(0.2)
         c2.close()
 
         log("  PASS: Session reuse handled cleanly")

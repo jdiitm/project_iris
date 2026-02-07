@@ -25,6 +25,7 @@ import uuid
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
 from utilities.iris_client import IrisClient
+from framework.wait import wait_for
 
 
 def log(msg):
@@ -101,15 +102,13 @@ def test_unique_messages_delivered():
         
         log(f"Sent {num_messages} unique messages")
         
-        time.sleep(1.0)
-        
-        # Receive all messages
+        # Receive all messages (poll with recv timeout instead of blind sleep)
         received = []
         receive_errors = []
         
         for attempt in range(num_messages * 2):  # Allow for potential duplicates
             try:
-                msg = receiver.recv_msg(timeout=0.5)
+                msg = receiver.recv_msg(timeout=1.0)
                 if msg:
                     decoded = msg.decode('utf-8') if isinstance(msg, bytes) else msg
                     received.append(decoded)
@@ -202,13 +201,11 @@ def test_retry_storm_handling():
         
         log("Sent 5 'retry' messages with same content")
         
-        time.sleep(1.0)
-        
-        # Count received
+        # Count received (poll with recv timeout)
         received = []
         for attempt in range(10):
             try:
-                msg = receiver.recv_msg(timeout=0.3)
+                msg = receiver.recv_msg(timeout=1.0)
                 if msg:
                     decoded = msg.decode('utf-8') if isinstance(msg, bytes) else msg
                     received.append(decoded)
@@ -283,18 +280,14 @@ def test_dedup_across_reconnects():
         sender.send_msg(receiver_name, offline_msg)
         log("Sent message to offline user")
         
-        time.sleep(0.5)
-        
         # First connect - should get the message
         receiver1 = IrisClient(host, port)
         receiver1.login(receiver_name)
         
-        time.sleep(0.5)
-        
         first_msgs = []
         for attempt in range(3):
             try:
-                msg = receiver1.recv_msg(timeout=0.5)
+                msg = receiver1.recv_msg(timeout=1.0)
                 if msg:
                     decoded = msg.decode('utf-8') if isinstance(msg, bytes) else msg
                     first_msgs.append(decoded)
@@ -311,18 +304,14 @@ def test_dedup_across_reconnects():
         receiver1 = None
         log(f"First connect: received {len(first_msgs)} messages")
         
-        time.sleep(0.5)
-        
         # Second connect - should NOT get duplicates
         receiver2 = IrisClient(host, port)
         receiver2.login(receiver_name)
         
-        time.sleep(0.5)
-        
         second_msgs = []
         for attempt in range(3):
             try:
-                msg = receiver2.recv_msg(timeout=0.5)
+                msg = receiver2.recv_msg(timeout=1.0)
                 if msg:
                     decoded = msg.decode('utf-8') if isinstance(msg, bytes) else msg
                     second_msgs.append(decoded)
