@@ -19,7 +19,6 @@ import ssl
 import struct
 import time
 import uuid
-import subprocess
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 sys.path.insert(0, PROJECT_ROOT)
@@ -53,6 +52,32 @@ def get_tls_socket():
     return s
 
 
+def parse_login_response(resp):
+    """Parse LOGIN_OK response to extract session_id and refresh_token.
+
+    Response format (iris_session.erl):
+      0x03 | "LOGIN_OK" | SidLen(u16be) | SessionId | RefreshTokenLen(u16be) | RefreshToken
+    """
+    idx = resp.find(b"LOGIN_OK")
+    if idx < 0:
+        return None, None
+    pos = idx + 8  # skip "LOGIN_OK"
+    if len(resp) < pos + 2:
+        return None, None
+    sid_len = struct.unpack('>H', resp[pos:pos + 2])[0]
+    pos += 2
+    session_id = resp[pos:pos + sid_len]
+    pos += sid_len
+    if len(resp) < pos + 2:
+        return session_id, None
+    rt_len = struct.unpack('>H', resp[pos:pos + 2])[0]
+    pos += 2
+    if rt_len == 0 or len(resp) < pos + rt_len:
+        return session_id, None
+    refresh_token = resp[pos:pos + rt_len]
+    return session_id, refresh_token
+
+
 def raw_login(sock, username):
     """Login and return raw response bytes."""
     sock.sendall(b'\x01' + username.encode('utf-8'))
@@ -71,53 +96,6 @@ def send_token_refresh(sock, refresh_token):
               struct.pack('>H', len(refresh_token)) +
               refresh_token)
     sock.sendall(packet)
-
-
-def run_erlang_rpc(code):
-    """Run Erlang code via a temp node connecting to the edge."""
-    hostname = socket.gethostname()
-    node = f"iris_edge1@{hostname}"
-    ts = int(time.time() * 1000)
-    cmd = (
-        f"erl -setcookie iris_secret -sname rpc_ref_{ts} -hidden -noshell "
-        f"-pa {PROJECT_ROOT}/ebin "
-        f"-eval \"{code}, init:stop().\""
-    )
-    result = subprocess.run(
-        cmd, shell=True, capture_output=True, text=True, timeout=10,
-        cwd=PROJECT_ROOT
-    )
-    return result.stdout.strip(), result.returncode
-
-
-def create_refresh_token_via_rpc(user_id):
-    """Create a refresh token for a user via Erlang rpc on the core node."""
-    hostname = socket.gethostname()
-    core_node = f"iris_core@{hostname}"
-    ts = int(time.time() * 1000)
-    # Use single-quoted Erlang strings to avoid shell escaping issues with ~
-    code = (
-        f"Node = list_to_atom(\"iris_core@\" ++ net_adm:localhost()), "
-        f"Res = rpc:call(Node, iris_auth, create_refresh_token, [<<\"{user_id}\">>], 5000), "
-        f"case Res of "
-        f"  {{ok, Token}} -> io:put_chars([\"TOKEN:\", binary_to_list(Token)]); "
-        f"  Err -> io:put_chars([\"ERROR:\", io_lib:format(\"~p\", [Err])]) "
-        f"end"
-    )
-    cmd = [
-        "erl", "-setcookie", "iris_secret", f"-sname", f"rpc_ref_{ts}",
-        "-hidden", "-noshell", "-pa", f"{PROJECT_ROOT}/ebin",
-        "-eval", f"{code}, init:stop()."
-    ]
-    result = subprocess.run(
-        cmd, capture_output=True, text=True, timeout=10,
-        cwd=PROJECT_ROOT
-    )
-    stdout = result.stdout.strip()
-    if "TOKEN:" in stdout:
-        return stdout.split("TOKEN:")[1].strip()
-    log(f"  RPC debug: stdout={stdout}, stderr={result.stderr[:200]}")
-    return None
 
 
 # =============================================================================
@@ -140,10 +118,10 @@ def test_refresh_returns_new_tokens():
     login_resp = raw_login(sock, user)
     time.sleep(0.1)
 
-    # Create a refresh token via Erlang rpc (since login may not include one yet)
-    refresh_token = create_refresh_token_via_rpc(user)
+    # Extract refresh token from LOGIN_OK response (created by server via Core RPC)
+    _session_id, refresh_token = parse_login_response(login_resp)
     if not refresh_token:
-        log("  FAIL: Could not create refresh token via rpc")
+        log("  FAIL: LOGIN_OK did not include a refresh token")
         sock.close()
         return False
 
@@ -206,12 +184,12 @@ def test_refresh_reuse_detected():
 
     user = unique_user("reuse_test")
     sock = get_tls_socket()
-    raw_login(sock, user)
+    login_resp = raw_login(sock, user)
     time.sleep(0.1)
 
-    refresh_token = create_refresh_token_via_rpc(user)
+    _session_id, refresh_token = parse_login_response(login_resp)
     if not refresh_token:
-        log("  FAIL: Could not create refresh token")
+        log("  FAIL: LOGIN_OK did not include a refresh token")
         sock.close()
         return False
 
