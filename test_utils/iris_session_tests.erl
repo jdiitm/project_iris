@@ -125,12 +125,14 @@ test_login_returns_structure() ->
 %% =============================================================================
 
 test_send_message_ok() ->
+    %% RFC-001-AMENDMENT-001 Section 7: v1.0 REJECTS plaintext messages (opcode 0x02).
+    %% Clients MUST use E2EE (0x23) or CBOR (0x10). Plaintext sends return an error.
     User = <<"sender">>,
     Target = <<"receiver">>,
     Msg = <<"Hello, World!">>,
     
     Result = iris_session:handle_packet({send_message, Target, Msg}, User, self(), tcp),
-    ?assertMatch({ok, User, []}, Result).
+    ?assertMatch({ok, User, [{send, _ErrorBin}]}, Result).
 
 test_send_message_preserves_user() ->
     User = <<"persistent_user">>,
@@ -142,20 +144,23 @@ test_send_message_preserves_user() ->
     ?assertEqual(User, ReturnedUser).
 
 test_send_message_empty_target() ->
+    %% RFC-001-AMENDMENT-001: Plaintext rejected regardless of target
     User = <<"sender">>,
     Result = iris_session:handle_packet({send_message, <<>>, <<"msg">>}, User, self(), tcp),
-    ?assertMatch({ok, User, []}, Result).
+    ?assertMatch({ok, User, [{send, _ErrorBin}]}, Result).
 
 test_send_message_empty_body() ->
+    %% RFC-001-AMENDMENT-001: Plaintext rejected regardless of body
     User = <<"sender">>,
     Result = iris_session:handle_packet({send_message, <<"target">>, <<>>}, User, self(), tcp),
-    ?assertMatch({ok, User, []}, Result).
+    ?assertMatch({ok, User, [{send, _ErrorBin}]}, Result).
 
 test_send_message_large_payload() ->
+    %% RFC-001-AMENDMENT-001: Plaintext rejected regardless of size
     User = <<"sender">>,
     LargeMsg = binary:copy(<<"X">>, 65536),  %% 64KB message
     Result = iris_session:handle_packet({send_message, <<"target">>, LargeMsg}, User, self(), tcp),
-    ?assertMatch({ok, User, []}, Result).
+    ?assertMatch({ok, User, [{send, _ErrorBin}]}, Result).
 
 %% =============================================================================
 %% Batch Send Tests
@@ -313,9 +318,10 @@ test_terminate_nonexistent() ->
 %% =============================================================================
 
 test_unicode_username() ->
+    %% RFC-001-AMENDMENT-001: Plaintext rejected; user is preserved in response
     User = <<"用户"/utf8>>,  %% Chinese characters
     Result = iris_session:handle_packet({send_message, <<"target">>, <<"msg">>}, User, self(), tcp),
-    ?assertMatch({ok, User, []}, Result).
+    ?assertMatch({ok, User, [{send, _ErrorBin}]}, Result).
 
 test_binary_nulls() ->
     User = <<"user\0name">>,

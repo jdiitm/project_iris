@@ -152,8 +152,17 @@ test_binary_serialization() ->
     %% Invalid binary (too short)
     ?assertEqual({error, invalid_format}, iris_hlc:from_binary(<<1,2,3>>)),
     
-    %% Old 8-byte format should be rejected
-    ?assertEqual({error, invalid_format}, iris_hlc:from_binary(<<0,0,0,0,0,0,0,0>>)).
+    %% 8-byte format: accepted if dual-write enabled (migration), rejected otherwise
+    %% RFC Section 5.4: Dual-write period where both 64-bit and 80-bit IDs are accepted
+    DualWrite = application:get_env(iris_edge, hlc_dual_write, true),
+    case DualWrite of
+        true ->
+            %% During dual-write: 8 bytes parsed as legacy 64-bit HLC (node_id=0)
+            Parsed = iris_hlc:from_binary(<<0,0,0,0,0,0,0,0>>),
+            ?assertEqual(0, iris_hlc:node_id(Parsed));
+        false ->
+            ?assertEqual({error, legacy_format_rejected}, iris_hlc:from_binary(<<0,0,0,0,0,0,0,0>>))
+    end.
 
 test_integer_serialization() ->
     HLC = iris_hlc:send(),
@@ -432,3 +441,51 @@ test_large_node_id_binary() ->
     ?assertEqual(1000, iris_hlc:node_id(Recovered)),
 
     ok = iris_hlc:set_node_id(42).
+
+%% =============================================================================
+%% RFC Section 5.4: Dual-Write Migration Tests (64-bit to 80-bit)
+%% =============================================================================
+
+dual_write_migration_test_() ->
+    {setup,
+     fun() ->
+         application:set_env(iris_edge, hlc_dual_write, true),
+         ok
+     end,
+     fun(_) ->
+         application:unset_env(iris_edge, hlc_dual_write),
+         ok
+     end,
+     [
+      {"80-bit binary accepted", fun test_80bit_accepted/0},
+      {"64-bit legacy binary accepted during dual-write", fun test_64bit_accepted_dual_write/0},
+      {"64-bit legacy sets node_id to 0", fun test_64bit_node_id_zero/0},
+      {"Invalid binary rejected", fun test_invalid_binary_rejected/0}
+     ]}.
+
+test_80bit_accepted() ->
+    %% Standard 80-bit binary should always work
+    Bin = <<16#0189A1B2C3D4:48, 42:16, 7:16>>,
+    Result = iris_hlc:from_binary(Bin),
+    ?assertMatch({hlc, _, 42, 7}, Result).
+
+test_64bit_accepted_dual_write() ->
+    %% 64-bit (8-byte) legacy format should be accepted during dual-write
+    application:set_env(iris_edge, hlc_dual_write, true),
+    Bin = <<16#0189A1B2C3D4:48, 42:16>>,
+    Result = iris_hlc:from_binary(Bin),
+    ?assertMatch({hlc, _, 42, 0}, Result).
+
+test_64bit_node_id_zero() ->
+    %% Legacy 64-bit format has no node ID, defaults to 0
+    application:set_env(iris_edge, hlc_dual_write, true),
+    Bin = <<16#0189A1B2C3D4:48, 100:16>>,
+    HLC = iris_hlc:from_binary(Bin),
+    ?assertEqual(0, iris_hlc:node_id(HLC)),
+    ?assertEqual(100, iris_hlc:logical_counter(HLC)).
+
+test_invalid_binary_rejected() ->
+    %% Neither 8 nor 10 bytes should be rejected
+    ?assertEqual({error, invalid_format}, iris_hlc:from_binary(<<1,2,3>>)),
+    ?assertEqual({error, invalid_format}, iris_hlc:from_binary(<<1,2,3,4,5,6,7,8,9>>)),
+    ?assertEqual({error, invalid_format}, iris_hlc:from_binary(<<>>)).

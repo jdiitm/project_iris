@@ -14,7 +14,9 @@
     pending_acks = #{} :: map(), %% MsgId => {Msg, Timestamp, RetryCount}
     retry_timer :: reference() | undefined,
     last_activity :: integer(),   %% For hibernation
-    hibernated = false :: boolean()
+    hibernated = false :: boolean(),
+    session_id :: binary() | undefined,  %% RFC Section 3.4: Connection resume
+    capabilities = [] :: list()  %% RFC Section 11.1: Negotiated capabilities
 }).
 
 %% Transport-agnostic setopts
@@ -272,6 +274,12 @@ process_buffer(Bin, Data = #data{socket = Socket, transport = Transport, user = 
                 ({ack_received, MsgId}, D = #data{pending_acks = P}) -> 
                     %% Remove from pending
                     D#data{pending_acks = maps:remove(MsgId, P)};
+                ({set_session_id, SId}, D) ->
+                    %% RFC Section 3.4: Store session_id for resume on disconnect
+                    D#data{session_id = SId};
+                ({set_capabilities, Caps}, D) ->
+                    %% RFC Section 11.1: Store negotiated capabilities
+                    D#data{capabilities = Caps};
                 (close, _D) -> gen_statem:stop({shutdown, closed}), error(closed)
             end, Data, Actions),
             
@@ -279,9 +287,11 @@ process_buffer(Bin, Data = #data{socket = Socket, transport = Transport, user = 
     end.
 
 
-terminate(Reason, _State, #data{user = User, pending_acks = Pending}) ->
+terminate(Reason, _State, #data{user = User, pending_acks = Pending, session_id = SessionId}) ->
     %% AUDIT3 FIX: Decrement connection counter
     iris_ingress_guard:close(),
+    %% RFC Section 3.4: Queue pending messages in session cache for resume
+    queue_pending_to_session_cache(SessionId, Pending),
     %% Save all pending_acks to offline storage
     save_pending_acks(User, Pending),
     %% Also flush any queued messages
@@ -296,6 +306,23 @@ terminate(Reason, _State, #data{user = User, pending_acks = Pending}) ->
             logger:warning("Connection for ~p terminated abnormally: ~p", [User, Reason])
     end,
     ok.
+
+%% RFC Section 3.4: Queue pending messages in session cache for connection resume
+queue_pending_to_session_cache(undefined, _Pending) -> ok;
+queue_pending_to_session_cache(_SessionId, Pending) when map_size(Pending) == 0 -> ok;
+queue_pending_to_session_cache(SessionId, Pending) ->
+    try
+        %% Queue each pending message with an incrementing sequence number
+        Entries = maps:to_list(Pending),
+        lists:foldl(fun({_MsgId, {Msg, _Ts, _Retries}}, Seq) ->
+            iris_session_cache:queue_message(SessionId, Seq, Msg),
+            Seq + 1
+        end, iris_session_cache:next_seq(SessionId), Entries),
+        ok
+    catch _:_ ->
+        %% Session cache may not be available -- degrade gracefully
+        ok
+    end.
 
 save_pending_acks(undefined, _Pending) ->
     ok;

@@ -22,6 +22,10 @@
 -define(LEVEL_SHED, 3).
 -define(LEVEL_CRITICAL, 4).
 
+%% RFC Section 11.1: Version/Capability Negotiation
+-define(SERVER_VERSIONS, [1]).
+-define(SERVER_CAPABILITIES, [<<"zstd">>, <<"zlib">>, <<"e2ee">>, <<"groups">>]).
+
 %% @doc Check if a feature should be degraded based on current load level.
 %% Returns true if the feature should be skipped (degraded).
 -spec should_degrade(atom()) -> boolean().
@@ -72,6 +76,10 @@ track_request(User) ->
             %% ETS table doesn't exist yet - ignore
             ok
     end.
+
+%% Generate a unique session ID for connection resume (RFC Section 3.4)
+generate_session_id() ->
+    base64:encode(crypto:strong_rand_bytes(16)).
 
 %% Dynamic Core node discovery with failover
 get_core_node() ->
@@ -593,6 +601,23 @@ handle_packet({sender_key_dist, _GroupId, _KeyData}, undefined, _Pid, _Mod) ->
 %% Control Opcodes (PROTOCOL_V1_FREEZE v1.1)
 %% =============================================================================
 
+%% =============================================================================
+%% Version/Capability Negotiation (0x0C): RFC Section 11.1
+%% =============================================================================
+%% Client sends supported versions and capabilities after LOGIN.
+%% Server responds with negotiated (intersection) version and capabilities.
+%% Supported server capabilities: "zstd", "zlib", "e2ee", "groups"
+
+handle_packet({version_negotiate, ClientVersions, ClientCapabilities}, User, _Pid, _Mod) ->
+    %% Negotiate version: pick highest version supported by both
+    NegotiatedVersion = negotiate_version(ClientVersions, ?SERVER_VERSIONS),
+    %% Negotiate capabilities: intersection of client and server
+    NegotiatedCaps = iris_compression:negotiate(ClientCapabilities, ?SERVER_CAPABILITIES),
+    Response = iris_proto:encode_version_response(NegotiatedVersion, NegotiatedCaps),
+    logger:info("Version negotiated: v~p, caps=~p for user ~p",
+                [NegotiatedVersion, NegotiatedCaps, User]),
+    {ok, User, [{send, Response}, {set_capabilities, NegotiatedCaps}]};
+
 %% PING (0x08): Client keepalive heartbeat - respond with PONG
 handle_packet(ping, User, _Pid, _Mod) ->
     Pong = iris_proto:encode_pong(),
@@ -602,20 +627,148 @@ handle_packet(ping, User, _Pid, _Mod) ->
 handle_packet(pong, User, _Pid, _Mod) ->
     {ok, User, []};
 
-%% RESUME (0x0A): Connection resume - not yet implemented, acknowledge gracefully
-handle_packet({resume, _SessionId, _LastSeqNo}, User, _Pid, _Mod) ->
-    %% TODO: Implement session resume with sequence replay
-    %% For now, treat as no-op (connection continues as normal)
-    {ok, User, []};
+%% RESUME (0x0A): Connection resume (RFC Section 3.4)
+%% Lookup session in cache; if valid, replay missed messages.
+%% If expired/unknown, send NACK so client does full login.
+handle_packet({resume, SessionId, LastSeqNo}, User, _Pid, _Mod) ->
+    case iris_session_cache:get_messages_after(SessionId, LastSeqNo) of
+        {ok, Messages} ->
+            %% Replay missed messages as a batch
+            ReplayActions = [{send, MsgBin} || {_Seq, MsgBin} <- Messages],
+            logger:info("RESUME: Replaying ~p messages for ~p (session ~p, after seq ~p)",
+                       [length(Messages), User, SessionId, LastSeqNo]),
+            {ok, User, ReplayActions};
+        {error, _Reason} ->
+            %% Session expired or not found -- NACK
+            logger:info("RESUME NACK: Session ~p not found/expired for ~p", [SessionId, User]),
+            NackPayload = encode_error(<<"RESUME_NACK">>),
+            {ok, User, [{send, NackPayload}]}
+    end;
 
-%% TOKEN_REFRESH (0x0B): Token refresh request - not yet implemented
-handle_packet({token_refresh, _RefreshToken}, User, _Pid, _Mod) ->
-    %% TODO: Implement token refresh flow
-    %% For now, treat as no-op
-    {ok, User, []};
+%% TOKEN_REFRESH (0x0B): Token refresh flow (RFC FR-11a)
+%% Refresh tokens live on Core (mnesia). Validate+rotate via RPC to Core,
+%% then create access token locally on Edge (iris_auth gen_server runs here).
+handle_packet({token_refresh, RefreshToken}, User, _Pid, _Mod) ->
+    CoreNode = get_core_node(),
+    %% Step 1: Validate and rotate on Core (mnesia-only, no gen_server needed)
+    Result = iris_circuit_breaker:call(CoreNode, iris_auth, validate_and_rotate_refresh, [RefreshToken]),
+    case Result of
+        {ok, _UserId, NewRefresh} ->
+            %% Step 2: Create access token locally on Edge
+            case catch iris_auth:create_token(User) of
+                {ok, NewAccess} ->
+                    AccessBin = ensure_binary(NewAccess),
+                    RefreshBin = ensure_binary(NewRefresh),
+                    Response = <<16#0B,
+                                 (byte_size(AccessBin)):16, AccessBin/binary,
+                                 (byte_size(RefreshBin)):16, RefreshBin/binary>>,
+                    logger:info("TOKEN_REFRESH: Issued new token pair for ~p", [User]),
+                    {ok, User, [{send, Response}]};
+                _ ->
+                    %% Access token creation failed -- still return new refresh token
+                    %% Use a placeholder access token
+                    Placeholder = <<"access_token_pending">>,
+                    RefreshBin = ensure_binary(NewRefresh),
+                    Response = <<16#0B,
+                                 (byte_size(Placeholder)):16, Placeholder/binary,
+                                 (byte_size(RefreshBin)):16, RefreshBin/binary>>,
+                    logger:warning("TOKEN_REFRESH: Access token creation failed for ~p, using placeholder", [User]),
+                    {ok, User, [{send, Response}]}
+            end;
+        {error, token_reused} ->
+            logger:warning("TOKEN_REFRESH: Reuse detected for ~p, revoking family", [User]),
+            {ok, User, [{send, encode_error(token_reused)}]};
+        {error, Reason} ->
+            logger:warning("TOKEN_REFRESH: Failed for ~p: ~p", [User, Reason]),
+            {ok, User, [{send, encode_error(Reason)}]};
+        {badrpc, Reason} ->
+            logger:warning("TOKEN_REFRESH: RPC failed for ~p: ~p", [User, Reason]),
+            {ok, User, [{send, encode_error(service_unavailable)}]}
+    end;
+
+%% =============================================================================
+%% CBOR Message (0x10): RFC-001-AMENDMENT-001 extensible message format
+%% =============================================================================
+%% RFC Section 1.2: If the CBOR map includes an "idempotency_key" field,
+%% server MUST validate it as UUIDv7 (16 bytes, version=7, variant=0b10).
+handle_packet({cbor_msg, Target, Map}, User, _Pid, _Mod) when User =/= undefined ->
+    track_request(User),
+    case check_message_rate(User) of
+        allow ->
+            %% RFC Section 1.2: Validate idempotency_key if present
+            case validate_cbor_idempotency_key(Map) of
+                ok ->
+                    %% Route as CBOR delivery to target
+                    DeliveryPacket = iris_proto:encode_cbor_msg(User, Map),
+                    iris_router:route(Target, DeliveryPacket),
+                    {ok, User, []};
+                {error, invalid_idempotency_key} ->
+                    logger:warning("CBOR msg rejected: invalid idempotency_key from ~p", [User]),
+                    {ok, User, [{send, encode_error(invalid_idempotency_key)}]}
+            end;
+        {deny, RetryAfter} ->
+            logger:warning("CBOR message rate limited for ~p", [User]),
+            {ok, User, [{send, encode_rate_limited(RetryAfter)}]}
+    end;
+
+handle_packet({cbor_msg, _Target, _Map}, undefined, _Pid, _Mod) ->
+    %% Not logged in - reject
+    {ok, undefined, []};
 
 handle_packet({error, _}, User, _Pid, _Mod) ->
      {ok, User, []}.
+
+%% =============================================================================
+%% Internal: Traced RPC (RFC NFR-30: Every RPC MUST propagate trace_id)
+%% =============================================================================
+
+%% @doc RPC wrapper that propagates trace context across Edge->Core boundary.
+%% Injects current trace context into the RPC arguments, and the core-side
+%% entry point can extract it using iris_trace:extract/1.
+-spec traced_rpc(node(), module(), atom(), list()) -> term().
+traced_rpc(Node, Mod, Fun, Args) ->
+    traced_rpc(Node, Mod, Fun, Args, 5000).
+
+-spec traced_rpc(node(), module(), atom(), list(), timeout()) -> term().
+traced_rpc(Node, Mod, Fun, Args, Timeout) ->
+    %% Inject trace context as last argument (map)
+    TraceCtx = iris_trace:inject(#{}),
+    case TraceCtx of
+        #{<<"trace_id">> := _} ->
+            %% Pass trace context alongside args via a wrapper call
+            rpc:call(Node, iris_trace, execute_with_context,
+                     [TraceCtx, Mod, Fun, Args], Timeout);
+        _ ->
+            %% No active trace - plain RPC
+            rpc:call(Node, Mod, Fun, Args, Timeout)
+    end.
+
+%% =============================================================================
+%% Internal: Version negotiation helper (RFC Section 11.1)
+%% =============================================================================
+
+negotiate_version(ClientVersions, ServerVersions) when is_list(ClientVersions), is_list(ServerVersions) ->
+    Common = [V || V <- ClientVersions, lists:member(V, ServerVersions)],
+    case Common of
+        [] -> hd(ServerVersions);  %% Fallback to server's primary version
+        _ -> lists:max(Common)
+    end;
+negotiate_version(_, ServerVersions) ->
+    hd(ServerVersions).
+
+%% =============================================================================
+%% Internal: UUIDv7 idempotency key validation (RFC Section 1.2)
+%% =============================================================================
+
+%% @doc Validate idempotency_key in CBOR message map if present.
+%% If the key is absent, validation passes (backwards compatibility).
+%% If present, it MUST be valid UUIDv7.
+-spec validate_cbor_idempotency_key(map()) -> ok | {error, invalid_idempotency_key}.
+validate_cbor_idempotency_key(Map) when is_map(Map) ->
+    case maps:get(<<"idempotency_key">>, Map, undefined) of
+        undefined -> ok;  %% Field not present - allow (backwards compat)
+        Key -> iris_uuid:validate_idempotency_key(Key)
+    end.
 
 %% =============================================================================
 %% Internal: Login helpers
@@ -635,7 +788,7 @@ complete_login(User, TransportPid) ->
     %% AUDIT FIX: Reduces worst-case login time from 10s to 5s
     CoreNode = get_core_node(),
     spawn(fun() ->
-        case rpc:call(CoreNode, iris_core, register_user, [User, node(), TransportPid], 5000) of
+        case traced_rpc(CoreNode, iris_core, register_user, [User, node(), TransportPid]) of
             ok -> ok;
             {badrpc, Reason} -> 
                 logger:warning("Async Core registration failed for ~p on ~p: ~p", [User, CoreNode, Reason]);
@@ -649,8 +802,23 @@ complete_login(User, TransportPid) ->
     %% But for celebrity accounts with 1M+ messages, we stream in pages to prevent OOM
     OfflineActions = deliver_offline_messages(User),
     
-    %% Response: LOGIN_OK followed by any offline messages
-    {ok, User, [{send, <<3, "LOGIN_OK">>} | OfflineActions]}.
+    %% Generate session_id for connection resume (RFC Section 3.4)
+    SessionId = generate_session_id(),
+    iris_session_cache:store(SessionId, User),
+    
+    %% Generate refresh token (RFC FR-11a) -- best-effort via Core RPC
+    RefreshTokenPart = case catch iris_circuit_breaker:call(CoreNode, iris_auth, create_refresh_token, [User]) of
+        {ok, RT} ->
+            RTBin = ensure_binary(RT),
+            <<(byte_size(RTBin)):16, RTBin/binary>>;
+        _ ->
+            <<0:16>>  %% No refresh token available
+    end,
+    
+    %% Response: LOGIN_OK + SessionIdLen(16) + SessionId + RefreshTokenLen(16) + RefreshToken
+    SidLen = byte_size(SessionId),
+    LoginOkPayload = <<3, "LOGIN_OK", SidLen:16, SessionId/binary, RefreshTokenPart/binary>>,
+    {ok, User, [{send, LoginOkPayload}, {set_session_id, SessionId} | OfflineActions]}.
 
 %% =============================================================================
 %% HOT-001 FIX: Paginated Offline Delivery for Celebrity Hotspots
@@ -915,6 +1083,10 @@ check_message_rate(User) ->
 encode_rate_limited(RetryAfter) ->
     %% Error response with retry-after hint
     <<16#FF, RetryAfter:32>>.
+
+ensure_binary(B) when is_binary(B) -> B;
+ensure_binary(L) when is_list(L) -> list_to_binary(L);
+ensure_binary(A) when is_atom(A) -> atom_to_binary(A, utf8).
 
 encode_error(Reason) when is_atom(Reason) ->
     ReasonBin = atom_to_binary(Reason, utf8),

@@ -29,6 +29,7 @@
 -export([get_replicas/1, repair_async/4]).
 -export([set_replication_factor/1, get_replication_factor/0]).
 -export([local_sync_write/3]).  %% Called via RPC on remote nodes
+-export([reconcile_reads/1]).   %% Exported for testing (RFC Section 5.3)
 
 %% Configurable via application env
 -define(DEFAULT_REPLICATION_FACTOR, 3).
@@ -333,8 +334,28 @@ reconcile_reads(Results) ->
     Values = [V || {_Node, V} <- Results, V =/= not_found],
     case Values of
         [] -> not_found;
-        [V | _] -> {ok, V}  %% Return first (TODO: version/timestamp comparison)
+        [Single] -> {ok, Single};
+        Multiple ->
+            %% RFC Section 5.3: Resolve conflicts by highest timestamp.
+            %% Values may be {Data, Timestamp} tuples or raw values.
+            Winner = lists:foldl(fun(V, Best) ->
+                pick_latest(V, Best)
+            end, hd(Multiple), tl(Multiple)),
+            {ok, Winner}
     end.
+
+%% Pick the value with the higher timestamp. If timestamps tie,
+%% use deterministic tiebreak (lexicographic comparison of the value).
+pick_latest({_V1, Ts1} = A, {_V2, Ts2} = B) when is_integer(Ts1), is_integer(Ts2) ->
+    if
+        Ts1 > Ts2 -> A;
+        Ts2 > Ts1 -> B;
+        A >= B -> A;  %% Deterministic tiebreak
+        true -> B
+    end;
+pick_latest(A, _B) ->
+    %% Raw values without timestamps -- keep first (legacy fallback)
+    A.
 
 %% =============================================================================
 %% Internal: Replica Selection

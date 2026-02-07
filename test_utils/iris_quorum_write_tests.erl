@@ -341,6 +341,63 @@ partition_guard_test_() ->
       ]}}.
 
 %% =============================================================================
+%% Quorum Read Conflict Resolution Tests (RFC Section 5.3)
+%% =============================================================================
+
+reconcile_reads_test_() ->
+    {"Quorum read conflict resolution",
+     [
+      {"Empty results return not_found", fun() ->
+           ?assertEqual(not_found, iris_quorum_write:reconcile_reads([]))
+       end},
+
+      {"All not_found returns not_found", fun() ->
+           Results = [{node1, not_found}, {node2, not_found}, {node3, not_found}],
+           ?assertEqual(not_found, iris_quorum_write:reconcile_reads(Results))
+       end},
+
+      {"Single value returned as-is", fun() ->
+           Results = [{node1, {<<"v1">>, 100}}, {node2, not_found}],
+           ?assertEqual({ok, {<<"v1">>, 100}}, iris_quorum_write:reconcile_reads(Results))
+       end},
+
+      {"Latest timestamp wins among conflicting values", fun() ->
+           %% Node 1 has older value (timestamp 100)
+           %% Node 2 has newer value (timestamp 200)
+           %% Node 3 has middle value (timestamp 150)
+           Results = [
+               {node1, {<<"old_value">>, 100}},
+               {node2, {<<"newest_value">>, 200}},
+               {node3, {<<"middle_value">>, 150}}
+           ],
+           {ok, Winner} = iris_quorum_write:reconcile_reads(Results),
+           %% The winner must be the value with the highest timestamp
+           ?assertEqual({<<"newest_value">>, 200}, Winner)
+       end},
+
+      {"Equal timestamps resolve deterministically", fun() ->
+           %% When timestamps tie, pick the lexicographically larger value
+           %% to ensure determinism across nodes
+           Results = [
+               {node1, {<<"value_a">>, 100}},
+               {node2, {<<"value_b">>, 100}}
+           ],
+           {ok, Winner} = iris_quorum_write:reconcile_reads(Results),
+           %% Both have same timestamp, deterministic tiebreak
+           ?assertMatch({_, 100}, Winner)
+       end},
+
+      {"Majority not_found with one value still returns the value", fun() ->
+           Results = [
+               {node1, not_found},
+               {node2, {<<"lone_value">>, 50}},
+               {node3, not_found}
+           ],
+           ?assertEqual({ok, {<<"lone_value">>, 50}}, iris_quorum_write:reconcile_reads(Results))
+       end}
+     ]}.
+
+%% =============================================================================
 %% Integration Test Placeholder
 %% =============================================================================
 

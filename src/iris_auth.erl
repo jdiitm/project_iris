@@ -23,6 +23,7 @@
 -export([receive_revocation/2]).  %% P1-H2: Cross-node revocation propagation
 %% IA-3: Refresh token API (RFC-001 v4.0 FR-11a)
 -export([create_refresh_token/1, create_refresh_token/2, exchange_refresh_token/1]).
+-export([validate_and_rotate_refresh/1]).  %% Mnesia-only validation (for cross-node RPC)
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
 -define(SERVER, ?MODULE).
@@ -34,8 +35,12 @@
     issuer :: binary(),
     revoked_count = 0 :: integer(),
     eddsa_pub :: binary() | undefined,    %% P1-4: Ed25519 public key
-    eddsa_priv :: binary() | undefined    %% P1-4: Ed25519 private key
+    eddsa_priv :: binary() | undefined,   %% P1-4: Ed25519 private key
+    auth_mode = signer :: signer | verifier  %% RFC Section 9.1: Key isolation
 }).
+
+%% @doc Get current auth mode (signer or verifier).
+-export([get_auth_mode/0]).
 
 %% =============================================================================
 %% API
@@ -89,6 +94,12 @@ create_eddsa_token(UserId, Claims, TTL) ->
 -spec get_eddsa_public_key() -> {ok, binary()} | {error, no_eddsa_key}.
 get_eddsa_public_key() ->
     gen_server:call(?SERVER, get_eddsa_public_key).
+
+%% @doc Get current auth mode (signer or verifier).
+%% RFC Section 9.1: Only auth service holds private key.
+-spec get_auth_mode() -> signer | verifier.
+get_auth_mode() ->
+    gen_server:call(?SERVER, get_auth_mode).
 
 %% @doc Revoke a token by its JTI (extracted from token).
 -spec revoke_token(binary()) -> ok | {error, term()}.
@@ -190,9 +201,24 @@ init([]) ->
             {Pub, Priv}
     end,
 
-    logger:info("JWT auth initialized (issuer: ~s, eddsa: ~s)", 
-                [Issuer, case EdDSAPub of undefined -> "disabled"; _ -> "enabled" end]),
-    {ok, #state{secret = Secret, issuer = Issuer, eddsa_pub = EdDSAPub, eddsa_priv = EdDSAPriv}}.
+    %% RFC Section 9.1: Auth mode determines key isolation
+    %% signer = holds private key, can create and validate tokens (auth service)
+    %% verifier = public key only, can validate but not create EdDSA tokens (edge/core)
+    AuthMode = application:get_env(iris_edge, auth_mode, signer),
+    
+    %% In verifier mode, discard the private key for security
+    {FinalPub, FinalPriv, FinalMode} = case AuthMode of
+        verifier ->
+            logger:info("JWT: Running in VERIFIER mode (no EdDSA private key)"),
+            {EdDSAPub, undefined, verifier};
+        _ ->
+            {EdDSAPub, EdDSAPriv, signer}
+    end,
+    
+    logger:info("JWT auth initialized (issuer: ~s, eddsa: ~s, mode: ~s)", 
+                [Issuer, case FinalPub of undefined -> "disabled"; _ -> "enabled" end, FinalMode]),
+    {ok, #state{secret = Secret, issuer = Issuer, eddsa_pub = FinalPub, 
+                eddsa_priv = FinalPriv, auth_mode = FinalMode}}.
 
 handle_call({validate, Token, Opts}, _From, State) ->
     Result = do_validate(Token, Opts, State),
@@ -219,6 +245,10 @@ handle_call({revoke, TokenId}, _From, State = #state{revoked_count = Count}) ->
     
     {reply, ok, State#state{revoked_count = Count + 1}};
 
+handle_call({create_eddsa, _UserId, _ExtraClaims, _TTL}, _From, State = #state{auth_mode = verifier}) ->
+    %% RFC Section 9.1: Verifier mode cannot create EdDSA tokens
+    {reply, {error, verifier_mode_no_signing}, State};
+
 handle_call({create_eddsa, UserId, ExtraClaims, TTL}, _From, State) ->
     Result = do_create_eddsa_token(UserId, ExtraClaims, TTL, State),
     {reply, Result, State};
@@ -228,6 +258,9 @@ handle_call(get_eddsa_public_key, _From, State = #state{eddsa_pub = Pub}) ->
         undefined -> {reply, {error, no_eddsa_key}, State};
         _ -> {reply, {ok, Pub}, State}
     end;
+
+handle_call(get_auth_mode, _From, State = #state{auth_mode = Mode}) ->
+    {reply, Mode, State};
 
 handle_call(_Request, _From, State) ->
     {reply, {error, unknown_request}, State}.
@@ -664,6 +697,32 @@ exchange_refresh_token(TokenId) ->
                             {ok, NewAccess} = create_token(UserId),
                             {ok, NewRefresh} = create_refresh_token_in_family(UserId, FamilyId),
                             {ok, NewAccess, NewRefresh}
+                    end
+            end
+    end.
+
+%% @doc Validate refresh token and rotate (mnesia-only, no gen_server dependency).
+%% Returns {ok, UserId, NewRefreshToken} so the caller can create access tokens locally.
+-spec validate_and_rotate_refresh(binary()) -> {ok, binary(), binary()} | {error, term()}.
+validate_and_rotate_refresh(TokenId) ->
+    Now = os:system_time(second),
+    case mnesia:dirty_read(?REFRESH_TABLE, TokenId) of
+        [] ->
+            {error, token_reused};
+        [{?REFRESH_TABLE, TokenId, UserId, FamilyId, Used, _CreatedAt, ExpiresAt}] ->
+            case ExpiresAt =< Now of
+                true ->
+                    {error, refresh_expired};
+                false ->
+                    case Used of
+                        true ->
+                            revoke_refresh_family(FamilyId),
+                            {error, token_reused};
+                        false ->
+                            mnesia:dirty_write(?REFRESH_TABLE,
+                                {?REFRESH_TABLE, TokenId, UserId, FamilyId, true, Now, ExpiresAt}),
+                            {ok, NewRefresh} = create_refresh_token_in_family(UserId, FamilyId),
+                            {ok, UserId, NewRefresh}
                     end
             end
     end.

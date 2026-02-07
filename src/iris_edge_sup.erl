@@ -42,6 +42,9 @@ init([]) ->
                              {read_concurrency, true}, 
                              {write_concurrency, true}]),
     
+    %% Session cache for connection resume (RFC Section 3.4)
+    iris_session_cache:start(),
+    
     logger:info("ETS tables created (owned by supervisor)"),
     
     %% Supervisor flags

@@ -17,9 +17,10 @@
 %% Read Receipts (Best-effort features, Opcodes 0x74-0x75)
 -export([encode_read_receipt/2, encode_read_receipt_relay/3]).
 
-%% Control Opcodes (PROTOCOL_V1_FREEZE v1.1, Opcodes 0x08-0x0B)
+%% Control Opcodes (PROTOCOL_V1_FREEZE v1.1, Opcodes 0x08-0x0C)
 -export([encode_ping/0, encode_pong/0]).
 -export([encode_resume/2, encode_token_refresh/1]).
+-export([encode_version_negotiate/2, encode_version_response/2]).
 
 %% Group Messaging (RFC-001-AMENDMENT-001, Opcodes 0x30-0x36)
 -export([encode_group_create/1, encode_group_join/2]).
@@ -47,6 +48,7 @@
                 | pong                               %% Keepalive pong (0x09)
                 | {resume, binary(), non_neg_integer()} %% Connection resume (0x0A)
                 | {token_refresh, binary()}           %% Token refresh (0x0B)
+                | {version_negotiate, list(), list()} %% Version negotiation (0x0C)
                 | {ack, binary()}
                 | {error, term()}.
 
@@ -179,12 +181,14 @@ decode(<<7, TargetLen:16, Rest/binary>>) ->
     end;
 
 %% =============================================================================
-%% Control Opcodes (PROTOCOL_V1_FREEZE v1.1, Opcodes 0x08-0x0B)
+%% Control Opcodes (PROTOCOL_V1_FREEZE v1.1, Opcodes 0x08-0x0C)
 %% =============================================================================
 %% 0x08 -> ping          (Client keepalive)
 %% 0x09 -> pong          (Server keepalive response)
 %% 0x0A | SessionIdLen(16) | SessionId | LastSeq(64) -> {resume, SessionId, LastSeq}
 %% 0x0B | TokenLen(16) | Token -> {token_refresh, Token}
+%% 0x0C | PayloadLen(32) | Payload(CBOR) -> {version_negotiate, Versions, Capabilities}
+%%       RFC Section 11.1: Client sends supported versions and capabilities
 
 decode(<<16#08>>) ->
     {ping, <<>>};
@@ -218,6 +222,26 @@ decode(<<16#0B, TokenLen:16, Rest/binary>>) ->
             { {token_refresh, Token}, Rem };
         _ ->
             {more, <<16#0B, TokenLen:16, Rest/binary>>}
+    end;
+
+%% 0x0C: Version/Capability Negotiation (RFC Section 11.1)
+decode(<<16#0C, _/binary>> = Bin) when byte_size(Bin) < 5 ->
+    {more, Bin};
+decode(<<16#0C, PayloadLen:32, _/binary>>) when PayloadLen > ?MAX_CBOR_LEN ->
+    { {error, version_payload_too_large}, <<>> };
+decode(<<16#0C, PayloadLen:32, Rest/binary>>) ->
+    case Rest of
+        <<Payload:PayloadLen/binary, Rem/binary>> ->
+            case cbor_decode(Payload) of
+                {ok, Map} when is_map(Map) ->
+                    Versions = maps:get(<<"versions">>, Map, [1]),
+                    Capabilities = maps:get(<<"capabilities">>, Map, []),
+                    { {version_negotiate, Versions, Capabilities}, Rem };
+                _ ->
+                    { {error, invalid_version_payload}, <<>> }
+            end;
+        _ ->
+            {more, <<16#0C, PayloadLen:32, Rest/binary>>}
     end;
 
 %% =============================================================================
@@ -926,6 +950,24 @@ encode_resume(SessionId, LastSeqNo) when is_binary(SessionId), is_integer(LastSe
 encode_token_refresh(Token) when is_binary(Token) ->
     TLen = byte_size(Token),
     <<16#0B, TLen:16, Token/binary>>.
+
+%% @doc Encode VERSION_NEGOTIATE request (0x0C) - Client to Server
+%% Format: 0x0C | PayloadLen(32) | CBOR({versions, capabilities})
+-spec encode_version_negotiate(list(), list()) -> binary().
+encode_version_negotiate(Versions, Capabilities) ->
+    Map = #{<<"versions">> => Versions, <<"capabilities">> => Capabilities},
+    Payload = cbor_encode(Map),
+    PLen = byte_size(Payload),
+    <<16#0C, PLen:32, Payload/binary>>.
+
+%% @doc Encode VERSION_RESPONSE (0x0C) - Server to Client
+%% Same opcode, server replies with negotiated version and capabilities.
+-spec encode_version_response(integer(), list()) -> binary().
+encode_version_response(Version, Capabilities) ->
+    Map = #{<<"version">> => Version, <<"capabilities">> => Capabilities},
+    Payload = cbor_encode(Map),
+    PLen = byte_size(Payload),
+    <<16#0C, PLen:32, Payload/binary>>.
 
 %% =============================================================================
 %% Read Receipt Encoding (Best-effort, Opcodes 0x74-0x75)
