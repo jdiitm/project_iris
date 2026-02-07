@@ -197,7 +197,7 @@ PROTOCOL_CONTRACTS = [
         schema={
             "type": "binary",
             "format": [
-                {"name": "opcode", "type": "uint8", "value": 0x10},
+                {"name": "opcode", "type": "uint8", "value": 0x11},
                 {"name": "id_len", "type": "uint16_be"},
                 {"name": "msg_id", "type": "bytes"},
                 {"name": "content_len", "type": "uint32_be"},
@@ -399,7 +399,7 @@ def test_reliable_message_contract():
     data = generate_protocol_data(contract, msg_id=msg_id, content=content)
     
     # Validate structure
-    assert data[0] == 0x10, "Opcode should be 0x10"
+    assert data[0] == 0x11, "Opcode should be 0x11 (RELIABLE_MSG per PROTOCOL_V1_FREEZE v1.1)"
     
     id_len = struct.unpack('>H', data[1:3])[0]
     assert id_len == len(msg_id), f"ID length mismatch"
@@ -525,7 +525,7 @@ def test_live_message_contract():
         try:
             data = recv_sock.recv(4096)
             # Message should be delivered in reliable format
-            if data and data[0] == 0x10:  # Reliable message opcode
+            if data and data[0] == 0x11:  # Reliable message opcode (v1.1)
                 print("  ✓ live_message contract: VALID (reliable delivery)")
             elif data and test_message.encode() in data:
                 print("  ✓ live_message contract: VALID (raw delivery)")

@@ -2,13 +2,15 @@
 
 **Status**: FROZEN  
 **Freeze Date**: 2026-01-23  
-**Version**: 1.0  
+**Version**: 1.1 (Standards Audit fixes — 2026-02-06)  
 
 ---
 
 ## 1. Overview
 
-This document marks the **protocol specification freeze** for Iris v1.0. All protocol opcodes, message formats, and cryptographic specifications defined herein are considered stable and MUST NOT change without a new RFC amendment.
+This document is the **canonical protocol specification** for Iris. All opcodes, message formats, and cryptographic specifications are defined here. Changes require an RFC amendment.
+
+> **v1.1 changes**: Fixed opcode 0x10 collision (P1-2), added control opcodes 0x08–0x0B (P2-1, P2-4, P2-7).
 
 ---
 
@@ -25,7 +27,13 @@ This document marks the **protocol specification freeze** for Iris v1.0. All pro
 | 0x05 | GET_STATUS | Client→Server | Stable |
 | 0x06 | STATUS_RESPONSE | Server→Client | Stable |
 | 0x07 | SEND_SEQ | Client→Server | Stable |
-| 0x10 | RELIABLE_MSG | Server→Client | Stable |
+| 0x08 | PING | Client→Server | Stable (v1.1) |
+| 0x09 | PONG | Server→Client | Stable (v1.1) |
+| 0x0A | RESUME | Client→Server | Stable (v1.1) |
+| 0x0B | TOKEN_REFRESH | Client→Server | Stable (v1.1) |
+| 0x11 | RELIABLE_MSG | Server→Client | Stable (moved from 0x10 in v1.1) |
+
+> **v1.1 breaking change**: `RELIABLE_MSG` moved from `0x10` to `0x11` to resolve collision with `CBOR_MSG`. Migration: server sends on both during transition; clients signal `0x11` support via capability negotiation.
 
 ### 2.2 CBOR Extension (v1.0)
 
@@ -54,6 +62,18 @@ This document marks the **protocol specification freeze** for Iris v1.0. All pro
 | 0x34 | GROUP_DELIVERY | Server→Client | Reserved |
 | 0x35 | GROUP_ROSTER | Client→Server | Reserved |
 | 0x36 | SENDER_KEY_DIST | Client→Server | Reserved |
+
+### 2.5 Post-Launch Reserved (v1.2+)
+
+| Opcode | Name | Direction | Status |
+|--------|------|-----------|--------|
+| 0x40 | EDIT_MSG | Client→Server | Reserved |
+| 0x41 | DELETE_MSG | Client→Server | Reserved |
+| 0x42 | EDIT_NOTIFY | Server→Client | Reserved |
+| 0x43 | DEL_NOTIFY | Server→Client | Reserved |
+| 0x50 | BLOCK_USER | Client→Server | Reserved |
+| 0x51 | UNBLOCK_USER | Client→Server | Reserved |
+| 0x52 | REPORT_USER | Client→Server | Reserved |
 
 ---
 
@@ -194,11 +214,11 @@ New features MUST:
 ## Approval
 
 - [x] Protocol Implementation Complete
-- [x] Test Suite Passing (62/64 tests)
+- [x] Test Suite Passing (75/75 tests)
 - [x] Security Review (E2EE implementation)
 - [x] Performance Validation
 
-**Protocol Status**: FROZEN for v1.0 release
+**Protocol Status**: FROZEN for v1.1 release
 
 ---
 

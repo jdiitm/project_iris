@@ -102,7 +102,7 @@ test_send_advances_clock() ->
 test_receive_merges_clocks() ->
     %% Create a "remote" HLC with a future timestamp
     FutureTime = erlang:system_time(millisecond) + 5000,  %% 5 seconds in future
-    RemoteHLC = iris_hlc:from_integer((FutureTime bsl 16) bor (10 bsl 8) bor 99),
+    RemoteHLC = iris_hlc:from_integer((FutureTime bsl 32) bor (10 bsl 16) bor 99),
     
     %% Receive should merge and produce HLC >= remote
     MergedHLC = iris_hlc:recv(RemoteHLC),
@@ -123,15 +123,15 @@ test_comparison() ->
     ?assertEqual(lt, iris_hlc:compare(HLC1, HLC2)),
     ?assertEqual(gt, iris_hlc:compare(HLC2, HLC1)),
     
-    %% Manual construction for edge cases
+    %% Manual construction for edge cases (80-bit format: PT<<32, L<<16, N)
     %% Same physical time, different logical
-    H1 = iris_hlc:from_integer((1000 bsl 16) bor (5 bsl 8) bor 1),
-    H2 = iris_hlc:from_integer((1000 bsl 16) bor (10 bsl 8) bor 1),
+    H1 = iris_hlc:from_integer((1000 bsl 32) bor (5 bsl 16) bor 1),
+    H2 = iris_hlc:from_integer((1000 bsl 32) bor (10 bsl 16) bor 1),
     ?assertEqual(lt, iris_hlc:compare(H1, H2)),
     
     %% Same physical and logical, different node
-    H3 = iris_hlc:from_integer((1000 bsl 16) bor (5 bsl 8) bor 1),
-    H4 = iris_hlc:from_integer((1000 bsl 16) bor (5 bsl 8) bor 2),
+    H3 = iris_hlc:from_integer((1000 bsl 32) bor (5 bsl 16) bor 1),
+    H4 = iris_hlc:from_integer((1000 bsl 32) bor (5 bsl 16) bor 2),
     ?assertEqual(lt, iris_hlc:compare(H3, H4)).
 
 %% ============================================================================
@@ -141,16 +141,19 @@ test_comparison() ->
 test_binary_serialization() ->
     HLC = iris_hlc:send(),
     
-    %% Serialize to binary
+    %% Serialize to binary — 80-bit format = 10 bytes
     Bin = iris_hlc:to_binary(HLC),
-    ?assertEqual(8, byte_size(Bin)),
+    ?assertEqual(10, byte_size(Bin)),
     
     %% Deserialize
     Recovered = iris_hlc:from_binary(Bin),
     ?assertEqual(eq, iris_hlc:compare(HLC, Recovered)),
     
-    %% Invalid binary
-    ?assertEqual({error, invalid_format}, iris_hlc:from_binary(<<1,2,3>>)).
+    %% Invalid binary (too short)
+    ?assertEqual({error, invalid_format}, iris_hlc:from_binary(<<1,2,3>>)),
+    
+    %% Old 8-byte format should be rejected
+    ?assertEqual({error, invalid_format}, iris_hlc:from_binary(<<0,0,0,0,0,0,0,0>>)).
 
 test_integer_serialization() ->
     HLC = iris_hlc:send(),
@@ -170,11 +173,11 @@ test_integer_serialization() ->
     ?assertEqual(iris_hlc:node_id(HLC), iris_hlc:node_id(Recovered)).
 
 test_component_extraction() ->
-    %% Construct a known HLC
+    %% Construct a known HLC (80-bit format: PT<<32, L<<16, N)
     PT = 1234567890123,
     L = 42,
     N = 7,
-    Int = (PT bsl 16) bor (L bsl 8) bor N,
+    Int = (PT bsl 32) bor (L bsl 16) bor N,
     HLC = iris_hlc:from_integer(Int),
     
     ?assertEqual(PT, iris_hlc:physical_time(HLC)),
@@ -259,7 +262,7 @@ test_clock_drift_handling() ->
     %% Test receiving HLC with excessive drift (>30s in future)
     %% The module should handle this gracefully
     VeryFutureTime = erlang:system_time(millisecond) + 60000,  %% 60s in future
-    RemoteHLC = iris_hlc:from_integer((VeryFutureTime bsl 16) bor (0 bsl 8) bor 99),
+    RemoteHLC = iris_hlc:from_integer((VeryFutureTime bsl 32) bor (0 bsl 16) bor 99),
     
     %% Should not crash, should bound the drift
     MergedHLC = iris_hlc:recv(RemoteHLC),
@@ -344,3 +347,88 @@ test_now_for_node() ->
     HLC = iris_hlc:now_for_node(123),
     ?assertEqual(123, iris_hlc:node_id(HLC)),
     ?assertEqual(0, iris_hlc:logical_counter(HLC)).
+
+%% ============================================================================
+%% RFC-001 v4.0: 80-bit Format Tests (P1-1)
+%% ============================================================================
+
+v4_80bit_test_() ->
+    {foreach,
+     fun setup/0,
+     fun cleanup/1,
+     [
+        {"80-bit binary is 10 bytes", fun test_80bit_binary_size/0},
+        {"16-bit node ID range (0-65535)", fun test_16bit_node_id_range/0},
+        {"16-bit logical counter range (0-65535)", fun test_16bit_logical_counter_range/0},
+        {"80-bit round-trip encode/decode", fun test_80bit_roundtrip/0},
+        {"Large node ID in binary", fun test_large_node_id_binary/0}
+     ]
+    }.
+
+test_80bit_binary_size() ->
+    HLC = iris_hlc:send(),
+    Bin = iris_hlc:to_binary(HLC),
+    %% 48 + 16 + 16 = 80 bits = 10 bytes
+    ?assertEqual(10, byte_size(Bin)).
+
+test_16bit_node_id_range() ->
+    %% Node ID must support full 16-bit range (0-65535)
+    ok = iris_hlc:set_node_id(0),
+    HLC0 = iris_hlc:send(),
+    ?assertEqual(0, iris_hlc:node_id(HLC0)),
+
+    ok = iris_hlc:set_node_id(256),
+    HLC256 = iris_hlc:send(),
+    ?assertEqual(256, iris_hlc:node_id(HLC256)),
+
+    ok = iris_hlc:set_node_id(65535),
+    HLC65535 = iris_hlc:send(),
+    ?assertEqual(65535, iris_hlc:node_id(HLC65535)),
+
+    %% Restore for other tests
+    ok = iris_hlc:set_node_id(42).
+
+test_16bit_logical_counter_range() ->
+    %% Logical counter must support 16-bit range.
+    %% Construct an HLC with logical = 65535 and verify roundtrip.
+    PT = 1000000000000,
+    L = 65535,
+    N = 42,
+    Int = (PT bsl 32) bor (L bsl 16) bor N,
+    HLC = iris_hlc:from_integer(Int),
+    ?assertEqual(65535, iris_hlc:logical_counter(HLC)),
+
+    %% Roundtrip through binary
+    Bin = iris_hlc:to_binary(HLC),
+    Recovered = iris_hlc:from_binary(Bin),
+    ?assertEqual(65535, iris_hlc:logical_counter(Recovered)).
+
+test_80bit_roundtrip() ->
+    %% Encode to binary (10 bytes) and decode — all components preserved
+    HLC = iris_hlc:send(),
+    Bin = iris_hlc:to_binary(HLC),
+    Recovered = iris_hlc:from_binary(Bin),
+
+    ?assertEqual(iris_hlc:physical_time(HLC), iris_hlc:physical_time(Recovered)),
+    ?assertEqual(iris_hlc:logical_counter(HLC), iris_hlc:logical_counter(Recovered)),
+    ?assertEqual(iris_hlc:node_id(HLC), iris_hlc:node_id(Recovered)),
+
+    %% Also roundtrip through integer
+    Int = iris_hlc:to_integer(HLC),
+    RecoveredInt = iris_hlc:from_integer(Int),
+    ?assertEqual(eq, iris_hlc:compare(HLC, RecoveredInt)).
+
+test_large_node_id_binary() ->
+    %% Verify that node IDs > 255 serialize and deserialize correctly
+    %% (this would fail with the old 8-bit format)
+    ok = iris_hlc:set_node_id(1000),
+    HLC = iris_hlc:send(),
+    ?assertEqual(1000, iris_hlc:node_id(HLC)),
+
+    Bin = iris_hlc:to_binary(HLC),
+    ?assertEqual(10, byte_size(Bin)),
+
+    Recovered = iris_hlc:from_binary(Bin),
+    ?assertEqual(1000, iris_hlc:node_id(Recovered)),
+
+    ok = iris_hlc:set_node_id(42).

@@ -4,8 +4,8 @@
 **Authors**: System Architecture Team  
 **Created**: 2026-01-23  
 **Protocol Freeze Date**: 2026-01-23  
-**Amends**: RFC-001-SYSTEM-REQUIREMENTS.md v2.0  
-**Revision**: 1.2
+**Amends**: RFC-001-SYSTEM-REQUIREMENTS.md v4.0  
+**Revision**: 1.3
 
 ---
 
@@ -39,6 +39,7 @@ This amendment adds End-to-End Encryption (E2EE) and Group Messaging as **launch
 | FR-12 | E2EE mandatory | All message content encrypted client-to-client | Server cannot decrypt any message payload |
 | FR-13 | Key bundle upload | Client uploads Identity Key + Signed Pre-Key + One-Time Pre-Keys | Verify bundle stored with 99.999% durability |
 | FR-14 | Key bundle fetch | Recipient's public keys available to sender | Fetch returns valid bundle within 50ms P99 |
+| FR-14a | OPK exhaustion fallback | When OPK pool empty, X3DH proceeds with SPK-only (3-DH) | Verify SK derived from DH1,DH2,DH3 only |
 | FR-15 | Forward secrecy | Compromise of long-term keys does not reveal past messages | Simulate key compromise, verify old messages unreadable |
 | FR-16 | Post-compromise security | After key recovery, attacker loses access | Advance ratchet 100 times, verify old session keys invalid |
 
@@ -86,42 +87,10 @@ This amendment adds End-to-End Encryption (E2EE) and Group Messaging as **launch
 
 ## 4. Protocol Extensions
 
-### 4.1 New Opcodes
+> **Canonical reference**: All opcodes, message formats, and wire specifications are defined in **PROTOCOL_V1_FREEZE.md**. This section lists the opcodes introduced by this amendment for traceability only.
 
-| Opcode | Name | Direction | Description |
-|--------|------|-----------|-------------|
-| 0x10 | CBOR_MSG | Both | CBOR-encoded extensible message |
-| 0x20 | UPLOAD_PREKEYS | Client→Server | Upload key bundle |
-| 0x21 | FETCH_PREKEYS | Client→Server | Request recipient's public keys |
-| 0x22 | PREKEY_RESPONSE | Server→Client | Return key bundle |
-| 0x23 | E2EE_MSG | Client→Server | E2EE message envelope |
-| 0x24 | E2EE_DELIVERY | Server→Client | E2EE message delivery |
-| 0x30 | GROUP_CREATE | Client→Server | Create new group |
-| 0x31 | GROUP_JOIN | Server→Client | Notification of being added to group |
-| 0x32 | GROUP_LEAVE | Client→Server | Leave group |
-| 0x33 | GROUP_MSG | Client→Server | Send message to group |
-| 0x34 | GROUP_DELIVERY | Server→Client | Group message delivery |
-| 0x35 | GROUP_ROSTER | Client→Server | Request group member list |
-| 0x36 | SENDER_KEY_DIST | Client→Server | Distribute Sender Key to group |
-
-### 4.2 E2EE Message Envelope Format
-
-```
-0x23 | RecipientLen:16 | Recipient:var |
-     | SenderIKPub:32 | EphemeralPub:32 |
-     | PrekeyUsed:1 | OPKIndex:16 (if PrekeyUsed=1) |
-     | CipherLen:32 | Ciphertext:var |
-     | MAC:16
-```
-
-### 4.3 Group Message Format
-
-```
-0x33 | GroupIdLen:16 | GroupId:var |
-     | SenderKeyId:16 |
-     | CipherLen:32 | Ciphertext:var |
-     | MAC:16
-```
+**Opcodes added**: `0x10` CBOR_MSG, `0x20–0x24` E2EE protocol, `0x30–0x36` Group protocol.  
+**Message formats**: See PROTOCOL_V1_FREEZE Sections 4.1 (E2EE) and 4.2 (CBOR).
 
 ---
 
@@ -152,23 +121,21 @@ This amendment adds End-to-End Encryption (E2EE) and Group Messaging as **launch
 └─────────────────────────────────────────────────────────────┘
 ```
 
+### 5.3 Key Verification
+
+**5.3.1 Safety Number Display**: Each E2EE session MUST be representable as a "safety number" — `SHA-256(sort(IK_A, IK_B))[:30]` displayed as 12 groups of 5 digits (60 digits total), matching Signal's UX pattern.
+
+**5.3.2 Key Change Notification**: When a user's Identity Key changes, the server MUST notify all active sessions. Clients MUST display: "Alice's security code changed."
+
+**5.3.3 Key Transparency Log** *(deferred to post-launch)*: Append-only Merkle tree of all public key operations per CONIKS or similar scheme.
+
 ---
 
 ## 6. Cryptographic Specifications
 
-### 6.1 Algorithm Requirements
+> **Canonical reference**: Algorithm table and key sizes are in **PROTOCOL_V1_FREEZE.md Section 3**. This section covers protocol-level behavior only.
 
-| Component | Algorithm | Key Size |
-|-----------|-----------|----------|
-| Identity Key | Curve25519 | 256-bit |
-| Signed Pre-Key | Curve25519 | 256-bit |
-| One-Time Pre-Key | Curve25519 | 256-bit |
-| Ephemeral Key | Curve25519 | 256-bit |
-| Message Encryption | AES-256-GCM | 256-bit |
-| Key Derivation | HKDF-SHA256 | - |
-| Signature | Ed25519 | 256-bit |
-
-### 6.2 X3DH Key Exchange
+### 6.1 X3DH Key Exchange
 
 Per Signal Protocol specification:
 1. Alice fetches Bob's key bundle: (IK_B, SPK_B, OPK_B)
@@ -177,14 +144,16 @@ Per Signal Protocol specification:
 4. Shared secret SK = HKDF(DH1 || DH2 || DH3 || DH4)
 5. Alice sends initial message with (IK_A, EK_A, OPK_index, ciphertext)
 
-### 6.3 Double Ratchet
+**OPK Exhaustion Fallback** (FR-14a): If no OPK available, DH4 is omitted. SK = HKDF(DH1 || DH2 || DH3). Cryptographically secure but loses one-time pre-key uniqueness. Client MUST replenish when pool < 20 keys; upload batch of 100 via opcode 0x20.
+
+### 6.2 Double Ratchet
 
 Per Signal Protocol specification:
 - Symmetric-key ratchet: Derive new message keys for each message
 - DH ratchet: Advance on each reply to achieve forward secrecy
 - Header encryption: Optional (deferred to v1.5)
 
-### 6.4 Sender Keys (Groups)
+### 6.3 Sender Keys (Groups)
 
 Per Signal Protocol specification:
 1. Each member generates a Sender Key for the group
@@ -196,11 +165,7 @@ Per Signal Protocol specification:
 
 ## 7. Deprecation Schedule
 
-| Version | Change |
-|---------|--------|
-| v0.9 | Emit warning on plaintext message (opcode 0x02) |
-| v1.0 | Reject plaintext messages, require E2EE (opcode 0x23) |
-| v1.1 | Remove legacy plaintext opcode from protocol spec |
+> See **PROTOCOL_V1_FREEZE.md Section 5** for canonical deprecation timeline (v0.9 warn → v1.0 require E2EE → v1.1 remove plaintext).
 
 ---
 
@@ -266,6 +231,7 @@ Per Signal Protocol specification:
 |------|---------|---------|
 | 2026-01-23 | 1.0 | Initial amendment |
 | 2026-01-25 | 1.2 | Updated Section 8.1 test paths to reflect actual implementation locations; added NFR-27 implementation note documenting 1000-member capacity |
+| 2026-02-06 | 1.3 | Standards Audit: added FR-14a OPK exhaustion fallback (P1-6), Section 5.3 Key Verification (P1-5); DRY consolidation — protocol details reference PROTOCOL_V1_FREEZE |
 
 ---
 

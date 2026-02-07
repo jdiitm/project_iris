@@ -7,11 +7,11 @@
 %%% - No central coordinator required
 %%% - Clock skew tolerance up to MAX_DRIFT_MS
 %%%
-%%% Format (64-bit):
-%%% ┌────────────────────────────────────────────────────────────┐
-%%% │   Physical Time (ms)   │ Logical Ctr │     Node ID         │
-%%% │        48 bits         │   8 bits    │      8 bits         │
-%%% └────────────────────────────────────────────────────────────┘
+%%% Format (80-bit, RFC-001 v4.0 Section 5.4):
+%%% ┌────────────────────────────────────────────────────────────────────┐
+%%% │   Physical Time (ms)   │  Logical Ctr  │       Node ID            │
+%%% │        48 bits         │    16 bits    │       16 bits            │
+%%% └────────────────────────────────────────────────────────────────────┘
 %%%
 %%% @end
 %%%-------------------------------------------------------------------
@@ -36,15 +36,15 @@
 -define(SERVER, ?MODULE).
 -define(MAX_DRIFT_MS, 30000).  % Maximum tolerated clock drift (30 seconds)
 -define(PHYSICAL_BITS, 48).
--define(LOGICAL_BITS, 8).
--define(NODE_BITS, 8).
--define(MAX_LOGICAL, 255).     % 2^8 - 1
+-define(LOGICAL_BITS, 16).
+-define(NODE_BITS, 16).
+-define(MAX_LOGICAL, 65535).   % 2^16 - 1  (RFC-001 v4.0: 16-bit logical counter)
 
 %% HLC record
 -record(hlc, {
     physical :: non_neg_integer(),  % milliseconds since epoch
-    logical  :: non_neg_integer(),  % 0-255
-    node_id  :: non_neg_integer()   % 0-255
+    logical  :: non_neg_integer(),  % 0-65535
+    node_id  :: non_neg_integer()   % 0-65535
 }).
 
 -record(state, {
@@ -79,7 +79,7 @@ now() ->
 -spec now_for_node(non_neg_integer()) -> hlc().
 now_for_node(NodeId) ->
     PT = erlang:system_time(millisecond),
-    #hlc{physical = PT, logical = 0, node_id = NodeId band 16#FF}.
+    #hlc{physical = PT, logical = 0, node_id = NodeId band 16#FFFF}.
 
 %% @doc Generate a new HLC for sending a message.
 %% Advances the local clock and returns the new timestamp.
@@ -118,29 +118,31 @@ compare(#hlc{physical = PA, logical = LA, node_id = NA},
         true -> eq
     end.
 
-%% @doc Convert HLC to 8-byte binary (big-endian).
+%% @doc Convert HLC to 10-byte binary (big-endian, 80-bit format).
+%% RFC-001 v4.0: 48-bit physical + 16-bit logical + 16-bit node ID = 80 bits
 -spec to_binary(hlc()) -> binary().
 to_binary(#hlc{physical = PT, logical = L, node_id = N}) ->
     <<PT:?PHYSICAL_BITS, L:?LOGICAL_BITS, N:?NODE_BITS>>.
 
-%% @doc Parse HLC from 8-byte binary.
+%% @doc Parse HLC from 10-byte binary.
 -spec from_binary(binary()) -> hlc() | {error, invalid_format}.
 from_binary(<<PT:?PHYSICAL_BITS, L:?LOGICAL_BITS, N:?NODE_BITS>>) ->
     #hlc{physical = PT, logical = L, node_id = N};
 from_binary(_) ->
     {error, invalid_format}.
 
-%% @doc Convert HLC to 64-bit integer (for comparison/storage).
+%% @doc Convert HLC to 80-bit integer (for comparison/storage).
+%% RFC-001 v4.0: (PT << 32) | (L << 16) | N
 -spec to_integer(hlc()) -> non_neg_integer().
 to_integer(#hlc{physical = PT, logical = L, node_id = N}) ->
-    (PT bsl 16) bor (L bsl 8) bor N.
+    (PT bsl 32) bor (L bsl 16) bor N.
 
-%% @doc Parse HLC from 64-bit integer.
+%% @doc Parse HLC from 80-bit integer.
 -spec from_integer(non_neg_integer()) -> hlc().
 from_integer(Int) when is_integer(Int), Int >= 0 ->
-    N = Int band 16#FF,
-    L = (Int bsr 8) band 16#FF,
-    PT = Int bsr 16,
+    N = Int band 16#FFFF,
+    L = (Int bsr 16) band 16#FFFF,
+    PT = Int bsr 32,
     #hlc{physical = PT, logical = L, node_id = N}.
 
 %% @doc Extract physical time component (milliseconds).
@@ -162,7 +164,7 @@ get_node_id() ->
 
 %% @doc Set the node ID (for testing/reconfiguration).
 -spec set_node_id(non_neg_integer()) -> ok.
-set_node_id(NodeId) when NodeId >= 0, NodeId =< 255 ->
+set_node_id(NodeId) when NodeId >= 0, NodeId =< 65535 ->
     gen_server:call(?SERVER, {set_node_id, NodeId}).
 
 %%====================================================================
@@ -172,7 +174,7 @@ set_node_id(NodeId) when NodeId >= 0, NodeId =< 255 ->
 init([NodeIdArg]) ->
     NodeId = case NodeIdArg of
         auto -> compute_node_id();
-        N when is_integer(N), N >= 0, N =< 255 -> N;
+        N when is_integer(N), N >= 0, N =< 65535 -> N;
         _ -> compute_node_id()
     end,
     InitialHLC = #hlc{
@@ -254,7 +256,7 @@ terminate(_Reason, _State) ->
 %% @private Compute node ID from Erlang node name.
 compute_node_id() ->
     NodeName = atom_to_binary(node(), utf8),
-    Hash = erlang:phash2(NodeName, 256),
+    Hash = erlang:phash2(NodeName, 65536),
     Hash.
 
 %% @private Perform the receive merge operation.

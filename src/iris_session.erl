@@ -589,6 +589,31 @@ handle_packet({sender_key_dist, GroupId, KeyData}, User, _Pid, _Mod) when User =
 handle_packet({sender_key_dist, _GroupId, _KeyData}, undefined, _Pid, _Mod) ->
     {ok, undefined, []};
 
+%% =============================================================================
+%% Control Opcodes (PROTOCOL_V1_FREEZE v1.1)
+%% =============================================================================
+
+%% PING (0x08): Client keepalive heartbeat - respond with PONG
+handle_packet(ping, User, _Pid, _Mod) ->
+    Pong = iris_proto:encode_pong(),
+    {ok, User, [{send, Pong}]};
+
+%% PONG (0x09): Server keepalive response - no action needed
+handle_packet(pong, User, _Pid, _Mod) ->
+    {ok, User, []};
+
+%% RESUME (0x0A): Connection resume - not yet implemented, acknowledge gracefully
+handle_packet({resume, _SessionId, _LastSeqNo}, User, _Pid, _Mod) ->
+    %% TODO: Implement session resume with sequence replay
+    %% For now, treat as no-op (connection continues as normal)
+    {ok, User, []};
+
+%% TOKEN_REFRESH (0x0B): Token refresh request - not yet implemented
+handle_packet({token_refresh, _RefreshToken}, User, _Pid, _Mod) ->
+    %% TODO: Implement token refresh flow
+    %% For now, treat as no-op
+    {ok, User, []};
+
 handle_packet({error, _}, User, _Pid, _Mod) ->
      {ok, User, []}.
 

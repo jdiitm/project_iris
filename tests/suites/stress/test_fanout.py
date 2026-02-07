@@ -235,7 +235,7 @@ class IrisClient:
         while len(self.buffer) >= 1:
             opcode = self.buffer[0]
             
-            if opcode == 0x10:  # Reliable message
+            if opcode == 0x11:  # Reliable message (PROTOCOL_V1_FREEZE v1.1)
                 if len(self.buffer) < 3:
                     break
                 id_len = struct.unpack('>H', self.buffer[1:3])[0]
