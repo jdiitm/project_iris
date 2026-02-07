@@ -378,6 +378,17 @@ DOCKER_CHAOS_TESTS=(
 if [ "$DOCKER_ONLY" = true ]; then
     echo -e "${YELLOW}[INFO]${NC} Running Docker tests only (--docker-only mode)"
     echo ""
+
+    # Compilation is required: Docker containers mount ebin/ and need .beam files.
+    # In non-docker-only mode, Phase 1 handles this. Here we must do it explicitly.
+    echo "Compiling..."
+    make all > /dev/null 2>&1 || {
+        echo -e "${RED}Compilation failed!${NC}"
+        make all 2>&1
+        exit 1
+    }
+    echo -e "  ${GREEN}Compilation successful${NC}"
+    echo ""
 else
     # ==========================================================================
     # PHASE 0: SETUP

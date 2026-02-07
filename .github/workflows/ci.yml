@@ -157,6 +157,12 @@ jobs:
       - name: Install Dependencies
         run: pip install -r requirements-test.txt
 
+      - name: Cache Erlang builds
+        uses: actions/cache@v4
+        with:
+          path: ebin
+          key: ebin-${{ hashFiles('src/**/*.erl', 'test_utils/**/*.erl') }}
+
       - name: Run Docker Chaos Tests (proven scripts)
         run: |
           chmod +x docker/global-cluster/cluster.sh
