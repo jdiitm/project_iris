@@ -20,6 +20,11 @@
     tls_enabled :: boolean()
 }).
 
+%% Per-IP connection rate limiting (RFC Section 10)
+-define(CONN_RATE_TABLE, iris_conn_rate).
+-define(CONN_RATE_WINDOW_MS, 1000).  %% 1-second sliding window
+-define(CONN_RATE_MAX, 50).          %% Max 50 connections per IP per second
+
 start_link(Port) ->
     start_link(Port, iris_edge_conn).
 
@@ -84,6 +89,15 @@ start_listener(Port, HandlerMod, TlsEnabled) ->
     
     io:format("Listener started on port ~p (Handler: ~p, TLS: ~p)~n", [Port, HandlerMod, TlsEnabled]),
     
+    %% RFC Section 10: Per-IP connection rate limiting
+    case ets:info(?CONN_RATE_TABLE) of
+        undefined ->
+            ets:new(?CONN_RATE_TABLE, [public, named_table, bag,
+                                       {write_concurrency, true},
+                                       {read_concurrency, true}]);
+        _ -> ok
+    end,
+    
     NumAcceptors = application:get_env(iris_edge, num_acceptors, 500),
     [spawn_acceptor(LSock, HandlerMod, TlsEnabled) || _ <- lists:seq(1, NumAcceptors)],
     
@@ -126,10 +140,12 @@ get_tls_options() ->
     BaseOpts = [
         {certfile, CertFile},
         {keyfile, KeyFile},
-        {versions, ['tlsv1.2', 'tlsv1.3']},
+        %% RFC NFR-14: TLS 1.3 MANDATORY for all client connections
+        {versions, ['tlsv1.3']},
         {ciphers, tls_ciphers()},
-        {honor_cipher_order, true},
-        {reuse_sessions, true}
+        {honor_cipher_order, true}
+        %% NOTE: reuse_sessions removed -- not applicable to TLS 1.3
+        %% (TLS 1.3 uses built-in 0-RTT/PSK session resumption)
     ],
     
     %% Optional: Client certificate verification
@@ -144,20 +160,13 @@ get_tls_options() ->
             BaseOpts ++ [{verify, verify_none}]
     end.
 
-%% Secure TLS 1.2/1.3 cipher suites
+%% RFC NFR-14: TLS 1.3 cipher suites only
 tls_ciphers() ->
     [
-        %% TLS 1.3 ciphers
+        %% TLS 1.3 ciphers (only -- TLS 1.2 ciphers removed per NFR-14)
         "TLS_AES_256_GCM_SHA384",
         "TLS_AES_128_GCM_SHA256",
-        "TLS_CHACHA20_POLY1305_SHA256",
-        %% TLS 1.2 ciphers (ECDHE for forward secrecy)
-        "ECDHE-ECDSA-AES256-GCM-SHA384",
-        "ECDHE-RSA-AES256-GCM-SHA384",
-        "ECDHE-ECDSA-AES128-GCM-SHA256",
-        "ECDHE-RSA-AES128-GCM-SHA256",
-        "ECDHE-ECDSA-CHACHA20-POLY1305",
-        "ECDHE-RSA-CHACHA20-POLY1305"
+        "TLS_CHACHA20_POLY1305_SHA256"
     ].
 
 %% =============================================================================
@@ -168,11 +177,17 @@ spawn_acceptor(LSock, HandlerMod, TlsEnabled) ->
     spawn_link(fun() -> acceptor(LSock, HandlerMod, TlsEnabled) end).
 
 acceptor(LSock, HandlerMod, false) ->
-    %% Plain TCP accept
+    %% Plain TCP accept + per-IP rate limiting (RFC Section 10)
     case gen_tcp:accept(LSock) of
         {ok, Sock} ->
-            handle_new_connection(Sock, HandlerMod, false),
-            acceptor(LSock, HandlerMod, false);
+            case check_conn_rate_tcp(Sock) of
+                allow ->
+                    handle_new_connection(Sock, HandlerMod, false),
+                    acceptor(LSock, HandlerMod, false);
+                deny ->
+                    gen_tcp:close(Sock),
+                    acceptor(LSock, HandlerMod, false)
+            end;
         {error, emfile} ->
             timer:sleep(1000),
             acceptor(LSock, HandlerMod, false);
@@ -182,17 +197,25 @@ acceptor(LSock, HandlerMod, false) ->
     end;
 
 acceptor(LSock, HandlerMod, true) ->
-    %% TLS accept with handshake
+    %% TLS accept with per-IP rate limiting BEFORE handshake (RFC Section 10).
+    %% Checking before handshake means denied connections skip the ~20ms TLS
+    %% overhead, making the rate limiter effective against connection floods.
     case ssl:transport_accept(LSock, 30000) of
         {ok, TlsSock} ->
-            case ssl:handshake(TlsSock, 10000) of
-                {ok, SslSocket} ->
-                    handle_new_connection(SslSocket, HandlerMod, true),
-                    acceptor(LSock, HandlerMod, true);
-                {error, Reason} ->
-                    logger:warning("TLS handshake failed: ~p", [Reason]),
+            case check_conn_rate_tls(TlsSock) of
+                deny ->
                     catch ssl:close(TlsSock),
-                    acceptor(LSock, HandlerMod, true)
+                    acceptor(LSock, HandlerMod, true);
+                allow ->
+                    case ssl:handshake(TlsSock, 10000) of
+                        {ok, SslSocket} ->
+                            handle_new_connection(SslSocket, HandlerMod, true),
+                            acceptor(LSock, HandlerMod, true);
+                        {error, Reason} ->
+                            logger:warning("TLS handshake failed: ~p", [Reason]),
+                            catch ssl:close(TlsSock),
+                            acceptor(LSock, HandlerMod, true)
+                    end
             end;
         {error, timeout} ->
             acceptor(LSock, HandlerMod, true);
@@ -220,6 +243,53 @@ handle_new_connection(Sock, HandlerMod, TlsEnabled) ->
                 true -> ssl:close(Sock);
                 false -> gen_tcp:close(Sock)
             end
+    end.
+
+%% =============================================================================
+%% Per-IP Connection Rate Limiting (RFC Section 10)
+%% =============================================================================
+
+check_conn_rate_tls(SslSocket) ->
+    try
+        case ssl:peername(SslSocket) of
+            {ok, {IP, _Port}} -> check_ip_rate(IP);
+            {error, _} -> allow
+        end
+    catch _:_ -> allow
+    end.
+
+check_conn_rate_tcp(Sock) ->
+    try
+        case inet:peername(Sock) of
+            {ok, {IP, _Port}} -> check_ip_rate(IP);
+            {error, _} -> allow
+        end
+    catch _:_ -> allow
+    end.
+
+check_ip_rate(IP) ->
+    Now = os:system_time(millisecond),
+    Cutoff = Now - ?CONN_RATE_WINDOW_MS,
+    MaxRate = application:get_env(iris_edge, conn_rate_max, ?CONN_RATE_MAX),
+    
+    %% Record this connection attempt
+    ets:insert(?CONN_RATE_TABLE, {IP, Now}),
+    
+    %% Count recent connections from this IP (bag table: lookup returns all)
+    AllEntries = ets:lookup(?CONN_RATE_TABLE, IP),
+    RecentCount = length([1 || {_, T} <- AllEntries, T > Cutoff]),
+    
+    %% Cleanup old entries inline
+    OldEntries = [{K, T} || {K, T} <- AllEntries, T =< Cutoff],
+    lists:foreach(fun(E) -> ets:delete_object(?CONN_RATE_TABLE, E) end, OldEntries),
+    
+    case RecentCount > MaxRate of
+        true ->
+            logger:warning("Connection rate limited: ~p (~p conns in ~pms)",
+                          [IP, RecentCount, ?CONN_RATE_WINDOW_MS]),
+            deny;
+        false ->
+            allow
     end.
 
 %% =============================================================================

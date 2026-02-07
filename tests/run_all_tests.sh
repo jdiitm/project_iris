@@ -472,6 +472,11 @@ else
         [ -f "$test" ] && run_test "$test" 300
     done
 
+    # Restart server before conformance tests (resilience tests may degrade it)
+    echo ""
+    echo -e "${YELLOW}[RECOVERY]${NC} Restarting server before conformance tests..."
+    restart_server_quick
+
     echo ""
     echo "--- Conformance Tests ---"
     for test in tests/suites/conformance/test_*.py; do

@@ -226,13 +226,11 @@ def test_tls_downgrade_attack():
 
     if rejected:
         log("  PASS: Server rejected TLS 1.2 downgrade (TLS 1.3 enforced)")
+        return True
     else:
-        # Many servers accept TLS 1.2 as well -- this is a policy decision.
-        # Erlang ssl by default accepts TLS 1.2+. Document but don't fail.
-        log("  NOTE: Server accepted TLS 1.2 connection")
-        log("  INFO: RFC NFR-14 says 'TLS 1.3 MANDATORY' -- consider restricting")
-        log("  PASS: Server did not crash from downgrade attempt")
-    return True
+        log("  FAIL: Server ACCEPTED TLS 1.2 connection")
+        log("  RFC NFR-14 VIOLATION: 'TLS 1.3 MANDATORY for all client connections'")
+        return False
 
 
 # =========================================================================
