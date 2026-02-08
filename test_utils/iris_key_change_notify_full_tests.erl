@@ -74,3 +74,60 @@ decode_key_change_alert_roundtrip_test() ->
     Encoded = iris_proto:encode_key_change_alert(UserId),
     {Decoded, <<>>} = iris_proto:decode(Encoded),
     ?assertEqual({key_change_alert, UserId}, Decoded).
+
+%% =============================================================================
+%% Integration: iris_session fetch_prekeys must record key contact
+%% =============================================================================
+
+session_setup() ->
+    %% Start Mnesia for iris_keys
+    application:stop(mnesia),
+    ok = mnesia:delete_schema([node()]),
+    ok = mnesia:create_schema([node()]),
+    ok = application:start(mnesia),
+    %% Start iris_keys gen_server (creates tables + ETS)
+    {ok, KeysPid} = iris_keys:start_link(),
+    %% Ensure contacts table is clean
+    catch ets:delete_all_objects(iris_key_contacts),
+    %% Ensure rate limiter is running (needed by iris_session)
+    RlPid = case whereis(iris_rate_limiter) of
+        undefined ->
+            case iris_rate_limiter:start_link() of
+                {ok, P} -> P;
+                {error, {already_started, P}} -> P;
+                _ -> undefined
+            end;
+        P -> P
+    end,
+    %% Disable auth for this test
+    application:set_env(iris_edge, auth_enabled, false),
+    {KeysPid, RlPid}.
+
+session_cleanup({KeysPid, _RlPid}) ->
+    catch gen_server:stop(KeysPid, normal, 1000),
+    catch ets:delete_all_objects(iris_key_contacts),
+    application:unset_env(iris_edge, auth_enabled),
+    application:stop(mnesia),
+    ok.
+
+%% Test: When bob fetches alice's prekeys via iris_session, alice's key_contacts
+%% must contain bob. This proves the session layer wires fetch_bundle/3 (not /1).
+session_fetch_records_contact_test_() ->
+    {setup, fun session_setup/0, fun session_cleanup/1, fun() ->
+        %% Upload a key bundle for alice
+        AliceBundle = #{
+            identity_key => crypto:strong_rand_bytes(32),
+            signed_prekey => crypto:strong_rand_bytes(32),
+            signed_prekey_signature => crypto:strong_rand_bytes(64),
+            one_time_prekeys => [crypto:strong_rand_bytes(32)]
+        },
+        ok = iris_keys:upload_bundle(<<"alice">>, AliceBundle),
+
+        %% Bob fetches alice's prekeys through the session layer
+        _Result = iris_session:handle_packet(
+            {fetch_prekeys, <<"alice">>}, <<"bob">>, self(), iris_edge_conn),
+
+        %% Assert: alice's key_contacts must now contain bob
+        Contacts = iris_keys:get_key_contacts(<<"alice">>),
+        ?assert(lists:member(<<"bob">>, Contacts))
+    end}.

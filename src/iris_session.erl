@@ -408,7 +408,8 @@ handle_packet({fetch_prekeys, TargetUser}, User, _Pid, _Mod) when User =/= undef
             %% Keys module not running
             {ok, User, [{send, <<16#22, 0:32>>}]};
         _ ->
-            case iris_keys:fetch_bundle(TargetUser) of
+            %% GAP-13: Use fetch_bundle/3 to record requester as contact
+            case iris_keys:fetch_bundle(TargetUser, true, User) of
                 {ok, Bundle} ->
                     Response = iris_proto:encode_prekey_response(Bundle),
                     {ok, User, [{send, Response}]};
