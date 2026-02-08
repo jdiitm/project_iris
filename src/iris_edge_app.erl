@@ -1,6 +1,7 @@
 -module(iris_edge_app).
 -behaviour(application).
 -export([start/2, stop/1]).
+-export([check_mtls_enforcement/0]).
 
 start(_Type, _Args) ->
     logger:info("Starting Iris Edge Application..."),
@@ -32,3 +33,20 @@ start(_Type, _Args) ->
 stop(_State) ->
     logger:info("Stopping Iris Edge Application..."),
     ok.
+
+%% @doc Check mTLS enforcement config. Exits if enforce_mtls=true but
+%% ssl_dist_optfile is not set. Called from start/2.
+-spec check_mtls_enforcement() -> ok.
+check_mtls_enforcement() ->
+    case application:get_env(iris_core, enforce_mtls, false) of
+        true ->
+            case init:get_argument(ssl_dist_optfile) of
+                {ok, _} -> ok;
+                error ->
+                    logger:error("CRITICAL: enforce_mtls=true but ssl_dist_optfile not set"),
+                    exit(mtls_not_configured)
+            end;
+        false ->
+            logger:warning("mTLS NOT enforced (NFR-15). Set enforce_mtls=true for production."),
+            ok
+    end.

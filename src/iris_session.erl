@@ -728,15 +728,9 @@ handle_packet({token_refresh, RefreshToken}, User, _Pid, _Mod) ->
                     logger:info("TOKEN_REFRESH: Issued new token pair for ~p", [User]),
                     {ok, User, [{send, Response}]};
                 _ ->
-                    %% Access token creation failed -- still return new refresh token
-                    %% Use a placeholder access token
-                    Placeholder = <<"access_token_pending">>,
-                    RefreshBin = ensure_binary(NewRefresh),
-                    Response2 = <<16#0B,
-                                 (byte_size(Placeholder)):16, Placeholder/binary,
-                                 (byte_size(RefreshBin)):16, RefreshBin/binary>>,
-                    logger:warning("TOKEN_REFRESH: Access token creation failed for ~p, using placeholder", [User]),
-                    {ok, User, [{send, Response2}]}
+                    %% Access token creation failed -- return explicit error
+                    logger:error("TOKEN_REFRESH: Access token creation failed for ~p", [User]),
+                    {ok, User, [{send, encode_error(<<"token_creation_failed">>)}]}
             end;
         {error, token_reused} ->
             logger:warning("TOKEN_REFRESH: Reuse detected for ~p, revoking family", [User]),

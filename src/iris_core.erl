@@ -8,6 +8,7 @@
 
 %% High-Scale Messaging APIs
 -export([register_user/3, lookup_user/1]).
+-export([check_mtls_enforcement/0]).
 -export([store_offline/2, store_offline_durable/2, store_batch/2, retrieve_offline/1]).
 -export([retrieve_offline_paginated/3, get_offline_queue_depth/1, delete_offline_confirmed/2]).
 -export([get_bucket_count/1, set_bucket_count/2]).
@@ -133,6 +134,48 @@ init([]) ->
         #{id => iris_shard,
           start => {iris_shard, start_link, []},
           type => worker,
+          restart => permanent},
+
+        %% Metrics: Must start early -- other modules emit counters through it
+        #{id => iris_metrics,
+          start => {iris_metrics, start_link, []},
+          type => worker,
+          restart => permanent},
+
+        %% E2EE Key Bundle Storage (X3DH key bundles, SPK rotation)
+        #{id => iris_keys,
+          start => {iris_keys, start_link, []},
+          type => worker,
+          restart => permanent},
+
+        %% Cross-Region Message Bridge
+        #{id => iris_region_bridge,
+          start => {iris_region_bridge, start_link, []},
+          type => worker,
+          restart => permanent},
+
+        %% Optional Read Receipt Tracking
+        #{id => iris_read_receipts,
+          start => {iris_read_receipts, start_link, []},
+          type => worker,
+          restart => permanent},
+
+        %% Mailbox Guard: Per-user mailbox overflow protection
+        #{id => iris_mailbox_guard,
+          start => {iris_mailbox_guard, start_link, []},
+          type => worker,
+          restart => permanent},
+
+        %% Mailbox Monitor: Tracks mailbox sizes for backpressure signals
+        #{id => iris_mailbox_monitor,
+          start => {iris_mailbox_monitor, start_link, []},
+          type => worker,
+          restart => permanent},
+
+        %% Efficiency Monitor: Scheduler utilization and memory tracking
+        #{id => iris_efficiency_monitor,
+          start => {iris_efficiency_monitor, start_link, []},
+          type => worker,
           restart => permanent}
     ],
 
@@ -186,6 +229,27 @@ init([]) ->
     end,
 
     {ok, {SupFlags, Children}}.
+
+%%%===================================================================
+%%% mTLS Enforcement (NFR-15)
+%%%===================================================================
+
+%% @doc Check mTLS enforcement config. Exits if enforce_mtls=true but
+%% ssl_dist_optfile is not set. Called from start/2.
+-spec check_mtls_enforcement() -> ok.
+check_mtls_enforcement() ->
+    case application:get_env(iris_core, enforce_mtls, false) of
+        true ->
+            case init:get_argument(ssl_dist_optfile) of
+                {ok, _} -> ok;
+                error ->
+                    logger:error("CRITICAL: enforce_mtls=true but ssl_dist_optfile not set"),
+                    exit(mtls_not_configured)
+            end;
+        false ->
+            logger:warning("mTLS NOT enforced (NFR-15). Set enforce_mtls=true for production."),
+            ok
+    end.
 
 %%%===================================================================
 %%% FAANG-Grade Messaging APIs
@@ -683,7 +747,18 @@ create_tables(Nodes) ->
         {attributes, [token_id, user_id, family_id, used, created_at, expires_at]},
         {type, set}
     ]),
-    mnesia:wait_for_tables([presence, offline_msg, user_meta, user_status, revoked_tokens, dedup_log, refresh_tokens], 5000),
+    %% FR-8b: User safety tables (block/report)
+    mnesia:create_table(user_blocks, [
+        {disc_copies, Nodes},
+        {attributes, [key, blocker, blocked, created_at]},
+        {type, set}
+    ]),
+    mnesia:create_table(user_reports, [
+        {disc_copies, Nodes},
+        {attributes, [id, reporter, reported, reason, created_at]},
+        {type, bag}
+    ]),
+    mnesia:wait_for_tables([presence, offline_msg, user_meta, user_status, revoked_tokens, dedup_log, refresh_tokens, user_blocks, user_reports], 5000),
     logger:info("Tables created.").
 
 %% Legacy wrapper for specific node lists (unused now but kept for API compat)

@@ -173,7 +173,8 @@ init([]) ->
             ets:new(?METRICS_ETS, [named_table, public, {write_concurrency, true}]),
             ets:insert(?METRICS_ETS, {opk_exhausted_count, 0}),
             ets:insert(?METRICS_ETS, {opk_low_alerts, 0}),
-            ets:insert(?METRICS_ETS, {spk_fallback_count, 0});
+            ets:insert(?METRICS_ETS, {spk_fallback_count, 0}),
+            ets:insert(?METRICS_ETS, {spk_rotation_needed, 0});
         _ -> ok
     end,
     
@@ -183,6 +184,10 @@ init([]) ->
             ets:new(?CONTACTS_TABLE, [bag, named_table, public]);
         _ -> ok
     end,
+    
+    %% NFR-25: Schedule periodic SPK rotation check (default: 7 days)
+    RotationInterval = application:get_env(iris_core, spk_rotation_interval_ms, 604800000),
+    erlang:send_after(RotationInterval, self(), check_spk_rotation),
     
     {ok, #state{}}.
 
@@ -236,6 +241,13 @@ handle_call(_Request, _From, State) ->
 
 handle_cast(_Msg, State) ->
     {noreply, State}.
+
+handle_info(check_spk_rotation, State) ->
+    rotate_expired_spks(),
+    %% Reschedule
+    Interval = application:get_env(iris_core, spk_rotation_interval_ms, 604800000),
+    erlang:send_after(Interval, self(), check_spk_rotation),
+    {noreply, State};
 
 handle_info(_Info, State) ->
     {noreply, State}.
@@ -314,18 +326,22 @@ detect_identity_key_change(UserId, NewIK) ->
             logger:warning("KEY_CHANGE: Identity key changed for user ~p", [UserId]),
             iris_metrics:inc(iris_identity_key_changes),
             %% GAP-13: Notify contacts who have fetched this user's key bundle
+            %% Direct pid delivery -- bypasses router pool (which may not be running)
             Contacts = get_key_contacts(UserId),
             case Contacts of
                 [] -> ok;
                 _ ->
                     AlertPacket = iris_proto:encode_key_change_alert(UserId),
                     lists:foreach(fun(ContactId) ->
-                        %% Route via existing infrastructure (best-effort)
                         try
-                            iris_router:route(ContactId, {deliver_msg, AlertPacket})
+                            case iris_core:lookup_user(ContactId) of
+                                {ok, _Node, Pid} when is_pid(Pid) ->
+                                    Pid ! {deliver_msg, AlertPacket};
+                                _ ->
+                                    ok  %% Contact offline, they'll see on next key fetch
+                            end
                         catch _:_ ->
-                            %% Contact may be offline — notification is best-effort
-                            ok
+                            ok  %% Best-effort
                         end
                     end, Contacts)
             end;
@@ -562,6 +578,38 @@ do_list_users() ->
     end.
 
 %% =============================================================================
+%% Internal: SPK Rotation Check (NFR-25)
+%% =============================================================================
+
+-define(SPK_MAX_AGE_SECONDS, 604800). %% 7 days
+
+rotate_expired_spks() ->
+    %% Scan all key bundles for expired SPKs (timestamp > 7 days old)
+    Now = os:system_time(second),
+    F = fun() -> mnesia:all_keys(e2ee_key_bundle) end,
+    case mnesia:transaction(F) of
+        {atomic, UserIds} ->
+            lists:foreach(fun(UserId) ->
+                case mnesia:transaction(fun() -> mnesia:read(e2ee_key_bundle, UserId) end) of
+                    {atomic, [Record]} ->
+                        SpkTs = element(6, Record), %% signed_prekey_timestamp field
+                        Age = Now - SpkTs,
+                        case Age > ?SPK_MAX_AGE_SECONDS of
+                            true ->
+                                incr_metric(spk_rotation_needed),
+                                logger:warning("SPK expired for user ~p (age: ~p seconds)", [UserId, Age]);
+                            false ->
+                                ok
+                        end;
+                    _ ->
+                        ok
+                end
+            end, UserIds);
+        _ ->
+            ok
+    end.
+
+%% =============================================================================
 %% Internal: Low Prekey Alert (NFR-24)
 %% =============================================================================
 
@@ -601,7 +649,8 @@ get_opk_metrics() ->
         #{
             opk_exhausted_count => ets:lookup_element(?METRICS_ETS, opk_exhausted_count, 2),
             opk_low_alerts => ets:lookup_element(?METRICS_ETS, opk_low_alerts, 2),
-            spk_fallback_count => ets:lookup_element(?METRICS_ETS, spk_fallback_count, 2)
+            spk_fallback_count => ets:lookup_element(?METRICS_ETS, spk_fallback_count, 2),
+            spk_rotation_needed => ets:lookup_element(?METRICS_ETS, spk_rotation_needed, 2)
         }
     catch
         error:badarg -> #{}  %% Table not created yet
