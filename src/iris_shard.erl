@@ -17,6 +17,7 @@
 -export([join_shard/1, leave_shard/1]).
 -export([get_all_shards/0, get_local_shards/0]).
 -export([get_shard_stats/0]).
+-export([calculate_shards_for_node/3]).  %% Pure function for TDD
 
 -behaviour(gen_server).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
@@ -143,7 +144,10 @@ init([]) ->
     
     ShardCount = get_shard_count(),
     
-    %% Auto-join shards based on node name hash (for even distribution)
+    %% AUDIT FIX: Monitor node changes for shard redistribution
+    net_kernel:monitor_nodes(true),
+    
+    %% Auto-join shards based on even distribution across cluster
     LocalShards = calculate_local_shards(ShardCount),
     
     %% Join calculated shards
@@ -215,6 +219,23 @@ handle_cast({update_shard_count, Count}, State) ->
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
+%% AUDIT FIX: Redistribute shards when cluster topology changes
+handle_info({nodeup, _Node}, State = #state{shard_count = ShardCount, local_shards = OldShards}) ->
+    NewShards = calculate_local_shards(ShardCount),
+    ToLeave = OldShards -- NewShards,
+    ToJoin = NewShards -- OldShards,
+    lists:foreach(fun(S) -> leave_shard_internal(S) end, ToLeave),
+    lists:foreach(fun(S) -> join_shard_internal(S) end, ToJoin),
+    {noreply, State#state{local_shards = NewShards}};
+
+handle_info({nodedown, _Node}, State = #state{shard_count = ShardCount, local_shards = OldShards}) ->
+    NewShards = calculate_local_shards(ShardCount),
+    ToLeave = OldShards -- NewShards,
+    ToJoin = NewShards -- OldShards,
+    lists:foreach(fun(S) -> leave_shard_internal(S) end, ToLeave),
+    lists:foreach(fun(S) -> join_shard_internal(S) end, ToJoin),
+    {noreply, State#state{local_shards = NewShards}};
+
 handle_info(_Info, State) ->
     {noreply, State}.
 
@@ -258,19 +279,35 @@ shuffle_nodes(Nodes) ->
     Tagged = [{rand:uniform(), N} || N <- Nodes],
     [N || {_, N} <- lists:sort(Tagged)].
 
-%% Calculate which shards this node should own based on node name
+%% Calculate which shards this node should own based on cluster membership.
+%% AUDIT FIX: Old code only claimed 3 shards per node (out of 4096),
+%% leaving 99%+ shards unowned. New code divides the full shard space
+%% evenly across all known nodes.
 calculate_local_shards(ShardCount) ->
-    %% Use node name hash to determine primary shard
-    NodeName = atom_to_binary(node(), utf8),
-    PrimaryShard = erlang:phash2(NodeName, ShardCount),
-    
-    %% For redundancy, also claim adjacent shards
-    %% This gives each node ~3 shards by default
-    AdjacentCount = 2,
-    ShardIds = [PrimaryShard | 
-                [(PrimaryShard + I) rem ShardCount || I <- lists:seq(1, AdjacentCount)]],
-    
-    lists:usort(ShardIds).
+    AllNodes = lists:sort([node() | nodes()]),
+    calculate_shards_for_node(node(), AllNodes, ShardCount).
+
+%% @doc Pure function: calculate which shards a specific node should own.
+%% Distributes ShardCount shards evenly across AllNodes using modulo assignment.
+%% Each node owns shards where (ShardId rem NodeCount) == NodeIndex.
+%% Exported for TDD — no gen_server dependency.
+-spec calculate_shards_for_node(atom(), [atom()], pos_integer()) -> [non_neg_integer()].
+calculate_shards_for_node(Node, AllNodes, ShardCount) ->
+    SortedNodes = lists:sort(AllNodes),
+    NodeCount = length(SortedNodes),
+    case index_of(Node, SortedNodes) of
+        not_found -> [];
+        MyIndex ->
+            [S || S <- lists:seq(0, ShardCount - 1), S rem NodeCount =:= MyIndex]
+    end.
+
+index_of(_Elem, []) -> not_found;
+index_of(Elem, [Elem | _]) -> 0;
+index_of(Elem, [_ | Rest]) ->
+    case index_of(Elem, Rest) of
+        not_found -> not_found;
+        N -> N + 1
+    end.
 
 safe_avg([]) -> 0.0;
 safe_avg(List) ->

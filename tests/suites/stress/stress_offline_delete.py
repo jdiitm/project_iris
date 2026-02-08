@@ -147,7 +147,7 @@ def main():
     # 1. Setup Environment
     # Only restart if users > 2000 (fresh start for heavy load), otherwise reuse for speed dev
     if args.users > 2000:
-        os.system("make stop >/dev/null 2>&1; killall beam.smp 2>/dev/null")
+        os.system("make stop >/dev/null 2>&1; pkill -9 -f 'beam.smp.*iris_' 2>/dev/null")
         os.system("make clean >/dev/null; make all >/dev/null")
         # Use high limits
         os.system("make start_core >/dev/null; sleep 2")

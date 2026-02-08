@@ -717,71 +717,10 @@ decode_base64url(Bin) ->
         _:_ -> {error, invalid_base64}
     end.
 
-%% Simple JSON encoding/decoding (minimal implementation)
-encode_json(Map) when is_map(Map) ->
-    Pairs = maps:fold(fun(K, V, Acc) ->
-        KEnc = encode_json_value(K),
-        VEnc = encode_json_value(V),
-        [<<KEnc/binary, ":", VEnc/binary>> | Acc]
-    end, [], Map),
-    <<"{", (iolist_to_binary(lists:join(<<",">>, Pairs)))/binary, "}">>.
-
-encode_json_value(V) when is_binary(V) ->
-    <<"\"", V/binary, "\"">>;
-encode_json_value(V) when is_integer(V) ->
-    integer_to_binary(V);
-encode_json_value(V) when is_atom(V) ->
-    <<"\"", (atom_to_binary(V))/binary, "\"">>.
-
-decode_json(Bin) ->
-    try
-        %% Simple JSON object parser
-        {ok, parse_json_object(Bin)}
-    catch
-        _:_ -> {error, invalid_json}
-    end.
-
-parse_json_object(<<"{", Rest/binary>>) ->
-    parse_json_pairs(Rest, #{}).
-
-parse_json_pairs(<<"}", _/binary>>, Acc) ->
-    Acc;
-parse_json_pairs(<<",", Rest/binary>>, Acc) ->
-    parse_json_pairs(Rest, Acc);
-parse_json_pairs(<<" ", Rest/binary>>, Acc) ->
-    parse_json_pairs(Rest, Acc);
-parse_json_pairs(<<"\"", Rest/binary>>, Acc) ->
-    {Key, Rest2} = parse_json_string(Rest, <<>>),
-    Rest3 = skip_colon(Rest2),
-    {Value, Rest4} = parse_json_value(Rest3),
-    parse_json_pairs(Rest4, maps:put(Key, Value, Acc)).
-
-skip_colon(<<":", Rest/binary>>) -> Rest;
-skip_colon(<<" ", Rest/binary>>) -> skip_colon(Rest);
-skip_colon(Rest) -> Rest.
-
-parse_json_string(<<"\"", Rest/binary>>, Acc) ->
-    {Acc, Rest};
-parse_json_string(<<"\\\"", Rest/binary>>, Acc) ->
-    parse_json_string(Rest, <<Acc/binary, "\"">>);
-parse_json_string(<<C, Rest/binary>>, Acc) ->
-    parse_json_string(Rest, <<Acc/binary, C>>).
-
-parse_json_value(<<" ", Rest/binary>>) ->
-    parse_json_value(Rest);
-parse_json_value(<<"\"", Rest/binary>>) ->
-    {Str, Rest2} = parse_json_string(Rest, <<>>),
-    {Str, Rest2};
-parse_json_value(Bin) ->
-    %% Try to parse number
-    parse_json_number(Bin, <<>>).
-
-parse_json_number(<<C, Rest/binary>>, Acc) when C >= $0, C =< $9 ->
-    parse_json_number(Rest, <<Acc/binary, C>>);
-parse_json_number(Rest, Acc) when byte_size(Acc) > 0 ->
-    {binary_to_integer(Acc), Rest};
-parse_json_number(Rest, <<>>) ->
-    {null, Rest}.
+%% AUDIT FIX (Finding 1.2): Delegated to iris_auth_json module.
+%% Old inline parser used O(N^2) binary append; new module uses iolists (O(N)).
+encode_json(Map) -> iris_auth_json:encode(Map).
+decode_json(Bin) -> iris_auth_json:decode(Bin).
 
 %% =============================================================================
 %% Internal: Cleanup

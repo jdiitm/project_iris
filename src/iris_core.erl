@@ -393,8 +393,17 @@ get_bucket_count(User) ->
     end.
 
 set_bucket_count(User, Count) ->
-    F = fun() -> mnesia:write({user_meta, User, Count}) end,
-    mnesia:transaction(F).
+    %% AUDIT FIX (Finding 2.1): Reject bucket count decreases to prevent
+    %% data stranding — messages in higher-numbered buckets become invisible
+    %% if BucketCount shrinks.
+    CurrentCount = get_bucket_count(User),
+    case Count < CurrentCount of
+        true ->
+            {error, {bucket_count_decrease, CurrentCount, Count}};
+        false ->
+            F = fun() -> mnesia:write({user_meta, User, Count}) end,
+            mnesia:transaction(F)
+    end.
 
 update_status(User, online) -> ok;
 update_status(User, offline) ->
