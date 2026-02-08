@@ -4,6 +4,44 @@ All notable changes to Iris Messaging System.
 
 ## [Unreleased]
 
+### Added
+
+#### RFC v4.0 Compliance Gaps (2026-02-07 — 2026-02-08)
+
+**Closed 19 RFC v4.0 compliance gaps via TDD. Test suite expanded from ~115 to 120+ tests.**
+
+- **Protocol**:
+  - Version/capability negotiation (opcode 0x0C) in `iris_proto.erl`
+  - UUIDv7 idempotency key validation (`iris_uuid.erl`, 14 tests)
+  - 64-bit HLC backward compatibility (`iris_hlc.erl`)
+
+- **Security**:
+  - JWT key isolation: `auth_mode` signer/verifier in `iris_auth.erl` (8 tests)
+  - JWT replay protection: `jti` nonce tracking with TTL cleanup
+  - E2EE header validation: required `ik`/`ek` fields before routing
+
+- **Limits & Durability**:
+  - Inbox 10K limit enforcement in `iris_core.erl` (GAP-6)
+  - Payload 64KB limit on E2EE/Group paths (GAP-7)
+  - Outbox 7-day TTL cleanup in `iris_region_bridge.erl` (GAP-1)
+  - Session cache 100K hard limit with LRU eviction (5 tests)
+  - Dedup Mnesia cross-check on bloom positives (4 tests)
+
+- **Observability**:
+  - `msg_in`/`msg_out`/`ack_sent` counters wired to production paths (GAP-5)
+  - Span instrumentation on 7 key session operations (GAP-4)
+  - 50% outbox queue depth alert metric (GAP-2)
+  - Identity key change detection + metric (GAP-13, notification PENDING_DESIGN)
+  - Distributed tracing `traced_rpc/4` for Edge→Core propagation
+
+- **Infrastructure**:
+  - Docker image aligned to OTP 26 (`bc7a32b`)
+  - CI Tier 0 timeout raised to 35 minutes
+  - Edge listener hardened; test suite stabilized 120→124 pass
+  - Memory benchmark NFR-19 hard gate (≤10KB/conn)
+
+See [RFC_COMPLIANCE.md](docs/RFC_COMPLIANCE.md) for full gap closure table.
+
 ### Changed
 
 #### Test Infrastructure Consolidation (2026-02-05)
@@ -30,7 +68,7 @@ All notable changes to Iris Messaging System.
 
 - **Updated CI pipeline** to use proven scripts
 
-**Results**: 75+ tests, reliable execution with fresh cluster per Docker test
+**Results**: 75+ tests at time of entry; reliable execution with fresh cluster per Docker test
 
 ---
 
@@ -38,7 +76,7 @@ All notable changes to Iris Messaging System.
 
 #### TLS Enforcement & Test Suite Stabilization (2026-02-03)
 
-**Critical: TLS is now enforced for all client connections. All 115+ tests pass (100%).**
+**Critical: TLS is now enforced for all client connections. All 115+ tests passed at time of entry (100%).**
 
 - **TLS Enforcement**: Server now requires TLS for all client connections
   - Server starts with `config/test_tls.config` (includes `{port, 8085}`)

@@ -1,6 +1,6 @@
 # Testing Guide
 
-**Status**: 95+ tests | **Last Verified**: 2026-02-08
+**Status**: 120+ tests passing | **Last Verified**: 2026-02-08
 
 ## Quick Start
 
@@ -8,31 +8,28 @@
 # Run ALL tests (recommended)
 ./tests/run_all_tests.sh
 
-# Run non-Docker tests only (faster iteration)
+# Run non-Docker tests only (faster iteration, ~30 min)
 ./tests/run_all_tests.sh --quick
 
-# Run Docker chaos tests only
+# Run Docker chaos tests only (~2 hr)
 ./tests/run_all_tests.sh --docker-only
 
 # Show help
 ./tests/run_all_tests.sh --help
 ```
 
-## Proven Scripts
-
-The test infrastructure uses these **proven, verified scripts**:
+## Test Infrastructure
 
 | Script | Purpose |
 |--------|---------|
-| `tests/run_all_tests.sh` | **Main test runner** - single entry point for all tests |
-| `docker/global-cluster/cluster.sh` | Docker cluster management (up/down) |
+| `tests/run_all_tests.sh` | **Authoritative test runner** — single entry point |
+| `docker/global-cluster/cluster.sh` | Docker cluster up/down |
 | `docker/global-cluster/init_cluster.sh` | Mnesia cluster initialization |
-| `docker/global-cluster/run_chaos_tests.sh` | Runs chaos tests with fresh cluster per test |
+| `docker/global-cluster/run_chaos_tests.sh` | Chaos tests with fresh cluster per test |
 
-### Single Test Execution (Docker)
+### Single Docker Test
 
 ```bash
-# Start cluster and run one test
 cd docker/global-cluster
 ./cluster.sh down && ./cluster.sh up && python3 ../../tests/suites/chaos_dist/test_network_partition.py
 ```
@@ -44,8 +41,8 @@ cd docker/global-cluster
 | Mode | Command | Description |
 |------|---------|-------------|
 | **Full** | `./tests/run_all_tests.sh` | All tests (unit → Docker chaos) |
-| **Quick** | `./tests/run_all_tests.sh --quick` | Non-Docker tests only |
-| **Docker Only** | `./tests/run_all_tests.sh --docker-only` | Docker chaos tests only |
+| **Quick** | `./tests/run_all_tests.sh --quick` | Non-Docker tests only (CI Tier 0) |
+| **Docker Only** | `./tests/run_all_tests.sh --docker-only` | Docker chaos tests only (CI Tier 1) |
 
 ---
 
@@ -55,50 +52,61 @@ Tests run in **phases** based on infrastructure requirements:
 
 | Phase | Description | Infrastructure |
 |-------|-------------|----------------|
-| **Phase 1** | Unit tests | No server |
-| **Phase 2** | Standalone tests | Local TLS server |
-| **Phase 3** | ClusterManager tests | Self-managed |
-| **Phase 4** | Docker chaos tests | Fresh cluster per test |
+| **Phase 1** | Unit tests (property-based) | No server |
+| **Phase 2** | Standalone tests (integration, e2e, security, etc.) | Local TLS server |
+| **Phase 3** | ClusterManager tests (chaos_controlled) | Self-managed per test |
+| **Phase 4** | Docker chaos tests (chaos_dist) | Fresh cluster per test |
 
 ### Why Fresh Cluster Per Test?
 
-Docker chaos tests (`chaos_dist/`) are **destructive** - they kill containers, partition networks, and corrupt state. Each test gets a **fresh cluster** via `cluster.sh up` to ensure isolation.
+Docker chaos tests (`chaos_dist/`) are **destructive** — they kill containers, partition networks, and corrupt state. Each test gets a **fresh cluster** via `cluster.sh up` to ensure isolation.
 
 ---
 
 ## Test Suites
 
-| Suite | Tests | Description |
+### Python Test Suites (~146 files)
+
+| Suite | Files | Description |
 |-------|-------|-------------|
-| unit | 2 | Property-based tests |
-| integration | 22+ | Core message flow |
-| e2e | 5+ | End-to-end scenarios |
-| security | 9+ | TLS, auth, rate limiting, CBOR validation, sender key rotation |
-| resilience | 3 | Fault tolerance |
-| performance_light | 6 | Benchmarks (NFR-19 hard gate) |
-| stress | 14 | Load testing (NFR-4 rate metric) |
-| chaos_dist | 18 | Docker-based chaos tests |
-| chaos_controlled | 2 | Controlled chaos |
-| contract | 1 | Edge-core contract |
-| compatibility | 2 | Protocol versions, mixed HLC ordering |
-| erlang unit (new) | 9 | Dedup bloom cross-check (4), session cache bound (5) |
-| erlang RFC v4 gap | 8+ | Inbox characterization (2), inbox limit (3), metrics callsite (5), RFC constants (3+), key change (2) |
+| unit | 4 | Property-based tests (Hypothesis) |
+| integration | 37 | Core message flow, dedup, metrics, presence |
+| e2e | 11 | End-to-end scenarios (conversation, key verification, ratchet) |
+| security | 23 | TLS, JWT, fuzz, CBOR, rate limiting, sender keys |
+| resilience | 7 | Fault tolerance, connection resume, clock skew |
+| performance_light | 8 | Benchmarks, CPU, memory (NFR-19 hard gate) |
+| stress | 18 | Load testing, fan-out, soak, reconnect storm |
+| chaos_dist | 25 | Docker-based chaos (SIGKILL, partition, disk full) |
+| chaos_controlled | 2 | Combined chaos (self-managed cluster) |
+| compatibility | 7 | Protocol versions, HLC migration, compression |
+| contract | 3 | Edge-core contract, rate limit constants, RFC v4 |
+| conformance | 1 | WebSocket RFC 6455 compliance |
+
+### Erlang Test Suites (70 modules, 326+ tests)
+
+| Category | Modules | Examples |
+|----------|---------|----------|
+| Core protocol | 5 | `iris_proto_tests`, `iris_session_tests`, `iris_cbor_tests` |
+| Storage & dedup | 8 | `iris_dedup_tests`, `iris_store_tests`, `iris_durable_batcher_tests` |
+| Auth & security | 7 | `iris_auth_tests`, `iris_auth_eddsa_tests`, `iris_auth_key_isolation_tests` |
+| E2EE | 5 | `iris_x3dh_tests`, `iris_ratchet_tests`, `iris_keys_tests`, `iris_sender_keys_tests` |
+| Routing & sharding | 6 | `iris_shard_tests`, `iris_router_pool_tests`, `iris_region_bridge_tests` |
+| Resilience | 5 | `iris_circuit_breaker_tests`, `iris_partition_guard_tests`, `iris_flow_controller_tests` |
+| Observability | 3 | `iris_metrics_nfr_tests`, `iris_metrics_slo_tests`, `iris_trace_tests` |
+| RFC v4 gaps | 8 | `iris_inbox_limit_tests`, `iris_rfc_v4_constants_tests`, `iris_key_change_notify_tests` |
+| Other | 23 | Presence, typing, group, ingress guard, concurrency torture, etc. |
 
 ---
 
 ## CI Pipeline
 
-The CI pipeline uses the same proven scripts:
+| Tier | Trigger | Scope | Timeout |
+|------|---------|-------|---------|
+| **Tier 0** | Every commit + PR | `--quick` (non-Docker) | 35 min |
+| **Tier 1** | Nightly + main push | `--docker-only` (chaos) | 2 hr |
+| **Tier 2** | Manual dispatch | Full suite | 24 hr |
 
-```yaml
-# Tier 0 - Every commit (fast)
-./tests/run_all_tests.sh --quick
-
-# Tier 2 - Nightly (full Docker chaos)
-./tests/run_all_tests.sh --docker-only
-```
-
-See `.github/workflows/ci.yml` for full configuration.
+See [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) for full configuration.
 
 ---
 
@@ -115,12 +123,12 @@ See `.github/workflows/ci.yml` for full configuration.
 ### Required Patterns
 
 ```python
-# ✅ Explicit skip with reason
+# Explicit skip with reason
 if not infrastructure_available():
     print("SKIP:DOCKER - Container not running")
     sys.exit(2)
 
-# ✅ Seed randomness for reproducibility
+# Seed randomness for reproducibility
 TEST_SEED = int(os.environ.get("TEST_SEED", "42"))
 random.seed(TEST_SEED)
 ```
@@ -128,13 +136,13 @@ random.seed(TEST_SEED)
 ### Prohibited Patterns
 
 ```python
-# ❌ CI-conditional pass
+# CI-conditional pass
 if os.environ.get("CI"): sys.exit(0)
 
-# ❌ Swallow exceptions
+# Swallow exceptions
 except: pass
 
-# ❌ Arbitrary sleeps instead of proper waits
+# Arbitrary sleeps instead of proper waits
 time.sleep(60)  # Hope it works
 ```
 
@@ -145,7 +153,6 @@ time.sleep(60)  # Hope it works
 ### Server Not Available
 
 ```bash
-# For standalone tests, start server manually
 CONFIG=config/test_tls make start
 ```
 
@@ -158,7 +165,6 @@ rm -rf Mnesia.* MnesiaCore.* /tmp/Mnesia.*
 ### Docker Cluster Issues
 
 ```bash
-# Use proven cluster.sh script
 cd docker/global-cluster
 ./cluster.sh down
 ./cluster.sh up
@@ -167,7 +173,7 @@ cd docker/global-cluster
 ### Test Hangs
 
 ```bash
-pkill -9 -f beam.smp
+pkill -9 -f "beam.smp.*iris_"
 ```
 
 ---
@@ -176,26 +182,13 @@ pkill -9 -f beam.smp
 
 ```
 tests/
-├── run_all_tests.sh     # Main test runner (PROVEN)
-├── suites/              # Test suites by category
-│   ├── unit/            # Property-based tests
-│   ├── integration/     # Core message delivery
-│   ├── e2e/             # End-to-end scenarios
-│   ├── security/        # Security validation
-│   ├── resilience/      # Fault tolerance
-│   ├── stress/          # Load testing
-│   ├── performance_light/   # Benchmarks
-│   ├── chaos_dist/      # Docker chaos tests (PROVEN)
-│   ├── chaos_controlled/    # Controlled chaos
-│   ├── compatibility/   # Protocol versions
-│   └── contract/        # Edge-core contract
-├── framework/           # ClusterManager, assertions
-├── utilities/           # IrisClient (TLS-enabled)
+├── run_all_tests.sh     # Authoritative test runner
+├── conftest.py          # Seeded randomness, deterministic IDs
+├── suites/              # Test suites by category (13 suites)
+├── framework/           # ClusterManager, assertions, wait utilities
+├── utilities/           # IrisClient (TLS-enabled), TLS helpers
 └── artifacts/           # Test outputs (gitignored)
 
-docker/global-cluster/
-├── cluster.sh           # Cluster management (PROVEN)
-├── init_cluster.sh      # Mnesia initialization (PROVEN)
-├── run_chaos_tests.sh   # Chaos test runner (PROVEN)
-└── docker-compose.yml   # Cluster definition
+test_utils/              # 70 Erlang EUnit test modules
+docker/global-cluster/   # Docker cluster scripts
 ```

@@ -1,7 +1,7 @@
 # Architectural Decisions & Design Rationale
 
-**Last Updated**: 2026-02-03  
-**Status**: Current (RFC-001 v3.0 Aligned, TLS Enforced)
+**Last Updated**: 2026-02-08  
+**Status**: Current (RFC-001 v4.0 Aligned, TLS Enforced)
 
 ---
 
@@ -9,7 +9,7 @@
 
 Project Iris is a global-scale messaging platform implementing **Hardened AP** semantics with optional **CP mode** for critical data. This document records key architectural decisions and their rationale.
 
-**Key Architectural Principles (RFC-001 v3.0)**:
+**Key Architectural Principles (RFC-001 v4.0)**:
 - **Server as Log**: The server is an append-only, ordered Inbox Log per user
 - **Client as Oracle**: Encryption, decryption, and view state live on client
 - **Sync over Push**: Synchronization is the primary primitive; push is optimization
@@ -57,17 +57,7 @@ Project Iris is a global-scale messaging platform implementing **Hardened AP** s
 - Quorum writes provide better failure tolerance
 - Simplifies storage API for developers
 
-### Configuration
-
-```erlang
-%% Replication factor (default: 3)
-{iris_core, [{replication_factor, 3}]}
-
-%% Durability options in code:
-iris_store:put(Table, Key, Value, #{durability => guaranteed})  %% sync_transaction
-iris_store:put(Table, Key, Value, #{durability => quorum})      %% quorum writes
-iris_store:put(Table, Key, Value, #{durability => best_effort}) %% async
-```
+Configuration: See [DEPLOYMENT.md](DEPLOYMENT.md#configuration-reference).
 
 ---
 
@@ -75,19 +65,7 @@ iris_store:put(Table, Key, Value, #{durability => best_effort}) %% async
 
 ### Decision: Regional Sharding via `iris_region_router`
 
-**Architecture**:
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                     GLOBAL ROUTING LAYER                            │
-│   (iris_region_router - Routes users to home region)               │
-└─────────────────────────────────────────────────────────────────────┘
-                      │                    │                    │
-           ┌─────────▼─────────┐ ┌────────▼────────┐ ┌─────────▼─────────┐
-           │   REGION: US      │ │ REGION: EU      │ │ REGION: APAC      │
-           │   Mnesia Cluster  │ │ Mnesia Cluster  │ │ Mnesia Cluster    │
-           │   (50 nodes max)  │ │ (50 nodes max)  │ │ (50 nodes max)    │
-           └───────────────────┘ └─────────────────┘ └───────────────────┘
-```
+See [DEPLOYMENT.md](DEPLOYMENT.md) for the architecture diagram.
 
 **Scaling Math**:
 - 20 regions × 50 nodes/region × 2M users/node = 2 Billion users
@@ -99,22 +77,11 @@ iris_store:put(Table, Key, Value, #{durability => best_effort}) %% async
 - Regional sharding limits Mnesia mesh to 50 nodes per region
 - Consistent hashing ensures deterministic user-to-region mapping
 
-### Configuration
-
-```erlang
-{iris_core, [
-    {region_id, <<"us-east-1">>},
-    {regions, [<<"us-east-1">>, <<"eu-west-1">>, <<"ap-south-1">>]},
-    {region_endpoints, #{
-        <<"us-east-1">> => ['core@us-east-1.iris.io'],
-        <<"eu-west-1">> => ['core@eu-west-1.iris.io']
-    }}
-]}
-```
+Configuration: See [DEPLOYMENT.md](DEPLOYMENT.md#configuration-reference).
 
 ---
 
-## 4. Partitioning Strategy (RFC-001 v3.0 Section 5.2)
+## 4. Partitioning Strategy (RFC-001 v4.0 Section 5.2)
 
 ### Decision: User ID Partitioning with Jump Consistent Hash + Vnodes
 
@@ -300,11 +267,12 @@ nuke_and_recreate_table(Table) ->
 4. Docker as canonical execution environment
 5. **TLS enforced** on all client connections (NFR-14)
 
-**Test Counts** (as of 2026-02-03 - Post TLS Stabilization):
-- Python test files: 63 (all passing)
-- Total test cases: 115+ (all passing)
-- Chaos_dist tests: 12 (Docker required, TLS enabled)
-- See [TESTING.md](TESTING.md) for current counts and detailed results
+**Test Counts** (as of 2026-02-08):
+- Python test files: ~146 across 13 suites
+- Erlang test modules: 70 (326+ individual EUnit tests)
+- CI Tier 0: 124+ tests passing
+- Chaos_dist tests: 25 (Docker required, TLS enabled)
+- See [TESTING.md](TESTING.md) for current counts
 
 **TLS Test Infrastructure** (Feb 2026):
 - Server runs with `config/test_tls.config`
@@ -322,48 +290,29 @@ nuke_and_recreate_table(Table) ->
 
 ## 8. Deferred Work
 
-### P0 (Blocked)
+### Completed (since last update)
+
+| Item | Resolution |
+|------|------------|
+| UUIDv7 message IDs | Implemented in `iris_uuid.erl` with server-side validation |
+| mTLS inter-node (NFR-15) | Configurable; test exists (`test_mtls_inter_node.py`); full enforcement deferred pending PKI |
+| Inbox overflow protection | 10K limit enforced in `iris_core.erl` (GAP-6) |
+| Outbox TTL | 7-day cleanup in `iris_region_bridge.erl` (GAP-1) |
+
+### Still Deferred
 
 | Item | Effort | Blocker |
 |------|--------|---------|
 | Cross-region Mnesia replication | 2-3 days | Docker volume config |
-| `ra` library integration | 1-2 days | External dependency |
-
-### P1 (Next Sprint)
-
-| Item | Effort | Dependency |
-|------|--------|------------|
-| mTLS inter-node (NFR-15) | 1-2 days | Cert infrastructure |
-| UUIDv7 message IDs | 3-5 days | Protocol breaking change |
-
-### P2 (Backlog)
-
-| Item | Effort | Dependency |
-|------|--------|------------|
+| `ra` library integration (full CP) | 1-2 days | External dependency |
 | 5B user architecture | 2-3 months | Storage rewrite |
-| Full CP consistency | 3-6 months | New storage layer |
+| Key change peer notification | 1-2 weeks | Protocol design needed (GAP-13 PENDING_DESIGN) |
 
 ---
 
 ## 9. Module Overview
 
-### New Modules (2026-01-24)
-
-| Module | Purpose | Tests |
-|--------|---------|-------|
-| `iris_quorum_write` | Quorum-based writes with hot failover | `iris_quorum_write_tests.erl` |
-| `iris_store` | Simplified storage API | `iris_store_tests.erl` |
-| `iris_region_router` | Cross-region message routing | `iris_region_router_tests.erl` |
-| `iris_raft` | CP mode via Raft consensus | `iris_raft_tests.erl` |
-
-### Modified Modules (2026-01-24)
-
-| Module | Change |
-|--------|--------|
-| `iris_core` | Added `allow_table_nuke` safety gate |
-| `iris_async_router` | Added `get_pool_size/0` auto-tuning |
-| `iris_edge_sup` | Dynamic router pool sizing |
-| `iris_storage` | Simplified to Mnesia-only |
+See the [README](../README.md#modules-57-total) for the full module reference (57 modules, grouped by layer).
 
 ---
 
@@ -439,6 +388,6 @@ The following audit findings were addressed:
 
 - [RFC-001 System Requirements](rfc/RFC-001-SYSTEM-REQUIREMENTS.md)
 - [RFC-001 Amendment (E2EE + Groups)](rfc/RFC-001-AMENDMENT-001.md)
-- [Test Status](TEST_STATUS.md)
-- [Cluster Setup](CLUSTER_SETUP.md)
+- [RFC Compliance Status](RFC_COMPLIANCE.md)
+- [Deployment Guide](DEPLOYMENT.md)
 - [5B DAU Roadmap](ROADMAP.md)

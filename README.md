@@ -1,219 +1,209 @@
 # Project Iris: WhatsApp-Class Messaging Engine
 
-[![Tests](https://img.shields.io/badge/tests-75%2B%20passing-brightgreen)](tests/run_all_tests.sh)
+[![Tests](https://img.shields.io/badge/tests-120%2B%20passing-brightgreen)](tests/run_all_tests.sh)
 [![TLS](https://img.shields.io/badge/TLS-enforced-green)](docs/DEPLOYMENT.md)
 [![Erlang](https://img.shields.io/badge/Erlang-OTP%2026%2B-blue)](https://www.erlang.org/)
 
-> **Current Status**: Development. Tested at **10K concurrent connections** locally.  
-> Full test suite (75+ tests) passing with TLS enforced.  
-> Architecture designed for 1M+ users per region (see [Scalability Analysis](docs/SCALABILITY_ANALYSIS.md)).  
-> Planet-scale deployment (2B+ users) requires multi-region infrastructure.
+> **Status**: Development / Pre-alpha. Tested at **10K concurrent connections** locally.
+> Full test suite (120+ tests) passing with TLS enforced. Last verified: 2026-02-08.
+> Architecture designed for 1M+ users per region. See [Scalability Analysis](docs/SCALABILITY_ANALYSIS.md).
 
-## Overview
+## What This Is
 
-Project Iris is a high-performance distributed messaging system built in **Erlang/OTP**, designed to demonstrate WhatsApp-class scalability and reliability.
+Distributed messaging system in **Erlang/OTP 26**, targeting WhatsApp-class reliability. Two node types: stateless **Edge** (TLS, auth, connection hold) and stateful **Core** (Mnesia, user sharding, offline storage). E2EE via Signal Protocol. Multi-region via async bridge.
 
-### Key Capabilities
+See [DEPLOYMENT.md](docs/DEPLOYMENT.md) for architecture diagrams and setup.
+
+### Measured Performance (local, 24-core)
 
 | Metric | Tested | Designed For |
 |--------|--------|--------------|
-| Concurrent Users | 10K (local) | 1M+ per region |
+| Concurrent Users | 10K | 1M+ per region |
 | Throughput | 8K msg/s | 100K+ msg/s |
-| Memory per User | ~12 KB | ~10-15 KB |
-| P99 Latency | < 25ms (local) | < 50ms cross-region |
-| Message Durability | Zero loss (guaranteed mode)* | Zero loss |
+| Memory per Connection | ~12 KB | ≤10 KB (NFR-19) |
+| P99 Latency | < 25ms | < 50ms cross-region |
+| Message Durability | Zero loss (guaranteed mode) | 99.999% (NFR-6) |
 
-*Durability guarantee applies to `durability => guaranteed` writes. See [Scalability Analysis](docs/SCALABILITY_ANALYSIS.md) for methodology.*
+### Non-Goals (Deferred)
 
-## Architecture
+- Multi-device sync (RFC-002)
+- Media messages, voice/video (RFC-002)
+- Message edit/delete (opcodes 0x40-0x43, post-launch)
+- Sealed sender, key backup, MFA, OAuth 2.0
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                     GLOBAL ROUTING LAYER                            │
-│   (iris_region_router - Routes users to home region)               │
-└─────────────────────────────────────────────────────────────────────┘
-                      │                    │                    │
-           ┌─────────▼─────────┐ ┌────────▼────────┐ ┌─────────▼─────────┐
-           │   REGION: US      │ │ REGION: EU      │ │ REGION: APAC      │
-           │   Mnesia Cluster  │ │ Mnesia Cluster  │ │ Mnesia Cluster    │
-           │   (50 nodes max)  │ │ (50 nodes max)  │ │ (50 nodes max)    │
-           └───────────────────┘ └─────────────────┘ └───────────────────┘
-```
+### Known Limitations
 
-### Node Types
+- **Mnesia RAM**: `disc_copies` loads all data into RAM at startup. >32 GB data requires multi-region sharding.
+- **Test sleeps**: ~500 `time.sleep()` calls remain in tests (RFC Section 13.2 violation). See [audit](docs/audit/time_sleep_audit.md).
+- **mTLS inter-node**: Configurable but not enforced (NFR-15 deferred pending PKI infrastructure).
+- **Key change notification**: Identity key change detected + metric emitted, but peer notification protocol is PENDING_DESIGN.
 
-1. **Core Node** (`iris_core`): User registry, offline storage, Mnesia replication
-2. **Edge Node** (`iris_edge`): Connection handling, TLS termination, message routing
+---
 
-### Core Modules
+## Modules (57 total)
+
+### Edge Layer
 
 | Module | Purpose |
 |--------|---------|
-| `iris_store` | Simplified storage API with durability options |
-| `iris_quorum_write` | Quorum-based writes (RF=3, majority ACK) |
-| `iris_region_router` | Regional sharding for 2B+ users |
-| `iris_durable_batcher` | WAL + batched sync_transaction |
-| `iris_flow_controller` | Multi-level adaptive backpressure |
-| `iris_circuit_breaker` | Fallback routing with adaptive timeout |
-| `iris_partition_guard` | Split-brain detection and safe mode |
-| `iris_async_router` | Auto-tuned worker pool for message routing |
-| `iris_auth` | JWT authentication (HMAC-SHA256) |
-| `iris_rate_limiter` | Per-user token bucket rate limiting |
+| `iris_edge_listener` | TLS accept loop, per-IP connection rate limiting |
+| `iris_edge_conn` | Per-connection process, WebSocket upgrade |
+| `iris_session` | Packet dispatch, auth, rate checks, span instrumentation |
+| `iris_proto` | Wire protocol codec (v1.1, 30+ opcodes) |
+| `iris_ws_lite` | Lightweight WebSocket framing |
+| `iris_compression` | Zstd/zlib payload compression |
+| `iris_auth` | JWT validation (EdDSA primary, HMAC legacy), refresh tokens, revocation |
+| `iris_rate_limiter` | Per-user token bucket + distributed gossip via `pg` |
 
-### E2EE Modules (Signal Protocol)
+### Core Layer
 
 | Module | Purpose |
 |--------|---------|
-| `iris_x3dh` | X3DH key agreement |
-| `iris_ratchet` | Double Ratchet for forward secrecy |
-| `iris_keys` | Key management and storage |
-| `iris_group` | Group membership management |
+| `iris_core` | Application entry, Mnesia init, user registry, offline storage |
+| `iris_shard` | Jump consistent hash, vnode assignment, rebalancing |
+| `iris_async_router` | Auto-tuned worker pool, cross-core user lookup |
+| `iris_router` | Route-to-user dispatch (local / remote / offline) |
+| `iris_region_router` | Consistent-hash region assignment for 2B+ users |
+| `iris_region_bridge` | Cross-region outbox queue (7-day TTL, fsync, FIFO drain) |
+| `iris_presence` | Versioned presence with privacy controls |
+| `iris_group` | Group CRUD, membership (≤256 E2EE, ≤10K broadcast) |
+| `iris_group_fanout` | Parallel group message delivery |
+
+### Storage & Durability
+
+| Module | Purpose |
+|--------|---------|
+| `iris_store` | Unified storage API (`guaranteed` / `quorum` / `best_effort`) |
+| `iris_quorum_write` | Majority-ACK writes (RF=3) |
+| `iris_durable_batcher` | WAL + batched `sync_transaction` |
+| `iris_dedup` | 3-tier dedup: ETS hot (5 min) → Bloom warm → Mnesia cold (7 day) |
+| `iris_session_cache` | Session resume cache (100K cap, LRU eviction, 5-min TTL) |
+| `iris_hlc` | 80-bit Hybrid Logical Clocks for cross-region ordering |
+
+### Security & E2EE (Signal Protocol)
+
+| Module | Purpose |
+|--------|---------|
+| `iris_x3dh` | X3DH key agreement (Curve25519) |
+| `iris_ratchet` | Double Ratchet (AES-256-GCM, HKDF-SHA256) |
+| `iris_keys` | Key bundle storage, identity key change detection |
 | `iris_sender_keys` | Sender Keys for group E2EE |
+
+### Resilience & Observability
+
+| Module | Purpose |
+|--------|---------|
+| `iris_partition_guard` | Split-brain detection, write blocking on minority side |
+| `iris_circuit_breaker` | Adaptive timeout, fallback routing |
+| `iris_flow_controller` | Sharded ETS counters, multi-level backpressure |
+| `iris_metrics` | Counters (msg_in/out, ack_sent, dedup_hit), SLI/SLO computation |
+| `iris_trace` | Distributed tracing (trace_id/span_id propagation across RPCs) |
+| `iris_limits` | Hard operational limits (RFC Section 8) |
+| `iris_cluster_manager` | Auto-wire replication on node join/leave |
+
+---
 
 ## Quick Start
 
 ### Prerequisites
 
-- **Runtime**: Erlang/OTP 26+
-- **Python**: 3.11+ (for tests)
-- **Docker**: For cluster simulation (optional)
+- **Erlang/OTP 26+**
+- **Python 3.11+** (tests only)
+- **Docker** (optional, for chaos tests)
 
 ### Build & Run
 
 ```bash
-# Compile (auto-tunes VM flags)
-make clean && make
-
-# Start local cluster
-make start
-
-# Run ALL tests
-./tests/run_all_tests.sh
+make clean && make          # Compile (auto-tunes VM flags)
+make start                  # Start local core + edge (TLS on port 8085)
+./tests/run_all_tests.sh    # Run ALL tests
 ```
 
 ### Docker Cluster
 
 ```bash
-# Start 5-region cluster (6 cores, 11 edges)
 cd docker/global-cluster
-./cluster.sh up
-
-# Run distributed chaos tests
-./run_chaos_tests.sh
-
-# Stop
-./cluster.sh down
+./cluster.sh up             # 5-region cluster (6 cores, 11 edges)
+./run_chaos_tests.sh        # Fresh cluster per test
+./cluster.sh down           # Teardown
 ```
+
+---
 
 ## Testing
 
-**Status**: 75+ tests passing | **Last Verified**: 2026-02-05
+**120+ tests** across 13 suites. See [TESTING.md](docs/TESTING.md) for full details.
 
 ```bash
-# Run ALL tests (recommended)
-./tests/run_all_tests.sh
-
-# Run non-Docker tests only (faster)
-./tests/run_all_tests.sh --quick
-
-# Run Docker chaos tests only
-./tests/run_all_tests.sh --docker-only
-
-# Run single chaos test
-cd docker/global-cluster
-./cluster.sh down && ./cluster.sh up && python3 ../../tests/suites/chaos_dist/test_network_partition.py
+./tests/run_all_tests.sh              # Full suite
+./tests/run_all_tests.sh --quick      # Non-Docker only (~30 min)
+./tests/run_all_tests.sh --docker-only # Docker chaos only (~2 hr)
 ```
 
-### Proven Test Scripts
+---
 
-| Script | Purpose |
-|--------|---------|
-| `tests/run_all_tests.sh` | Main test runner |
-| `docker/global-cluster/cluster.sh` | Cluster up/down |
-| `docker/global-cluster/init_cluster.sh` | Mnesia initialization |
-| `docker/global-cluster/run_chaos_tests.sh` | Chaos tests with fresh cluster |
+## Security
 
-See [TESTING.md](docs/TESTING.md) for details.
+| Feature | Implementation | Status |
+|---------|---------------|--------|
+| TLS 1.2/1.3 | Enforced on all client connections | Verified |
+| mTLS (inter-node) | Configurable via `docker-compose.mtls.yml` | Deferred (NFR-15) |
+| JWT Authentication | EdDSA (Ed25519) primary; HMAC-SHA256 legacy | Verified |
+| JWT Replay Protection | `jti` nonce tracking in ETS with TTL cleanup | Implemented |
+| Rate Limiting | Per-user token bucket + distributed `pg` gossip | Verified |
+| Connection Rate Limit | Per-IP throttling at edge (5/min default, RFC 10.1) | Verified |
+| E2EE | Signal Protocol (X3DH + Double Ratchet + Sender Keys) | Verified |
+| Input Validation | E2EE header fields, CBOR schema, payload 64KB limit | Verified |
 
-## Configuration
+See [DEPLOYMENT.md](docs/DEPLOYMENT.md) for TLS and certificate setup.
 
-### Storage Durability Options
-
-```erlang
-%% Guaranteed (default): sync_transaction to all replicas
-iris_store:put(Table, Key, Value, #{durability => guaranteed}).
-
-%% Quorum: Majority ACK, tolerates minority failures
-iris_store:put(Table, Key, Value, #{durability => quorum}).
-
-%% Best effort: Async, for non-critical data
-iris_store:put(Table, Key, Value, #{durability => best_effort}).
-```
-
-### Regional Routing
-
-```erlang
-{iris_core, [
-    {region_id, <<"us-east-1">>},
-    {regions, [<<"us-east-1">>, <<"eu-west-1">>, <<"ap-south-1">>]},
-    {replication_factor, 3}
-]}.
-```
-
-## Security Features
-
-| Feature | Status |
-|---------|--------|
-| TLS 1.2/1.3 | ✅ **Enforced** (all client connections) |
-| mTLS (inter-node) | ✅ Configurable |
-| JWT Authentication | ✅ HMAC-SHA256 |
-| Rate Limiting | ✅ Token bucket |
-| DoS Protection | ✅ Protocol limits |
-| E2EE | ✅ Signal Protocol |
-
-> **Note**: TLS is enforced for all client connections. Tests use certificates in `certs/` directory.
-> See [DEPLOYMENT.md](docs/DEPLOYMENT.md) for TLS configuration.
+---
 
 ## Documentation
 
-| Guide | Description |
-|-------|-------------|
-| [DEPLOYMENT.md](docs/DEPLOYMENT.md) | Setup, configuration, cluster management |
-| [OPERATIONS.md](docs/OPERATIONS.md) | Incident response, failover, scaling |
-| [TESTING.md](docs/TESTING.md) | Test suite, proven scripts, coverage |
-| [DECISIONS.md](docs/DECISIONS.md) | Architecture decisions |
-| [RFC-001](docs/rfc/RFC-001-SYSTEM-REQUIREMENTS.md) | System requirements spec |
+| Guide | Scope |
+|-------|-------|
+| [DEPLOYMENT.md](docs/DEPLOYMENT.md) | Architecture, setup, configuration, TLS, Docker cluster |
+| [OPERATIONS.md](docs/OPERATIONS.md) | Incident response, failover, scaling, monitoring |
+| [TESTING.md](docs/TESTING.md) | Test suites, CI pipeline, test contract |
+| [DECISIONS.md](docs/DECISIONS.md) | Architecture decisions and trade-offs |
+| [RFC_COMPLIANCE.md](docs/RFC_COMPLIANCE.md) | RFC v4.0 requirement verification status |
+| [PROTOCOL_V1_FREEZE.md](docs/PROTOCOL_V1_FREEZE.md) | Canonical wire protocol specification |
+| [RFC-001](docs/rfc/RFC-001-SYSTEM-REQUIREMENTS.md) | System requirements (v4.0) |
+| [Amendment 001](docs/rfc/RFC-001-AMENDMENT-001.md) | E2EE and group messaging requirements |
+| [ROADMAP.md](docs/ROADMAP.md) | 5B DAU scaling roadmap |
+| [SCALABILITY_ANALYSIS.md](docs/SCALABILITY_ANALYSIS.md) | Measured performance data and extrapolation |
 
 ## Project Structure
 
 ```
 project_iris/
-├── src/                    # Erlang source modules (46 modules)
-├── test_utils/             # Erlang test utilities and unit tests
+├── src/                    # 57 Erlang source modules (20K lines)
+├── test_utils/             # 70 Erlang EUnit test modules (326+ tests)
 ├── tests/
-│   ├── run_all_tests.sh    # Main test runner (PROVEN)
-│   ├── suites/             # Test suites (12 categories)
-│   │   ├── unit/           # Property-based tests
-│   │   ├── integration/    # Core message flow tests
-│   │   ├── e2e/            # End-to-end scenarios
-│   │   ├── security/       # Security validation
-│   │   ├── resilience/     # Fault tolerance
-│   │   ├── stress/         # Load testing
-│   │   ├── chaos_dist/     # Docker-based chaos tests
-│   │   ├── compatibility/  # Protocol version tests
-│   │   ├── contract/       # API contract tests
-│   │   └── performance_light/ # CPU/resource tests
-│   ├── framework/          # ClusterManager, assertions
-│   └── utilities/          # IrisClient (TLS-enabled)
-├── config/                 # Erlang config files
-├── certs/                  # TLS certificates
+│   ├── run_all_tests.sh    # Authoritative test runner
+│   ├── suites/             # 13 test categories
+│   │   ├── unit/           # Property-based (Hypothesis)
+│   │   ├── integration/    # Core message flow (37 tests)
+│   │   ├── e2e/            # End-to-end scenarios (11 tests)
+│   │   ├── security/       # TLS, auth, fuzz, rate limiting (23 tests)
+│   │   ├── resilience/     # Fault tolerance (7 tests)
+│   │   ├── stress/         # Load testing (18 tests)
+│   │   ├── performance_light/ # Benchmarks, NFR gates (8 tests)
+│   │   ├── chaos_dist/     # Docker chaos (25 tests, fresh cluster each)
+│   │   ├── chaos_controlled/ # Combined chaos (2 tests)
+│   │   ├── compatibility/  # Protocol versions, HLC migration (7 tests)
+│   │   ├── contract/       # Edge-core + RFC contracts (3 tests)
+│   │   └── conformance/    # WebSocket RFC 6455 (1 test)
+│   ├── framework/          # ClusterManager, assertions, wait utilities
+│   └── utilities/          # IrisClient (TLS-enabled), TLS helpers
+├── config/                 # Erlang app configs (test, test_tls, docker, mTLS)
+├── certs/                  # TLS certificates + generate_certs.sh
 ├── docker/
-│   └── global-cluster/     # Docker cluster (PROVEN scripts)
-│       ├── cluster.sh      # Cluster management
-│       ├── init_cluster.sh # Mnesia initialization
-│       └── run_chaos_tests.sh  # Chaos test runner
-├── docs/                   # Documentation
-└── Makefile                # Build and test commands
+│   └── global-cluster/     # 5-region Docker cluster
+├── scripts/                # auto_tune.sh, rfc_watchdog.py
+├── docs/                   # All documentation
+└── Makefile                # Build, test, cluster targets
 ```
 
 ---

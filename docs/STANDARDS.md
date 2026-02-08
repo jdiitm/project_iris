@@ -47,4 +47,4 @@ All claims must be backed by CSV data exports generated during "God Level" certi
 - `recovery_metrics.csv`
 
 ---
-**Status**: BINDING | **Date**: 2026-01-09
+**Status**: BINDING | **Established**: 2026-01-09 | **Last Reviewed**: 2026-02-08

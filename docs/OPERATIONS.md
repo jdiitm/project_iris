@@ -1,6 +1,6 @@
 # Operations Guide
 
-**Last Updated**: 2026-02-03 | **TLS Enforced**
+**Last Updated**: 2026-02-08 | **TLS Enforced**
 
 ## Quick Reference
 
@@ -10,8 +10,8 @@
 # Stop all nodes
 make stop
 
-# Force kill all Erlang
-killall -9 beam.smp
+# Force kill all Iris Erlang processes (safe — won't kill unrelated beam.smp)
+pkill -9 -f "beam.smp.*iris_"
 
 # Check node status
 epmd -names
@@ -169,19 +169,7 @@ rpc:call(HealthyNode, mnesia, dirty_read, [Table, Key]).
 
 ## Cross-Region Operations
 
-### Architecture
-
-```
-GLOBAL ROUTING (iris_region_router)
-         │
-    ┌────┼────┐
-    ▼    ▼    ▼
- US-EAST  EU   APAC   (Mnesia clusters, 50 nodes max each)
-    │    │    │
-    └────┴────┘
-         │
-  iris_region_bridge (async relay)
-```
+> Architecture diagram and configuration reference: [DEPLOYMENT.md](DEPLOYMENT.md)
 
 ### Diagnostics
 
@@ -217,19 +205,6 @@ mnesia:dirty_delete(cross_region_dead_letter, MsgId),
 iris_region_bridge:send_cross_region(Msg#outbound_msg.target_region, 
                                       Msg#outbound_msg.user_id, 
                                       Msg#outbound_msg.msg).
-```
-
-### Configuration
-
-```erlang
-{iris_core, [
-    {region_id, <<"us-east-1">>},
-    {regions, [<<"us-east-1">>, <<"eu-west-1">>, <<"ap-south-1">>]},
-    {region_endpoints, #{
-        <<"us-east-1">> => ['core@us-east-1.iris.io'],
-        <<"eu-west-1">> => ['core@eu-west-1.iris.io']
-    }}
-]}
 ```
 
 ---
@@ -296,8 +271,6 @@ iris_partition_guard:is_safe_for_writes().
 
 %% Connections
 iris_async_router:get_local_count().
-
-%% Router stats  
 iris_async_router:get_stats().
 
 %% Quorum health
@@ -309,6 +282,21 @@ erlang:memory().
 %% Mnesia
 mnesia:table_info(offline_msg, size).
 ```
+
+### RFC v4.0 Application Metrics (NFR-32)
+
+| Counter | Description |
+|---------|-------------|
+| `iris_msg_in` | Messages received from clients |
+| `iris_msg_out` | Messages routed to recipients |
+| `iris_ack_sent` | ACKs sent to senders |
+| `iris_dedup_hit` | Duplicate messages rejected |
+| `iris_rate_limited` | Rate limit rejections |
+| `iris_inbox_full_rejected` | Inbox 10K limit rejections |
+| `iris_outbox_queue_warning` | Outbox queue ≥50% capacity alerts |
+| `iris_identity_key_changes` | E2EE identity key change events |
+
+Read via: `iris_metrics:get(CounterName)` or `iris_metrics:get_all()`.
 
 ### Alerts to Configure
 
@@ -335,38 +323,13 @@ mnesia:table_info(offline_msg, size).
 
 ## Troubleshooting
 
-### TLS Connection Issues
-
-**Connection refused / TLS handshake failed**:
-```bash
-# Verify TLS is working
-openssl s_client -connect localhost:8085 -CAfile certs/ca.pem
-
-# Check server is listening with TLS
-ss -tlnp | grep 8085
-
-# Check server started with TLS config
-ps aux | grep beam.smp | grep test_tls
-```
-
-**Certificate verification failed**:
-```bash
-# Check certificate validity
-openssl x509 -in certs/edge-east-1.pem -noout -dates
-
-# Verify CA chain
-openssl verify -CAfile certs/ca.pem certs/edge-east-1.pem
-```
-
-### General Issues
+For TLS, certificate, and configuration troubleshooting, see [DEPLOYMENT.md](DEPLOYMENT.md#troubleshooting).
 
 **Edge can't reach Core**: Hidden nodes don't auto-reconnect.
 ```erlang
 net_adm:ping('core_node').
 ```
 
-**Data lost after restart**: Ensure `-mnesia dir` points to persistent storage.**Tables missing**: Check `mnesia:system_info(directory)` matches config.
+**Quorum not reached**: Check replicas with `iris_quorum_write:get_replicas/1`.
 
-**Quorum not reached**: Check nodes available with `iris_quorum_write:get_replicas/1`.
-
-**Cross-region routing fails**: Verify `region_endpoints` config and network.
+**Cross-region routing fails**: Verify `region_endpoints` config and network connectivity.

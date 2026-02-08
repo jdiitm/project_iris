@@ -1,6 +1,6 @@
 # Project Iris: 5B DAU Roadmap
 
-**Last Updated**: 2026-02-03  
+**Last Updated**: 2026-02-08  
 **Status**: Active Development  
 **Target**: WhatsApp/Telegram-class scale (5 Billion Daily Active Users)
 
@@ -8,7 +8,7 @@
 
 ## Current State Assessment
 
-**Readiness Level**: 5/10 (improved from 4/10 after TLS enforcement and test stabilization)
+**Readiness Level**: 6/10 (improved from 5/10 after RFC v4.0 gap closures and test expansion)
 
 | Capability | Status | Notes |
 |------------|--------|-------|
@@ -17,16 +17,20 @@
 | E2EE | ✅ Working | Signal Protocol implemented |
 | Cross-Region | ✅ Hardened | Multi-node disc_copies, TLS enabled |
 | **TLS Security** | ✅ **Enforced** | All client connections require TLS |
-| **Test Suite** | ✅ **100% Pass** | 115+ tests, all RFC-compliant |
+| **Test Suite** | ✅ **100% Pass** | 120+ tests, all TLS-enabled |
+| **RFC v4.0 Compliance** | ✅ **19 gaps closed** | See [RFC_COMPLIANCE.md](RFC_COMPLIANCE.md) |
+| **Operational Limits** | ✅ **Enforced** | Inbox 10K, payload 64KB, session 100K |
 | Scalability (10K) | ✅ Validated | Local testing with metrics |
 | Scalability (1M) | ⚠️ Designed | Architecture supports, not yet tested |
 | Production Ready | ❌ No | Development/Pre-alpha |
 
-### Recent Improvements (2026-02-03)
-- TLS enforced on all client connections (NFR-14 compliant)
-- Full test suite stabilization: 115+ tests, 100% pass rate
-- Reliable message protocol properly implemented in test clients
-- All chaos_dist tests working with Docker cluster
+### Recent Improvements (2026-02-07 — 2026-02-08)
+- Closed 19 RFC v4.0 compliance gaps via TDD
+- Inbox 10K limit, payload 64KB limit, outbox 7-day TTL enforced
+- JWT replay protection, key isolation, version negotiation
+- Test suite expanded to 120+ (from 115+), all passing
+- Session cache bounded (100K), dedup Mnesia cross-check added
+- Edge listener hardened, Docker image aligned to OTP 26
 
 ---
 
@@ -53,10 +57,13 @@
 
 **Goal**: Ensure data survives chaos.
 
-| Task | Status | Blocked By |
-|------|--------|------------|
-| Persistent cross-region queue | ❌ Pending | RFC: Queue semantics |
-| Mailbox overflow protection (AQM) | ❌ Pending | RFC: Drop policy |
+| Task | Status | Notes |
+|------|--------|-------|
+| Persistent cross-region queue | ✅ Done | `iris_region_bridge.erl` — FIFO, fsync, 7-day TTL |
+| Inbox overflow protection | ✅ Done | 10K limit in `iris_core.erl` (GAP-6) |
+| Outbox TTL enforcement | ✅ Done | 7-day cleanup in drain timer (GAP-1) |
+| Queue depth alerting | ✅ Done | 50% metric (GAP-2) |
+| Mailbox AQM (drop policy) | ❌ Pending | RFC: CoDel vs RED for latency-sensitive path |
 | Cross-region Mnesia auto-setup | ⚠️ Partial | Docker volume config |
 
 ### RFC Required: Cross-Region Queue
@@ -162,14 +169,22 @@ See [Scalability Analysis](SCALABILITY_ANALYSIS.md) for measured metrics and ext
 
 ### Phase 1.5: Test Stabilization (Complete - 2026-02-03)
 - [x] TLS enforced on all client connections (NFR-14)
-- [x] 115+ tests passing (100%)
+- [x] 120+ tests passing (100%)
 - [x] All chaos_dist tests working with Docker cluster
 - [x] Reliable message protocol (ACKs) properly implemented
 - [x] Cross-region durability validated (RPO=0)
 
+### Phase 1.75: RFC v4.0 Compliance (Complete - 2026-02-08)
+- [x] 19 RFC v4.0 gaps closed via TDD
+- [x] Inbox 10K, payload 64KB, outbox TTL enforced
+- [x] JWT replay protection + key isolation
+- [x] Span instrumentation + standard counters
+- [x] Session cache bounded, dedup cross-check added
+
 ### Phase 2
-- [ ] Messages survive cross-region link failure (queue durability)
-- [ ] Celebrity accounts don't crash shards (AQM)
+- [x] Messages survive cross-region link failure (queue durability)
+- [x] Inbox overflow protection (10K limit)
+- [ ] Celebrity accounts don't crash shards (AQM/CoDel)
 - [ ] Cross-region Mnesia auto-initializes
 
 ### Phase 3

@@ -1,6 +1,6 @@
 # Deployment Guide
 
-**Last Updated**: 2026-02-03 | **TLS Required**
+**Last Updated**: 2026-02-08 | **TLS Required**
 
 ## Architecture
 
@@ -242,21 +242,52 @@ iris_partition_guard:is_safe_for_writes().
 
 ---
 
-## Failover Behavior
+## Failover & Operations
 
-| Scenario | Data Loss | Recovery |
-|----------|-----------|----------|
-| Single edge | None | Auto (stateless) |
-| Single core (quorum) | None | Auto |
-| Single core (no quorum) | Possible | Verify data |
-| Network partition | None (blocked) | Auto on heal |
+See [OPERATIONS.md](OPERATIONS.md) for incident response, failover procedures, data recovery, and scaling operations.
 
-### Partition Handling
+---
 
-1. `iris_partition_guard` detects partition
-2. Writes blocked on minority side
-3. Reads continue (may be stale)
-4. Auto-recovery when network heals
+## Configuration Reference
+
+### `iris_core` Options
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `auto_init_db` | boolean | `true` | Create Mnesia schema on first start |
+| `allow_table_nuke` | boolean | `false` | **NEVER `true` in production.** Allow corrupted table recreation |
+| `allow_schema_delete` | boolean | `false` | Allow Mnesia schema deletion |
+| `presence_backend` | `ets \| mnesia` | `ets` | Presence storage. `ets` avoids global lock |
+| `replication_factor` | integer | `3` | Number of Mnesia replicas |
+| `consistency_mode` | atom | `hardened_ap` | `ap \| hardened_ap \| cp` (cp is experimental) |
+| `durability_mode` | atom | `local` | `local \| cluster \| quorum` for offline storage |
+| `expected_cluster_nodes` | list | `[]` | **Required for production.** All core node names for partition guard |
+| `wal_directory` | string | `"data/wal"` | WAL path. **Must be persistent storage, NOT tmpfs** |
+| `join_seeds` | list | `[]` | Seed nodes for cluster join |
+| `region_id` | binary | `<<"local">>` | This node's region identifier |
+| `regions` | list | `[]` | All known region IDs |
+| `region_endpoints` | map | `#{}` | `#{RegionId => [CoreNode]}` mapping |
+| `multimaster_durability` | boolean | `false` | Use `sync_transaction` for RPO=0 |
+
+### `iris_edge` Options
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `port` | integer | `8080` | Client-facing listen port |
+| `core_nodes` | list | `[]` | Core nodes to connect to for routing |
+| `auth_enabled` | boolean | `false` | Enable JWT authentication |
+| `jwt_secret` | binary | - | **Required if auth enabled.** 32+ bytes, identical across nodes |
+| `jwt_eddsa_private_key` | binary | auto-generated | Ed25519 private key for EdDSA JWT |
+| `auth_mode` | atom | `signer` | `signer` (has private key) or `verifier` (public key only) |
+| `allow_insecure` | boolean | `false` | Allow plaintext connections. **`false` in production** |
+| `tls_enabled` | boolean | `false` | Enable TLS for client connections |
+| `tls_certfile` | string | - | Path to TLS certificate PEM |
+| `tls_keyfile` | string | - | Path to TLS private key |
+| `tls_cacertfile` | string | - | Path to CA certificate for client verification |
+| `tls_verify` | atom | `verify_none` | `verify_none` or `verify_peer` (for mTLS) |
+| `tls_versions` | list | `['tlsv1.3', 'tlsv1.2']` | Allowed TLS versions |
+| `conn_rate_max` | integer | `50` | Per-IP connections/sec limit |
+| `router_pool_size` | integer | auto-tuned | Override auto-tuned router pool (75% of schedulers) |
 
 ---
 
