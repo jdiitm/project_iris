@@ -22,6 +22,9 @@
 -export([encode_resume/2, encode_token_refresh/1]).
 -export([encode_version_negotiate/2, encode_version_response/2]).
 
+%% Key Change Alert (GAP-13: RFC-001-AMENDMENT-001 Section 5.3.2, Opcode 0x1A)
+-export([encode_key_change_alert/1]).
+
 %% Group Messaging (RFC-001-AMENDMENT-001, Opcodes 0x30-0x36)
 -export([encode_group_create/1, encode_group_join/2]).
 -export([encode_group_leave/1, encode_group_msg/3]).
@@ -49,6 +52,7 @@
                 | {resume, binary(), non_neg_integer()} %% Connection resume (0x0A)
                 | {token_refresh, binary()}           %% Token refresh (0x0B)
                 | {version_negotiate, list(), list()} %% Version negotiation (0x0C)
+                | {key_change_alert, binary()}         %% Key change notification (0x1A)
                 | {ack, binary()}
                 | {error, term()}.
 
@@ -242,6 +246,22 @@ decode(<<16#0C, PayloadLen:32, Rest/binary>>) ->
             end;
         _ ->
             {more, <<16#0C, PayloadLen:32, Rest/binary>>}
+    end;
+
+%% =============================================================================
+%% Key Change Alert (Opcode 0x1A) - GAP-13, RFC-001-AMENDMENT-001 Section 5.3.2
+%% Format: 0x1A | UserIdLen(16) | UserId
+%% =============================================================================
+decode(<<16#1A, _/binary>> = Bin) when byte_size(Bin) < 3 ->
+    {more, Bin};
+decode(<<16#1A, UserLen:16, _/binary>>) when UserLen > ?MAX_USERNAME_LEN ->
+    { {error, key_change_user_too_long}, <<>> };
+decode(<<16#1A, UserLen:16, Rest/binary>>) ->
+    case Rest of
+        <<UserId:UserLen/binary, Rem/binary>> ->
+            { {key_change_alert, UserId}, Rem };
+        _ ->
+            {more, <<16#1A, UserLen:16, Rest/binary>>}
     end;
 
 %% =============================================================================
@@ -968,6 +988,17 @@ encode_version_response(Version, Capabilities) ->
     Payload = cbor_encode(Map),
     PLen = byte_size(Payload),
     <<16#0C, PLen:32, Payload/binary>>.
+
+%% =============================================================================
+%% Key Change Alert Encoding (GAP-13, Opcode 0x1A)
+%% =============================================================================
+%% Format: 0x1A | UserIdLen(16) | UserId
+%% Sent to contacts when a user's identity key changes.
+
+-spec encode_key_change_alert(binary()) -> binary().
+encode_key_change_alert(UserId) when is_binary(UserId) ->
+    ULen = byte_size(UserId),
+    <<16#1A, ULen:16, UserId/binary>>.
 
 %% =============================================================================
 %% Read Receipt Encoding (Best-effort, Opcodes 0x74-0x75)
