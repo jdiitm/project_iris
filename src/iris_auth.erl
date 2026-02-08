@@ -34,6 +34,7 @@
 -define(FAILED_LOGIN_TABLE, iris_auth_failed_logins).
 -define(FAILED_LOGIN_MAX, 10).              %% Max 10 failures per window
 -define(FAILED_LOGIN_WINDOW_SECS, 3600).    %% 1-hour window
+-define(JTI_SEEN_TABLE, iris_auth_jti_seen).  %% RFC Section 9.1: JWT replay protection (GAP-15)
 
 -record(state, {
     secret :: binary(),
@@ -288,6 +289,8 @@ handle_info(cleanup_revocations, State) ->
     cleanup_revoked(Cutoff),
     %% Also clean expired failed-login windows
     cleanup_failed_logins(Now),
+    %% RFC Section 9.1: Clean expired jti nonce entries (GAP-15)
+    cleanup_jti_seen(Now),
     erlang:send_after(3600000, self(), cleanup_revocations),
     {noreply, State};
 
@@ -377,6 +380,30 @@ cleanup_failed_logins(Now) ->
     ok.
 
 %% =============================================================================
+%% Internal: JTI Replay Protection Cleanup (GAP-15)
+%% =============================================================================
+
+cleanup_jti_seen(Now) ->
+    try
+        case ets:info(?JTI_SEEN_TABLE) of
+            undefined -> ok;
+            _ ->
+                %% Delete entries where token expiry has passed
+                Expired = ets:foldl(
+                    fun({Jti, Exp}, Acc) ->
+                        case Exp < Now of
+                            true -> [Jti | Acc];
+                            false -> Acc
+                        end
+                    end, [], ?JTI_SEEN_TABLE),
+                lists:foreach(fun(Id) -> ets:delete(?JTI_SEEN_TABLE, Id) end, Expired),
+                ok
+        end
+    catch
+        _:_ -> ok
+    end.
+
+%% =============================================================================
 %% Internal: JWT Validation
 %% =============================================================================
 
@@ -444,9 +471,41 @@ validate_claims(Claims, ExpectedIssuer, Opts) ->
                             Jti = maps:get(<<"jti">>, Claims, undefined),
                             case Jti =/= undefined andalso is_revoked(Jti) of
                                 true -> {error, token_revoked};
-                                false -> {ok, Claims}
+                                false ->
+                                    %% RFC Section 9.1: Replay protection via jti nonce (GAP-15)
+                                    case Jti =/= undefined andalso check_jti_replay(Jti, Exp) of
+                                        true -> {error, token_replayed};
+                                        false -> {ok, Claims}
+                                    end
                             end
                     end
+            end
+    end.
+
+%% @doc Check if a jti has been seen before (replay attack detection) (GAP-15)
+%% RFC Section 9.1: "Replay attacks: Nonce + timestamp validation"
+%% Tracks seen jti values in ETS with TTL = token expiry time.
+check_jti_replay(Jti, Exp) ->
+    try
+        case ets:lookup(?JTI_SEEN_TABLE, Jti) of
+            [{Jti, _}] ->
+                %% Already seen -- this is a replay
+                true;
+            [] ->
+                %% First use -- mark as seen with expiry for cleanup
+                ets:insert(?JTI_SEEN_TABLE, {Jti, Exp}),
+                false
+        end
+    catch
+        error:badarg ->
+            %% Table doesn't exist -- create it and allow
+            try
+                ets:new(?JTI_SEEN_TABLE, [named_table, public, set,
+                                          {read_concurrency, true}]),
+                ets:insert(?JTI_SEEN_TABLE, {Jti, Exp}),
+                false
+            catch
+                error:badarg -> false  %% Race condition, another process created it
             end
     end.
 

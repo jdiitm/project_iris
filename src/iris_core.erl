@@ -239,6 +239,16 @@ store_offline(User, Msg) ->
 %% RFC NFR-11: Server-side deduplication with 7-day window
 %% RFC FR-5: FIFO ordering using client-provided sequence number
 store_offline_durable(User, Msg) ->
+    %% RFC Section 8: Inbox Size limit enforcement (GAP-6 fix)
+    case get_offline_queue_depth(User) >= iris_limits:max_inbox_size() of
+        true ->
+            iris_metrics:inc(iris_inbox_full_rejected),
+            {error, inbox_full};
+        false ->
+            store_offline_durable_inner(User, Msg)
+    end.
+
+store_offline_durable_inner(User, Msg) ->
     %% RFC NFR-11: Extract SeqNo and check dedup BEFORE storing
     %% RFC FR-5: Preserve SeqNo for FIFO ordering
     %% Message format may be: {SeqNo, RealMsg} or just binary

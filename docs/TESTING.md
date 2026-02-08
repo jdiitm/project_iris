@@ -1,6 +1,6 @@
 # Testing Guide
 
-**Status**: 87+ tests | **Last Verified**: 2026-02-08
+**Status**: 95+ tests | **Last Verified**: 2026-02-08
 
 ## Quick Start
 
@@ -82,6 +82,7 @@ Docker chaos tests (`chaos_dist/`) are **destructive** - they kill containers, p
 | contract | 1 | Edge-core contract |
 | compatibility | 2 | Protocol versions, mixed HLC ordering |
 | erlang unit (new) | 9 | Dedup bloom cross-check (4), session cache bound (5) |
+| erlang RFC v4 gap | 8+ | Inbox characterization (2), inbox limit (3), metrics callsite (5), RFC constants (3+), key change (2) |
 
 ---
 

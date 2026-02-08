@@ -66,7 +66,13 @@ def create_socket(host, port, timeout=5.0):
 
 PRESETS = {
     "smoke": {
-        "user_count": 100,
+        # CI runners (ubuntu-latest) have 2 vCPUs. With 100 users, only ~5
+        # complete login in 30s due to thundering herd on the shared CPU,
+        # producing ~25 messages — statistically meaningless for delivery
+        # rate. 20 users all connect within seconds on 2 vCPUs, producing
+        # ~100-150 messages — a meaningful sample. Local machines (8+ cores)
+        # use 100 users as before.
+        "user_count": 20 if IS_CI else 100,
         "duration": 30,
         "ramp_time": 5,
         "load_time": 10,
@@ -75,8 +81,8 @@ PRESETS = {
         "enable_network_chaos": False,
         "enable_memory_stress": False,
         "enable_cpu_stress": False,
-        "min_delivery_rate": 0.70,  # Smoke: small sample (~160 msgs), high variance, 5s recovery
-        "description": "Quick smoke test (100 users, ~30s)"
+        "min_delivery_rate": 0.70,  # Smoke: high variance with small sample, 5s recovery
+        "description": "Quick smoke test ({} users, ~30s)".format(20 if IS_CI else 100),
     },
     "laptop": {
         "user_count": 50000,

@@ -228,10 +228,14 @@ do_upload_bundle(UserId, Bundle) ->
     %% Validate bundle
     case validate_bundle(Bundle) of
         ok ->
+            NewIK = maps:get(identity_key, Bundle),
+            %% RFC-001-AMENDMENT-001 Section 5.3.2: Key Change Detection (GAP-13)
+            %% Compare new IK with existing IK to detect identity key changes
+            detect_identity_key_change(UserId, NewIK),
             Now = os:system_time(millisecond),
             Record = #key_bundle{
                 user_id = UserId,
-                identity_key = maps:get(identity_key, Bundle),
+                identity_key = NewIK,
                 signed_prekey = maps:get(signed_prekey, Bundle),
                 signed_prekey_signature = maps:get(signed_prekey_signature, Bundle),
                 signed_prekey_timestamp = maps:get(signed_prekey_timestamp, Bundle, Now),
@@ -245,6 +249,27 @@ do_upload_bundle(UserId, Bundle) ->
             store_key_bundle_durable(UserId, Record);
         {error, _} = Error ->
             Error
+    end.
+
+%% @doc Detect identity key change and log for future notification (GAP-13)
+%% RFC-001-AMENDMENT-001 Section 5.3.2: "When a user's Identity Key changes,
+%% the server MUST notify all active sessions."
+%%
+%% PENDING_DESIGN: Full implementation requires:
+%% 1. Tracking which users have fetched each other's key bundles
+%% 2. Sending notification events to affected users
+%% 3. A new notification message type in the protocol
+%% For now, we detect the change and log it.
+detect_identity_key_change(UserId, NewIK) ->
+    case do_get_identity_key(UserId) of
+        {ok, ExistingIK} when ExistingIK =/= NewIK ->
+            logger:warning("KEY_CHANGE: Identity key changed for user ~p. "
+                          "Notification to peers PENDING_DESIGN (GAP-13)",
+                          [UserId]),
+            iris_metrics:inc(iris_identity_key_changes);
+        _ ->
+            %% No existing key or same key -- no change
+            ok
     end.
 
 %% AUDIT FIX: Quorum-based durable storage for key bundles

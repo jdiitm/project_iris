@@ -208,7 +208,10 @@ init_default_metrics() ->
     ets:insert(?METRICS_TABLE, {iris_inbox_append, 0}),    %% Inbox log appends
     ets:insert(?METRICS_TABLE, {iris_inbox_scan, 0}),      %% Inbox log scans
     ets:insert(?METRICS_TABLE, {iris_group_fanout, 0}),    %% Group message fan-outs
-    ets:insert(?METRICS_TABLE, {iris_rate_limited, 0}),    %% Rate limit rejections
+    ets:insert(?METRICS_TABLE, {iris_rate_limited, 0}),
+    ets:insert(?METRICS_TABLE, {iris_inbox_full_rejected, 0}),  %% RFC Section 8: Inbox limit rejections
+    ets:insert(?METRICS_TABLE, {iris_outbox_queue_warning, 0}),  %% RFC Section 7.2: 50% queue alert
+    ets:insert(?METRICS_TABLE, {iris_identity_key_changes, 0}),  %% Amendment 5.3.2: Key change events    %% Rate limit rejections
     
     %% ==========================================================================
     %% RFC-001 v3.0 NFR-6/NFR-8: Durability Counters (99.999% / RPO=0 tracking)

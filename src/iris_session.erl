@@ -146,6 +146,8 @@ call_iris_group(Function, Args) ->
 %% handle_packet(Packet, User, TransportPid, TransportMod) -> {ok, NewUser, Actions}
 %% Actions = [ {send, Bin} | {send_batch, [Bin]} | close ]
 handle_packet({login, LoginData}, _Current, TransportPid, _Mod) ->
+    %% RFC NFR-31: Span instrumentation for login
+    iris_trace:new_span(<<"session.login">>),
     %% Parse login data: may be just username or "username:token" format
     {User, MaybeToken} = parse_login_data(LoginData),
     
@@ -155,7 +157,7 @@ handle_packet({login, LoginData}, _Current, TransportPid, _Mod) ->
     process_flag(max_heap_size, #{size => 1000000, kill => true}), %% ~8MB limit
     
     %% RFC Section 10.1: Check failed-login rate limit first
-    case iris_auth:check_login_rate(User) of
+    Result = case iris_auth:check_login_rate(User) of
         {error, rate_limited} ->
             logger:warning("Failed-login rate limited for ~p (10/hour)", [User]),
             Actions = [{send, <<"LOGIN_RATE_LIMITED">>}, close],
@@ -165,8 +167,8 @@ handle_packet({login, LoginData}, _Current, TransportPid, _Mod) ->
             case rate_limit_check(User) of
                 {deny, _RetryAfter} ->
                     logger:warning("Login rate limited for ~p", [User]),
-                    Actions = [{send, <<"RATE_LIMITED">>}, close],
-                    {ok, undefined, Actions};
+                    Actions2 = [{send, <<"RATE_LIMITED">>}, close],
+                    {ok, undefined, Actions2};
                 allow ->
                     %% Optional JWT authentication
                     case authenticate(User, MaybeToken) of
@@ -176,11 +178,13 @@ handle_packet({login, LoginData}, _Current, TransportPid, _Mod) ->
                             %% RFC Section 10.1: Record failed login attempt
                             iris_auth:record_failed_login(User),
                             logger:warning("Auth failed for ~p: ~p", [User, Reason]),
-                            Actions = [{send, <<"AUTH_FAILED">>}, close],
-                            {ok, undefined, Actions}
+                            Actions3 = [{send, <<"AUTH_FAILED">>}, close],
+                            {ok, undefined, Actions3}
                     end
             end
-    end;
+    end,
+    iris_trace:end_span(<<"session.login">>),
+    Result;
 
 handle_packet({send_message, _Target, _Msg}, User, _Pid, _Mod) when User =/= undefined ->
     %% =============================================================================
@@ -208,19 +212,26 @@ handle_packet({send_message, _Target, _Msg}, undefined, _Pid, _Mod) ->
 %% NOTE: Dedup (RFC NFR-11) is handled on the CORE side in iris_core:store_offline_durable
 %% because that's where messages are persisted. Edge nodes don't have iris_dedup running.
 handle_packet({send_seq, Target, SeqNo, Msg}, User, _Pid, _Mod) when User =/= undefined ->
+    %% RFC NFR-31: Span instrumentation
+    iris_trace:new_span(<<"session.send_seq">>),
+    %% RFC NFR-32: Count incoming message
+    iris_metrics:msg_in(),
     %% RFC 7.4 FIX: Track request for flow controller rate calculation
     %% This enables throughput-based degradation (typing/presence shed under load)
     track_request(User),
-    case check_message_rate(User) of
+    Result = case check_message_rate(User) of
         allow ->
             %% Route with sequence number preserved as ordering key
             %% Dedup happens on core when message is stored
             iris_router:route_sequenced(Target, Msg, SeqNo),
+            iris_metrics:msg_out(),
             {ok, User, []};
         {deny, RetryAfter} ->
             logger:warning("Message rate limited for ~p", [User]),
             {ok, User, [{send, encode_rate_limited(RetryAfter)}]}
-    end;
+    end,
+    iris_trace:end_span(<<"session.send_seq">>),
+    Result;
 
 handle_packet({send_seq, _Target, _SeqNo, _Msg}, undefined, _Pid, _Mod) ->
     %% Not logged in - reject
@@ -259,6 +270,8 @@ handle_packet({get_status, TargetUser}, User, _Pid, _Mod) ->
     end;
 
 handle_packet({ack, MsgId}, User, _Pid, _Mod) ->
+    %% RFC NFR-32: Count ACK sent
+    iris_metrics:ack_sent(),
     {ok, User, [{ack_received, MsgId}]};
 
 %% =============================================================================
@@ -415,26 +428,39 @@ handle_packet({fetch_prekeys, _TargetUser}, undefined, _Pid, _Mod) ->
     {ok, undefined, [{send, <<16#22, 0:32>>}]};
 
 handle_packet({e2ee_msg, Recipient, Ciphertext, Header}, User, _Pid, _Mod) when User =/= undefined ->
+    %% RFC NFR-31: Span instrumentation
+    iris_trace:new_span(<<"session.e2ee_msg">>),
+    %% RFC NFR-32: Count incoming message
+    iris_metrics:msg_in(),
     %% Route E2EE message to recipient (server never decrypts)
-    %% NFR-18: Validate E2EE header fields before routing
-    case validate_e2ee_header(Header) of
+    %% RFC Section 8 / NFR-18: Validate payload size before routing (GAP-7 fix)
+    E2eeResult = case iris_limits:validate_payload(Ciphertext) of
+        {error, payload_too_large} ->
+            {ok, User, [{send, encode_error(payload_too_large)}]};
         ok ->
-            %% VIOLATION-4 FIX: Rate limit check on message send
-            case check_message_rate(User) of
-                allow ->
-                    %% Encode delivery packet with sender info
-                    DeliveryPacket = iris_proto:encode_e2ee_delivery(User, {Header, Ciphertext}),
-                    %% Route to recipient using async router
-                    iris_router:route(Recipient, DeliveryPacket),
-                    {ok, User, []};
-                {deny, RetryAfter} ->
-                    logger:warning("E2EE message rate limited for ~p", [User]),
-                    {ok, User, [{send, encode_rate_limited(RetryAfter)}]}
-            end;
-        {error, Reason} ->
-            logger:warning("E2EE header validation failed for ~p: ~p", [User, Reason]),
-            {ok, User, [{send, encode_error(invalid_e2ee_header)}]}
-    end;
+            %% NFR-18: Validate E2EE header fields before routing
+            case validate_e2ee_header(Header) of
+                ok ->
+                    %% VIOLATION-4 FIX: Rate limit check on message send
+                    case check_message_rate(User) of
+                        allow ->
+                            %% Encode delivery packet with sender info
+                            DeliveryPacket = iris_proto:encode_e2ee_delivery(User, {Header, Ciphertext}),
+                            %% Route to recipient using async router
+                            iris_router:route(Recipient, DeliveryPacket),
+                            iris_metrics:msg_out(),
+                            {ok, User, []};
+                        {deny, RetryAfter} ->
+                            logger:warning("E2EE message rate limited for ~p", [User]),
+                            {ok, User, [{send, encode_rate_limited(RetryAfter)}]}
+                    end;
+                {error, Reason} ->
+                    logger:warning("E2EE header validation failed for ~p: ~p", [User, Reason]),
+                    {ok, User, [{send, encode_error(invalid_e2ee_header)}]}
+            end
+    end,
+    iris_trace:end_span(<<"session.e2ee_msg">>),
+    E2eeResult;
 
 handle_packet({e2ee_msg, _Recipient, _Ciphertext, _Header}, undefined, _Pid, _Mod) ->
     %% Not logged in - reject
@@ -511,43 +537,56 @@ handle_packet({group_leave, _GroupId}, undefined, _Pid, _Mod) ->
     {ok, undefined, []};
 
 handle_packet({group_msg, GroupId, Ciphertext, Header}, User, _Pid, _Mod) when User =/= undefined ->
+    %% RFC NFR-31: Span instrumentation
+    iris_trace:new_span(<<"session.group_msg">>),
+    %% RFC NFR-32: Count incoming message
+    iris_metrics:msg_in(),
     %% Route encrypted group message to all members
-    %% Rate limit check
-    case check_message_rate(User) of
-        allow ->
-            case is_group_service_available() of
-                false ->
-                    {ok, User, [{send, encode_error(group_service_unavailable)}]};
-                true ->
-                    case call_iris_group(is_member, [GroupId, User]) of
+    %% RFC Section 8: Validate payload size (GAP-7 fix)
+    GrpResult = case iris_limits:validate_payload(Ciphertext) of
+        {error, payload_too_large} ->
+            {ok, User, [{send, encode_error(payload_too_large)}]};
+        ok ->
+            %% Rate limit check
+            case check_message_rate(User) of
+                allow ->
+                    case is_group_service_available() of
                         false ->
-                            {ok, User, [{send, encode_error(not_member)}]};
+                            {ok, User, [{send, encode_error(group_service_unavailable)}]};
                         true ->
-                            %% Fan out to all group members
-                            case call_iris_group(get_members, [GroupId]) of
-                                {ok, Members} ->
-                                    %% Encode the message once
-                                    DeliveryPacket = iris_proto:encode_group_msg(GroupId, 
-                                        maps:put(<<"sender">>, User, Header), Ciphertext),
-                                    %% Send to all members except sender
-                                    lists:foreach(fun(#{user_id := MemberId}) ->
-                                        if MemberId =/= User ->
-                                            iris_router:route(MemberId, DeliveryPacket);
-                                        true -> ok
-                                        end
-                                    end, Members),
-                                    {ok, User, []};
-                                {error, _Reason} ->
-                                    {ok, User, [{send, encode_error(group_not_found)}]}
-                            end;
-                        {error, _} ->
-                            {ok, User, [{send, encode_error(group_service_unavailable)}]}
-                    end
-            end;
-        {deny, RetryAfter} ->
-            logger:warning("Group message rate limited for ~p", [User]),
-            {ok, User, [{send, encode_rate_limited(RetryAfter)}]}
-    end;
+                            case call_iris_group(is_member, [GroupId, User]) of
+                                false ->
+                                    {ok, User, [{send, encode_error(not_member)}]};
+                                true ->
+                                    %% Fan out to all group members
+                                    case call_iris_group(get_members, [GroupId]) of
+                                        {ok, Members} ->
+                                            %% Encode the message once
+                                            DeliveryPacket = iris_proto:encode_group_msg(GroupId, 
+                                                maps:put(<<"sender">>, User, Header), Ciphertext),
+                                            %% Send to all members except sender
+                                            lists:foreach(fun(#{user_id := MemberId}) ->
+                                                if MemberId =/= User ->
+                                                    iris_router:route(MemberId, DeliveryPacket),
+                                                    iris_metrics:msg_out();
+                                                true -> ok
+                                                end
+                                            end, Members),
+                                            {ok, User, []};
+                                        {error, _Reason} ->
+                                            {ok, User, [{send, encode_error(group_not_found)}]}
+                                    end;
+                                {error, _} ->
+                                    {ok, User, [{send, encode_error(group_service_unavailable)}]}
+                            end
+                    end;
+                {deny, RetryAfter} ->
+                    logger:warning("Group message rate limited for ~p", [User]),
+                    {ok, User, [{send, encode_rate_limited(RetryAfter)}]}
+            end
+    end,
+    iris_trace:end_span(<<"session.group_msg">>),
+    GrpResult;
 
 handle_packet({group_msg, _GroupId, _Ciphertext, _Header}, undefined, _Pid, _Mod) ->
     {ok, undefined, []};
@@ -648,7 +687,9 @@ handle_packet(pong, User, _Pid, _Mod) ->
 %% Lookup session in cache; if valid, replay missed messages.
 %% If expired/unknown, send NACK so client does full login.
 handle_packet({resume, SessionId, LastSeqNo}, User, _Pid, _Mod) ->
-    case iris_session_cache:get_messages_after(SessionId, LastSeqNo) of
+    %% RFC NFR-31: Span instrumentation
+    iris_trace:new_span(<<"session.resume">>),
+    ResumeResult = case iris_session_cache:get_messages_after(SessionId, LastSeqNo) of
         {ok, Messages} ->
             %% Replay missed messages as a batch
             ReplayActions = [{send, MsgBin} || {_Seq, MsgBin} <- Messages],
@@ -660,16 +701,20 @@ handle_packet({resume, SessionId, LastSeqNo}, User, _Pid, _Mod) ->
             logger:info("RESUME NACK: Session ~p not found/expired for ~p", [SessionId, User]),
             NackPayload = encode_error(<<"RESUME_NACK">>),
             {ok, User, [{send, NackPayload}]}
-    end;
+    end,
+    iris_trace:end_span(<<"session.resume">>),
+    ResumeResult;
 
 %% TOKEN_REFRESH (0x0B): Token refresh flow (RFC FR-11a)
 %% Refresh tokens live on Core (mnesia). Validate+rotate via RPC to Core,
 %% then create access token locally on Edge (iris_auth gen_server runs here).
 handle_packet({token_refresh, RefreshToken}, User, _Pid, _Mod) ->
+    %% RFC NFR-31: Span instrumentation
+    iris_trace:new_span(<<"session.token_refresh">>),
     CoreNode = get_core_node(),
     %% Step 1: Validate and rotate on Core (mnesia-only, no gen_server needed)
-    Result = iris_circuit_breaker:call(CoreNode, iris_auth, validate_and_rotate_refresh, [RefreshToken]),
-    case Result of
+    TrResult = iris_circuit_breaker:call(CoreNode, iris_auth, validate_and_rotate_refresh, [RefreshToken]),
+    TrResponse = case TrResult of
         {ok, _UserId, NewRefresh} ->
             %% Step 2: Create access token locally on Edge
             case catch iris_auth:create_token(User) of
@@ -686,11 +731,11 @@ handle_packet({token_refresh, RefreshToken}, User, _Pid, _Mod) ->
                     %% Use a placeholder access token
                     Placeholder = <<"access_token_pending">>,
                     RefreshBin = ensure_binary(NewRefresh),
-                    Response = <<16#0B,
+                    Response2 = <<16#0B,
                                  (byte_size(Placeholder)):16, Placeholder/binary,
                                  (byte_size(RefreshBin)):16, RefreshBin/binary>>,
                     logger:warning("TOKEN_REFRESH: Access token creation failed for ~p, using placeholder", [User]),
-                    {ok, User, [{send, Response}]}
+                    {ok, User, [{send, Response2}]}
             end;
         {error, token_reused} ->
             logger:warning("TOKEN_REFRESH: Reuse detected for ~p, revoking family", [User]),
@@ -701,7 +746,9 @@ handle_packet({token_refresh, RefreshToken}, User, _Pid, _Mod) ->
         {badrpc, Reason} ->
             logger:warning("TOKEN_REFRESH: RPC failed for ~p: ~p", [User, Reason]),
             {ok, User, [{send, encode_error(service_unavailable)}]}
-    end;
+    end,
+    iris_trace:end_span(<<"session.token_refresh">>),
+    TrResponse;
 
 %% =============================================================================
 %% CBOR Message (0x10): RFC-001-AMENDMENT-001 extensible message format
@@ -709,8 +756,12 @@ handle_packet({token_refresh, RefreshToken}, User, _Pid, _Mod) ->
 %% RFC Section 1.2: If the CBOR map includes an "idempotency_key" field,
 %% server MUST validate it as UUIDv7 (16 bytes, version=7, variant=0b10).
 handle_packet({cbor_msg, Target, Map}, User, _Pid, _Mod) when User =/= undefined ->
+    %% RFC NFR-31: Span instrumentation
+    iris_trace:new_span(<<"session.cbor_msg">>),
+    %% RFC NFR-32: Count incoming message
+    iris_metrics:msg_in(),
     track_request(User),
-    case check_message_rate(User) of
+    CborResult = case check_message_rate(User) of
         allow ->
             %% RFC Section 1.2: Validate idempotency_key if present
             case validate_cbor_idempotency_key(Map) of
@@ -718,6 +769,7 @@ handle_packet({cbor_msg, Target, Map}, User, _Pid, _Mod) when User =/= undefined
                     %% Route as CBOR delivery to target
                     DeliveryPacket = iris_proto:encode_cbor_msg(User, Map),
                     iris_router:route(Target, DeliveryPacket),
+                    iris_metrics:msg_out(),
                     {ok, User, []};
                 {error, invalid_idempotency_key} ->
                     logger:warning("CBOR msg rejected: invalid idempotency_key from ~p", [User]),
@@ -726,7 +778,9 @@ handle_packet({cbor_msg, Target, Map}, User, _Pid, _Mod) when User =/= undefined
         {deny, RetryAfter} ->
             logger:warning("CBOR message rate limited for ~p", [User]),
             {ok, User, [{send, encode_rate_limited(RetryAfter)}]}
-    end;
+    end,
+    iris_trace:end_span(<<"session.cbor_msg">>),
+    CborResult;
 
 handle_packet({cbor_msg, _Target, _Map}, undefined, _Pid, _Mod) ->
     %% Not logged in - reject
