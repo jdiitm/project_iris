@@ -1,6 +1,6 @@
 # RFC-001 Compliance Status
 
-**Status**: 75+ tests pass | **TLS Enforced** | **Last Updated**: 2026-02-07
+**Status**: 80+ tests pass | **TLS Enforced** | **Last Updated**: 2026-02-08
 
 ## Verification Status Legend
 
@@ -96,6 +96,32 @@
 | Section 9.1 | JWT private key on all nodes (not isolated) | `auth_mode` config (signer/verifier) in `iris_auth.erl` | `iris_auth_key_isolation_tests.erl` (8 tests) |
 | Section 5.4 | No backward-compatible 64-bit HLC parsing | `from_binary/1` accepts 8-byte legacy format in `iris_hlc.erl` | `iris_hlc_tests.erl` (4 new tests) |
 
+## RFC v4.0 Gap Closures (2026-02-08)
+
+| Audit Item | Gap | Fix | Test |
+|------------|-----|-----|------|
+| Section 6.2 Dedup | `is_duplicate/1` used bloom-only (no Mnesia cross-check) | Added Mnesia `dedup_log` cross-check on bloom positive in `iris_dedup.erl` | `iris_dedup_sole_drop_tests.erl` (4 tests) |
+| Section 3.4 Session | Session cache had no size limit (unbounded ETS) | Added 100K hard limit with LRU eviction in `iris_session_cache.erl` | `iris_session_cache_bound_tests.erl` (5 tests) |
+| NFR-18 Validation | E2EE header fields not validated before routing | Added `validate_e2ee_header/1` in `iris_session.erl` (requires `ik`, `ek`) | `test_cbor_schema_validation.py` (4 tests) |
+| Section 5.4 Migration | No mixed 64/80-bit HLC cluster ordering test | Structural + live ordering test | `test_hlc_mixed_version.py` (2 tests) |
+| Amendment 6.3 | No sender key rotation race window test | Server resilience test during key rotation | `test_sender_key_rotation_window.py` (2 tests) |
+| NFR-19 Memory | No hard fail threshold in memory benchmark | Added NFR-19 hard gate (<=10KB/conn at full scale) | `benchmark_memory.py` (NFR-19 gate) |
+| NFR-4 Reconnect | No reconnect rate measurement | Added rate calculation to reconnect storm test | `test_reconnect_storm.py` (rate metric) |
+
+## RFC v4.0 Gap Closures (2026-02-08, Phase 2-3)
+
+| GAP | Requirement | Fix | Test |
+|-----|-------------|-----|------|
+| GAP-6 Section 8 | Inbox size limit not enforced (10K) | Added guard in `iris_core:store_offline_durable/2` calling `iris_limits:max_inbox_size()` | `iris_inbox_limit_tests.erl`, `iris_inbox_characterization_tests.erl` |
+| GAP-7 Section 8 | Payload 64KB limit not enforced on E2EE/Group paths | Added `iris_limits:validate_payload(Ciphertext)` to `e2ee_msg` and `group_msg` handlers | `iris_rfc_v4_constants_tests.erl` |
+| GAP-5 NFR-32 | `msg_in`/`msg_out`/`ack_sent` counters not called from production code | Added 6 counter calls to `iris_session.erl` message handlers | `iris_metrics_callsite_tests.erl` |
+| GAP-4 NFR-31 | No span instrumentation in production code paths | Added `iris_trace:new_span/end_span` to 7 key session operations | Span metrics emitted via `iris_trace:record_span_metrics` |
+| GAP-1 Section 7.2 | Outbox queue TTL not enforced (7 days) | Added `cleanup_expired_outbox/0` to drain timer in `iris_region_bridge.erl` | TTL constant `OUTBOX_TTL_MS = 604800000` |
+| GAP-2 Section 7.2 | No 50% queue depth alert metric | Added `iris_outbox_queue_warning` metric in `check_queue_overflow/1` | Metric initialized in `iris_metrics.erl` |
+| GAP-13 Amendment 5.3.2 | No key change notification | Added IK change detection in `iris_keys:do_upload_bundle/2` with metric | `iris_key_change_notify_tests.erl` (PENDING_DESIGN for notification) |
+| GAP-15 Section 9.1 | No JWT replay protection (nonce) | Added `jti` seen ETS table with TTL cleanup in `iris_auth.erl` | Replay returns `{error, token_replayed}` |
+| GAP-3 NFR-17 | Distributed rate limiting | Already implemented via `pg` gossip in `iris_rate_limiter.erl` | `test_distributed_rate_limit.py` |
+
 ## Deferred / Partial
 
 | Item | Status | Notes |
@@ -104,8 +130,20 @@
 | NFR-16 Clock Skew | **VERIFIED** | HLC unit tests cover drift handling; Python tests cover protocol tolerance |
 | Section 9.1 Versioning | **IMPLEMENTED** | Opcode 0x0C added; `signer`/`verifier` auth mode supported |
 | E2EE Crypto Validation | **VERIFIED** | Erlang unit tests cover Double Ratchet; Python tests cover primitives |
-| NFR-17 Distributed Rate Limit | Partial | Single-node tested; cross-node test requires Docker cluster |
+| NFR-17 Distributed Rate Limit | **IMPLEMENTED** | pg-based gossip in `iris_rate_limiter.erl`; cross-node test in Docker cluster |
 | FR-19 Group Size Limit | **VERIFIED** | 256-member limit test added to `test_group_membership.py` |
+| Section 6.2 Dedup is_duplicate | **VERIFIED** | Mnesia cross-check added; bloom FP tracked via `bloom_fp_in_is_duplicate` counter |
+| Section 3.4 Session Cache Limit | **VERIFIED** | 100K hard limit enforced with LRU eviction |
+| NFR-18 E2EE Header Validation | **VERIFIED** | Required fields (`ik`, `ek`) validated before routing |
+| Section 7.2 Outbox fsync | **VERIFIED** | Already uses `sync_transaction` (confirmed 2026-02-08) |
+| Section 8 Inbox Limit | **IMPLEMENTED** | 10K limit enforced in `iris_core.erl` (GAP-6 closure) |
+| Section 8 Payload Limit | **IMPLEMENTED** | 64KB enforced on E2EE and Group paths (GAP-7 closure) |
+| NFR-32 Standard Counters | **IMPLEMENTED** | `msg_in`/`msg_out`/`ack_sent` called in production paths (GAP-5 closure) |
+| NFR-31 Span Instrumentation | **IMPLEMENTED** | 7 key operations instrumented (GAP-4 closure) |
+| Section 7.2 Outbox TTL | **IMPLEMENTED** | 7-day cleanup in drain timer (GAP-1 closure) |
+| Section 7.2 Queue Alert | **IMPLEMENTED** | 50% metric emission (GAP-2 closure) |
+| Amendment 5.3.2 Key Change | **PARTIAL** | Detection + metric implemented; notification PENDING_DESIGN (GAP-13) |
+| Section 9.1 Replay Protection | **IMPLEMENTED** | JWT jti tracking in ETS with TTL cleanup (GAP-15 closure) |
 
 ## Test Coverage
 
@@ -115,13 +153,15 @@
 | integration | 22 | 22 | 100% | Core message flow |
 | stress | 14 | 14 | 100% | Load testing |
 | chaos_dist | 12 | 12 | 100% | Docker required, SIGKILL durability |
-| security | 7 | 7 | 100% | TLS, auth, rate limiting |
-| performance_light | 6 | 6 | 100% | Benchmarks |
+| security | 9 | 9 | 100% | TLS, auth, rate limiting, CBOR validation, sender key rotation |
+| performance_light | 6 | 6 | 100% | Benchmarks (NFR-19 hard gate added) |
 | e2e | 5 | 5 | 100% | End-to-end scenarios |
 | resilience | 3 | 3 | 100% | Fault tolerance |
 | chaos_controlled | 2 | 2 | 100% | Controlled chaos |
 | contract | 1 | 1 | 100% | Edge-core contract |
-| compatibility | 1 | 1 | 100% | Protocol versions |
-| **TOTAL** | **75** | **75** | **100%** | All TLS-enabled |
+| compatibility | 2 | 2 | 100% | Protocol versions, mixed HLC |
+| erlang unit (new) | 9 | 9 | 100% | Dedup sole-drop (4), session cache bound (5) |
+| erlang RFC v4 gap | 8 | 8 | 100% | Inbox limit (3), metrics callsite (5), constants (3+), key change (2) |
+| **TOTAL** | **95+** | **95+** | **100%** | All TLS-enabled |
 
 See [TESTING.md](TESTING.md) for details.

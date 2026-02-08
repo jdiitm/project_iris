@@ -25,6 +25,10 @@
 %% RFC-001 v3.0 NFR-6/NFR-8: Durability metrics (99.999% / RPO=0)
 -export([msg_acked/0, msg_lost/0, get_durability_metrics/0]).
 
+%% RFC-001 v4.0 Appendix B: SLI/SLO Tracking
+-export([get_sli_availability/0, get_sli_durability/0, get_sli_latency/0]).
+-export([get_slo_report/0]).
+
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
@@ -204,7 +208,10 @@ init_default_metrics() ->
     ets:insert(?METRICS_TABLE, {iris_inbox_append, 0}),    %% Inbox log appends
     ets:insert(?METRICS_TABLE, {iris_inbox_scan, 0}),      %% Inbox log scans
     ets:insert(?METRICS_TABLE, {iris_group_fanout, 0}),    %% Group message fan-outs
-    ets:insert(?METRICS_TABLE, {iris_rate_limited, 0}),    %% Rate limit rejections
+    ets:insert(?METRICS_TABLE, {iris_rate_limited, 0}),
+    ets:insert(?METRICS_TABLE, {iris_inbox_full_rejected, 0}),  %% RFC Section 8: Inbox limit rejections
+    ets:insert(?METRICS_TABLE, {iris_outbox_queue_warning, 0}),  %% RFC Section 7.2: 50% queue alert
+    ets:insert(?METRICS_TABLE, {iris_identity_key_changes, 0}),  %% Amendment 5.3.2: Key change events    %% Rate limit rejections
     
     %% ==========================================================================
     %% RFC-001 v3.0 NFR-6/NFR-8: Durability Counters (99.999% / RPO=0 tracking)
@@ -468,5 +475,103 @@ get_nfr_metrics() ->
             inbox_append => get_latency_stats({latency, inbox, append}),
             route_local => get_latency_stats({latency, route, local}),
             route_remote => get_latency_stats({latency, route, remote})
+        }
+    }.
+
+%% =============================================================================
+%% RFC-001 v4.0 Appendix B: SLI/SLO Tracking
+%% =============================================================================
+%% SLIs (Service Level Indicators):
+%%   availability = msg_out / (msg_out + msg_lost)
+%%   durability   = 1 - (msg_lost / msg_acked)
+%%   latency      = P99 end-to-end delivery latency
+%%
+%% SLOs (Service Level Objectives):
+%%   availability >= 99.9%
+%%   durability   >= 99.999% (NFR-6)
+%%   latency P99  <= 500ms   (NFR-33)
+%% =============================================================================
+
+%% @doc Compute availability SLI: msg_out / (msg_out + msg_lost).
+%% Returns a float between 0.0 and 1.0.
+-spec get_sli_availability() -> float().
+get_sli_availability() ->
+    try
+        [{_, MsgOut}] = ets:lookup(?METRICS_TABLE, iris_msg_out),
+        [{_, MsgLost}] = ets:lookup(?METRICS_TABLE, iris_msg_lost_total),
+        Total = MsgOut + MsgLost,
+        case Total of
+            0 -> 1.0;  %% No traffic yet = 100% availability
+            _ -> MsgOut / Total
+        end
+    catch
+        _:_ -> 1.0  %% Metrics not initialized
+    end.
+
+%% @doc Compute durability SLI: 1 - (msg_lost / msg_acked).
+%% Returns a float between 0.0 and 1.0.
+-spec get_sli_durability() -> float().
+get_sli_durability() ->
+    try
+        [{_, Acked}] = ets:lookup(?METRICS_TABLE, iris_msg_acked_total),
+        [{_, Lost}] = ets:lookup(?METRICS_TABLE, iris_msg_lost_total),
+        case Acked of
+            0 -> 1.0;  %% No ACKed messages yet = 100% durability
+            _ -> 1.0 - (Lost / Acked)
+        end
+    catch
+        _:_ -> 1.0  %% Metrics not initialized
+    end.
+
+%% @doc Compute latency SLI: P99 end-to-end delivery latency in ms.
+%% Returns a number or undefined.
+-spec get_sli_latency() -> number() | undefined.
+get_sli_latency() ->
+    try
+        get_latency_percentile({latency, message, e2e}, 0.99)
+    catch
+        error:badarg -> undefined  %% ETS table not yet created (no latency recorded)
+    end.
+
+%% @doc Generate a complete SLO compliance report.
+%% Checks all SLIs against their SLO targets.
+-spec get_slo_report() -> map().
+get_slo_report() ->
+    Availability = get_sli_availability(),
+    Durability = get_sli_durability(),
+    LatencyP99 = get_sli_latency(),
+
+    AvailPct = Availability * 100,
+    DurPct = Durability * 100,
+
+    LatencyOk = case LatencyP99 of
+        undefined -> true;  %% No data = pass
+        V -> V =< 500.0
+    end,
+
+    #{
+        %% SLI values
+        sli => #{
+            availability => Availability,
+            durability => Durability,
+            latency_p99_ms => LatencyP99
+        },
+        %% SLO targets
+        slo => #{
+            availability_target => 0.999,
+            durability_target => 0.99999,
+            latency_p99_target_ms => 500
+        },
+        %% Compliance
+        compliance => #{
+            availability_ok => AvailPct >= 99.9,
+            durability_ok => DurPct >= 99.999,
+            latency_ok => LatencyOk,
+            all_ok => (AvailPct >= 99.9) andalso (DurPct >= 99.999) andalso LatencyOk
+        },
+        %% Error budget remaining (1.0 = full budget, 0.0 = exhausted)
+        error_budget => #{
+            availability_remaining => max(0.0, (AvailPct - 99.9) / (100.0 - 99.9)),
+            durability_remaining => max(0.0, (DurPct - 99.999) / (100.0 - 99.999))
         }
     }.

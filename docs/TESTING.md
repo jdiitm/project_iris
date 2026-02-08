@@ -1,6 +1,6 @@
 # Testing Guide
 
-**Status**: 75+ tests | **Last Verified**: 2026-02-05
+**Status**: 95+ tests | **Last Verified**: 2026-02-08
 
 ## Quick Start
 
@@ -73,14 +73,16 @@ Docker chaos tests (`chaos_dist/`) are **destructive** - they kill containers, p
 | unit | 2 | Property-based tests |
 | integration | 22+ | Core message flow |
 | e2e | 5+ | End-to-end scenarios |
-| security | 7+ | TLS, auth, rate limiting |
+| security | 9+ | TLS, auth, rate limiting, CBOR validation, sender key rotation |
 | resilience | 3 | Fault tolerance |
-| performance_light | 6 | Benchmarks |
-| stress | 14 | Load testing |
+| performance_light | 6 | Benchmarks (NFR-19 hard gate) |
+| stress | 14 | Load testing (NFR-4 rate metric) |
 | chaos_dist | 18 | Docker-based chaos tests |
 | chaos_controlled | 2 | Controlled chaos |
 | contract | 1 | Edge-core contract |
-| compatibility | 1 | Protocol versions |
+| compatibility | 2 | Protocol versions, mixed HLC ordering |
+| erlang unit (new) | 9 | Dedup bloom cross-check (4), session cache bound (5) |
+| erlang RFC v4 gap | 8+ | Inbox characterization (2), inbox limit (3), metrics callsite (5), RFC constants (3+), key change (2) |
 
 ---
 

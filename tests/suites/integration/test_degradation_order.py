@@ -372,8 +372,6 @@ def test_baseline_all_features_working():
         bob_user = f"bob_baseline_{test_id}"
         bob.login(bob_user)
         
-        time.sleep(0.5)  # Let connections stabilize
-        
         # Test 1: Typing indicator
         log("  1. Testing typing indicator...")
         typing_works = probe_typing_indicator(alice, bob_user)
@@ -446,8 +444,6 @@ def test_degradation_order_under_load():
         bob = IrisClient()
         bob_user = f"bob_degrade_{test_id}"
         bob.login(bob_user)
-        
-        time.sleep(0.5)
         
         # Record baseline
         log("  1. Recording baseline...")

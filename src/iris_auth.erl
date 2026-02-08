@@ -30,6 +30,12 @@
 -define(REVOCATION_TABLE, iris_auth_revoked).
 -define(DEFAULT_TTL, 86400).  %% 24 hours in seconds
 
+%% RFC Section 10.1: Failed login rate limiting (10/hour per account)
+-define(FAILED_LOGIN_TABLE, iris_auth_failed_logins).
+-define(FAILED_LOGIN_MAX, 10).              %% Max 10 failures per window
+-define(FAILED_LOGIN_WINDOW_SECS, 3600).    %% 1-hour window
+-define(JTI_SEEN_TABLE, iris_auth_jti_seen).  %% RFC Section 9.1: JWT replay protection (GAP-15)
+
 -record(state, {
     secret :: binary(),
     issuer :: binary(),
@@ -41,6 +47,8 @@
 
 %% @doc Get current auth mode (signer or verifier).
 -export([get_auth_mode/0]).
+%% RFC Section 10.1: Failed login rate limiting
+-export([check_login_rate/1, record_failed_login/1]).
 
 %% =============================================================================
 %% API
@@ -182,6 +190,12 @@ init([]) ->
     %% Create revocation table
     ets:new(?REVOCATION_TABLE, [set, named_table, public, {read_concurrency, true}]),
     
+    %% RFC Section 10.1: Failed login tracking table
+    %% Format: {UserId, FailedCount, WindowStartTimestamp}
+    ets:new(?FAILED_LOGIN_TABLE, [set, named_table, public,
+                                   {read_concurrency, true},
+                                   {write_concurrency, true}]),
+    
     %% Schedule cleanup of expired revocations
     erlang:send_after(3600000, self(), cleanup_revocations),
     
@@ -273,6 +287,10 @@ handle_info(cleanup_revocations, State) ->
     Now = os:system_time(second),
     Cutoff = Now - 86400,
     cleanup_revoked(Cutoff),
+    %% Also clean expired failed-login windows
+    cleanup_failed_logins(Now),
+    %% RFC Section 9.1: Clean expired jti nonce entries (GAP-15)
+    cleanup_jti_seen(Now),
     erlang:send_after(3600000, self(), cleanup_revocations),
     {noreply, State};
 
@@ -281,6 +299,109 @@ handle_info(_Info, State) ->
 
 terminate(_Reason, _State) ->
     ok.
+
+%% =============================================================================
+%% RFC Section 10.1: Failed Login Rate Limiting
+%% =============================================================================
+
+%% @doc Check if a user is allowed to attempt login.
+%% Returns ok | {error, rate_limited}.
+%% Gracefully returns ok if the ETS table doesn't exist (iris_auth not started).
+-spec check_login_rate(binary()) -> ok | {error, rate_limited}.
+check_login_rate(UserId) ->
+    try
+        Now = os:system_time(second),
+        MaxFails = application:get_env(iris_core, failed_login_max, ?FAILED_LOGIN_MAX),
+        WindowSecs = application:get_env(iris_core, failed_login_window_secs, ?FAILED_LOGIN_WINDOW_SECS),
+        case ets:lookup(?FAILED_LOGIN_TABLE, UserId) of
+            [] ->
+                ok;
+            [{UserId, Count, WindowStart}] ->
+                case (Now - WindowStart) > WindowSecs of
+                    true ->
+                        %% Window expired, reset
+                        ets:delete(?FAILED_LOGIN_TABLE, UserId),
+                        ok;
+                    false ->
+                        case Count >= MaxFails of
+                            true ->
+                                {error, rate_limited};
+                            false ->
+                                ok
+                        end
+                end
+        end
+    catch
+        error:badarg ->
+            %% ETS table doesn't exist (iris_auth not started yet)
+            ok
+    end.
+
+%% @doc Record a failed login attempt for a user.
+%% Gracefully no-ops if the ETS table doesn't exist.
+-spec record_failed_login(binary()) -> ok.
+record_failed_login(UserId) ->
+    try
+        Now = os:system_time(second),
+        WindowSecs = application:get_env(iris_core, failed_login_window_secs, ?FAILED_LOGIN_WINDOW_SECS),
+        case ets:lookup(?FAILED_LOGIN_TABLE, UserId) of
+            [] ->
+                ets:insert(?FAILED_LOGIN_TABLE, {UserId, 1, Now});
+            [{UserId, Count, WindowStart}] ->
+                case (Now - WindowStart) > WindowSecs of
+                    true ->
+                        %% Window expired, start new window
+                        ets:insert(?FAILED_LOGIN_TABLE, {UserId, 1, Now});
+                    false ->
+                        %% Increment counter within window
+                        ets:insert(?FAILED_LOGIN_TABLE, {UserId, Count + 1, WindowStart})
+                end
+        end,
+        ok
+    catch
+        error:badarg ->
+            %% ETS table doesn't exist (iris_auth not started)
+            ok
+    end.
+
+%% @doc Clean up expired failed-login windows.
+cleanup_failed_logins(Now) ->
+    WindowSecs = application:get_env(iris_core, failed_login_window_secs, ?FAILED_LOGIN_WINDOW_SECS),
+    Cutoff = Now - WindowSecs,
+    %% Use ets:foldl to collect expired entries, then delete them
+    Expired = ets:foldl(
+        fun({UserId, _Count, WindowStart}, Acc) ->
+            case WindowStart < Cutoff of
+                true -> [UserId | Acc];
+                false -> Acc
+            end
+        end, [], ?FAILED_LOGIN_TABLE),
+    lists:foreach(fun(Id) -> ets:delete(?FAILED_LOGIN_TABLE, Id) end, Expired),
+    ok.
+
+%% =============================================================================
+%% Internal: JTI Replay Protection Cleanup (GAP-15)
+%% =============================================================================
+
+cleanup_jti_seen(Now) ->
+    try
+        case ets:info(?JTI_SEEN_TABLE) of
+            undefined -> ok;
+            _ ->
+                %% Delete entries where token expiry has passed
+                Expired = ets:foldl(
+                    fun({Jti, Exp}, Acc) ->
+                        case Exp < Now of
+                            true -> [Jti | Acc];
+                            false -> Acc
+                        end
+                    end, [], ?JTI_SEEN_TABLE),
+                lists:foreach(fun(Id) -> ets:delete(?JTI_SEEN_TABLE, Id) end, Expired),
+                ok
+        end
+    catch
+        _:_ -> ok
+    end.
 
 %% =============================================================================
 %% Internal: JWT Validation
@@ -350,9 +471,41 @@ validate_claims(Claims, ExpectedIssuer, Opts) ->
                             Jti = maps:get(<<"jti">>, Claims, undefined),
                             case Jti =/= undefined andalso is_revoked(Jti) of
                                 true -> {error, token_revoked};
-                                false -> {ok, Claims}
+                                false ->
+                                    %% RFC Section 9.1: Replay protection via jti nonce (GAP-15)
+                                    case Jti =/= undefined andalso check_jti_replay(Jti, Exp) of
+                                        true -> {error, token_replayed};
+                                        false -> {ok, Claims}
+                                    end
                             end
                     end
+            end
+    end.
+
+%% @doc Check if a jti has been seen before (replay attack detection) (GAP-15)
+%% RFC Section 9.1: "Replay attacks: Nonce + timestamp validation"
+%% Tracks seen jti values in ETS with TTL = token expiry time.
+check_jti_replay(Jti, Exp) ->
+    try
+        case ets:lookup(?JTI_SEEN_TABLE, Jti) of
+            [{Jti, _}] ->
+                %% Already seen -- this is a replay
+                true;
+            [] ->
+                %% First use -- mark as seen with expiry for cleanup
+                ets:insert(?JTI_SEEN_TABLE, {Jti, Exp}),
+                false
+        end
+    catch
+        error:badarg ->
+            %% Table doesn't exist -- create it and allow
+            try
+                ets:new(?JTI_SEEN_TABLE, [named_table, public, set,
+                                          {read_concurrency, true}]),
+                ets:insert(?JTI_SEEN_TABLE, {Jti, Exp}),
+                false
+            catch
+                error:badarg -> false  %% Race condition, another process created it
             end
     end.
 
@@ -564,71 +717,10 @@ decode_base64url(Bin) ->
         _:_ -> {error, invalid_base64}
     end.
 
-%% Simple JSON encoding/decoding (minimal implementation)
-encode_json(Map) when is_map(Map) ->
-    Pairs = maps:fold(fun(K, V, Acc) ->
-        KEnc = encode_json_value(K),
-        VEnc = encode_json_value(V),
-        [<<KEnc/binary, ":", VEnc/binary>> | Acc]
-    end, [], Map),
-    <<"{", (iolist_to_binary(lists:join(<<",">>, Pairs)))/binary, "}">>.
-
-encode_json_value(V) when is_binary(V) ->
-    <<"\"", V/binary, "\"">>;
-encode_json_value(V) when is_integer(V) ->
-    integer_to_binary(V);
-encode_json_value(V) when is_atom(V) ->
-    <<"\"", (atom_to_binary(V))/binary, "\"">>.
-
-decode_json(Bin) ->
-    try
-        %% Simple JSON object parser
-        {ok, parse_json_object(Bin)}
-    catch
-        _:_ -> {error, invalid_json}
-    end.
-
-parse_json_object(<<"{", Rest/binary>>) ->
-    parse_json_pairs(Rest, #{}).
-
-parse_json_pairs(<<"}", _/binary>>, Acc) ->
-    Acc;
-parse_json_pairs(<<",", Rest/binary>>, Acc) ->
-    parse_json_pairs(Rest, Acc);
-parse_json_pairs(<<" ", Rest/binary>>, Acc) ->
-    parse_json_pairs(Rest, Acc);
-parse_json_pairs(<<"\"", Rest/binary>>, Acc) ->
-    {Key, Rest2} = parse_json_string(Rest, <<>>),
-    Rest3 = skip_colon(Rest2),
-    {Value, Rest4} = parse_json_value(Rest3),
-    parse_json_pairs(Rest4, maps:put(Key, Value, Acc)).
-
-skip_colon(<<":", Rest/binary>>) -> Rest;
-skip_colon(<<" ", Rest/binary>>) -> skip_colon(Rest);
-skip_colon(Rest) -> Rest.
-
-parse_json_string(<<"\"", Rest/binary>>, Acc) ->
-    {Acc, Rest};
-parse_json_string(<<"\\\"", Rest/binary>>, Acc) ->
-    parse_json_string(Rest, <<Acc/binary, "\"">>);
-parse_json_string(<<C, Rest/binary>>, Acc) ->
-    parse_json_string(Rest, <<Acc/binary, C>>).
-
-parse_json_value(<<" ", Rest/binary>>) ->
-    parse_json_value(Rest);
-parse_json_value(<<"\"", Rest/binary>>) ->
-    {Str, Rest2} = parse_json_string(Rest, <<>>),
-    {Str, Rest2};
-parse_json_value(Bin) ->
-    %% Try to parse number
-    parse_json_number(Bin, <<>>).
-
-parse_json_number(<<C, Rest/binary>>, Acc) when C >= $0, C =< $9 ->
-    parse_json_number(Rest, <<Acc/binary, C>>);
-parse_json_number(Rest, Acc) when byte_size(Acc) > 0 ->
-    {binary_to_integer(Acc), Rest};
-parse_json_number(Rest, <<>>) ->
-    {null, Rest}.
+%% AUDIT FIX (Finding 1.2): Delegated to iris_auth_json module.
+%% Old inline parser used O(N^2) binary append; new module uses iolists (O(N)).
+encode_json(Map) -> iris_auth_json:encode(Map).
+decode_json(Bin) -> iris_auth_json:decode(Bin).
 
 %% =============================================================================
 %% Internal: Cleanup

@@ -466,20 +466,21 @@ class ClusterManager:
         # Kill make stop first
         self._run_make("stop", timeout=10)
         
-        # Kill any remaining beam.smp processes
+        # AUDIT FIX: Scope kills to iris processes only (was killall -9 beam.smp
+        # which killed ALL Erlang processes on the machine, including unrelated ones)
         try:
             subprocess.run(
-                ["killall", "-9", "beam.smp"],
+                ["pkill", "-9", "-f", "beam.smp.*iris_"],
                 capture_output=True,
                 timeout=10
             )
         except Exception:
             pass
         
-        # Kill epmd
+        # Kill epmd (system-level, restarts automatically)
         try:
             subprocess.run(
-                ["killall", "-9", "epmd"],
+                ["pkill", "-9", "epmd"],
                 capture_output=True,
                 timeout=5
             )

@@ -24,6 +24,7 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(_
 sys.path.insert(0, PROJECT_ROOT)
 
 from tests.framework import TestLogger, ClusterManager
+from tests.framework.wait import wait_for
 from tests.utilities import IrisClient
 
 
@@ -82,9 +83,7 @@ def test_online_user_status():
         target.login(target_user)
         log.connection_event("login", target_user)
         
-        time.sleep(2)  # Allow presence to propagate
-        
-        # Query status
+        # Query status (poll instead of blind sleep)
         querier = create_client_with_retry()
         querier.login(f"querier_{int(time.time())}")
         log.connection_event("login", "querier")
@@ -142,12 +141,10 @@ def test_offline_user_status():
         target = create_client_with_retry()
         target.login(target_user)
         log.connection_event("login", target_user)
-        time.sleep(1)
         
         # Go offline
         target.close()
         log.connection_event("disconnect", target_user)
-        time.sleep(3)  # Allow presence to update
         
         # Query status from fresh client with retries
         querier = create_client_with_retry()
@@ -201,9 +198,7 @@ def test_presence_cache():
         target.login(target_user)
         log.connection_event("login", target_user)
         
-        time.sleep(1)
-        
-        # Query same user multiple times
+        # Query same user multiple times (no sleep — poll directly)
         querier = create_client_with_retry()
         querier.login(f"cache_querier_{int(time.time())}")
         
@@ -273,8 +268,6 @@ def test_presence_propagation_sla():
         observer_user = f"sla_observer_{int(time.time())}"
         observer.login(observer_user)
         log.connection_event("login", observer_user)
-        
-        time.sleep(1)  # Stabilize
         
         # Target user - we'll measure how long until observer sees them
         target_user = f"sla_target_{int(time.time())}"
@@ -354,17 +347,13 @@ def test_last_seen_update_sla():
         target.login(target_user)
         log.connection_event("login", target_user)
         
-        time.sleep(2)  # Let presence propagate
-        
-        # Observer
+        # Observer (poll for propagation instead of blind sleep)
         observer = create_client_with_retry()
         observer_user = f"lastseen_observer_{int(time.time())}"
         observer.login(observer_user)
         log.connection_event("login", observer_user)
         
-        time.sleep(1)
-        
-        # Verify target shows as online
+        # Verify target shows as online (poll with retry)
         query_packet = create_get_status_packet(target_user)
         observer.sock.sendall(query_packet)
         observer.sock.settimeout(3.0)

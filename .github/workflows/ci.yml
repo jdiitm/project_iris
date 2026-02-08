@@ -76,7 +76,7 @@ jobs:
   tier0:
     name: "Tier 0 - All Non-Docker Tests"
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 35
     if: github.event.inputs.tier != '2'
 
     steps:

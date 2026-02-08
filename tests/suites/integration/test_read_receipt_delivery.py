@@ -84,11 +84,9 @@ def test_read_receipt_normal():
 
         # Send a message first
         send_client.send_msg(receiver, "read_receipt_test_msg")
-        time.sleep(0.3)
 
         # Receiver sends read receipt back to sender
         recv_client.sock.sendall(encode_read_receipt(sender, "rr_msg_001"))
-        time.sleep(0.3)
 
         send_client.close()
         recv_client.close()
@@ -121,7 +119,6 @@ def test_read_receipt_offline():
 
         # Send read receipt to non-existent/offline user
         client.sock.sendall(encode_read_receipt(offline_target, "rr_offline_msg"))
-        time.sleep(0.3)
 
         client.close()
 

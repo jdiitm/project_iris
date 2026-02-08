@@ -20,10 +20,11 @@
     tls_enabled :: boolean()
 }).
 
-%% Per-IP connection rate limiting (RFC Section 10)
+%% Per-IP connection rate limiting (RFC Section 10.1)
+%% RFC: 5 connections per minute per IP (configurable via app env)
 -define(CONN_RATE_TABLE, iris_conn_rate).
--define(CONN_RATE_WINDOW_MS, 1000).  %% 1-second sliding window
--define(CONN_RATE_MAX, 50).          %% Max 50 connections per IP per second
+-define(CONN_RATE_WINDOW_MS, 60000). %% 1-minute sliding window
+-define(CONN_RATE_MAX, 5).           %% Max 5 connections per IP per minute
 
 start_link(Port) ->
     start_link(Port, iris_edge_conn).
@@ -59,6 +60,12 @@ check_tls_policy(false) ->
 
 %% Start the actual listener
 start_listener(Port, HandlerMod, TlsEnabled) ->
+    %% Trap exits so acceptor crashes don't kill the listener.
+    %% Without this, a single handler crash cascades:
+    %%   handler -> acceptor (spawn_link) -> listener -> all 500 acceptors
+    %% With trap_exit, we absorb the EXIT and respawn the dead acceptor.
+    process_flag(trap_exit, true),
+    
     %% AUDIT FIX (Finding #7): TCP tuning for planet-scale
     %% - backlog: 65535 (was 4096) - handles thundering herd reconnects
     %% - nodelay: true - disable Nagle's algorithm (~40ms latency reduction)
@@ -74,34 +81,54 @@ start_listener(Port, HandlerMod, TlsEnabled) ->
         {send_timeout_close, true}  %% Close socket on send timeout
     ],
     
-    {ok, LSock} = case TlsEnabled of
+    case do_listen(Port, TlsEnabled, BaseOpts, 3) of
+        {ok, LSock} ->
+            io:format("Listener started on port ~p (Handler: ~p, TLS: ~p)~n",
+                      [Port, HandlerMod, TlsEnabled]),
+            
+            %% RFC Section 10: Per-IP connection rate limiting
+            case ets:info(?CONN_RATE_TABLE) of
+                undefined ->
+                    ets:new(?CONN_RATE_TABLE, [public, named_table, bag,
+                                               {write_concurrency, true},
+                                               {read_concurrency, true}]);
+                _ -> ok
+            end,
+            
+            NumAcceptors = application:get_env(iris_edge, num_acceptors, 500),
+            [spawn_acceptor(LSock, HandlerMod, TlsEnabled)
+             || _ <- lists:seq(1, NumAcceptors)],
+            
+            {ok, #state{lsock = LSock, handler = HandlerMod,
+                        tls_enabled = TlsEnabled}};
+        {error, Reason} ->
+            {stop, {listen_failed, Port, Reason}}
+    end.
+
+%% Listen with retry for transient eaddrinuse after SIGKILL restarts.
+do_listen(Port, TlsEnabled, BaseOpts, Retries) ->
+    Result = case TlsEnabled of
         true ->
-            %% Ensure SSL application is started before using ssl:listen
             ok = ensure_ssl_started(),
-            TlsOpts = get_tls_options(),
-            AllOpts = BaseOpts ++ TlsOpts,
+            AllOpts = BaseOpts ++ get_tls_options(),
             logger:info("Starting TLS listener on port ~p", [Port]),
             ssl:listen(Port, AllOpts);
         false ->
             logger:info("Starting TCP listener on port ~p (TLS disabled)", [Port]),
             gen_tcp:listen(Port, BaseOpts)
     end,
-    
-    io:format("Listener started on port ~p (Handler: ~p, TLS: ~p)~n", [Port, HandlerMod, TlsEnabled]),
-    
-    %% RFC Section 10: Per-IP connection rate limiting
-    case ets:info(?CONN_RATE_TABLE) of
-        undefined ->
-            ets:new(?CONN_RATE_TABLE, [public, named_table, bag,
-                                       {write_concurrency, true},
-                                       {read_concurrency, true}]);
-        _ -> ok
-    end,
-    
-    NumAcceptors = application:get_env(iris_edge, num_acceptors, 500),
-    [spawn_acceptor(LSock, HandlerMod, TlsEnabled) || _ <- lists:seq(1, NumAcceptors)],
-    
-    {ok, #state{lsock = LSock, handler = HandlerMod, tls_enabled = TlsEnabled}}.
+    case Result of
+        {ok, LSock} ->
+            {ok, LSock};
+        {error, eaddrinuse} when Retries > 0 ->
+            logger:warning("Port ~p in use, retrying in 1s (~p retries left)",
+                           [Port, Retries]),
+            timer:sleep(1000),
+            do_listen(Port, TlsEnabled, BaseOpts, Retries - 1);
+        {error, Reason} ->
+            logger:error("Failed to bind port ~p: ~p", [Port, Reason]),
+            {error, Reason}
+    end.
 
 %% =============================================================================
 %% SSL Application Management
@@ -174,7 +201,19 @@ tls_ciphers() ->
 %% =============================================================================
 
 spawn_acceptor(LSock, HandlerMod, TlsEnabled) ->
-    spawn_link(fun() -> acceptor(LSock, HandlerMod, TlsEnabled) end).
+    spawn_link(fun() -> acceptor_safe(LSock, HandlerMod, TlsEnabled) end).
+
+%% Wrap acceptor in try/catch so unexpected exceptions don't crash
+%% the linked listener. Normal exits (e.g. listen socket closed) propagate.
+acceptor_safe(LSock, HandlerMod, TlsEnabled) ->
+    try
+        acceptor(LSock, HandlerMod, TlsEnabled)
+    catch
+        error:closed -> ok;  %% Listen socket closed (shutdown)
+        Class:Reason:Stack ->
+            logger:error("Acceptor crash: ~p:~p~n~p", [Class, Reason, Stack]),
+            exit({acceptor_crash, Reason})
+    end.
 
 acceptor(LSock, HandlerMod, false) ->
     %% Plain TCP accept + per-IP rate limiting (RFC Section 10)
@@ -191,6 +230,8 @@ acceptor(LSock, HandlerMod, false) ->
         {error, emfile} ->
             timer:sleep(1000),
             acceptor(LSock, HandlerMod, false);
+        {error, closed} ->
+            ok;  %% Listen socket closed (shutdown)
         _Error ->
             timer:sleep(200),
             acceptor(LSock, HandlerMod, false)
@@ -219,6 +260,8 @@ acceptor(LSock, HandlerMod, true) ->
             end;
         {error, timeout} ->
             acceptor(LSock, HandlerMod, true);
+        {error, closed} ->
+            ok;  %% Listen socket closed (shutdown)
         {error, emfile} ->
             timer:sleep(1000),
             acceptor(LSock, HandlerMod, true);
@@ -228,7 +271,9 @@ acceptor(LSock, HandlerMod, true) ->
     end.
 
 handle_new_connection(Sock, HandlerMod, TlsEnabled) ->
-    %% Start handler and transfer socket ownership
+    %% Start handler and transfer socket ownership.
+    %% CRITICAL: unlink handler after socket transfer so handler crashes
+    %% do NOT cascade to this acceptor -> listener -> all other acceptors.
     case HandlerMod:start_link(Sock) of
         {ok, Pid} ->
             %% Transfer socket to handler
@@ -236,6 +281,9 @@ handle_new_connection(Sock, HandlerMod, TlsEnabled) ->
                 true -> ssl:controlling_process(Sock, Pid);
                 false -> gen_tcp:controlling_process(Sock, Pid)
             end,
+            %% Break the link: handler is now autonomous with its own socket.
+            %% If it crashes, only it dies — not this acceptor or the listener.
+            unlink(Pid),
             HandlerMod:set_socket(Pid, Sock);
         {error, Reason} ->
             logger:error("Failed to start handler: ~p", [Reason]),
@@ -302,6 +350,17 @@ handle_call(_Request, _From, State) ->
 handle_cast(_Msg, State) -> 
     {noreply, State}.
 
+%% Acceptor died normally (listen socket closed during shutdown) — don't respawn.
+handle_info({'EXIT', _Pid, normal}, State) ->
+    {noreply, State};
+handle_info({'EXIT', _Pid, shutdown}, State) ->
+    {noreply, State};
+%% Acceptor crashed — respawn a replacement to maintain pool size.
+handle_info({'EXIT', _Pid, _Reason},
+            State = #state{lsock = LSock, handler = Handler,
+                           tls_enabled = TlsEnabled}) ->
+    spawn_acceptor(LSock, Handler, TlsEnabled),
+    {noreply, State};
 handle_info(_Info, State) -> 
     {noreply, State}.
 

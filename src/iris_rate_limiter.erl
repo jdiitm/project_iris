@@ -25,8 +25,9 @@
 -define(TABLE, iris_rate_limit_buckets).
 
 %% Default limits (configurable via application env)
--define(DEFAULT_RATE, 100).        %% 100 msgs/second
--define(DEFAULT_BURST, 500).       %% Burst capacity
+%% RFC Section 10.1: 5 msg/sec sustained, 20 msg/sec burst (10s window)
+-define(DEFAULT_RATE, 5).          %% 5 msgs/second sustained
+-define(DEFAULT_BURST, 20).        %% Burst capacity (20 msgs/sec for 10s)
 -define(REFILL_INTERVAL, 100).     %% Refill every 100ms
 
 -define(GOSSIP_INTERVAL, 1000).    %% RFC NFR-17: Gossip every 1 second

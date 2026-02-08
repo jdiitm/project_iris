@@ -150,14 +150,10 @@ def test_typing_indicator_basic():
         bob.login(bob_user)
         log(f"  Bob logged in as {bob_user}")
         
-        time.sleep(1)
-        
         # Set up Alice (sender)
         alice = create_client_with_retry()
         alice.login(alice_user)
         log(f"  Alice logged in as {alice_user}")
-        
-        time.sleep(1)
         
         # Alice starts typing
         log("  Alice starts typing...")
@@ -222,13 +218,9 @@ def test_typing_sla_latency():
         receiver = create_client_with_retry()
         receiver.login(receiver_user)
         
-        time.sleep(1)
-        
         # Set up sender
         sender = create_client_with_retry()
         sender.login(sender_user)
-        
-        time.sleep(1)
         
         # Set receiver to non-blocking with short timeout for latency measurement
         receiver.sock.settimeout(0.1)
@@ -330,8 +322,6 @@ def test_bidirectional_typing():
         client_b = create_client_with_retry()
         client_b.login(user_b)
         
-        time.sleep(1)
-        
         # Both start typing
         log("  Both users start typing...")
         typing_a_to_b = create_typing_packet(user_b)
@@ -339,9 +329,6 @@ def test_bidirectional_typing():
         
         client_a.sock.sendall(typing_a_to_b)
         client_b.sock.sendall(typing_b_to_a)
-        
-        # Give time for propagation
-        time.sleep(2)
         
         # Both stop typing
         log("  Both users stop typing...")

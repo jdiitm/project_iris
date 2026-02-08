@@ -6,13 +6,24 @@
 -export([wait_for_socket/3, handshake/3, connected/3]).
 
 -record(data, {
-    socket :: gen_tcp:socket(),
+    socket :: gen_tcp:socket() | ssl:sslsocket(),
     user :: binary() | undefined,
     buffer = <<>> :: binary(),
     frag_op = undefined :: atom()
 }).
 
 -define(WS_GUID, "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").
+
+%% =============================================================================
+%% Transport-agnostic socket helpers (TLS + plain TCP)
+%% NFR-14: TLS is mandatory, but we handle both for robustness.
+%% =============================================================================
+
+sock_setopts({sslsocket, _, _} = Sock, Opts) -> ssl:setopts(Sock, Opts);
+sock_setopts(Sock, Opts) -> inet:setopts(Sock, Opts).
+
+sock_send({sslsocket, _, _} = Sock, Data) -> ssl:send(Sock, Data);
+sock_send(Sock, Data) -> gen_tcp:send(Sock, Data).
 
 %% API
 start_link(Socket) ->
@@ -31,14 +42,16 @@ callback_mode() -> [state_functions, state_enter].
 wait_for_socket(enter, _OldState, _Data) ->
     keep_state_and_data;
 wait_for_socket(cast, {socket_ready, Socket}, Data) ->
-    inet:setopts(Socket, [{active, once}]),
+    sock_setopts(Socket, [{active, once}]),
     {next_state, handshake, Data#data{socket = Socket}}.
 
 %% STATE: handshake (HTTP Upgrade)
 handshake(enter, _OldState, _Data) ->
     keep_state_and_data;
 
-handshake(info, {tcp, Socket, Bin}, Data = #data{buffer = Buff}) ->
+%% Handle both TLS ({ssl, ...}) and plain TCP ({tcp, ...}) data messages
+handshake(info, {Proto, Socket, Bin}, Data = #data{buffer = Buff})
+  when Proto =:= tcp; Proto =:= ssl ->
     NewBuff = <<Buff/binary, Bin/binary>>,
     case parse_http_upgrade(NewBuff) of
         {ok, Key, Rest} ->
@@ -48,11 +61,11 @@ handshake(info, {tcp, Socket, Bin}, Data = #data{buffer = Buff}) ->
                      "Upgrade: websocket\r\n",
                      "Connection: Upgrade\r\n",
                      "Sec-WebSocket-Accept: ", AcceptKey/binary, "\r\n\r\n">>,
-            gen_tcp:send(Socket, Resp),
+            sock_send(Socket, Resp),
             %% Enter Connected State and process any remaining data
             {next_state, connected, Data#data{buffer = Rest}, {next_event, internal, check_buffer}};
         more ->
-            inet:setopts(Socket, [{active, once}]),
+            sock_setopts(Socket, [{active, once}]),
             {keep_state, Data#data{buffer = NewBuff}};
         error ->
             io:format("WS: Handshake Error~n"),
@@ -66,21 +79,27 @@ connected(enter, _OldState, _Data) ->
 connected(internal, check_buffer, Data = #data{buffer = Buff}) ->
     process_ws_frames(Buff, Data);
 
-connected(info, {tcp, _Socket, Bin}, Data = #data{buffer = Buff}) ->
+%% Handle both TLS and plain TCP data messages
+connected(info, {Proto, _Socket, Bin}, Data = #data{buffer = Buff})
+  when Proto =:= tcp; Proto =:= ssl ->
     NewBuff = <<Buff/binary, Bin/binary>>,
     process_ws_frames(NewBuff, Data);
 
-connected(info, {tcp_closed, _}, Data) -> {stop, normal, Data};
-connected(info, {tcp_error, _, _}, Data) -> {stop, normal, Data};
+%% Handle both TLS and plain TCP close/error
+connected(info, {Closed, _}, Data)
+  when Closed =:= tcp_closed; Closed =:= ssl_closed ->
+    {stop, normal, Data};
+connected(info, {Error, _, _}, Data)
+  when Error =:= tcp_error; Error =:= ssl_error ->
+    {stop, normal, Data};
 
 %% Route msg from router
 connected(info, {deliver_msg, Msg}, Data = #data{socket = Socket}) ->
     %% Wrap in Binary Frame (Opcode 2)
     Frame = encode_frame(binary, Msg),
-    gen_tcp:send(Socket, Frame),
+    sock_send(Socket, Frame),
     keep_state_and_data.
 
-%% Frame Processing Loop
 %% Frame Processing Loop
 process_ws_frames(Buff, Data = #data{socket = Socket, user = User}) ->
     case decode_frame(Buff) of
@@ -96,23 +115,23 @@ process_ws_frames(Buff, Data = #data{socket = Socket, user = User}) ->
                 close -> {stop, normal, Data}
             end;
         more ->
-            inet:setopts(Socket, [{active, once}]),
+            sock_setopts(Socket, [{active, once}]),
             {keep_state, Data#data{buffer = Buff}}
     end.
 
 handle_actions([], _) -> ok;
 handle_actions([{send, Bin} | T], Socket) ->
-    gen_tcp:send(Socket, encode_frame(binary, Bin)),
+    sock_send(Socket, encode_frame(binary, Bin)),
     handle_actions(T, Socket);
 handle_actions([{send_batch, Bins} | T], Socket) ->
-    [gen_tcp:send(Socket, encode_frame(binary, B)) || B <- Bins],
+    [sock_send(Socket, encode_frame(binary, B)) || B <- Bins],
     handle_actions(T, Socket);
 handle_actions([close | _], Socket) ->
-    gen_tcp:send(Socket, encode_frame(close, <<>>)).
+    sock_send(Socket, encode_frame(close, <<>>)).
 
 %% WS Logic
 handle_frame_op(ping, _, Data) -> 
-    gen_tcp:send(Data#data.socket, encode_frame(pong, <<>>)),
+    sock_send(Data#data.socket, encode_frame(pong, <<>>)),
     {ok, Data};
 handle_frame_op(pong, _, Data) -> {ok, Data};
 handle_frame_op(close, _, _Data) -> close;

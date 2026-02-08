@@ -41,6 +41,7 @@
 -define(MAX_BACKOFF_MS, 60000).
 -define(BATCH_SIZE, 100).
 -define(MAX_QUEUE_SIZE, 10000).  %% FM-1: Max messages per destination region
+-define(OUTBOX_TTL_MS, 604800000).  %% RFC Section 7.2: 7 days in milliseconds
 %% GEO-001 FIX: Auto-reconnection constants
 -define(RECONNECT_INTERVAL_MS, 5000).   %% 5 seconds between reconnect attempts
 -define(HEALTH_CHECK_INTERVAL_MS, 10000). %% 10 seconds health check
@@ -111,6 +112,11 @@ send_cross_region(TargetRegion, UserId, Msg, Opts) ->
 check_queue_overflow(TargetRegion) ->
     try
         Depth = get_queue_depth(TargetRegion),
+        %% RFC Section 7.2: Alert at 50% of max queue depth (GAP-2 fix)
+        case Depth >= (?MAX_QUEUE_SIZE div 2) of
+            true -> iris_metrics:inc(iris_outbox_queue_warning);
+            false -> ok
+        end,
         case Depth >= ?MAX_QUEUE_SIZE of
             true ->
                 logger:warning("Outbox queue overflow for region ~s: ~p/~p",
@@ -380,6 +386,8 @@ handle_cast(_Msg, State) ->
     {noreply, State}.
 
 handle_info(drain, State) ->
+    %% RFC Section 7.2: Purge messages older than 7-day TTL (GAP-1 fix)
+    cleanup_expired_outbox(),
     NewState = do_drain(State),
     Timer = erlang:send_after(?DRAIN_INTERVAL_MS, self(), drain),
     {noreply, NewState#state{drain_timer = Timer}};
@@ -498,6 +506,30 @@ terminate(_Reason, State) ->
 %% =============================================================================
 %% Internal: Drain Logic
 %% =============================================================================
+
+%% @doc Purge outbox messages older than 7-day TTL (RFC Section 7.2 GAP-1 fix)
+cleanup_expired_outbox() ->
+    try
+        CutoffMs = erlang:system_time(millisecond) - ?OUTBOX_TTL_MS,
+        Expired = mnesia:activity(transaction, fun() ->
+            All = mnesia:match_object(?OUTBOUND_TABLE,
+                #cross_region_outbound{_ = '_'}, read),
+            [M || M <- All, M#cross_region_outbound.created_at < CutoffMs]
+        end),
+        case Expired of
+            [] -> ok;
+            _ ->
+                mnesia:activity(transaction, fun() ->
+                    lists:foreach(fun(M) ->
+                        mnesia:delete(?OUTBOUND_TABLE, M#cross_region_outbound.id, write)
+                    end, Expired)
+                end),
+                logger:info("Outbox TTL: purged ~p expired messages (older than 7 days)",
+                           [length(Expired)])
+        end
+    catch
+        _:_ -> ok  %% If cleanup fails, don't crash the drain cycle
+    end.
 
 do_drain(State) ->
     Now = erlang:system_time(millisecond),
