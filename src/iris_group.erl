@@ -48,7 +48,10 @@
     update_member_last_seen/2,  %% (GroupId, UserId) -> ok
     
     %% RFC-001 v3.0: E2EE group detection
-    has_sender_keys/1           %% (GroupId) -> boolean()
+    has_sender_keys/1,          %% (GroupId) -> boolean()
+    
+    %% RFC FR-19: Maximum members per E2EE group
+    max_members/0               %% () -> 256
 ]).
 
 %% gen_server callbacks
@@ -561,6 +564,10 @@ do_add_member(GroupId, UserId, AddedBy) ->
                     end
             end
     end.
+
+%% @doc Return the maximum number of members per E2EE group (RFC FR-19).
+-spec max_members() -> pos_integer().
+max_members() -> ?MAX_E2EE_GROUP_MEMBERS.
 
 %% @doc Check if a group has sender keys (indicating E2EE usage)
 -spec has_sender_keys(binary()) -> boolean().

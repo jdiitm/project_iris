@@ -794,7 +794,7 @@ validate_cbor_idempotency_key(Map) when is_map(Map) ->
 %% @doc Validate E2EE message header contains required fields.
 %% Required: ik (identity key), ek (ephemeral key).
 %% The server cannot decrypt but CAN validate structural integrity.
--spec validate_e2ee_header(map()) -> ok | {error, term()}.
+-spec validate_e2ee_header(term()) -> ok | {error, term()}.
 validate_e2ee_header(Header) when is_map(Header) ->
     RequiredKeys = [<<"ik">>, <<"ek">>],
     Missing = [K || K <- RequiredKeys, not maps:is_key(K, Header)],
@@ -803,9 +803,10 @@ validate_e2ee_header(Header) when is_map(Header) ->
         _ -> {error, {missing_e2ee_fields, Missing}}
     end;
 validate_e2ee_header(_) ->
-    %% Non-map header: accept for backward compatibility
-    %% (proto decoder may pass raw binary in some cases)
-    ok.
+    %% Non-map header MUST be rejected (NFR-18).
+    %% E2EE headers are always CBOR maps per RFC-001-AMENDMENT-001 Section 4.1.
+    %% A non-map value cannot contain required keys (ik, ek).
+    {error, invalid_header_type}.
 
 %% =============================================================================
 %% Internal: Login helpers

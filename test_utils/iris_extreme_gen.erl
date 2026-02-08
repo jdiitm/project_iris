@@ -1,5 +1,5 @@
 -module(iris_extreme_gen).
--export([start/3, start/5, worker_init/8, get_stats/0, get_latency_stats/0]).
+-export([start/3, start/5, start/6, worker_init/9, get_stats/0, get_latency_stats/0]).
 
 -define(TARGET_HOST, {127,0,0,1}).
 -define(TARGET_PORT, 8085).  %% Edge default port
@@ -38,7 +38,31 @@ start(Count, Duration, Mode) ->
     start(Count, Duration, Mode, ?TARGET_HOST, ?TARGET_PORT).
 
 start(Count, Duration, Mode, Host, Port) ->
-    io:format("Starting EXTREME Load Gen (~p): ~p connections to ~p:~p...~n", [Mode, Count, Host, Port]),
+    %% Detect TLS mode from CONFIG env var (the canonical test infrastructure
+    %% mechanism). When CONFIG contains "tls", the server was started with TLS.
+    %% When CONFIG is unset (e.g., Phase 3 chaos tests that manage their own
+    %% clusters), default to plain TCP — cert files may exist on disk even when
+    %% the server is not using TLS.
+    UseTls = case os:getenv("CONFIG") of
+        false -> false;
+        ConfigPath ->
+            case string:find(ConfigPath, "tls") of
+                nomatch -> false;
+                _ -> true
+            end
+    end,
+    start(Count, Duration, Mode, Host, Port, UseTls).
+
+start(Count, Duration, Mode, Host, Port, UseTls) ->
+    TlsLabel = case UseTls of true -> "TLS"; false -> "TCP" end,
+    io:format("Starting EXTREME Load Gen (~p/~s): ~p connections to ~p:~p...~n",
+              [Mode, TlsLabel, Count, Host, Port]),
+    
+    %% Ensure SSL application is started if TLS is needed
+    case UseTls of
+        true -> application:ensure_all_started(ssl);
+        false -> ok
+    end,
     
     %% Create ETS tables for latency tracking
     catch ets:delete(?PENDING_MSGS),
@@ -52,35 +76,54 @@ start(Count, Duration, Mode, Host, Port) ->
     
     %% Optimization: Spawn in batches to reach 100k faster
     spawn(fun() ->
-        spawn_workers(Count, Count, StatsPid, Duration, Mode, Host, Port)
+        spawn_workers(Count, Count, StatsPid, Duration, Mode, Host, Port, UseTls)
     end).
 
-spawn_workers(0, _MaxID, _StatsPid, _Duration, _Mode, _Host, _Port) -> ok;
-spawn_workers(N, MaxID, StatsPid, Duration, Mode, Host, Port) ->
+spawn_workers(0, _MaxID, _StatsPid, _Duration, _Mode, _Host, _Port, _UseTls) -> ok;
+spawn_workers(N, MaxID, StatsPid, Duration, Mode, Host, Port, UseTls) ->
     BatchSize = 100,
     CurrentBatch = min(N, BatchSize),
     
     lists:foreach(fun(I) ->
         Id = MaxID - N + I,
-        spawn(?MODULE, worker_init, [Id, StatsPid, Duration, (Id rem 20) + 1, Mode, Host, Port, MaxID])
+        spawn(?MODULE, worker_init, [Id, StatsPid, Duration, (Id rem 20) + 1, Mode, Host, Port, MaxID, UseTls])
     end, lists:seq(1, CurrentBatch)),
     
     timer:sleep(10), %% 10ms delay between batches of 100 = 10k/sec startup rate
-    spawn_workers(N - CurrentBatch, MaxID, StatsPid, Duration, Mode, Host, Port).
+    spawn_workers(N - CurrentBatch, MaxID, StatsPid, Duration, Mode, Host, Port, UseTls).
 
+
+%% =============================================================================
+%% Transport-Agnostic Helpers (TCP or TLS)
+%% =============================================================================
+
+sock_connect(Host, Port, Opts, Timeout, true) ->
+    SslOpts = Opts ++ [{verify, verify_none}],
+    ssl:connect(Host, Port, SslOpts, Timeout);
+sock_connect(Host, Port, Opts, Timeout, false) ->
+    gen_tcp:connect(Host, Port, Opts, Timeout).
+
+sock_send({sslsocket, _, _} = Sock, Data) -> ssl:send(Sock, Data);
+sock_send(Sock, Data) -> gen_tcp:send(Sock, Data).
+
+sock_recv({sslsocket, _, _} = Sock, Len, Timeout) -> ssl:recv(Sock, Len, Timeout);
+sock_recv(Sock, Len, Timeout) -> gen_tcp:recv(Sock, Len, Timeout).
+
+sock_setopts({sslsocket, _, _} = Sock, Opts) -> ssl:setopts(Sock, Opts);
+sock_setopts(Sock, Opts) -> inet:setopts(Sock, Opts).
 
 %% =============================================================================
 %% Worker
 %% =============================================================================
 
-worker_init(Id, StatsPid, Duration, _IpOffset, Mode, Host, Port, MaxID) ->
+worker_init(Id, StatsPid, Duration, _IpOffset, Mode, Host, Port, MaxID, UseTls) ->
     Opts = [binary, {packet, 0}, {active, false}, {reuseaddr, true}],
     
-    case gen_tcp:connect(Host, Port, Opts, 5000) of
+    case sock_connect(Host, Port, Opts, 5000, UseTls) of
         {ok, Sock} ->
             User = list_to_binary("user_" ++ integer_to_list(Id)),
-            gen_tcp:send(Sock, <<1, User/binary>>),
-            case gen_tcp:recv(Sock, 0, 60000) of
+            sock_send(Sock, <<1, User/binary>>),
+            case sock_recv(Sock, 0, 60000) of
                 {ok, Data} when byte_size(Data) >= 8 -> 
                     case binary:match(Data, <<"LOGIN_OK">>) of
                         nomatch ->
@@ -93,11 +136,11 @@ worker_init(Id, StatsPid, Duration, _IpOffset, Mode, Host, Port, MaxID) ->
                                     worker_loop(Sock, Id, StatsPid, EndTime);
                                 extreme_load ->
                                     erlang:send_after(rand:uniform(1000), self(), trigger_burst),
-                                    inet:setopts(Sock, [{active, once}]),
+                                    sock_setopts(Sock, [{active, once}]),
                                     duplex_loop(Sock, Id, StatsPid, EndTime, MaxID);
                                 fan_in ->
                                     erlang:send_after(rand:uniform(1000), self(), trigger_burst),
-                                    inet:setopts(Sock, [{active, once}]),
+                                    sock_setopts(Sock, [{active, once}]),
                                     fan_in_loop(Sock, Id, StatsPid, EndTime)
                             end
                     end;
@@ -108,24 +151,21 @@ worker_init(Id, StatsPid, Duration, _IpOffset, Mode, Host, Port, MaxID) ->
                     io:format("Worker ~p: Login recv error: ~p~n", [Id, Reason]),
                     exit(login_failed)
             end;
-        {error, Reason} -> 
-            % io:format("Worker ~p: Connect failed: ~p~n", [Id, Reason]),
+        {error, _Reason} -> 
             exit(connect_failed)
     end.
 
 worker_loop(Sock, Id, StatsPid, EndTime) ->
     receive
-        {tcp, Sock, _Data} ->
-            %% Just keep connection open and count headers if needed
-            %% For now, just drain buffer
-            inet:setopts(Sock, [{active, once}]),
+        {Proto, Sock, _Data} when Proto =:= tcp; Proto =:= ssl ->
+            %% Just keep connection open and drain buffer
+            sock_setopts(Sock, [{active, once}]),
             worker_loop(Sock, Id, StatsPid, EndTime);
-        {tcp_closed, Sock} ->
+        {Closed, Sock} when Closed =:= tcp_closed; Closed =:= ssl_closed ->
             ok;
         _ ->
             worker_loop(Sock, Id, StatsPid, EndTime)
     after 1000 ->
-        %% Check time
         Now = os:system_time(second),
         if Now >= EndTime -> ok;
         true -> worker_loop(Sock, Id, StatsPid, EndTime)
@@ -138,12 +178,12 @@ worker_loop(Sock, Id, StatsPid, EndTime) ->
 
 duplex_loop(Sock, Id, StatsPid, EndTime, MaxID) ->
     receive
-        {tcp, Sock, Data} ->
+        {Proto, Sock, Data} when Proto =:= tcp; Proto =:= ssl ->
             handle_incoming(Sock, Data, StatsPid),
-            inet:setopts(Sock, [{active, once}]),
+            sock_setopts(Sock, [{active, once}]),
             duplex_loop(Sock, Id, StatsPid, EndTime, MaxID);
             
-        {tcp_closed, Sock} ->
+        {Closed, Sock} when Closed =:= tcp_closed; Closed =:= ssl_closed ->
             exit(normal);
             
         trigger_burst ->
@@ -165,12 +205,12 @@ duplex_loop(Sock, Id, StatsPid, EndTime, MaxID) ->
 
 fan_in_loop(Sock, Id, StatsPid, EndTime) ->
     receive
-        {tcp, Sock, Data} ->
+        {Proto, Sock, Data} when Proto =:= tcp; Proto =:= ssl ->
             handle_incoming(Sock, Data, StatsPid),
-            inet:setopts(Sock, [{active, once}]),
+            sock_setopts(Sock, [{active, once}]),
             fan_in_loop(Sock, Id, StatsPid, EndTime);
             
-        {tcp_closed, Sock} ->
+        {Closed, Sock} when Closed =:= tcp_closed; Closed =:= ssl_closed ->
             exit(normal);
             
         trigger_burst ->
@@ -183,7 +223,7 @@ fan_in_loop(Sock, Id, StatsPid, EndTime) ->
                  Msg = <<"GOAL">>,
                  SeqNo = erlang:unique_integer([monotonic, positive]),
                  Packet = <<7, (byte_size(Target)):16, Target/binary, SeqNo:64, (byte_size(Msg)):16, Msg/binary>>,
-                 gen_tcp:send(Sock, Packet),
+                 sock_send(Sock, Packet),
                  StatsPid ! {add, 1, 0},
                  
                  %% Reduced frequency: 1 msg every 30-60s per user
@@ -199,7 +239,7 @@ fan_in_loop(Sock, Id, StatsPid, EndTime) ->
 %% based on when we receive ANY message relative to our recent sends.
 handle_incoming(Sock, <<16, IdLen:16, MsgId:IdLen/binary, _MsgLen:32, _Msg/binary>>, StatsPid) ->
     %% Reliable message received - send ACK
-    gen_tcp:send(Sock, <<3, MsgId/binary>>),
+    sock_send(Sock, <<3, MsgId/binary>>),
     RecvTime = erlang:monotonic_time(microsecond),
     
     %% Report receive time to stats for latency calculation
@@ -227,7 +267,7 @@ send_msg_with_timestamp(Sock, TargetId, StatsPid) ->
     %% Sequence number for FIFO ordering
     SeqNo = erlang:unique_integer([monotonic, positive]),
     Packet = <<7, (byte_size(Target)):16, Target/binary, SeqNo:64, (byte_size(Msg)):16, Msg/binary>>,
-    gen_tcp:send(Sock, Packet),
+    sock_send(Sock, Packet),
     StatsPid ! {add, 1, 0}.
 
 %% =============================================================================

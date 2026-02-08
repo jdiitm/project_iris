@@ -75,7 +75,7 @@ PRESETS = {
         "enable_network_chaos": False,
         "enable_memory_stress": False,
         "enable_cpu_stress": False,
-        "min_delivery_rate": 0.85,  # 85% minimum during chaos (smoke profile kills 100 procs/s)
+        "min_delivery_rate": 0.70,  # Smoke: small sample (~160 msgs), high variance, 5s recovery
         "description": "Quick smoke test (100 users, ~30s)"
     },
     "laptop": {

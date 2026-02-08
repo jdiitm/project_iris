@@ -229,6 +229,11 @@ run_test() {
 
 # Quick server restart (used after heavy tests)
 restart_server_quick() {
+    # Graceful shutdown first (SIGTERM) to allow clean socket teardown,
+    # then force kill (SIGKILL) as fallback. Using only SIGKILL causes
+    # listen sockets to linger in TIME_WAIT, leading to eaddrinuse on restart.
+    pkill -TERM beam.smp 2>/dev/null || true
+    sleep 1
     pkill -9 beam.smp 2>/dev/null || true
     # Wait for old beam.smp to actually exit (CI runners can be slow to reap)
     # Without this, ps -C beam.smp sees both old and new processes, inflating
@@ -238,6 +243,15 @@ restart_server_quick() {
         wait_attempts=$((wait_attempts + 1))
         if [ $wait_attempts -ge 10 ]; then
             echo -e "    ${YELLOW}Warning: beam.smp still in process table after 10s${NC}"
+            break
+        fi
+        sleep 1
+    done
+    # Wait for ports to be fully released (prevents eaddrinuse on restart)
+    local port_attempts=0
+    while ss -tlnp 2>/dev/null | grep -q ':8085\|:8086'; do
+        port_attempts=$((port_attempts + 1))
+        if [ $port_attempts -ge 5 ]; then
             break
         fi
         sleep 1
@@ -495,13 +509,10 @@ else
         [ -f "$test" ] && run_test "$test" 180
     done
 
-    # Restart server
+    # Restart server (use graceful shutdown to avoid eaddrinuse)
     echo ""
     echo -e "${YELLOW}[RECOVERY]${NC} Restarting server..."
-    pkill -9 beam.smp 2>/dev/null || true
-    sleep 3
-    rm -rf Mnesia.* MnesiaCore.* 2>/dev/null || true
-    start_server || exit 1
+    restart_server_quick
 
     echo ""
     echo "--- Performance Tests ---"
@@ -601,13 +612,10 @@ else
     echo "  (Each test manages its own cluster - server restart between tests)"
 
     # Unset CONFIG for Phase 3: chaos_controlled tests start their OWN cluster
-    # via ClusterManager or direct `make` calls. The Erlang load generator
-    # (iris_extreme_gen) connects via gen_tcp (plain TCP, not SSL) because
-    # Erlang's ssl:connect requires additional setup that iris_extreme_gen
-    # doesn't implement. Without unsetting CONFIG, the child `make start_*`
-    # commands inherit CONFIG=config/test_tls and start TLS-only servers,
-    # causing iris_extreme_gen's gen_tcp:connect to fail silently (0 messages).
-    # Phase 2 TLS testing is already complete at this point.
+    # via ClusterManager or direct `make` calls. Each test manages its own
+    # server lifecycle and configuration independently. Without unsetting
+    # CONFIG, child `make start_*` commands inherit CONFIG=config/test_tls,
+    # which may conflict with the test's own cluster configuration.
     unset CONFIG
 
     for test in tests/suites/chaos_controlled/*.py; do

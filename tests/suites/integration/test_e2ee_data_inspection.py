@@ -58,11 +58,25 @@ def cbor_encode_map(pairs):
     return header + body
 
 
+def cbor_encode_bytes(b):
+    """Encode raw bytes as CBOR byte string (major type 2)."""
+    n = len(b)
+    if n < 24:
+        return bytes([0x40 | n]) + b
+    elif n < 256:
+        return bytes([0x58, n]) + b
+    else:
+        return bytes([0x59]) + struct.pack('>H', n) + b
+
+
 def build_e2ee_header_cbor():
     """Build a minimal valid CBOR map for the E2EE header.
-    Server expects cbor_decode to return {ok, Map} where is_map(Map)."""
+    Server validates structural integrity: required keys ik and ek must be
+    present (RFC-001-AMENDMENT-001 Section 4.1). Values are dummy 32-byte
+    keys since the server never decrypts — it only checks presence."""
     return cbor_encode_map([
-        (cbor_encode_text("msg_type"), cbor_encode_text("e2ee")),
+        (cbor_encode_text("ik"), cbor_encode_bytes(b'\x00' * 32)),
+        (cbor_encode_text("ek"), cbor_encode_bytes(b'\x00' * 32)),
     ])
 
 
