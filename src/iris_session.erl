@@ -416,17 +416,24 @@ handle_packet({fetch_prekeys, _TargetUser}, undefined, _Pid, _Mod) ->
 
 handle_packet({e2ee_msg, Recipient, Ciphertext, Header}, User, _Pid, _Mod) when User =/= undefined ->
     %% Route E2EE message to recipient (server never decrypts)
-    %% VIOLATION-4 FIX: Rate limit check on message send
-    case check_message_rate(User) of
-        allow ->
-            %% Encode delivery packet with sender info
-            DeliveryPacket = iris_proto:encode_e2ee_delivery(User, {Header, Ciphertext}),
-            %% Route to recipient using async router
-            iris_router:route(Recipient, DeliveryPacket),
-            {ok, User, []};
-        {deny, RetryAfter} ->
-            logger:warning("E2EE message rate limited for ~p", [User]),
-            {ok, User, [{send, encode_rate_limited(RetryAfter)}]}
+    %% NFR-18: Validate E2EE header fields before routing
+    case validate_e2ee_header(Header) of
+        ok ->
+            %% VIOLATION-4 FIX: Rate limit check on message send
+            case check_message_rate(User) of
+                allow ->
+                    %% Encode delivery packet with sender info
+                    DeliveryPacket = iris_proto:encode_e2ee_delivery(User, {Header, Ciphertext}),
+                    %% Route to recipient using async router
+                    iris_router:route(Recipient, DeliveryPacket),
+                    {ok, User, []};
+                {deny, RetryAfter} ->
+                    logger:warning("E2EE message rate limited for ~p", [User]),
+                    {ok, User, [{send, encode_rate_limited(RetryAfter)}]}
+            end;
+        {error, Reason} ->
+            logger:warning("E2EE header validation failed for ~p: ~p", [User, Reason]),
+            {ok, User, [{send, encode_error(invalid_e2ee_header)}]}
     end;
 
 handle_packet({e2ee_msg, _Recipient, _Ciphertext, _Header}, undefined, _Pid, _Mod) ->
@@ -779,6 +786,26 @@ validate_cbor_idempotency_key(Map) when is_map(Map) ->
         undefined -> ok;  %% Field not present - allow (backwards compat)
         Key -> iris_uuid:validate_idempotency_key(Key)
     end.
+
+%% =============================================================================
+%% Internal: E2EE Header Validation (RFC-001-AMENDMENT-001 Section 4.1, NFR-18)
+%% =============================================================================
+
+%% @doc Validate E2EE message header contains required fields.
+%% Required: ik (identity key), ek (ephemeral key).
+%% The server cannot decrypt but CAN validate structural integrity.
+-spec validate_e2ee_header(map()) -> ok | {error, term()}.
+validate_e2ee_header(Header) when is_map(Header) ->
+    RequiredKeys = [<<"ik">>, <<"ek">>],
+    Missing = [K || K <- RequiredKeys, not maps:is_key(K, Header)],
+    case Missing of
+        [] -> ok;
+        _ -> {error, {missing_e2ee_fields, Missing}}
+    end;
+validate_e2ee_header(_) ->
+    %% Non-map header: accept for backward compatibility
+    %% (proto decoder may pass raw binary in some cases)
+    ok.
 
 %% =============================================================================
 %% Internal: Login helpers

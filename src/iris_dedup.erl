@@ -116,12 +116,25 @@ check_and_mark(MsgId) ->
     end.
 
 %% @doc Just check if duplicate (no side effects)
-%% P0-C3: Checks both hot ETS and warm bloom tiers
+%% RFC-001 v4.0 Section 6.2: Bloom MUST NOT be sole basis for drop decision.
+%% When bloom returns positive, cross-check against authoritative Mnesia dedup_log.
 -spec is_duplicate(binary()) -> boolean().
 is_duplicate(MsgId) ->
     case ets:member(?TABLE, MsgId) of
         true -> true;
-        false -> check_bloom(MsgId)
+        false ->
+            case check_bloom(MsgId) of
+                true ->
+                    %% Bloom says "probably seen" - MUST verify with Mnesia (RFC 6.2)
+                    case mnesia:dirty_read(dedup_log, MsgId) of
+                        [{dedup_log, MsgId, _}] -> true;
+                        [] ->
+                            %% Bloom false positive - message is truly new
+                            gen_server:cast(?SERVER, bloom_fp_in_is_duplicate),
+                            false
+                    end;
+                false -> false
+            end
     end.
 
 %% @doc Just mark as seen (for pipeline scenarios)
@@ -228,6 +241,13 @@ handle_cast(bloom_hit, State) ->
 handle_cast({false_positive, _Timestamp}, State) ->
     %% P0-FIX: Track bloom filter false positives (messages that bloom said "duplicate" but weren't)
     %% MO-2: Also count as a bloom check for FPR computation
+    {noreply, State#state{
+        bloom_false_positives = State#state.bloom_false_positives + 1,
+        bloom_checks = State#state.bloom_checks + 1
+    }};
+
+handle_cast(bloom_fp_in_is_duplicate, State) ->
+    %% RFC 6.2 FIX: Track false positives caught in is_duplicate/1 read path
     {noreply, State#state{
         bloom_false_positives = State#state.bloom_false_positives + 1,
         bloom_checks = State#state.bloom_checks + 1

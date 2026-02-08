@@ -149,13 +149,20 @@ def test_reconnect_burst():
                     pass
 
     reconnect_time = time.time() - reconnect_start
-    log(f"  Reconnected: {reconnected}/{connected} in {reconnect_time:.1f}s")
+    reconnect_rate = reconnected / max(reconnect_time, 0.001)
+    log(f"  Reconnected: {reconnected}/{connected} in {reconnect_time:.1f}s ({reconnect_rate:.0f}/sec)")
 
     if not server_alive():
         log("  FAIL: Server crashed during reconnect storm")
         return False
 
     success_rate = reconnected / max(connected, 1)
+
+    # NFR-4 rate gate: full profile should achieve meaningful reconnect rate.
+    # Smoke profile is too small to measure rate reliably.
+    if TEST_PROFILE == "full" and reconnect_rate < 1000:
+        log(f"  WARN NFR-4: Reconnect rate {reconnect_rate:.0f}/sec below target (100K/sec at scale)")
+
     if success_rate >= 0.8:
         log(f"  PASS: {success_rate*100:.0f}% reconnect success rate")
         return True

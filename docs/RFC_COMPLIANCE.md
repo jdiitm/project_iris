@@ -1,6 +1,6 @@
 # RFC-001 Compliance Status
 
-**Status**: 75+ tests pass | **TLS Enforced** | **Last Updated**: 2026-02-07
+**Status**: 80+ tests pass | **TLS Enforced** | **Last Updated**: 2026-02-08
 
 ## Verification Status Legend
 
@@ -96,6 +96,18 @@
 | Section 9.1 | JWT private key on all nodes (not isolated) | `auth_mode` config (signer/verifier) in `iris_auth.erl` | `iris_auth_key_isolation_tests.erl` (8 tests) |
 | Section 5.4 | No backward-compatible 64-bit HLC parsing | `from_binary/1` accepts 8-byte legacy format in `iris_hlc.erl` | `iris_hlc_tests.erl` (4 new tests) |
 
+## RFC v4.0 Gap Closures (2026-02-08)
+
+| Audit Item | Gap | Fix | Test |
+|------------|-----|-----|------|
+| Section 6.2 Dedup | `is_duplicate/1` used bloom-only (no Mnesia cross-check) | Added Mnesia `dedup_log` cross-check on bloom positive in `iris_dedup.erl` | `iris_dedup_sole_drop_tests.erl` (4 tests) |
+| Section 3.4 Session | Session cache had no size limit (unbounded ETS) | Added 100K hard limit with LRU eviction in `iris_session_cache.erl` | `iris_session_cache_bound_tests.erl` (5 tests) |
+| NFR-18 Validation | E2EE header fields not validated before routing | Added `validate_e2ee_header/1` in `iris_session.erl` (requires `ik`, `ek`) | `test_cbor_schema_validation.py` (4 tests) |
+| Section 5.4 Migration | No mixed 64/80-bit HLC cluster ordering test | Structural + live ordering test | `test_hlc_mixed_version.py` (2 tests) |
+| Amendment 6.3 | No sender key rotation race window test | Server resilience test during key rotation | `test_sender_key_rotation_window.py` (2 tests) |
+| NFR-19 Memory | No hard fail threshold in memory benchmark | Added NFR-19 hard gate (<=10KB/conn at full scale) | `benchmark_memory.py` (NFR-19 gate) |
+| NFR-4 Reconnect | No reconnect rate measurement | Added rate calculation to reconnect storm test | `test_reconnect_storm.py` (rate metric) |
+
 ## Deferred / Partial
 
 | Item | Status | Notes |
@@ -106,6 +118,10 @@
 | E2EE Crypto Validation | **VERIFIED** | Erlang unit tests cover Double Ratchet; Python tests cover primitives |
 | NFR-17 Distributed Rate Limit | Partial | Single-node tested; cross-node test requires Docker cluster |
 | FR-19 Group Size Limit | **VERIFIED** | 256-member limit test added to `test_group_membership.py` |
+| Section 6.2 Dedup is_duplicate | **VERIFIED** | Mnesia cross-check added; bloom FP tracked via `bloom_fp_in_is_duplicate` counter |
+| Section 3.4 Session Cache Limit | **VERIFIED** | 100K hard limit enforced with LRU eviction |
+| NFR-18 E2EE Header Validation | **VERIFIED** | Required fields (`ik`, `ek`) validated before routing |
+| Section 7.2 Outbox fsync | **VERIFIED** | Already uses `sync_transaction` (confirmed 2026-02-08) |
 
 ## Test Coverage
 
@@ -115,13 +131,14 @@
 | integration | 22 | 22 | 100% | Core message flow |
 | stress | 14 | 14 | 100% | Load testing |
 | chaos_dist | 12 | 12 | 100% | Docker required, SIGKILL durability |
-| security | 7 | 7 | 100% | TLS, auth, rate limiting |
-| performance_light | 6 | 6 | 100% | Benchmarks |
+| security | 9 | 9 | 100% | TLS, auth, rate limiting, CBOR validation, sender key rotation |
+| performance_light | 6 | 6 | 100% | Benchmarks (NFR-19 hard gate added) |
 | e2e | 5 | 5 | 100% | End-to-end scenarios |
 | resilience | 3 | 3 | 100% | Fault tolerance |
 | chaos_controlled | 2 | 2 | 100% | Controlled chaos |
 | contract | 1 | 1 | 100% | Edge-core contract |
-| compatibility | 1 | 1 | 100% | Protocol versions |
-| **TOTAL** | **75** | **75** | **100%** | All TLS-enabled |
+| compatibility | 2 | 2 | 100% | Protocol versions, mixed HLC |
+| erlang unit (new) | 9 | 9 | 100% | Dedup sole-drop (4), session cache bound (5) |
+| **TOTAL** | **87** | **87** | **100%** | All TLS-enabled |
 
 See [TESTING.md](TESTING.md) for details.

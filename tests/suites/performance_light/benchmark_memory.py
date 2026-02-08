@@ -276,6 +276,16 @@ def run_benchmark():
     else:
         log(f"  ✅ Connection count OK: {conn_count}")
     
+    # NFR-19 Hard Gate: Per-connection memory MUST NOT exceed 10KB at scale.
+    # At smoke scale, TLS overhead dominates so we only gate on full profile.
+    NFR19_HARD_LIMIT_KB = 10
+    if TEST_PROFILE == "full" and conn_count >= min_reliable_conns:
+        if per_conn_kb > NFR19_HARD_LIMIT_KB:
+            log(f"  FAIL NFR-19: Per-connection memory {per_conn_kb:.2f} KB > {NFR19_HARD_LIMIT_KB} KB hard limit")
+            passed = False
+        else:
+            log(f"  NFR-19 PASS: Per-connection memory {per_conn_kb:.2f} KB <= {NFR19_HARD_LIMIT_KB} KB")
+    
     log("")
     return passed
 
