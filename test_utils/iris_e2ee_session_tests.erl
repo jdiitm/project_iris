@@ -363,6 +363,48 @@ store_default_durability_test() ->
     ?assert(lists:member({put, 4}, Exports)).
 
 %% =============================================================================
+%% E2EE Header Validation Tests (Audit Finding 1: Key Length Enforcement)
+%% =============================================================================
+
+%% Valid header: 32-byte ik and ek should be accepted
+e2ee_header_valid_keys_test() ->
+    Header = #{<<"ik">> => crypto:strong_rand_bytes(32),
+               <<"ek">> => crypto:strong_rand_bytes(32)},
+    ?assertEqual(ok, iris_session:validate_e2ee_header(Header)).
+
+%% Short ik (< 32 bytes) must be rejected
+e2ee_header_short_ik_test() ->
+    Header = #{<<"ik">> => <<0>>,
+               <<"ek">> => crypto:strong_rand_bytes(32)},
+    ?assertMatch({error, _}, iris_session:validate_e2ee_header(Header)).
+
+%% Short ek (< 32 bytes) must be rejected
+e2ee_header_short_ek_test() ->
+    Header = #{<<"ik">> => crypto:strong_rand_bytes(32),
+               <<"ek">> => <<0>>},
+    ?assertMatch({error, _}, iris_session:validate_e2ee_header(Header)).
+
+%% Empty ik must be rejected
+e2ee_header_empty_ik_test() ->
+    Header = #{<<"ik">> => <<>>,
+               <<"ek">> => crypto:strong_rand_bytes(32)},
+    ?assertMatch({error, _}, iris_session:validate_e2ee_header(Header)).
+
+%% Non-binary ik must be rejected
+e2ee_header_nonbinary_ik_test() ->
+    Header = #{<<"ik">> => 12345,
+               <<"ek">> => crypto:strong_rand_bytes(32)},
+    ?assertMatch({error, _}, iris_session:validate_e2ee_header(Header)).
+
+%% Missing fields still rejected (existing behavior)
+e2ee_header_missing_fields_test() ->
+    ?assertMatch({error, _}, iris_session:validate_e2ee_header(#{})).
+
+%% Non-map still rejected (existing behavior)
+e2ee_header_nonmap_test() ->
+    ?assertMatch({error, _}, iris_session:validate_e2ee_header(<<"not a map">>)).
+
+%% =============================================================================
 %% Test Suite
 %% =============================================================================
 

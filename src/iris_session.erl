@@ -1,5 +1,7 @@
 -module(iris_session).
 -export([handle_packet/4, terminate/1]).
+-export([validate_e2ee_header/1]).  %% Exported for TDD (audit finding 1)
+-export([group_fanout_recipients/3]).  %% Exported for TDD (audit finding 3)
 
 -include_lib("kernel/include/inet.hrl").
 
@@ -565,14 +567,12 @@ handle_packet({group_msg, GroupId, Ciphertext, Header}, User, _Pid, _Mod) when U
                                             %% Encode the message once
                                             DeliveryPacket = iris_proto:encode_group_msg(GroupId, 
                                                 maps:put(<<"sender">>, User, Header), Ciphertext),
-                                            %% Send to all members except sender
+                                            %% Audit Finding 3: Re-check membership to close TOCTOU window
+                                            Recipients = group_fanout_recipients(GroupId, User, Members),
                                             lists:foreach(fun(#{user_id := MemberId}) ->
-                                                if MemberId =/= User ->
-                                                    iris_router:route(MemberId, DeliveryPacket),
-                                                    iris_metrics:msg_out();
-                                                true -> ok
-                                                end
-                                            end, Members),
+                                                iris_router:route(MemberId, DeliveryPacket),
+                                                iris_metrics:msg_out()
+                                            end, Recipients),
                                             {ok, User, []};
                                         {error, _Reason} ->
                                             {ok, User, [{send, encode_error(group_not_found)}]}
@@ -843,18 +843,38 @@ validate_cbor_idempotency_key(Map) when is_map(Map) ->
     end.
 
 %% =============================================================================
+%% Internal: Group Fan-out Recipient Filtering (Audit Finding 3: TOCTOU Fix)
+%% =============================================================================
+
+%% @doc Filter group member list to valid recipients for fan-out.
+%% Re-checks membership for each recipient to close the TOCTOU window
+%% between get_members and the actual routing.
+%% Excludes the sender and any members removed since the snapshot.
+-spec group_fanout_recipients(binary(), binary(), [map()]) -> [map()].
+group_fanout_recipients(GroupId, Sender, Members) ->
+    lists:filter(fun(#{user_id := MemberId}) ->
+        MemberId =/= Sender andalso
+        call_iris_group(is_member, [GroupId, MemberId]) =:= true
+    end, Members).
+
+%% =============================================================================
 %% Internal: E2EE Header Validation (RFC-001-AMENDMENT-001 Section 4.1, NFR-18)
 %% =============================================================================
 
-%% @doc Validate E2EE message header contains required fields.
-%% Required: ik (identity key), ek (ephemeral key).
-%% The server cannot decrypt but CAN validate structural integrity.
+%% @doc Validate E2EE message header contains required fields with correct sizes.
+%% Required: ik (identity key, 32 bytes), ek (ephemeral key, 32 bytes).
+%% The server cannot decrypt but CAN validate structural integrity and key sizes.
+%% Audit Finding 1: Prevent trivially empty/garbage headers that bypass E2EE.
+-define(MIN_E2EE_KEY_LEN, 32).  %% X25519 public key size
+
 -spec validate_e2ee_header(term()) -> ok | {error, term()}.
 validate_e2ee_header(Header) when is_map(Header) ->
     RequiredKeys = [<<"ik">>, <<"ek">>],
     Missing = [K || K <- RequiredKeys, not maps:is_key(K, Header)],
     case Missing of
-        [] -> ok;
+        [] ->
+            %% Validate key field types and minimum lengths
+            validate_e2ee_key_fields(Header);
         _ -> {error, {missing_e2ee_fields, Missing}}
     end;
 validate_e2ee_header(_) ->
@@ -862,6 +882,21 @@ validate_e2ee_header(_) ->
     %% E2EE headers are always CBOR maps per RFC-001-AMENDMENT-001 Section 4.1.
     %% A non-map value cannot contain required keys (ik, ek).
     {error, invalid_header_type}.
+
+%% @doc Validate ik and ek fields are binaries of at least 32 bytes.
+validate_e2ee_key_fields(Header) ->
+    IK = maps:get(<<"ik">>, Header),
+    EK = maps:get(<<"ek">>, Header),
+    case {is_binary(IK), is_binary(EK)} of
+        {false, _} -> {error, {invalid_e2ee_key, ik, not_binary}};
+        {_, false} -> {error, {invalid_e2ee_key, ek, not_binary}};
+        {true, true} ->
+            case {byte_size(IK) >= ?MIN_E2EE_KEY_LEN, byte_size(EK) >= ?MIN_E2EE_KEY_LEN} of
+                {false, _} -> {error, {e2ee_key_too_short, ik, byte_size(IK)}};
+                {_, false} -> {error, {e2ee_key_too_short, ek, byte_size(EK)}};
+                {true, true} -> ok
+            end
+    end.
 
 %% =============================================================================
 %% Internal: Login helpers

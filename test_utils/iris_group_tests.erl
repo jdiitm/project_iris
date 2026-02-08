@@ -328,7 +328,8 @@ e2ee_group_limits_test_() ->
      [
          {"E2EE group detection via sender keys", fun test_e2ee_detection/0},
          {"Broadcast group allows more members", fun test_broadcast_group_size/0},
-         {"E2EE group limit error message", fun test_e2ee_limit_error/0}
+         {"E2EE group limit error message", fun test_e2ee_limit_error/0},
+         {"E2EE group hard limit at 256", fun test_e2ee_group_hard_limit/0}
      ]}.
 
 test_e2ee_detection() ->
@@ -392,6 +393,32 @@ test_e2ee_limit_error() ->
     %% The limit should be 256 for E2EE groups (enforced in add_member)
     %% We verify the limit type mechanism is in place
     %% Full 256-member test would be too slow for unit tests
+    
+    ok.
+
+test_e2ee_group_hard_limit() ->
+    %% Audit Finding 2: Exercise the actual 256-member limit enforcement
+    Creator = <<"hard_limit_creator">>,
+    {ok, GroupId} = iris_group:create_group(<<"Hard Limit Test">>, Creator),
+    
+    %% Mark group as E2EE by storing a sender key
+    ok = iris_group:store_sender_key(GroupId, Creator, <<"hk1">>, <<"key_data">>),
+    ?assert(iris_group:has_sender_keys(GroupId)),
+    
+    %% Add 255 members (creator is member #1, so 255 more = 256 total)
+    lists:foreach(fun(N) ->
+        Member = list_to_binary(io_lib:format("hl_~p", [N])),
+        Result = iris_group:add_member(GroupId, Member, Creator),
+        ?assertEqual(ok, Result)
+    end, lists:seq(1, 255)),
+    
+    %% Verify we're at exactly 256
+    {ok, Info} = iris_group:get_group(GroupId),
+    ?assertEqual(256, maps:get(member_count, Info)),
+    
+    %% The 257th member must be rejected
+    Rejected = iris_group:add_member(GroupId, <<"overflow_member">>, Creator),
+    ?assertMatch({error, _}, Rejected),
     
     ok.
 
@@ -466,5 +493,69 @@ test_last_seen_update() ->
     
     %% Update non-existent member (should not crash)
     ok = iris_group:update_member_last_seen(GroupId, <<"nonexistent">>),
+    
+    ok.
+
+%% =============================================================================
+%% Audit Finding 3: Sender Key Race Condition (TOCTOU)
+%% =============================================================================
+%% The fan-out loop in iris_session must skip members who have been removed
+%% between the initial is_member check and the actual routing.
+%% iris_session:group_fanout_recipients/3 is a pure function for TDD.
+%% =============================================================================
+
+sender_key_race_test_() ->
+    {setup,
+     fun setup/0,
+     fun cleanup/1,
+     [
+         {"Removed member excluded from fanout", fun test_removed_member_excluded_from_fanout/0},
+         {"Self excluded from fanout", fun test_self_excluded_from_fanout/0}
+     ]}.
+
+test_removed_member_excluded_from_fanout() ->
+    Creator = <<"race_creator">>,
+    MemberA = <<"race_alice">>,
+    MemberB = <<"race_bob">>,
+    MemberC = <<"race_carol">>,
+    {ok, GroupId} = iris_group:create_group(<<"Race Test">>, Creator),
+    ok = iris_group:add_member(GroupId, MemberA, Creator),
+    ok = iris_group:add_member(GroupId, MemberB, Creator),
+    ok = iris_group:add_member(GroupId, MemberC, Creator),
+    
+    %% Get member list (snapshot at T1)
+    {ok, AllMembers} = iris_group:get_members(GroupId),
+    ?assertEqual(4, length(AllMembers)),
+    
+    %% Remove Carol (simulating removal at T2, after snapshot)
+    ok = iris_group:remove_member(GroupId, MemberC, Creator),
+    
+    %% The fan-out function must re-check membership and exclude Carol
+    Recipients = iris_session:group_fanout_recipients(GroupId, MemberA, AllMembers),
+    RecipientIds = [Id || #{user_id := Id} <- Recipients],
+    
+    %% Carol must NOT be in recipients (she was removed)
+    ?assertNot(lists:member(MemberC, RecipientIds)),
+    %% Sender (Alice) must NOT be in recipients
+    ?assertNot(lists:member(MemberA, RecipientIds)),
+    %% Creator and Bob MUST be in recipients
+    ?assert(lists:member(Creator, RecipientIds)),
+    ?assert(lists:member(MemberB, RecipientIds)),
+    
+    ok.
+
+test_self_excluded_from_fanout() ->
+    Creator = <<"self_creator">>,
+    MemberA = <<"self_alice">>,
+    {ok, GroupId} = iris_group:create_group(<<"Self Test">>, Creator),
+    ok = iris_group:add_member(GroupId, MemberA, Creator),
+    
+    {ok, AllMembers} = iris_group:get_members(GroupId),
+    
+    %% Sender must be excluded
+    Recipients = iris_session:group_fanout_recipients(GroupId, Creator, AllMembers),
+    RecipientIds = [Id || #{user_id := Id} <- Recipients],
+    ?assertNot(lists:member(Creator, RecipientIds)),
+    ?assert(lists:member(MemberA, RecipientIds)),
     
     ok.
