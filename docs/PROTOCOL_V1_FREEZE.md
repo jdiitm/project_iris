@@ -32,9 +32,12 @@ This document is the **canonical protocol specification** for Iris. All opcodes,
 | 0x0A | RESUME | Client→Server | Stable (v1.1) |
 | 0x0B | TOKEN_REFRESH | Client→Server | Stable (v1.1) |
 | 0x0C | VERSION_NEGOTIATE | Both | Stable (v1.1) |
+| 0x0D | SEND_SEQ_V2 | Client→Server | Stable (v1.2, RFC v4.0) |
 | 0x11 | RELIABLE_MSG | Server→Client | Stable (moved from 0x10 in v1.1) |
 
 > **v1.1 breaking change**: `RELIABLE_MSG` moved from `0x10` to `0x11` to resolve collision with `CBOR_MSG`. Migration: server sends on both during transition; clients signal `0x11` support via capability negotiation.
+
+> **v1.2 addition** (RFC v4.0): `SEND_SEQ_V2` (`0x0D`) extends `SEND_SEQ` (`0x07`) with a mandatory 128-bit UUIDv7 idempotency key. Wire format: `0x0D | TargetLen(16) | Target | IdempotencyKey(128) | SeqNo(64) | MsgLen(16) | Msg`. The idempotency key enables server-side deduplication by `(user_id, idempotency_key)` per RFC Section 1.2. `0x07` remains unchanged for backward compatibility.
 
 ### 2.2 CBOR Extension (v1.0)
 

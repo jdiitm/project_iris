@@ -239,6 +239,36 @@ handle_packet({send_seq, _Target, _SeqNo, _Msg}, undefined, _Pid, _Mod) ->
     %% Not logged in - reject
     {ok, undefined, []};
 
+%% RFC v4.0: SEND_SEQ_V2 (0x0D) with UUIDv7 idempotency key
+handle_packet({send_seq_v2, Target, IdKey, SeqNo, Msg}, User, _Pid, _Mod) when User =/= undefined ->
+    iris_trace:new_span(<<"session.send_seq_v2">>),
+    iris_metrics:msg_in(),
+    track_request(User),
+    Result = case check_message_rate(User) of
+        allow ->
+            %% RFC 1.2: Validate UUIDv7 format
+            case iris_uuid:validate_idempotency_key(IdKey) of
+                ok ->
+                    %% Wrap as {idempotent_msg, IdKey, {SeqNo, Msg}} for dedup by key
+                    RoutedMsg = {idempotent_msg, IdKey, {SeqNo, Msg}},
+                    iris_router:route(Target, RoutedMsg),
+                    iris_metrics:msg_out(),
+                    {ok, User, []};
+                {error, invalid_idempotency_key} ->
+                    logger:warning("send_seq_v2 rejected: invalid idempotency_key from ~p", [User]),
+                    {ok, User, [{send, encode_error(invalid_idempotency_key)}]}
+            end;
+        {deny, RetryAfter} ->
+            logger:warning("send_seq_v2 rate limited for ~p", [User]),
+            {ok, User, [{send, encode_rate_limited(RetryAfter)}]}
+    end,
+    iris_trace:end_span(<<"session.send_seq_v2">>),
+    Result;
+
+handle_packet({send_seq_v2, _Target, _IdKey, _SeqNo, _Msg}, undefined, _Pid, _Mod) ->
+    %% Not logged in - reject
+    {ok, undefined, []};
+
 handle_packet({batch_send, Target, Blob}, User, _Pid, _Mod) ->
     Msgs = iris_proto:unpack_batch(Blob),
     %% P2-1 FIX: Use rpc:cast for fire-and-forget batch storage
@@ -753,7 +783,13 @@ handle_packet({cbor_msg, Target, Map}, User, _Pid, _Mod) when User =/= undefined
                 ok ->
                     %% Route as CBOR delivery to target
                     DeliveryPacket = iris_proto:encode_cbor_msg(User, Map),
-                    iris_router:route(Target, DeliveryPacket),
+                    %% RFC 1.2: Wrap with idempotency_key for dedup if present
+                    IdempotencyKey = maps:get(<<"idempotency_key">>, Map, undefined),
+                    RoutedMsg = case IdempotencyKey of
+                        undefined -> DeliveryPacket;
+                        Key -> {idempotent_msg, Key, DeliveryPacket}
+                    end,
+                    iris_router:route(Target, RoutedMsg),
                     iris_metrics:msg_out(),
                     {ok, User, []};
                 {error, invalid_idempotency_key} ->

@@ -336,6 +336,44 @@ test_sequential_decodes() ->
     {{ack, <<"ack2">>}, <<>>} = iris_proto:decode(Msg2).
 
 %% =============================================================================
+%% RFC v4.0 WS3: SEND_SEQ_V2 (0x0D) Opcode Tests
+%% =============================================================================
+
+send_seq_v2_test_() ->
+    {"SEND_SEQ_V2 (0x0D) opcode (RFC v4.0 WS3)",
+     [
+      {"Encode/decode roundtrip", fun test_send_seq_v2_roundtrip/0},
+      {"Rejects short idempotency key (not 16 bytes)", fun test_send_seq_v2_rejects_short_key/0},
+      {"Partial packet returns {more, _}", fun test_send_seq_v2_partial_packet/0}
+     ]}.
+
+test_send_seq_v2_roundtrip() ->
+    Target = <<"bob">>,
+    IdKey = crypto:strong_rand_bytes(16),  %% 16-byte UUIDv7
+    SeqNo = 42,
+    Msg = <<"Hello via v2!">>,
+    Encoded = iris_proto:encode_seq_msg_v2(Target, IdKey, SeqNo, Msg),
+    ?assertMatch(<<16#0D, _/binary>>, Encoded),
+    {Decoded, <<>>} = iris_proto:decode(Encoded),
+    ?assertEqual({send_seq_v2, Target, IdKey, SeqNo, Msg}, Decoded).
+
+test_send_seq_v2_rejects_short_key() ->
+    %% When the remaining bytes after target are < 16 (not enough for a
+    %% 16-byte idempotency key), the decoder returns invalid_idempotency_key.
+    Target = <<"bob">>,
+    TLen = byte_size(Target),
+    %% Only 10 bytes after target — not enough for 16-byte key
+    Bin = <<16#0D, TLen:16, Target/binary, 1,2,3,4,5,6,7,8,9,10>>,
+    Result = iris_proto:decode(Bin),
+    ?assertMatch({{error, invalid_idempotency_key}, _}, Result).
+
+test_send_seq_v2_partial_packet() ->
+    %% Only opcode and partial target length
+    Input = <<16#0D, 0>>,
+    Result = iris_proto:decode(Input),
+    ?assertMatch({more, _}, Result).
+
+%% =============================================================================
 %% AUDIT FIX: Protocol Fuzzing Tests
 %% =============================================================================
 %% 

@@ -1,6 +1,7 @@
 -module(iris_proto).
 -export([decode/1, unpack_batch/1, encode_status/3, encode_reliable_msg/2, decode_reliable_msg/1]).
 -export([encode_seq_msg/3]).  %% AUDIT FIX: Sequence-numbered message encoder (RFC FR-5)
+-export([encode_seq_msg_v2/4]).  %% RFC v4.0: send_seq_v2 with UUIDv7 idempotency key
 -export([generate_msg_id/0]). %% Unique message ID generator
 
 %% CBOR Protocol Extensions (RFC-001-AMENDMENT-001, Opcode 0x10)
@@ -182,6 +183,27 @@ decode(<<7, TargetLen:16, Rest/binary>>) ->
             { {send_seq, Target, SeqNo, Msg}, Rem };
         _ ->
             {more, <<7, TargetLen:16, Rest/binary>>}
+    end;
+
+%% RFC v4.0: SEND_SEQ_V2 with UUIDv7 idempotency key (opcode 0x0D)
+%% Format: 0x0D | TargetLen(16) | Target | IdempotencyKey(16 bytes) | SeqNo(64) | MsgLen(16) | Msg
+decode(<<16#0D, _/binary>> = Bin) when byte_size(Bin) < 3 ->
+    {more, Bin};
+
+decode(<<16#0D, TargetLen:16, _/binary>>) when TargetLen > ?MAX_TARGET_LEN ->
+    { {error, target_too_long}, <<>> };
+
+decode(<<16#0D, TargetLen:16, Rest/binary>>) ->
+    case Rest of
+        <<Target:TargetLen/binary, IdKey:16/binary, SeqNo:64, MsgLen:16, _/binary>> when MsgLen > ?MAX_MSG_LEN ->
+            { {error, message_too_long}, <<>> };
+        <<Target:TargetLen/binary, IdKey:16/binary, SeqNo:64, MsgLen:16, Msg:MsgLen/binary, Rem/binary>> ->
+            { {send_seq_v2, Target, IdKey, SeqNo, Msg}, Rem };
+        <<_Target:TargetLen/binary, IdKey/binary>> when byte_size(IdKey) < 16 ->
+            %% Have target but idempotency key is too short (< 16 bytes)
+            { {error, invalid_idempotency_key}, <<>> };
+        _ ->
+            {more, <<16#0D, TargetLen:16, Rest/binary>>}
     end;
 
 %% =============================================================================
@@ -594,13 +616,25 @@ encode_seq_msg(Target, SeqNo, Msg) ->
     MLen = byte_size(Msg),
     <<7, TLen:16, Target/binary, SeqNo:64, MLen:16, Msg/binary>>.
 
-%% Generate unique message ID (RFC §5.2 - globally unique, sortable)
+%% RFC v4.0: Encode SEND_SEQ_V2 with UUIDv7 idempotency key
+%% Format: 0x0D | TargetLen(16) | Target | IdempotencyKey(16 bytes) | SeqNo(64) | MsgLen(16) | Msg
+encode_seq_msg_v2(Target, IdKey, SeqNo, Msg) when byte_size(IdKey) =:= 16 ->
+    TLen = byte_size(Target),
+    MLen = byte_size(Msg),
+    <<16#0D, TLen:16, Target/binary, IdKey/binary, SeqNo:64, MLen:16, Msg/binary>>.
+
+%% Generate unique message ID (RFC §5.4 - 80-bit HLC binary, sortable)
 generate_msg_id() ->
-    %% Combine monotonic time, unique integer, and node hash for uniqueness
-    Time = erlang:monotonic_time(),
-    Unique = erlang:unique_integer([positive]),
-    Node = erlang:phash2(node(), 16#FFFF),
-    iolist_to_binary(io_lib:format("~.16b~.16b~.4b", [Time band 16#FFFFFFFFFFFF, Unique band 16#FFFFFFFF, Node])).
+    case whereis(iris_hlc) of
+        undefined ->
+            %% Fallback: 10-byte pseudo-HLC for environments without HLC gen_server
+            Time = erlang:system_time(millisecond) band 16#FFFFFFFFFFFF,
+            Unique = erlang:unique_integer([positive]) band 16#FFFF,
+            Node = erlang:phash2(node(), 16#FFFF),
+            <<Time:48, Unique:16, Node:16>>;
+        _Pid ->
+            iris_hlc:to_binary(iris_hlc:send())
+    end.
 
 %% =============================================================================
 %% CBOR Codec Implementation (RFC 8949)

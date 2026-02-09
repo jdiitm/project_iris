@@ -312,6 +312,28 @@ store_offline_durable(User, Msg) ->
             store_offline_durable_inner(User, Msg)
     end.
 
+store_offline_durable_inner(User, {idempotent_msg, IdempotencyKey, RealMsg}) ->
+    %% RFC 1.2: Dedup by (user_id, idempotency_key), NOT by content hash
+    DedupKey = <<User/binary, ":", IdempotencyKey/binary>>,
+    case iris_dedup:check_and_mark(DedupKey) of
+        duplicate ->
+            logger:debug("Dedup: idempotency_key duplicate for ~p", [User]),
+            iris_metrics:dedup_hit(),
+            ok;
+        new ->
+            Count = get_bucket_count(User),
+            case application:get_env(iris_core, multimaster_durability, false) of
+                true ->
+                    store_offline_sync_replicated(User, RealMsg, Count);
+                false ->
+                    case iris_durable_batcher:store(User, RealMsg, Count, undefined) of
+                        ok -> ok;
+                        {error, Reason} ->
+                            logger:error("WAL write failed: ~p", [Reason]),
+                            {error, durable_write_failed}
+                    end
+            end
+    end;
 store_offline_durable_inner(User, Msg) ->
     %% RFC NFR-11: Extract SeqNo and check dedup BEFORE storing
     %% RFC FR-5: Preserve SeqNo for FIFO ordering
