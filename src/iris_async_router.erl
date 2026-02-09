@@ -18,6 +18,7 @@
 -export([start_link/1, route/2, route/3, route_async/2, route_sequenced/3]).
 -export([register_local/2, unregister_local/1]).
 -export([get_local_count/0, get_stats/0, get_pool_size/0]).
+-export([route_via_outbox_or_offline/3]).  %% RFC Section 7.2: Outbox-aware fallback
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
 -define(LOCAL_PRESENCE, local_presence_v2).
@@ -401,7 +402,7 @@ do_remote_route(User, Msg, MsgId) ->
             %% Destination is rate limited - store offline for later delivery
             logger:warning("HOT-002: Destination ~p rate limited (msg_id=~p), storing offline. Retry in ~pms",
                           [User, MsgId, RetryAfter]),
-            store_offline_guaranteed(User, Msg, MsgId),
+            route_via_outbox_or_offline(User, Msg, MsgId),
             {success, offline}  %% Not a failure - graceful degradation
     end.
 
@@ -428,10 +429,10 @@ do_remote_route_inner(User, Msg, MsgId) ->
                 {ok, offline} ->
                     {success, offline};
                 {error, Reason} ->
-                    %% Guaranteed fallback - store offline
+                    %% Guaranteed fallback — use outbox queue if cross-region
                     logger:warning("Route failed for user ~p (msg_id=~p): ~p, storing offline",
                                    [User, MsgId, Reason]),
-                    store_offline_guaranteed(User, Msg, MsgId),
+                    route_via_outbox_or_offline(User, Msg, MsgId),
                     {failure, Reason}
             end
     end.
@@ -441,8 +442,8 @@ do_legacy_route(User, Msg, MsgId) ->
     Members = pg:get_members(iris_shards),
     case Members of
         [] ->
-            %% No cluster members - store offline guaranteed
-            store_offline_guaranteed(User, Msg, MsgId),
+            %% No cluster members — use outbox queue if cross-region
+            route_via_outbox_or_offline(User, Msg, MsgId),
             {success, offline};
         [TargetPid | _] ->
             TargetPid ! {route_remote, User, Msg},
@@ -612,6 +613,59 @@ try_route_fallbacks([Node | Rest], User, Msg) ->
             end;
         {badrpc, _} -> 
             try_route_fallbacks(Rest, User, Msg)
+    end.
+
+%% =============================================================================
+%% RFC Section 7.2: Outbox-aware fallback routing
+%% =============================================================================
+%% When routing fails, this function decides WHERE to store the message:
+%% - If iris_region_bridge is running (multi-region mode), delegate to the
+%%   region bridge which enforces 10k/7d outbox queue controls per RFC 7.2.
+%% - Otherwise (single-region mode), fall back to store_offline_guaranteed
+%%   for best-effort local storage.
+%%
+%% This prevents cross-region partition traffic from filling up the generic
+%% offline message store, which has no per-region overflow or TTL controls.
+%% =============================================================================
+-spec route_via_outbox_or_offline(binary(), binary(), binary() | undefined) -> ok | {error, term()}.
+route_via_outbox_or_offline(User, Msg, MsgId) ->
+    case whereis(iris_region_bridge) of
+        undefined ->
+            %% No region bridge running — single-region mode.
+            %% Use generic offline storage (existing behavior).
+            store_offline_guaranteed(User, Msg, MsgId);
+        _Pid ->
+            %% Region bridge is running — multi-region mode.
+            %% Determine target region and delegate to the bridge,
+            %% which enforces 10k per-region limit and 7-day TTL.
+            TargetRegion = get_target_region(User),
+            case iris_region_bridge:send_cross_region(TargetRegion, User, Msg) of
+                ok ->
+                    ok;
+                {error, {queue_overflow, _Details}} ->
+                    %% RFC 7.2: NACK on overflow — do NOT fall through to
+                    %% unbounded offline storage. Propagate backpressure.
+                    logger:warning("Outbox overflow for user ~p in region ~s (msg_id=~p)",
+                                   [User, TargetRegion, MsgId]),
+                    {error, queue_overflow};
+                {error, Reason} ->
+                    %% Bridge failed for other reasons — fall back to offline
+                    logger:warning("Region bridge failed for ~p: ~p, falling back to offline",
+                                   [User, Reason]),
+                    store_offline_guaranteed(User, Msg, MsgId)
+            end
+    end.
+
+%% Determine target region for a user via iris_region_router if available,
+%% otherwise use a default region identifier.
+get_target_region(User) ->
+    case whereis(iris_region_router) of
+        undefined ->
+            <<"default">>;
+        _Pid ->
+            try iris_region_router:get_home_region(User)
+            catch _:_ -> <<"default">>
+            end
     end.
 
 %% AUDIT FIX: Guaranteed offline storage - NEVER returns error
