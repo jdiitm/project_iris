@@ -338,10 +338,13 @@ detect_identity_key_change(UserId, NewIK) ->
                                 {ok, _Node, Pid} when is_pid(Pid) ->
                                     Pid ! {deliver_msg, AlertPacket};
                                 _ ->
-                                    ok  %% Contact offline, they'll see on next key fetch
+                                    %% Contact offline: store for delivery on reconnect (RFC 5.3.2 MUST)
+                                    iris_core:store_offline_durable(ContactId, AlertPacket)
                             end
                         catch _:_ ->
-                            ok  %% Best-effort
+                            %% Lookup crashed (e.g. shard not running) -- treat as offline
+                            %% RFC 5.3.2: MUST notify, so store durably for later delivery
+                            catch iris_core:store_offline_durable(ContactId, AlertPacket)
                         end
                     end, Contacts)
             end;
