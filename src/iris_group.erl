@@ -29,6 +29,7 @@
     add_member/3,             %% (GroupId, UserId, AddedBy) -> ok | {error, Reason}
     remove_member/3,          %% (GroupId, UserId, RemovedBy) -> ok | {error, Reason}
     get_members/1,            %% (GroupId) -> {ok, [MemberInfo]} | {error, Reason}
+    get_roster_for_member/2,  %% (GroupId, UserId) -> {ok, [MemberInfo]} | {error, not_member|Reason}
     is_member/2,              %% (GroupId, UserId) -> boolean()
     
     %% Admin management
@@ -160,18 +161,60 @@ remove_member(GroupId, UserId, RemovedBy) ->
 %% @doc Get all members of a group.
 -spec get_members(binary()) -> {ok, [map()]} | {error, term()}.
 get_members(GroupId) ->
-    case mnesia:dirty_read(group, GroupId) of
-        [] -> {error, not_found};
-        [_] ->
-            %% Use explicit tuple syntax for MatchSpec to ensure correct arity
-            %% Record: {group_member, Key, Role, JoinedAt, AddedBy, LastSeen}
-            MatchSpec = [{
-                {group_member, {GroupId, '$1'}, '$2', '$3', '$4', '_'},
-                [],
-                [#{user_id => '$1', role => '$2', joined_at => '$3', added_by => '$4'}]
-            }],
-            Members = mnesia:dirty_select(group_member, MatchSpec),
-            {ok, Members}
+    %% Check ETS roster cache first (populated on miss, invalidated on mutations).
+    case catch ets:lookup(iris_group_roster_cache, GroupId) of
+        [{GroupId, Cached}] ->
+            {ok, Cached};
+        _ ->
+            case mnesia:dirty_read(group, GroupId) of
+                [] -> {error, not_found};
+                [_] ->
+                    %% Key-range iteration on ordered_set: O(k) where k = group members,
+                    %% instead of O(n) full table scan via dirty_select/dirty_match_object.
+                    Members = get_members_by_prefix(GroupId),
+                    catch ets:insert(iris_group_roster_cache, {GroupId, Members}),
+                    {ok, Members}
+            end
+    end.
+
+%% Iterate group_member keys starting from {GroupId, <<>>} (smallest key
+%% with this GroupId) until the GroupId prefix no longer matches.
+%% ordered_set guarantees lexicographic key order.
+get_members_by_prefix(GroupId) ->
+    StartKey = {GroupId, <<>>},
+    case mnesia:dirty_next(group_member, StartKey) of
+        '$end_of_table' -> [];
+        {GroupId, _} = Key -> collect_members(GroupId, Key, []);
+        _ -> []  %% Next key has different GroupId
+    end.
+
+collect_members(GroupId, Key = {GroupId, _UserId}, Acc) ->
+    case mnesia:dirty_read(group_member, Key) of
+        [#group_member{key = {_, UserId}, role = Role, joined_at = JoinedAt, added_by = AddedBy}] ->
+            Member = #{user_id => UserId, role => Role, joined_at => JoinedAt, added_by => AddedBy},
+            case mnesia:dirty_next(group_member, Key) of
+                '$end_of_table' -> lists:reverse([Member | Acc]);
+                {GroupId, _} = NextKey -> collect_members(GroupId, NextKey, [Member | Acc]);
+                _ -> lists:reverse([Member | Acc])  %% Different GroupId
+            end;
+        [] ->
+            %% Key disappeared (concurrent delete) - skip
+            case mnesia:dirty_next(group_member, Key) of
+                '$end_of_table' -> lists:reverse(Acc);
+                {GroupId, _} = NextKey -> collect_members(GroupId, NextKey, Acc);
+                _ -> lists:reverse(Acc)
+            end
+    end;
+collect_members(_GroupId, _Key, Acc) ->
+    lists:reverse(Acc).
+
+%% @doc Combined membership check + roster retrieval in a single call.
+%% Eliminates serial RPC round-trips from the edge node.
+-spec get_roster_for_member(binary(), binary()) -> {ok, [map()]} | {error, term()}.
+get_roster_for_member(GroupId, UserId) ->
+    case is_member(GroupId, UserId) of
+        true -> get_members(GroupId);
+        false -> {error, not_member}
     end.
 
 %% @doc Check if a user is a member of a group.
@@ -315,6 +358,10 @@ update_member_last_seen(GroupId, UserId) ->
 %% =============================================================================
 
 init([]) ->
+    %% ETS cache for roster queries: avoids Mnesia scans on repeat lookups.
+    %% Invalidated on add_member/remove_member. Public for direct reads from
+    %% rpc:call processes (get_members/1 is not a gen_server call).
+    ets:new(iris_group_roster_cache, [named_table, public, set]),
     %% Initialize Mnesia tables if not exists
     init_tables(),
     {ok, #{}}.
@@ -329,10 +376,12 @@ handle_call({delete_group, GroupId, UserId}, _From, State) ->
 
 handle_call({add_member, GroupId, UserId, AddedBy}, _From, State) ->
     Result = do_add_member(GroupId, UserId, AddedBy),
+    catch ets:delete(iris_group_roster_cache, GroupId),
     {reply, Result, State};
 
 handle_call({remove_member, GroupId, UserId, RemovedBy}, _From, State) ->
     Result = do_remove_member(GroupId, UserId, RemovedBy),
+    catch ets:delete(iris_group_roster_cache, GroupId),
     {reply, Result, State};
 
 handle_call({promote_admin, GroupId, UserId, PromotedBy}, _From, State) ->
@@ -389,10 +438,12 @@ init_tables() ->
     end,
     
     %% Create group_member table
+    %% ordered_set: Key is {GroupId, UserId}. Ordered by key enables efficient
+    %% prefix scans in get_members/1 (O(k) members instead of O(n) total records).
     case mnesia:create_table(group_member, [
         {attributes, record_info(fields, group_member)},
         {StorageType, [node()]},
-        {type, set}
+        {type, ordered_set}
     ]) of
         {atomic, ok} -> ok;
         {aborted, {already_exists, group_member}} -> ok;

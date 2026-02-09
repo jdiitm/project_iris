@@ -468,21 +468,30 @@ get_shard_nodes(User) ->
 get_discovery_nodes() ->
     LocalNodes = case whereis(iris_discovery) of
         undefined ->
-            %% No discovery - use pg or connected nodes
-            case pg:get_members(iris_shards) of
-                [] -> 
-                    %% Include hidden nodes (edge nodes run with -hidden flag)
-                    AllNodes = nodes(connected),
-                    [node() | AllNodes];
-                Pids -> [node(P) || P <- Pids]
-            end;
+            discover_via_pg_or_connected();
         _ ->
-            iris_discovery:get_nodes(iris_core)
+            case iris_discovery:get_nodes(iris_core) of
+                [] ->
+                    %% Discovery running but no cores registered yet; fall back
+                    discover_via_pg_or_connected();
+                Nodes ->
+                    Nodes
+            end
     end,
     
     %% P0-A FIX: Also include cross-region cores for global user lookup
     CrossRegionNodes = get_all_region_cores(),
     lists:usort(LocalNodes ++ CrossRegionNodes).
+
+%% Discover core nodes via pg groups or Erlang connected nodes
+discover_via_pg_or_connected() ->
+    case pg:get_members(iris_shards) of
+        [] ->
+            %% Include hidden nodes (edge nodes run with -hidden flag)
+            AllNodes = nodes(connected),
+            [node() | AllNodes];
+        Pids -> [node(P) || P <- Pids]
+    end.
 
 %% P0-A FIX: Get all core nodes across all configured regions
 get_all_region_cores() ->

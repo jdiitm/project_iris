@@ -268,6 +268,20 @@ class IrisClient:
             elif opcode == 0x03:  # ACK
                 self.buffer = self.buffer[1:]  # Just skip ACKs
             
+            elif opcode == 0xFF:  # Rate-limit response: 0xFF | RetryAfter(32)
+                if len(self.buffer) < 5:
+                    break
+                self.buffer = self.buffer[5:]
+            
+            elif opcode == 0xFE:  # Error response: 0xFE | ReasonLen(16) | Reason
+                if len(self.buffer) < 3:
+                    break
+                reason_len = struct.unpack('>H', self.buffer[1:3])[0]
+                total = 3 + reason_len
+                if len(self.buffer) < total:
+                    break
+                self.buffer = self.buffer[total:]
+            
             else:
                 # Unknown opcode, skip one byte
                 self.buffer = self.buffer[1:]

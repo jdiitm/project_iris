@@ -247,7 +247,7 @@ save_bucket(Bucket) ->
 get_user_rate(User) ->
     %% Could look up per-user rate from config/DB
     %% For now, use global default
-    case application:get_env(iris_core, user_rate_limits) of
+    case get_app_env(user_rate_limits) of
         {ok, Limits} ->
             maps:get(User, Limits, get_default_rate());
         undefined ->
@@ -255,7 +255,7 @@ get_user_rate(User) ->
     end.
 
 get_user_burst(User) ->
-    case application:get_env(iris_core, user_burst_limits) of
+    case get_app_env(user_burst_limits) of
         {ok, Limits} ->
             maps:get(User, Limits, get_default_burst());
         undefined ->
@@ -263,10 +263,25 @@ get_user_burst(User) ->
     end.
 
 get_default_rate() ->
-    application:get_env(iris_core, rate_limit_default, ?DEFAULT_RATE).
+    case get_app_env(rate_limit_default) of
+        {ok, V} -> V;
+        undefined -> ?DEFAULT_RATE
+    end.
 
 get_default_burst() ->
-    application:get_env(iris_core, rate_burst_default, ?DEFAULT_BURST).
+    case get_app_env(rate_burst_default) of
+        {ok, V} -> V;
+        undefined -> ?DEFAULT_BURST
+    end.
+
+%% Read config from the application that is actually running on this node.
+%% iris_rate_limiter is supervised by iris_edge_sup, so iris_edge env is
+%% authoritative. Fall back to iris_core for single-node / test setups.
+get_app_env(Key) ->
+    case application:get_env(iris_edge, Key) of
+        {ok, _} = Ok -> Ok;
+        undefined -> application:get_env(iris_core, Key)
+    end.
 
 cleanup_idle_buckets(Cutoff) ->
     cleanup_idle_fold(ets:first(?TABLE), Cutoff).

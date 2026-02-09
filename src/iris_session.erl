@@ -593,26 +593,16 @@ handle_packet({group_msg, _GroupId, _Ciphertext, _Header}, undefined, _Pid, _Mod
     {ok, undefined, []};
 
 handle_packet({group_roster, GroupId}, User, _Pid, _Mod) when User =/= undefined ->
-    %% Request group roster (member list)
-    case is_group_service_available() of
-        false ->
-            {ok, User, [{send, encode_error(group_service_unavailable)}]};
-        true ->
-            case call_iris_group(is_member, [GroupId, User]) of
-                false ->
-                    {ok, User, [{send, encode_error(not_member)}]};
-                true ->
-                    case call_iris_group(get_members, [GroupId]) of
-                        {ok, Members} ->
-                            MemberIds = [M || #{user_id := M} <- Members],
-                            Response = iris_proto:encode_group_roster_response(GroupId, MemberIds),
-                            {ok, User, [{send, Response}]};
-                        {error, Reason} ->
-                            {ok, User, [{send, encode_error(Reason)}]}
-                    end;
-                {error, _} ->
-                    {ok, User, [{send, encode_error(group_service_unavailable)}]}
-            end
+    %% Request group roster - single RPC combines is_member + get_members
+    case call_iris_group(get_roster_for_member, [GroupId, User]) of
+        {ok, Members} ->
+            MemberIds = [M || #{user_id := M} <- Members],
+            Response = iris_proto:encode_group_roster_response(GroupId, MemberIds),
+            {ok, User, [{send, Response}]};
+        {error, not_member} ->
+            {ok, User, [{send, encode_error(not_member)}]};
+        {error, _Reason} ->
+            {ok, User, [{send, encode_error(group_service_unavailable)}]}
     end;
 
 handle_packet({group_roster, _GroupId}, undefined, _Pid, _Mod) ->
