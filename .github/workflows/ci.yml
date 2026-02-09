@@ -20,15 +20,21 @@
 #   Tier 1: Nightly + main push         (~2 hours)
 #   Tier 2: Manual / pre-release        (~24 hours)
 #
+# Trigger strategy:
+#   - push: Only main/master/develop (post-merge validation + tier1 gate)
+#   - pull_request: All PRs targeting main/master/develop (pre-merge CI)
+#   - Feature branch pushes WITHOUT an open PR get no CI run. Open a PR
+#     or use workflow_dispatch to trigger manually.
+#
 # Concurrency: Only one CI run per branch at a time. New pushes cancel
-# in-progress runs to prevent duplicate push+pull_request flakiness.
+# in-progress runs to prevent wasted minutes.
 # =============================================================================
 
 name: CI
 
 on:
   push:
-    branches: [main, master, develop, 'fix/**', 'feat/**']
+    branches: [main, master, develop]
   pull_request:
     branches: [main, master, develop]
   schedule:
@@ -45,12 +51,12 @@ on:
 # ---------------------------------------------------------------------------
 # CONCURRENCY: Prevent duplicate runs for the same branch.
 #
-# Problem: Pushing to a branch with an open PR triggers BOTH push and
-# pull_request events, causing two identical tier0 runs. The second may
-# fail due to resource contention, appearing as "flaky."
+# Groups by branch name (head_ref for PRs, ref_name for pushes).
+# cancel-in-progress ensures only the latest commit is tested.
 #
-# Fix: Group by branch name (head_ref for PRs, ref_name for pushes).
-# cancel-in-progress ensures only the latest push runs.
+# Since push only fires for main/master/develop (not feature branches),
+# and pull_request fires for PRs, there is no longer a push+PR overlap
+# for feature branches.
 # ---------------------------------------------------------------------------
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
