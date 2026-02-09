@@ -46,6 +46,7 @@ setup() ->
         undefined ->
             application:set_env(iris_edge, jwt_secret, <<"refresh_token_test_secret_key_32b!">>),
             application:set_env(iris_edge, auth_enabled, true),
+            application:set_env(iris_edge, allow_hmac_jwt, true),
             {ok, Pid} = iris_auth:start_link(),
             {started, Pid};
         Pid ->
@@ -54,6 +55,7 @@ setup() ->
 
 cleanup({started, _Pid}) ->
     gen_server:stop(iris_auth),
+    application:unset_env(iris_edge, allow_hmac_jwt),
     catch mnesia:delete_table(revoked_tokens),
     catch mnesia:delete_table(refresh_tokens),
     application:stop(mnesia);

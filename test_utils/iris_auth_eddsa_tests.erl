@@ -32,6 +32,7 @@ setup() ->
         undefined ->
             application:set_env(iris_edge, jwt_secret, <<"test_secret_key_for_eddsa_testing!">>),
             application:set_env(iris_edge, auth_enabled, true),
+            application:set_env(iris_edge, allow_hmac_jwt, true),
             {ok, Pid} = iris_auth:start_link(),
             {started, Pid};
         Pid ->
@@ -40,6 +41,7 @@ setup() ->
 
 cleanup({started, _Pid}) ->
     gen_server:stop(iris_auth),
+    application:unset_env(iris_edge, allow_hmac_jwt),
     catch mnesia:delete_table(revoked_tokens),
     application:stop(mnesia);
 cleanup({existing, _Pid}) ->

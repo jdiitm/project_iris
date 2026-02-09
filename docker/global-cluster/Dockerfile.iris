@@ -17,6 +17,9 @@ RUN apk add --no-cache \
     iptables \
     iproute2 \
     bash \
+    zstd-dev \
+    gcc \
+    musl-dev \
     && rm -rf /var/cache/apk/*
 
 # Verify libfaketime is installed correctly

@@ -1,5 +1,7 @@
 # `time.sleep()` Usage Audit
 
+> **Historical artifact** (2026-02-07). Snapshot of `time.sleep()` usage at time of audit. Numbers may drift as tests evolve. This is a known limitation, not an active tracking document.
+
 **RFC Reference**: Section 13.2 — "Tests MUST NOT use `time.sleep()` for synchronization"
 **Date**: 2026-02-07
 **Total instances found**: ~530+ across 108 files in `tests/`

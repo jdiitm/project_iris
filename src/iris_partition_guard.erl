@@ -2,13 +2,18 @@
 -behaviour(gen_server).
 
 %% =============================================================================
-%% Partition Guard: Split-Brain Detection and Safe Mode
+%% Partition Guard: Split-Brain Detection and Divergence Tracking
 %% =============================================================================
 %% This module monitors cluster membership and detects network partitions.
-%% When quorum is lost:
-%% - Writes are rejected to prevent data divergence
-%% - Reads are allowed (stale data is better than no data)
+%% When quorum is lost (AP mode per RFC Section 7.1.1):
+%% - Writes are ALLOWED on both sides (availability over consistency)
+%% - Mode changes to 'diverged' to track potential data divergence
+%% - Epoch counter increments for post-healing reconciliation
 %% - Warnings are logged continuously
+%%
+%% Post-healing reconciliation uses resolve_authority/4:
+%% - Higher epoch wins; equal epoch ties broken by lowest node ID
+%% - Append-only tables merge via union
 %%
 %% CRITICAL: Dynamic mode is DEPRECATED (CB-1 Audit Finding)
 %% ---------------------------------------------------------
@@ -19,8 +24,8 @@
 %% ALWAYS use static mode with explicit expected_cluster_nodes in production.
 %%
 %% RFC Compliance:
-%% - Supports hardened AP semantics with explicit partition handling
-%% - Prevents silent data divergence during split-brain
+%% - AP semantics: writes allowed during partition (Section 7.1.1)
+%% - Divergence tracked via epoch counter for reconciliation
 %% =============================================================================
 
 %% pg group for dynamic membership discovery
@@ -36,7 +41,7 @@
 -define(QUORUM_RECOVERY_DELAY_MS, 10000).  %% Wait 10s before re-enabling writes
 
 -record(state, {
-    mode = normal :: normal | safe_mode | forced_unsafe,
+    mode = normal :: normal | diverged | forced_unsafe,
     membership_mode = static :: static | dynamic,  %% AUDIT FIX (Finding #3)
     expected_nodes = [] :: [node()],
     visible_nodes = [] :: [node()],
@@ -55,8 +60,9 @@ start_link() ->
     gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
 
 %% @doc Check if cluster is safe for write operations
-%% Returns 'ok' if safe, {error, partition_detected} if in safe mode
--spec is_safe_for_writes() -> ok | {error, partition_detected}.
+%% RFC Section 7.1.1: Always returns 'ok' (AP mode — writes always allowed).
+%% In diverged mode, writes proceed but may need reconciliation after healing.
+-spec is_safe_for_writes() -> ok.
 is_safe_for_writes() ->
     case whereis(?SERVER) of
         undefined -> ok;  %% Guard not running = permissive
@@ -152,14 +158,16 @@ handle_call(is_safe_for_writes, _From, State = #state{mode = normal}) ->
     {reply, ok, State};
 handle_call(is_safe_for_writes, _From, State = #state{mode = forced_unsafe}) ->
     {reply, ok, State};
-handle_call(is_safe_for_writes, _From, State = #state{mode = safe_mode}) ->
-    {reply, {error, partition_detected}, State};
+handle_call(is_safe_for_writes, _From, State = #state{mode = diverged}) ->
+    %% RFC Section 7.1.1: AP mode — writes allowed during partition.
+    %% Data divergence will be reconciled after partition heals.
+    {reply, ok, State};
 
 handle_call(get_status, _From, State) ->
     Status = #{
         mode => State#state.mode,
         membership_mode => State#state.membership_mode,  %% AUDIT FIX (Finding #3)
-        safe_for_writes => State#state.mode =/= safe_mode,
+        safe_for_writes => true,  %% RFC 7.1.1: AP mode — always safe for writes
         expected_nodes => State#state.expected_nodes,
         visible_nodes => State#state.visible_nodes,
         partition_count => State#state.partition_count,
@@ -235,41 +243,42 @@ do_partition_check(State = #state{quorum_threshold = Threshold}) ->
     end,
     
     case {HasQuorum, State#state.mode} of
-        {true, safe_mode} ->
-            %% Quorum restored - check if we should exit safe mode
-            maybe_exit_safe_mode(State#state{expected_nodes = Expected, visible_nodes = AllVisible});
+        {true, diverged} ->
+            %% Quorum restored - check if we should exit diverged mode
+            maybe_exit_diverged_mode(State#state{expected_nodes = Expected, visible_nodes = AllVisible});
         
         {false, normal} ->
-            %% Quorum lost - enter safe mode
-            enter_safe_mode(State#state{expected_nodes = Expected, visible_nodes = AllVisible});
+            %% Quorum lost - enter diverged mode (AP: writes still allowed)
+            enter_diverged_mode(State#state{expected_nodes = Expected, visible_nodes = AllVisible});
         
         {_, _} ->
             %% No change needed
             State#state{expected_nodes = Expected, visible_nodes = AllVisible}
     end.
 
-enter_safe_mode(State) ->
+enter_diverged_mode(State) ->
     Now = os:system_time(second),
     NewCount = State#state.partition_count + 1,
     NewEpoch = State#state.epoch + 1,  %% FM-2: Increment epoch on partition
     
-    logger:error("=== PARTITION DETECTED (epoch ~p) ===", [NewEpoch]),
-    logger:error("Expected nodes: ~p", [State#state.expected_nodes]),
-    logger:error("Visible nodes: ~p", [State#state.visible_nodes]),
-    logger:error("Entering SAFE MODE - writes will be rejected"),
-    logger:error("Partition count: ~p", [NewCount]),
+    logger:warning("=== PARTITION DETECTED (epoch ~p) ===", [NewEpoch]),
+    logger:warning("Expected nodes: ~p", [State#state.expected_nodes]),
+    logger:warning("Visible nodes: ~p", [State#state.visible_nodes]),
+    logger:warning("Entering DIVERGED MODE - writes allowed, data may diverge (AP)"),
+    logger:warning("Reconciliation required after partition heals (resolve_authority/4)"),
+    logger:warning("Partition count: ~p", [NewCount]),
     
     %% Log to metrics if available
     try iris_metrics:increment(partition_detected) catch _:_ -> ok end,
     
     State#state{
-        mode = safe_mode,
+        mode = diverged,
         last_quorum_loss = Now,
         partition_count = NewCount,
         epoch = NewEpoch
     }.
 
-maybe_exit_safe_mode(State = #state{last_quorum_loss = LastLoss}) ->
+maybe_exit_diverged_mode(State = #state{last_quorum_loss = LastLoss}) ->
     Now = os:system_time(second),
     TimeSinceLoss = (Now - LastLoss) * 1000,  %% Convert to ms
     
@@ -277,12 +286,12 @@ maybe_exit_safe_mode(State = #state{last_quorum_loss = LastLoss}) ->
         true ->
             logger:info("=== QUORUM RESTORED ==="),
             logger:info("Visible nodes: ~p", [State#state.visible_nodes]),
-            logger:info("Exiting safe mode - writes enabled"),
+            logger:info("Exiting diverged mode - cluster converged"),
             State#state{mode = normal};
         false ->
-            %% Still in recovery delay
+            %% Still in recovery delay — reconciliation may be ongoing
             RemainingMs = ?QUORUM_RECOVERY_DELAY_MS - TimeSinceLoss,
-            logger:info("Quorum restored, but waiting ~p ms before enabling writes", [RemainingMs]),
+            logger:info("Quorum restored, waiting ~p ms for reconciliation", [RemainingMs]),
             State
     end.
 

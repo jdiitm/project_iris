@@ -415,7 +415,7 @@ do_validate(Token, Opts, State = #state{secret = Secret, issuer = ExpectedIssuer
             SigningInput = <<Header/binary, ".", Payload/binary>>,
             
             %% IA-1: Check HMAC deprecation flag before validation
-            HmacAllowed = application:get_env(iris_edge, allow_hmac_jwt, true),
+            HmacAllowed = application:get_env(iris_edge, allow_hmac_jwt, false),
             SigValid = case Alg of
                 <<"EdDSA">> ->
                     %% P1-4: EdDSA verification

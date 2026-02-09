@@ -4,6 +4,7 @@
 -export([start_link/1, set_socket/2]).
 -export([init/1, callback_mode/0, terminate/3, code_change/4]).
 -export([wait_for_socket/3, connected/3]).
+-export([maybe_compress_outbound/2, maybe_decompress_inbound/2]).  %% Pure, exported for TDD
 
 -record(data, {
     socket :: gen_tcp:socket() | ssl:sslsocket(),
@@ -126,7 +127,7 @@ connected(info, {tcp_error, _Socket, _Reason}, Data) ->
 connected(info, {ssl_error, _Socket, _Reason}, Data) ->
     {stop, normal, Data};
 
-connected(info, {deliver_msg, Msg}, Data = #data{socket = Socket, transport = Transport, user = User, pending_acks = Pending}) ->
+connected(info, {deliver_msg, Msg}, Data = #data{socket = Socket, transport = Transport, user = User, pending_acks = Pending, capabilities = Caps}) ->
     Now = os:system_time(millisecond),
     
     %% Bounded pending_acks: Drop oldest if at capacity
@@ -146,7 +147,8 @@ connected(info, {deliver_msg, Msg}, Data = #data{socket = Socket, transport = Tr
             Packet = iris_proto:encode_reliable_msg(MsgId, Msg),
             NewPending = maps:put(MsgId, {Msg, os:system_time(seconds), 0}, BoundedPending),
             
-            case send(Socket, Transport, Packet) of
+            %% RFC Section 11.1: Compress outbound if negotiated
+            case send_compressed(Socket, Transport, Caps, Packet) of
                 ok -> 
                     {keep_state, Data#data{pending_acks = NewPending, timeouts = 0, last_activity = Now}};
                 {error, Reason} ->
@@ -242,12 +244,71 @@ handle_socket_data(Bin, Data = #data{buffer = Buff}) ->
             process_buffer(NewBuff, Data#data{last_activity = Now, hibernated = false})
     end.
 
+%% =============================================================================
+%% RFC Section 11.1: Compression Wiring (Pure Functions for TDD)
+%% =============================================================================
+
+%% @doc Maybe compress an outbound packet based on negotiated capabilities.
+%% Packet format: <<Opcode:8, Payload/binary>>
+%% If compressed: <<(Opcode bor 0x80):8, CompressedPayload/binary>>
+-spec maybe_compress_outbound([binary()], binary()) -> binary().
+maybe_compress_outbound([], Packet) ->
+    Packet;
+maybe_compress_outbound(Caps, <<Opcode:8, Payload/binary>> = Packet) ->
+    case pick_compression_algo(Caps) of
+        none -> Packet;
+        Algo ->
+            case iris_compression:maybe_compress(Algo, Payload) of
+                {compressed, CompressedPayload} ->
+                    FlaggedOpcode = iris_compression:flag_compressed(Opcode),
+                    <<FlaggedOpcode:8, CompressedPayload/binary>>;
+                {uncompressed, _} ->
+                    Packet
+            end
+    end;
+maybe_compress_outbound(_Caps, Packet) ->
+    Packet.
+
+%% @doc Maybe decompress an inbound packet based on negotiated capabilities.
+-spec maybe_decompress_inbound([binary()], binary()) -> binary().
+maybe_decompress_inbound(_Caps, <<Opcode:8, Payload/binary>> = Packet) ->
+    case iris_compression:is_compressed(Opcode) of
+        false -> Packet;
+        true ->
+            OriginalOpcode = iris_compression:original_opcode(Opcode),
+            Algo = pick_compression_algo(_Caps),
+            case Algo of
+                none -> Packet;  %% No algo negotiated — pass through
+                _ ->
+                    case iris_compression:decompress(Algo, Payload) of
+                        {ok, Decompressed} ->
+                            <<OriginalOpcode:8, Decompressed/binary>>;
+                        {error, _} ->
+                            Packet  %% Decompression failed — pass through
+                    end
+            end
+    end;
+maybe_decompress_inbound(_Caps, Packet) ->
+    Packet.
+
+%% Pick the best compression algorithm from negotiated capabilities.
+pick_compression_algo([]) -> none;
+pick_compression_algo([<<"zstd">> | _]) -> zstd;
+pick_compression_algo([<<"zlib">> | _]) -> zlib;
+pick_compression_algo([_ | Rest]) -> pick_compression_algo(Rest).
+
 %% Transport-agnostic send
 send(Socket, tcp, Msg) -> gen_tcp:send(Socket, Msg);
 send(Socket, ssl, Msg) -> ssl:send(Socket, Msg).
 
-process_buffer(Bin, Data = #data{socket = Socket, transport = Transport, user = CurrentUser}) ->
-    case iris_proto:decode(Bin) of
+%% RFC Section 11.1: Compression-aware send (DRY helper for all outbound paths)
+send_compressed(Socket, Transport, Caps, Msg) ->
+    send(Socket, Transport, maybe_compress_outbound(Caps, Msg)).
+
+process_buffer(Bin, Data = #data{socket = Socket, transport = Transport, user = CurrentUser, capabilities = Caps}) ->
+    %% RFC Section 11.1: Decompress inbound if compression flag set
+    DecompressedBin = maybe_decompress_inbound(Caps, Bin),
+    case iris_proto:decode(DecompressedBin) of
         {more, _} ->
             setopts(Socket, Transport, [{active, once}]),
             {keep_state, Data#data{buffer = Bin}};
@@ -259,17 +320,19 @@ process_buffer(Bin, Data = #data{socket = Socket, transport = Transport, user = 
             %% Execute Actions & Update State
             NewData = lists:foldl(fun
                 ({send, Msg}, D) -> 
-                    _ = send(Socket, Transport, Msg), 
+                    %% RFC Section 11.1: Compress outbound if negotiated
+                    _ = send_compressed(Socket, Transport, D#data.capabilities, Msg), 
                     D;
                 ({send_batch, Msgs}, D) -> 
-                    _ = [send(Socket, Transport, M) || M <- Msgs], 
+                    _ = [send_compressed(Socket, Transport, D#data.capabilities, M) || M <- Msgs], 
                     D;
                 ({deliver_msg, Msg}, D = #data{pending_acks = P}) ->
                     %% Wrap in reliable message format
                     MsgId = generate_msg_id(),
                     OutPacket = iris_proto:encode_reliable_msg(MsgId, Msg),
                     NewP = maps:put(MsgId, {Msg, os:system_time(seconds), 0}, P),
-                    _ = send(Socket, Transport, OutPacket),
+                    %% RFC Section 11.1: Compress outbound if negotiated
+                    _ = send_compressed(Socket, Transport, D#data.capabilities, OutPacket),
                     D#data{pending_acks = NewP};
                 ({ack_received, MsgId}, D = #data{pending_acks = P}) -> 
                     %% Remove from pending
@@ -277,9 +340,9 @@ process_buffer(Bin, Data = #data{socket = Socket, transport = Transport, user = 
                 ({set_session_id, SId}, D) ->
                     %% RFC Section 3.4: Store session_id for resume on disconnect
                     D#data{session_id = SId};
-                ({set_capabilities, Caps}, D) ->
+                ({set_capabilities, NewCaps}, D) ->
                     %% RFC Section 11.1: Store negotiated capabilities
-                    D#data{capabilities = Caps};
+                    D#data{capabilities = NewCaps};
                 (close, _D) -> gen_statem:stop({shutdown, closed}), error(closed)
             end, Data, Actions),
             

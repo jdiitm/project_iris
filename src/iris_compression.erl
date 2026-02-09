@@ -24,15 +24,8 @@ compress(zlib, Data) ->
         _:Reason -> {error, Reason}
     end;
 compress(zstd, Data) ->
-    %% Erlang doesn't have native zstd; use zlib as fallback with zstd tag.
-    %% In production, this would use a NIF wrapper for libzstd.
-    %% For now, use zlib internally but tag it as zstd format.
-    try
-        Compressed = zlib:compress(Data),
-        {ok, <<"zstd:", Compressed/binary>>}
-    catch
-        _:Reason -> {error, Reason}
-    end.
+    %% Real zstd via NIF (RFC Section 11.1: "zstd (recommended)")
+    iris_zstd_nif:compress(Data).
 
 %% @doc Decompress data with the given algorithm.
 -spec decompress(zstd | zlib, binary()) -> {ok, binary()} | {error, term()}.
@@ -43,15 +36,9 @@ decompress(zlib, Compressed) ->
     catch
         _:Reason -> {error, Reason}
     end;
-decompress(zstd, <<"zstd:", Compressed/binary>>) ->
-    try
-        Data = zlib:uncompress(Compressed),
-        {ok, Data}
-    catch
-        _:Reason -> {error, Reason}
-    end;
-decompress(zstd, _) ->
-    {error, invalid_zstd_format}.
+decompress(zstd, Data) ->
+    %% Real zstd via NIF (RFC Section 11.1)
+    iris_zstd_nif:decompress(Data).
 
 %% @doc Maybe compress based on payload size. Skips payloads <= 128 bytes.
 -spec maybe_compress(zstd | zlib, binary()) -> {compressed, binary()} | {uncompressed, binary()}.

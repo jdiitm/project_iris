@@ -173,9 +173,10 @@ def test_hmac_backward_compatibility():
 
         application:set_env(iris_edge, jwt_secret, <<"compat_test_secret_32bytes_long!">>),
         application:set_env(iris_edge, auth_enabled, true),
+        application:set_env(iris_edge, allow_hmac_jwt, true),
         {ok, _} = iris_auth:start_link(),
 
-        %% Create HMAC token (traditional)
+        %% Create HMAC token (traditional, requires explicit allow_hmac_jwt)
         {ok, HmacToken} = iris_auth:create_token(<<"carol">>),
         case iris_auth:validate_token(HmacToken) of
             {ok, _} -> io:format("HMAC_VALID: ok~n");

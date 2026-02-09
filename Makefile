@@ -13,7 +13,26 @@ APP_FILES = $(patsubst src/%.app.src,ebin/%.app,$(APP_SRC))
 APPUP_SRC = $(wildcard src/*.appup.src)
 APPUP_FILES = $(patsubst src/%.appup.src,ebin/%.appup,$(APPUP_SRC))
 
-all: check_deps $(BEAM_FILES) $(APP_FILES) $(APPUP_FILES)
+# NIF: zstd compression (RFC Section 11.1)
+ERL_INCLUDE = $(shell $(ERL) -noshell -eval 'io:format("~s", [code:root_dir()]), init:stop().')/usr/include
+ERTS_INCLUDE = $(shell $(ERL) -noshell -eval 'io:format("~s/erts-~s/include", [code:root_dir(), erlang:system_info(version)]), init:stop().')
+NIF_SRC = c_src/iris_zstd_nif.c
+NIF_SO = priv/iris_zstd_nif.so
+NIF_CFLAGS = -shared -fPIC -O2 -I$(ERL_INCLUDE) -I$(ERTS_INCLUDE)
+# ZSTD_INCLUDE and ZSTD_LIBDIR can be overridden for non-standard paths
+ZSTD_INCLUDE ?=
+ZSTD_LIBDIR ?=
+NIF_ZSTD_CFLAGS = $(if $(ZSTD_INCLUDE),-I$(ZSTD_INCLUDE),)
+NIF_ZSTD_LDFLAGS = $(if $(ZSTD_LIBDIR),-L$(ZSTD_LIBDIR),) -lzstd
+
+all: check_deps nif $(BEAM_FILES) $(APP_FILES) $(APPUP_FILES)
+
+# Build zstd NIF shared object
+nif: $(NIF_SO)
+
+$(NIF_SO): $(NIF_SRC)
+	@mkdir -p priv
+	$(CC) $(NIF_CFLAGS) $(NIF_ZSTD_CFLAGS) -o $@ $< $(NIF_ZSTD_LDFLAGS)
 
 ebin/%.app: src/%.app.src
 	cp $< $@

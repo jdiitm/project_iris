@@ -39,7 +39,11 @@ iris_compression_test_() ->
       {"zlib roundtrip", fun test_compress_zlib_roundtrip/0},
       {"Small payload not compressed", fun test_compress_noop_small_payload/0},
       {"Compressed frame has flag", fun test_compressed_frame_has_flag/0},
-      {"Negotiate capabilities", fun test_negotiate_capabilities/0}
+      {"Negotiate capabilities", fun test_negotiate_capabilities/0},
+
+      %% RFC Section 11.1: Real zstd format verification
+      {"zstd produces real zstd format (not fake tag)", fun test_zstd_produces_real_format/0},
+      {"zstd real roundtrip with random data", fun test_zstd_real_roundtrip/0}
      ]}.
 
 %% =============================================================================
@@ -87,3 +91,27 @@ test_negotiate_capabilities() ->
     ?assert(lists:member(<<"zstd">>, Intersection)),
     ?assert(lists:member(<<"zlib">>, Intersection)),
     ?assertNot(lists:member(<<"e2ee">>, Intersection)).
+
+%% =============================================================================
+%% RFC Section 11.1: Real Zstandard Format Tests
+%% The compressed output must be real zstd format, not fake zlib-with-tag.
+%% Zstd magic bytes: 0xFD2FB528 (little-endian: <<16#28, 16#B5, 16#2F, 16#FD>>)
+%% =============================================================================
+
+test_zstd_produces_real_format() ->
+    Data = crypto:strong_rand_bytes(256),
+    {ok, Compressed} = iris_compression:compress(zstd, Data),
+    %% Must NOT start with the fake "zstd:" tag
+    ?assertNot(binary:match(Compressed, <<"zstd:">>) =:= {0, 5}),
+    %% Must start with real zstd magic bytes (0xFD2FB528 little-endian)
+    <<Magic:4/binary, _/binary>> = Compressed,
+    ?assertEqual(<<16#28, 16#B5, 16#2F, 16#FD>>, Magic).
+
+test_zstd_real_roundtrip() ->
+    %% Multiple data sizes to verify robustness
+    lists:foreach(fun(Size) ->
+        Data = crypto:strong_rand_bytes(Size),
+        {ok, Compressed} = iris_compression:compress(zstd, Data),
+        {ok, Decompressed} = iris_compression:decompress(zstd, Compressed),
+        ?assertEqual(Data, Decompressed)
+    end, [256, 1024, 4096, 10000]).

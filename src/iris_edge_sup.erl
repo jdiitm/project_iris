@@ -64,6 +64,46 @@ init([]) ->
             shutdown => 5000,
             type => worker,
             modules => [iris_circuit_breaker]
+        },
+
+        %% Auth: JWT verification and token lifecycle
+        #{
+            id => iris_auth,
+            start => {iris_auth, start_link, []},
+            restart => permanent,
+            shutdown => 5000,
+            type => worker,
+            modules => [iris_auth]
+        },
+
+        %% Rate Limiter: Per-user and per-IP throttling
+        #{
+            id => iris_rate_limiter,
+            start => {iris_rate_limiter, start_link, []},
+            restart => permanent,
+            shutdown => 5000,
+            type => worker,
+            modules => [iris_rate_limiter]
+        },
+
+        %% Ingress Guard: Connection-level abuse prevention
+        #{
+            id => iris_ingress_guard,
+            start => {iris_ingress_guard, start_link, []},
+            restart => permanent,
+            shutdown => 5000,
+            type => worker,
+            modules => [iris_ingress_guard]
+        },
+
+        %% Discovery: Core node discovery via pg
+        #{
+            id => iris_discovery,
+            start => {iris_discovery, start_link, []},
+            restart => permanent,
+            shutdown => 5000,
+            type => worker,
+            modules => [iris_discovery]
         }
     ] ++ [
         %% ROUTER POOL (Multi-Core Optimization)

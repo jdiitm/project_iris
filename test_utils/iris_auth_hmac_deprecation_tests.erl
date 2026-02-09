@@ -8,10 +8,11 @@
 %% disableable via config for production.
 %%
 %% Tests verify:
-%% 1. HMAC accepted by default (backward compat)
-%% 2. HMAC rejected when allow_hmac_jwt = false
-%% 3. EdDSA always accepted regardless of HMAC setting
-%% 4. Deprecation warning logged in mixed mode
+%% 1. HMAC rejected by default (RFC v4.0 Sec 6.3: EdDSA mandatory)
+%% 2. HMAC accepted when explicitly enabled via allow_hmac_jwt = true
+%% 3. HMAC rejected when allow_hmac_jwt = false
+%% 4. EdDSA always accepted regardless of HMAC setting
+%% 5. Deprecation warning logged in mixed mode
 %%
 %% Pattern: follows iris_auth_eddsa_tests.erl setup/cleanup.
 %% =============================================================================
@@ -58,22 +59,32 @@ iris_auth_hmac_deprecation_test_() ->
      fun setup/0,
      fun cleanup/1,
      [
-      {"HMAC accepted by default", fun test_hmac_accepted_by_default/0},
+      {"HMAC rejected by default (RFC v4.0)", fun test_hmac_rejected_by_default/0},
+      {"HMAC accepted when explicitly enabled", fun test_hmac_accepted_when_explicitly_enabled/0},
       {"HMAC rejected when disabled", fun test_hmac_rejected_when_disabled/0},
       {"EdDSA always accepted", fun test_eddsa_always_accepted/0},
-      {"HMAC deprecation detectable", fun test_hmac_deprecation_detectable/0}
+      {"HMAC deprecation detectable when enabled", fun test_hmac_deprecation_detectable/0}
      ]}.
 
 %% =============================================================================
 %% Tests
 %% =============================================================================
 
-test_hmac_accepted_by_default() ->
-    %% With no explicit config, HMAC tokens should validate (backward compat)
+test_hmac_rejected_by_default() ->
+    %% RFC v4.0 Sec 6.3: With no explicit config, HMAC tokens must be rejected.
+    %% EdDSA is the mandatory algorithm; HMAC requires explicit opt-in.
     application:unset_env(iris_edge, allow_hmac_jwt),
     {ok, Token} = iris_auth:create_token(<<"hmac_default_user">>),
+    Result = iris_auth:validate_token(Token),
+    ?assertEqual({error, hmac_deprecated}, Result).
+
+test_hmac_accepted_when_explicitly_enabled() ->
+    %% When allow_hmac_jwt = true is explicitly set, HMAC tokens should validate.
+    application:set_env(iris_edge, allow_hmac_jwt, true),
+    {ok, Token} = iris_auth:create_token(<<"hmac_enabled_user">>),
     {ok, Claims} = iris_auth:validate_token(Token),
-    ?assertEqual(<<"hmac_default_user">>, maps:get(<<"sub">>, Claims)).
+    ?assertEqual(<<"hmac_enabled_user">>, maps:get(<<"sub">>, Claims)),
+    application:unset_env(iris_edge, allow_hmac_jwt).
 
 test_hmac_rejected_when_disabled() ->
     %% When allow_hmac_jwt = false, HMAC tokens should be rejected
@@ -92,9 +103,9 @@ test_eddsa_always_accepted() ->
     application:unset_env(iris_edge, allow_hmac_jwt).
 
 test_hmac_deprecation_detectable() ->
-    %% When HMAC is still allowed (default), validate_token returns {ok, Claims}
-    %% with no error. The caller can check the alg to detect HMAC usage.
-    application:unset_env(iris_edge, allow_hmac_jwt),
+    %% When HMAC is explicitly allowed, validate_token returns {ok, Claims}.
+    %% The caller can check the alg to detect HMAC usage.
+    application:set_env(iris_edge, allow_hmac_jwt, true),
     {ok, Token} = iris_auth:create_token(<<"hmac_detect_user">>),
     {ok, _Claims} = iris_auth:validate_token(Token),
     %% Token was validated - confirm it's an HMAC token by checking header

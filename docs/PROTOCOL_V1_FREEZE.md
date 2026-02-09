@@ -31,9 +31,13 @@ This document is the **canonical protocol specification** for Iris. All opcodes,
 | 0x09 | PONG | Server→Client | Stable (v1.1) |
 | 0x0A | RESUME | Client→Server | Stable (v1.1) |
 | 0x0B | TOKEN_REFRESH | Client→Server | Stable (v1.1) |
+| 0x0C | VERSION_NEGOTIATE | Both | Stable (v1.1) |
+| 0x0D | SEND_SEQ_V2 | Client→Server | Stable (v1.2, RFC v4.0) |
 | 0x11 | RELIABLE_MSG | Server→Client | Stable (moved from 0x10 in v1.1) |
 
 > **v1.1 breaking change**: `RELIABLE_MSG` moved from `0x10` to `0x11` to resolve collision with `CBOR_MSG`. Migration: server sends on both during transition; clients signal `0x11` support via capability negotiation.
+
+> **v1.2 addition** (RFC v4.0): `SEND_SEQ_V2` (`0x0D`) extends `SEND_SEQ` (`0x07`) with a mandatory 128-bit UUIDv7 idempotency key. Wire format: `0x0D | TargetLen(16) | Target | IdempotencyKey(128) | SeqNo(64) | MsgLen(16) | Msg`. The idempotency key enables server-side deduplication by `(user_id, idempotency_key)` per RFC Section 1.2. `0x07` remains unchanged for backward compatibility.
 
 ### 2.2 CBOR Extension (v1.0)
 
@@ -180,14 +184,17 @@ This document is the **canonical protocol specification** for Iris. All opcodes,
 
 ### 7.2 Test Coverage
 
+See [TESTING.md](TESTING.md) for authoritative counts. Summary as of 2026-02-08:
+
 | Category | Tests | Status |
 |----------|-------|--------|
-| Unit Tests | 16 | ✅ All passing |
-| Integration Tests | 14 | ✅ All passing |
-| E2E Tests | 2 | ✅ All passing |
-| Performance Tests | 6 | ✅ All passing |
-| Security Tests | 7 | ✅ All passing |
-| Stress Tests | 10 | ⚠️ 9/10 passing |
+| Erlang EUnit | 326+ | ✅ All passing (70 modules) |
+| Python integration | 37 | ✅ All passing |
+| Python e2e | 11 | ✅ All passing |
+| Python security | 23 | ✅ All passing |
+| Python stress | 18 | ✅ All passing |
+| Python chaos (Docker) | 25 | ✅ All passing |
+| Other suites | 30+ | ✅ All passing |
 
 ---
 
@@ -213,8 +220,8 @@ New features MUST:
 
 ## Approval
 
-- [x] Protocol Implementation Complete
-- [x] Test Suite Passing (75/75 tests)
+- [x] Protocol Implementation Complete (30+ opcodes)
+- [x] Test Suite Passing (120+ tests, all TLS-enabled)
 - [x] Security Review (E2EE implementation)
 - [x] Performance Validation
 

@@ -1,6 +1,7 @@
 -module(iris_proto).
 -export([decode/1, unpack_batch/1, encode_status/3, encode_reliable_msg/2, decode_reliable_msg/1]).
 -export([encode_seq_msg/3]).  %% AUDIT FIX: Sequence-numbered message encoder (RFC FR-5)
+-export([encode_seq_msg_v2/4]).  %% RFC v4.0: send_seq_v2 with UUIDv7 idempotency key
 -export([generate_msg_id/0]). %% Unique message ID generator
 
 %% CBOR Protocol Extensions (RFC-001-AMENDMENT-001, Opcode 0x10)
@@ -21,6 +22,9 @@
 -export([encode_ping/0, encode_pong/0]).
 -export([encode_resume/2, encode_token_refresh/1]).
 -export([encode_version_negotiate/2, encode_version_response/2]).
+
+%% Key Change Alert (GAP-13: RFC-001-AMENDMENT-001 Section 5.3.2, Opcode 0x1A)
+-export([encode_key_change_alert/1]).
 
 %% Group Messaging (RFC-001-AMENDMENT-001, Opcodes 0x30-0x36)
 -export([encode_group_create/1, encode_group_join/2]).
@@ -49,6 +53,7 @@
                 | {resume, binary(), non_neg_integer()} %% Connection resume (0x0A)
                 | {token_refresh, binary()}           %% Token refresh (0x0B)
                 | {version_negotiate, list(), list()} %% Version negotiation (0x0C)
+                | {key_change_alert, binary()}         %% Key change notification (0x1A)
                 | {ack, binary()}
                 | {error, term()}.
 
@@ -180,6 +185,27 @@ decode(<<7, TargetLen:16, Rest/binary>>) ->
             {more, <<7, TargetLen:16, Rest/binary>>}
     end;
 
+%% RFC v4.0: SEND_SEQ_V2 with UUIDv7 idempotency key (opcode 0x0D)
+%% Format: 0x0D | TargetLen(16) | Target | IdempotencyKey(16 bytes) | SeqNo(64) | MsgLen(16) | Msg
+decode(<<16#0D, _/binary>> = Bin) when byte_size(Bin) < 3 ->
+    {more, Bin};
+
+decode(<<16#0D, TargetLen:16, _/binary>>) when TargetLen > ?MAX_TARGET_LEN ->
+    { {error, target_too_long}, <<>> };
+
+decode(<<16#0D, TargetLen:16, Rest/binary>>) ->
+    case Rest of
+        <<Target:TargetLen/binary, IdKey:16/binary, SeqNo:64, MsgLen:16, _/binary>> when MsgLen > ?MAX_MSG_LEN ->
+            { {error, message_too_long}, <<>> };
+        <<Target:TargetLen/binary, IdKey:16/binary, SeqNo:64, MsgLen:16, Msg:MsgLen/binary, Rem/binary>> ->
+            { {send_seq_v2, Target, IdKey, SeqNo, Msg}, Rem };
+        <<_Target:TargetLen/binary, IdKey/binary>> when byte_size(IdKey) < 16 ->
+            %% Have target but idempotency key is too short (< 16 bytes)
+            { {error, invalid_idempotency_key}, <<>> };
+        _ ->
+            {more, <<16#0D, TargetLen:16, Rest/binary>>}
+    end;
+
 %% =============================================================================
 %% Control Opcodes (PROTOCOL_V1_FREEZE v1.1, Opcodes 0x08-0x0C)
 %% =============================================================================
@@ -242,6 +268,22 @@ decode(<<16#0C, PayloadLen:32, Rest/binary>>) ->
             end;
         _ ->
             {more, <<16#0C, PayloadLen:32, Rest/binary>>}
+    end;
+
+%% =============================================================================
+%% Key Change Alert (Opcode 0x1A) - GAP-13, RFC-001-AMENDMENT-001 Section 5.3.2
+%% Format: 0x1A | UserIdLen(16) | UserId
+%% =============================================================================
+decode(<<16#1A, _/binary>> = Bin) when byte_size(Bin) < 3 ->
+    {more, Bin};
+decode(<<16#1A, UserLen:16, _/binary>>) when UserLen > ?MAX_USERNAME_LEN ->
+    { {error, key_change_user_too_long}, <<>> };
+decode(<<16#1A, UserLen:16, Rest/binary>>) ->
+    case Rest of
+        <<UserId:UserLen/binary, Rem/binary>> ->
+            { {key_change_alert, UserId}, Rem };
+        _ ->
+            {more, <<16#1A, UserLen:16, Rest/binary>>}
     end;
 
 %% =============================================================================
@@ -574,13 +616,25 @@ encode_seq_msg(Target, SeqNo, Msg) ->
     MLen = byte_size(Msg),
     <<7, TLen:16, Target/binary, SeqNo:64, MLen:16, Msg/binary>>.
 
-%% Generate unique message ID (RFC §5.2 - globally unique, sortable)
+%% RFC v4.0: Encode SEND_SEQ_V2 with UUIDv7 idempotency key
+%% Format: 0x0D | TargetLen(16) | Target | IdempotencyKey(16 bytes) | SeqNo(64) | MsgLen(16) | Msg
+encode_seq_msg_v2(Target, IdKey, SeqNo, Msg) when byte_size(IdKey) =:= 16 ->
+    TLen = byte_size(Target),
+    MLen = byte_size(Msg),
+    <<16#0D, TLen:16, Target/binary, IdKey/binary, SeqNo:64, MLen:16, Msg/binary>>.
+
+%% Generate unique message ID (RFC §5.4 - 80-bit HLC binary, sortable)
 generate_msg_id() ->
-    %% Combine monotonic time, unique integer, and node hash for uniqueness
-    Time = erlang:monotonic_time(),
-    Unique = erlang:unique_integer([positive]),
-    Node = erlang:phash2(node(), 16#FFFF),
-    iolist_to_binary(io_lib:format("~.16b~.16b~.4b", [Time band 16#FFFFFFFFFFFF, Unique band 16#FFFFFFFF, Node])).
+    case whereis(iris_hlc) of
+        undefined ->
+            %% Fallback: 10-byte pseudo-HLC for environments without HLC gen_server
+            Time = erlang:system_time(millisecond) band 16#FFFFFFFFFFFF,
+            Unique = erlang:unique_integer([positive]) band 16#FFFF,
+            Node = erlang:phash2(node(), 16#FFFF),
+            <<Time:48, Unique:16, Node:16>>;
+        _Pid ->
+            iris_hlc:to_binary(iris_hlc:send())
+    end.
 
 %% =============================================================================
 %% CBOR Codec Implementation (RFC 8949)
@@ -968,6 +1022,17 @@ encode_version_response(Version, Capabilities) ->
     Payload = cbor_encode(Map),
     PLen = byte_size(Payload),
     <<16#0C, PLen:32, Payload/binary>>.
+
+%% =============================================================================
+%% Key Change Alert Encoding (GAP-13, Opcode 0x1A)
+%% =============================================================================
+%% Format: 0x1A | UserIdLen(16) | UserId
+%% Sent to contacts when a user's identity key changes.
+
+-spec encode_key_change_alert(binary()) -> binary().
+encode_key_change_alert(UserId) when is_binary(UserId) ->
+    ULen = byte_size(UserId),
+    <<16#1A, ULen:16, UserId/binary>>.
 
 %% =============================================================================
 %% Read Receipt Encoding (Best-effort, Opcodes 0x74-0x75)

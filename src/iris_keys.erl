@@ -22,7 +22,7 @@
 -export([start_link/0]).
 
 %% Key Bundle API
--export([upload_bundle/2, fetch_bundle/1, fetch_bundle/2]).
+-export([upload_bundle/2, fetch_bundle/1, fetch_bundle/2, fetch_bundle/3]).
 -export([get_identity_key/1, get_signed_prekey/1, pop_one_time_prekey/1]).
 -export([refill_one_time_prekeys/2]).
 -export([get_prekey_count/1]).
@@ -30,8 +30,14 @@
 %% Safety Number (EK-1: RFC-001-AMENDMENT-001 v1.3 Section 5.3.1)
 -export([compute_safety_number/2]).
 
+%% GAP-13: Key Change Contact Tracking (RFC-001-AMENDMENT-001 Section 5.3.2)
+-export([record_key_contact/2, get_key_contacts/1]).
+
 %% Admin API
 -export([delete_user_keys/1, list_users/0]).
+
+%% Exported for testing (F3 audit: quorum write durability)
+-export([store_key_bundle_durable/2]).
 
 %% Metrics API
 -export([get_opk_metrics/0]).
@@ -45,6 +51,8 @@
 
 %% AUDIT FIX: Metrics ETS table for OPK tracking
 -define(METRICS_ETS, iris_keys_metrics).
+%% GAP-13: Key change contact tracking
+-define(CONTACTS_TABLE, iris_key_contacts).
 
 %% =============================================================================
 %% Records
@@ -91,6 +99,12 @@ fetch_bundle(UserId) ->
 fetch_bundle(UserId, ConsumeOPK) when is_binary(UserId), is_boolean(ConsumeOPK) ->
     gen_server:call(?SERVER, {fetch_bundle, UserId, ConsumeOPK}).
 
+%% @doc Fetch a user's key bundle with contact tracking (GAP-13)
+%% Records the requester as a contact of the owner for key change notifications.
+-spec fetch_bundle(binary(), boolean(), binary()) -> {ok, map()} | {error, not_found}.
+fetch_bundle(UserId, ConsumeOPK, RequesterUserId) when is_binary(UserId), is_boolean(ConsumeOPK), is_binary(RequesterUserId) ->
+    gen_server:call(?SERVER, {fetch_bundle, UserId, ConsumeOPK, RequesterUserId}).
+
 %% @doc Get only the identity key (no OPK consumption)
 -spec get_identity_key(binary()) -> {ok, binary()} | {error, not_found}.
 get_identity_key(UserId) ->
@@ -127,6 +141,28 @@ list_users() ->
     gen_server:call(?SERVER, list_users).
 
 %% =============================================================================
+%% GAP-13: Key Change Contact Tracking (Pure ETS Operations)
+%% =============================================================================
+
+%% @doc Record that FetcherUserId has fetched OwnerUserId's key bundle.
+%% Used to notify contacts when the owner's identity key changes.
+-spec record_key_contact(binary(), binary()) -> ok.
+record_key_contact(OwnerUserId, FetcherUserId) ->
+    %% Avoid duplicates: check before insert (bag table allows dupes otherwise)
+    Existing = ets:match_object(?CONTACTS_TABLE, {OwnerUserId, FetcherUserId}),
+    case Existing of
+        [] -> ets:insert(?CONTACTS_TABLE, {OwnerUserId, FetcherUserId});
+        _  -> true
+    end,
+    ok.
+
+%% @doc Get all users who have fetched this user's key bundle.
+-spec get_key_contacts(binary()) -> [binary()].
+get_key_contacts(OwnerUserId) ->
+    Entries = ets:lookup(?CONTACTS_TABLE, OwnerUserId),
+    [Fetcher || {_, Fetcher} <- Entries].
+
+%% =============================================================================
 %% GenServer Callbacks
 %% =============================================================================
 
@@ -140,9 +176,21 @@ init([]) ->
             ets:new(?METRICS_ETS, [named_table, public, {write_concurrency, true}]),
             ets:insert(?METRICS_ETS, {opk_exhausted_count, 0}),
             ets:insert(?METRICS_ETS, {opk_low_alerts, 0}),
-            ets:insert(?METRICS_ETS, {spk_fallback_count, 0});
+            ets:insert(?METRICS_ETS, {spk_fallback_count, 0}),
+            ets:insert(?METRICS_ETS, {spk_rotation_needed, 0});
         _ -> ok
     end,
+    
+    %% GAP-13: Create key contacts table for change notification
+    case ets:info(?CONTACTS_TABLE) of
+        undefined ->
+            ets:new(?CONTACTS_TABLE, [bag, named_table, public]);
+        _ -> ok
+    end,
+    
+    %% NFR-25: Schedule periodic SPK rotation check (default: 7 days)
+    RotationInterval = application:get_env(iris_core, spk_rotation_interval_ms, 604800000),
+    erlang:send_after(RotationInterval, self(), check_spk_rotation),
     
     {ok, #state{}}.
 
@@ -152,6 +200,15 @@ handle_call({upload_bundle, UserId, Bundle}, _From, State) ->
 
 handle_call({fetch_bundle, UserId, ConsumeOPK}, _From, State) ->
     {Result, NewState} = do_fetch_bundle(UserId, ConsumeOPK, State),
+    {reply, Result, NewState};
+
+handle_call({fetch_bundle, UserId, ConsumeOPK, RequesterUserId}, _From, State) ->
+    {Result, NewState} = do_fetch_bundle(UserId, ConsumeOPK, State),
+    %% GAP-13: Record requester as contact for key change notifications
+    case Result of
+        {ok, _} -> record_key_contact(UserId, RequesterUserId);
+        _ -> ok
+    end,
     {reply, Result, NewState};
 
 handle_call({get_identity_key, UserId}, _From, State) ->
@@ -187,6 +244,13 @@ handle_call(_Request, _From, State) ->
 
 handle_cast(_Msg, State) ->
     {noreply, State}.
+
+handle_info(check_spk_rotation, State) ->
+    rotate_expired_spks(),
+    %% Reschedule
+    Interval = application:get_env(iris_core, spk_rotation_interval_ms, 604800000),
+    erlang:send_after(Interval, self(), check_spk_rotation),
+    {noreply, State};
 
 handle_info(_Info, State) ->
     {noreply, State}.
@@ -255,18 +319,38 @@ do_upload_bundle(UserId, Bundle) ->
 %% RFC-001-AMENDMENT-001 Section 5.3.2: "When a user's Identity Key changes,
 %% the server MUST notify all active sessions."
 %%
-%% PENDING_DESIGN: Full implementation requires:
-%% 1. Tracking which users have fetched each other's key bundles
-%% 2. Sending notification events to affected users
-%% 3. A new notification message type in the protocol
-%% For now, we detect the change and log it.
+%% GAP-13 IMPLEMENTED: Key change detection + contact notification.
+%% 1. key_contacts ETS tracks which users have fetched each other's key bundles
+%% 2. On IK change, contacts are looked up and notification packets are routed
+%% 3. Opcode 0x1A (key_change_alert) encodes the notification
 detect_identity_key_change(UserId, NewIK) ->
     case do_get_identity_key(UserId) of
         {ok, ExistingIK} when ExistingIK =/= NewIK ->
-            logger:warning("KEY_CHANGE: Identity key changed for user ~p. "
-                          "Notification to peers PENDING_DESIGN (GAP-13)",
-                          [UserId]),
-            iris_metrics:inc(iris_identity_key_changes);
+            logger:warning("KEY_CHANGE: Identity key changed for user ~p", [UserId]),
+            iris_metrics:inc(iris_identity_key_changes),
+            %% GAP-13: Notify contacts who have fetched this user's key bundle
+            %% Direct pid delivery -- bypasses router pool (which may not be running)
+            Contacts = get_key_contacts(UserId),
+            case Contacts of
+                [] -> ok;
+                _ ->
+                    AlertPacket = iris_proto:encode_key_change_alert(UserId),
+                    lists:foreach(fun(ContactId) ->
+                        try
+                            case iris_core:lookup_user(ContactId) of
+                                {ok, _Node, Pid} when is_pid(Pid) ->
+                                    Pid ! {deliver_msg, AlertPacket};
+                                _ ->
+                                    %% Contact offline: store for delivery on reconnect (RFC 5.3.2 MUST)
+                                    iris_core:store_offline_durable(ContactId, AlertPacket)
+                            end
+                        catch _:_ ->
+                            %% Lookup crashed (e.g. shard not running) -- treat as offline
+                            %% RFC 5.3.2: MUST notify, so store durably for later delivery
+                            catch iris_core:store_offline_durable(ContactId, AlertPacket)
+                        end
+                    end, Contacts)
+            end;
         _ ->
             %% No existing key or same key -- no change
             ok
@@ -288,14 +372,10 @@ store_key_bundle_durable(UserId, Record) ->
             case iris_quorum_write:write_durable(e2ee_key_bundle, UserId, Record) of
                 ok -> ok;
                 {error, quorum_not_reached} ->
-                    %% Fallback: try local sync_transaction
-                    %% This is still durable on this node
-                    logger:warning("Quorum write failed for key bundle ~p, using local fallback", [UserId]),
-                    F = fun() -> mnesia:write(e2ee_key_bundle, Record, write) end,
-                    case mnesia:sync_transaction(F) of
-                        {atomic, ok} -> ok;
-                        {aborted, Reason} -> {error, Reason}
-                    end;
+                    %% F3 AUDIT FIX: CP > AP for key bundles. Do NOT fallback
+                    %% to single-node write. Propagate failure; clients should retry.
+                    logger:error("Quorum write failed for key bundle ~p, rejecting (CP > AP)", [UserId]),
+                    {error, quorum_not_reached};
                 {error, Reason} ->
                     {error, Reason}
             end
@@ -500,6 +580,38 @@ do_list_users() ->
     end.
 
 %% =============================================================================
+%% Internal: SPK Rotation Check (NFR-25)
+%% =============================================================================
+
+-define(SPK_MAX_AGE_SECONDS, 604800). %% 7 days
+
+rotate_expired_spks() ->
+    %% Scan all key bundles for expired SPKs (timestamp > 7 days old)
+    Now = os:system_time(second),
+    F = fun() -> mnesia:all_keys(e2ee_key_bundle) end,
+    case mnesia:transaction(F) of
+        {atomic, UserIds} ->
+            lists:foreach(fun(UserId) ->
+                case mnesia:transaction(fun() -> mnesia:read(e2ee_key_bundle, UserId) end) of
+                    {atomic, [Record]} ->
+                        SpkTs = element(6, Record), %% signed_prekey_timestamp field
+                        Age = Now - SpkTs,
+                        case Age > ?SPK_MAX_AGE_SECONDS of
+                            true ->
+                                incr_metric(spk_rotation_needed),
+                                logger:warning("SPK expired for user ~p (age: ~p seconds)", [UserId, Age]);
+                            false ->
+                                ok
+                        end;
+                    _ ->
+                        ok
+                end
+            end, UserIds);
+        _ ->
+            ok
+    end.
+
+%% =============================================================================
 %% Internal: Low Prekey Alert (NFR-24)
 %% =============================================================================
 
@@ -539,7 +651,8 @@ get_opk_metrics() ->
         #{
             opk_exhausted_count => ets:lookup_element(?METRICS_ETS, opk_exhausted_count, 2),
             opk_low_alerts => ets:lookup_element(?METRICS_ETS, opk_low_alerts, 2),
-            spk_fallback_count => ets:lookup_element(?METRICS_ETS, spk_fallback_count, 2)
+            spk_fallback_count => ets:lookup_element(?METRICS_ETS, spk_fallback_count, 2),
+            spk_rotation_needed => ets:lookup_element(?METRICS_ETS, spk_rotation_needed, 2)
         }
     catch
         error:badarg -> #{}  %% Table not created yet

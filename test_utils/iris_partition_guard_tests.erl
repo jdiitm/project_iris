@@ -46,7 +46,11 @@ iris_partition_guard_test_() ->
       {"Membership mode default is static", fun test_membership_mode_default/0},
       {"Membership mode can be set to dynamic", fun test_membership_mode_dynamic/0},
       {"Status includes membership_mode field", fun test_status_has_membership_mode/0},
-      {"Dynamic mode uses pg for discovery", fun test_dynamic_mode_design/0}
+      {"Dynamic mode uses pg for discovery", fun test_dynamic_mode_design/0},
+
+      %% RFC Section 7.1.1: AP mode — writes allowed during partition
+      {"Writes allowed during partition (AP mode)", fun test_writes_allowed_during_partition/0},
+      {"Partition mode is 'diverged' not 'safe_mode'", fun test_partition_mode_is_diverged/0}
      ]}.
 
 %% =============================================================================
@@ -134,6 +138,56 @@ test_dynamic_mode_design() ->
     %% Verify start_link is available for testing
     Exports = proplists:get_value(exports, Info, []),
     ?assert(lists:member({start_link, 0}, Exports)).
+
+%% =============================================================================
+%% RFC Section 7.1.1: AP Mode Tests
+%% "Each partition continues reads/writes during split (AP mode)"
+%% =============================================================================
+
+test_writes_allowed_during_partition() ->
+    %% Configure expected nodes with an unreachable node so quorum is lost
+    FakeNode = 'iris_core_fake@unreachable_host',
+    application:set_env(iris_core, expected_cluster_nodes, [node(), FakeNode]),
+    case iris_partition_guard:start_link() of
+        {ok, Pid} ->
+            %% Trigger partition check — FakeNode is unreachable,
+            %% so quorum (>50%) is lost (1 of 2 visible = 50%, not >50%).
+            Pid ! check_partition,
+            timer:sleep(100),  %% Let the check complete
+            %% RFC 7.1.1 AP requirement: writes MUST still be allowed
+            Result = iris_partition_guard:is_safe_for_writes(),
+            gen_server:stop(Pid, normal, 1000),
+            ?assertEqual(ok, Result);
+        {error, {already_started, ExistingPid}} ->
+            gen_server:stop(ExistingPid, normal, 1000),
+            timer:sleep(50),
+            test_writes_allowed_during_partition()
+    end,
+    application:unset_env(iris_core, expected_cluster_nodes).
+
+test_partition_mode_is_diverged() ->
+    %% Same setup: unreachable node causes quorum loss
+    FakeNode = 'iris_core_fake@unreachable_host',
+    application:set_env(iris_core, expected_cluster_nodes, [node(), FakeNode]),
+    case iris_partition_guard:start_link() of
+        {ok, Pid} ->
+            %% Trigger partition check
+            Pid ! check_partition,
+            timer:sleep(100),
+            Status = iris_partition_guard:get_status(),
+            gen_server:stop(Pid, normal, 1000),
+            %% Mode should be 'diverged' (AP), NOT 'safe_mode' (CP)
+            ?assertEqual(diverged, maps:get(mode, Status)),
+            %% Epoch should have incremented from 0 to 1
+            ?assert(maps:get(epoch, Status) >= 1),
+            %% Writes should still be allowed in diverged mode
+            ?assertEqual(true, maps:get(safe_for_writes, Status));
+        {error, {already_started, ExistingPid}} ->
+            gen_server:stop(ExistingPid, normal, 1000),
+            timer:sleep(50),
+            test_partition_mode_is_diverged()
+    end,
+    application:unset_env(iris_core, expected_cluster_nodes).
 
 %% =============================================================================
 %% Functional Tests (require running guard)
