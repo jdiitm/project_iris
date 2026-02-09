@@ -420,12 +420,25 @@ def benchmark_roster_retrieval():
         admin.login(admin_user)
         log(f"  Admin logged in: {admin_user}")
         
+        # Drain any pending data from login before sending GROUP_CREATE.
+        # On CI, the server may send additional data after LOGIN_OK that
+        # arrives after login()'s recv(), contaminating the next read.
+        admin.sock.setblocking(False)
+        try:
+            while admin.sock.recv(4096):
+                pass
+        except (BlockingIOError, OSError):
+            pass
+        admin.sock.setblocking(True)
+        
         group_name = f"roster_test_{int(time.time())}".encode()
         admin.sock.sendall(encode_group_create(group_name))
-        response = recv_response(admin.sock, 3.0)
+        response = recv_response(admin.sock, 10.0)
         
         if len(response) == 0 or response[0] != 0x31:
-            log("  FAIL: Could not create group")
+            log(f"  FAIL: Could not create group (response len={len(response)}, "
+                f"first_byte=0x{response[0]:02x} expected 0x31)" if response else
+                "  FAIL: Could not create group (empty response)")
             admin.close()
             log_result("Roster retrieval", False, 0, "ms", ROSTER_TARGET_MS)
             return False
@@ -635,6 +648,11 @@ def main():
     benchmark_roster_query_p99()  # NFR-29 (latency-sensitive, must run on clean VM)
     benchmark_group_creation()
     benchmark_message_fanout()
+    # Settling pause: fanout benchmark creates 1000 group members and sends 50
+    # messages, causing Mnesia GC pressure. Without a pause, the next group_create
+    # can fail on CI runners (2 vCPU) due to server-side GC stalls.
+    if IS_CI:
+        time.sleep(2)
     benchmark_roster_retrieval()
     
     # Summary
