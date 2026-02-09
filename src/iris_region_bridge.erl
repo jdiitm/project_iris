@@ -22,7 +22,7 @@
 
 -export([start_link/0]).
 -export([send_cross_region/3, send_cross_region/4]).
--export([get_queue_depth/0, get_queue_depth/1]).
+-export([get_queue_depth/0, get_queue_depth/1, get_queue_depth_fast/1]).
 -export([get_max_queue_size/0]).  %% FM-1: Expose limit for tests
 -export([get_stats/0, drain_region/1]).
 -export([init_tables/0]).
@@ -41,6 +41,7 @@
 -define(MAX_BACKOFF_MS, 60000).
 -define(BATCH_SIZE, 100).
 -define(MAX_QUEUE_SIZE, 10000).  %% FM-1: Max messages per destination region
+-define(DEPTH_ETS, iris_region_bridge_depth).  %% G-3: O(1) queue depth counter
 -define(OUTBOX_TTL_MS, 604800000).  %% RFC Section 7.2: 7 days in milliseconds
 %% GEO-001 FIX: Auto-reconnection constants
 -define(RECONNECT_INTERVAL_MS, 5000).   %% 5 seconds between reconnect attempts
@@ -150,6 +151,8 @@ do_send_cross_region(TargetRegion, UserId, Msg, Opts) ->
         mnesia:write(?OUTBOUND_TABLE, Record, write)
     end) of
         ok -> 
+            %% G-3 FIX: Atomically increment depth counter for this region
+            incr_depth(TargetRegion),
             %% Notify bridge to drain
             gen_server:cast(?SERVER, drain_now),
             ok;
@@ -165,10 +168,36 @@ get_queue_depth() ->
 
 -spec get_queue_depth(binary()) -> non_neg_integer().
 get_queue_depth(Region) ->
-    mnesia:activity(transaction, fun() ->
-        length(mnesia:match_object(?OUTBOUND_TABLE, 
-            #cross_region_outbound{target_region = Region, status = pending, _ = '_'}, read))
-    end).
+    %% G-3 FIX: Prefer O(1) ETS counter; fall back to O(N) scan if counter unavailable
+    get_queue_depth_fast(Region).
+
+%% @doc O(1) queue depth via ETS atomic counter (G-3 Fix: RFC 7.2 / FM-1).
+%% Called on every send_cross_region -- must be fast.
+-spec get_queue_depth_fast(binary()) -> non_neg_integer().
+get_queue_depth_fast(Region) ->
+    try
+        case ets:lookup(?DEPTH_ETS, {queue_depth, Region}) of
+            [{_, V}] when V >= 0 -> V;
+            [{_, _}] -> 0;  %% Negative due to race; treat as 0
+            [] -> 0
+        end
+    catch
+        error:badarg ->
+            %% ETS table not created yet (startup race) -- fall back to scan
+            get_queue_depth_scan(Region)
+    end.
+
+%% @doc O(N) fallback -- only used if ETS counter table is unavailable.
+-spec get_queue_depth_scan(binary()) -> non_neg_integer().
+get_queue_depth_scan(Region) ->
+    try
+        mnesia:activity(transaction, fun() ->
+            length(mnesia:match_object(?OUTBOUND_TABLE,
+                #cross_region_outbound{target_region = Region, status = pending, _ = '_'}, read))
+        end)
+    catch
+        _:_ -> 0
+    end.
 
 %% @doc Get delivery statistics
 -spec get_stats() -> map().
@@ -287,6 +316,13 @@ ensure_disc_copies(Table, Nodes) ->
 %% =============================================================================
 
 init([]) ->
+    %% G-3 FIX: Create O(1) depth counter ETS table
+    case ets:info(?DEPTH_ETS) of
+        undefined ->
+            ets:new(?DEPTH_ETS, [set, named_table, public, {write_concurrency, true}]);
+        _ -> ok
+    end,
+    
     %% Ensure tables exist
     init_tables(),
     
@@ -524,6 +560,16 @@ cleanup_expired_outbox() ->
                         mnesia:delete(?OUTBOUND_TABLE, M#cross_region_outbound.id, write)
                     end, Expired)
                 end),
+                %% G-3 FIX: Decrement depth counters for expired messages
+                RegionCounts = lists:foldl(fun(M, Acc) ->
+                    R = M#cross_region_outbound.target_region,
+                    maps:update_with(R, fun(V) -> V + 1 end, 1, Acc)
+                end, #{}, Expired),
+                maps:foreach(fun(R, Count) ->
+                    try ets:update_counter(?DEPTH_ETS, {queue_depth, R},
+                            {2, -Count, 0, 0}, {{queue_depth, R}, 0})
+                    catch error:badarg -> ok end
+                end, RegionCounts),
                 logger:info("Outbox TTL: purged ~p expired messages (older than 7 days)",
                            [length(Expired)])
         end
@@ -576,6 +622,8 @@ deliver_message(Msg = #cross_region_outbound{id = MsgId, target_region = Region,
             mnesia:activity(transaction, fun() ->
                 mnesia:delete(?OUTBOUND_TABLE, MsgId, write)
             end),
+            %% G-3 FIX: Decrement depth counter
+            decr_depth(Region),
             logger:debug("Delivered cross-region message ~p to ~s", [MsgId, Region]),
             increment_stat(delivered, State);
             
@@ -590,6 +638,8 @@ deliver_message(Msg = #cross_region_outbound{id = MsgId, target_region = Region,
                         attempts = NewAttempts,
                         last_error = Reason
                     }),
+                    %% G-3 FIX: Decrement depth counter (moved out of pending)
+                    decr_depth(Region),
                     increment_stat(failed, State);
                 false ->
                     %% Schedule retry with exponential backoff
@@ -672,6 +722,15 @@ generate_msg_id() ->
 increment_stat(Key, State = #state{stats = Stats}) ->
     NewStats = maps:update_with(Key, fun(V) -> V + 1 end, 1, Stats),
     State#state{stats = NewStats}.
+
+%% G-3 FIX: Atomic O(1) depth counter operations
+incr_depth(Region) ->
+    try ets:update_counter(?DEPTH_ETS, {queue_depth, Region}, 1, {{queue_depth, Region}, 0})
+    catch error:badarg -> ok end.
+
+decr_depth(Region) ->
+    try ets:update_counter(?DEPTH_ETS, {queue_depth, Region}, {2, -1, 0, 0}, {{queue_depth, Region}, 0})
+    catch error:badarg -> ok end.
 
 %% =============================================================================
 %% GEO-001 FIX: Health Check Implementation

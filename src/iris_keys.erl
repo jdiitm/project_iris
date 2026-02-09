@@ -146,21 +146,23 @@ list_users() ->
 
 %% @doc Record that FetcherUserId has fetched OwnerUserId's key bundle.
 %% Used to notify contacts when the owner's identity key changes.
+%% GAP-3 AUDIT FIX: Uses Mnesia (persistent) instead of ETS (RAM-only).
 -spec record_key_contact(binary(), binary()) -> ok.
 record_key_contact(OwnerUserId, FetcherUserId) ->
     %% Avoid duplicates: check before insert (bag table allows dupes otherwise)
-    Existing = ets:match_object(?CONTACTS_TABLE, {OwnerUserId, FetcherUserId}),
+    Existing = mnesia:dirty_match_object({key_contact, OwnerUserId, FetcherUserId}),
     case Existing of
-        [] -> ets:insert(?CONTACTS_TABLE, {OwnerUserId, FetcherUserId});
-        _  -> true
+        [] -> mnesia:dirty_write({key_contact, OwnerUserId, FetcherUserId});
+        _  -> ok
     end,
     ok.
 
 %% @doc Get all users who have fetched this user's key bundle.
+%% GAP-3 AUDIT FIX: Reads from Mnesia (survives restart).
 -spec get_key_contacts(binary()) -> [binary()].
 get_key_contacts(OwnerUserId) ->
-    Entries = ets:lookup(?CONTACTS_TABLE, OwnerUserId),
-    [Fetcher || {_, Fetcher} <- Entries].
+    Entries = mnesia:dirty_read(key_contact, OwnerUserId),
+    [Fetcher || {key_contact, _, Fetcher} <- Entries].
 
 %% =============================================================================
 %% GenServer Callbacks
@@ -181,12 +183,10 @@ init([]) ->
         _ -> ok
     end,
     
-    %% GAP-13: Create key contacts table for change notification
-    case ets:info(?CONTACTS_TABLE) of
-        undefined ->
-            ets:new(?CONTACTS_TABLE, [bag, named_table, public]);
-        _ -> ok
-    end,
+    %% GAP-3 AUDIT FIX: Key contacts table MUST be persistent (Mnesia disc_copies).
+    %% Previously ETS (RAM-only): restart wiped the contact graph, silently
+    %% breaking key change notifications (Amendment 5.3.2 MUST requirement).
+    init_contacts_table(),
     
     %% NFR-25: Schedule periodic SPK rotation check (default: 7 days)
     RotationInterval = application:get_env(iris_core, spk_rotation_interval_ms, 604800000),
@@ -283,6 +283,30 @@ init_table() ->
             logger:error("Failed to create e2ee_key_bundle table: ~p", [Reason]),
             {error, Reason}
     end.
+
+%% GAP-3 AUDIT FIX: Mnesia-backed key contacts table
+%% Record: {key_contact, OwnerUserId, FetcherUserId}
+init_contacts_table() ->
+    StorageType = case mnesia:table_info(schema, disc_copies) of
+        [] -> ram_copies;
+        _ -> disc_copies
+    end,
+    case mnesia:create_table(key_contact, [
+        {attributes, [owner, fetcher]},
+        {StorageType, [node()]},
+        {type, bag}  %% bag allows multiple fetchers per owner
+    ]) of
+        {atomic, ok} ->
+            logger:info("Created key_contact table (~p)", [StorageType]),
+            ok;
+        {aborted, {already_exists, key_contact}} ->
+            ok;
+        {aborted, Reason} ->
+            logger:error("Failed to create key_contact table: ~p", [Reason]),
+            {error, Reason}
+    end,
+    mnesia:wait_for_tables([key_contact], 5000),
+    ok.
 
 %% =============================================================================
 %% Internal: Bundle Operations
@@ -669,20 +693,24 @@ compute_safety_number(IK_A, IK_B) when is_binary(IK_A), is_binary(IK_B),
                                         byte_size(IK_A) >= 16, byte_size(IK_B) >= 16 ->
     Sorted = lists:sort([IK_A, IK_B]),
     Combined = erlang:iolist_to_binary(Sorted),
-    Hash = crypto:hash(sha256, Combined),
-    %% Take first 30 bytes -> 60 hex chars -> convert to 60 decimal digits
-    Trunc = binary:part(Hash, 0, 30),
+    %% GAP-1 AUDIT FIX: Use SHA-512 (64 bytes) to provide enough entropy
+    %% for 30 digit-pairs using 2 bytes each (60 bytes needed).
+    Hash = crypto:hash(sha512, Combined),
+    %% Take first 60 bytes -> 30 digit-pairs via 16-bit sampling
+    Trunc = binary:part(Hash, 0, 60),
     Digits = format_safety_number_digits(Trunc),
     {ok, Digits};
 compute_safety_number(_, _) ->
     {error, invalid_key}.
 
-%% Convert 30 bytes to 60 decimal digits grouped as 12x5
+%% Convert 60 bytes to 60 decimal digits grouped as 12x5.
+%% GAP-1 AUDIT FIX: Read 2 bytes (16 bits, 0-65535) per digit-pair, then
+%% rem 100. Bias: 65536/100 = 655 full cycles + remainder 36, giving
+%% max bias of 655/656 ≈ 0.15% (negligible vs previous 1.5x from 8-bit).
 format_safety_number_digits(Bytes) ->
-    %% Convert each byte to 2-digit decimal (mod 100, zero-padded)
     DigitList = lists:flatten([
-        io_lib:format("~2..0B", [B rem 100])
-        || <<B>> <= Bytes
+        io_lib:format("~2..0B", [W rem 100])
+        || <<W:16>> <= Bytes
     ]),
     DigitsBin = list_to_binary(DigitList),
     %% Group into 12 groups of 5 digits

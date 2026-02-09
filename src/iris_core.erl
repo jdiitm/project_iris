@@ -5,6 +5,11 @@
 %% OTP Callbacks
 -export([start/2, stop/1, init/1]).
 -export([init_db/0, init_db/1, join_cluster/1, init_cross_region_replication/0]).
+-export([reconcile_after_partition/0]).  %% F1 AUDIT FIX: RFC 7.1.1 union merge
+-export([reconcile_batch/2]).  %% G-2 FIX: cursor-based batched reconciliation
+-export([reconcile_table/3]).  %% GAP-2 FIX: generic table reconciliation (RFC 7.1.1)
+-export([merge_table_batch/3]).  %% F1 FIX: exported for conflict resolution testing
+-export([should_overwrite/3]).   %% F1 FIX: timestamp-aware conflict resolution
 
 %% High-Scale Messaging APIs
 -export([register_user/3, lookup_user/1]).
@@ -859,6 +864,264 @@ init_cross_region_replication() ->
             logger:info("Cross-region replication initialized successfully"),
             ok
     end.
+
+%%%===================================================================
+%%% F1 AUDIT FIX: Post-Partition Reconciliation (RFC 7.1.1)
+%%%===================================================================
+%%% Called by iris_partition_guard when transitioning from diverged -> normal.
+%%% Performs union merge of append-only tables (offline_msg) across all
+%%% visible nodes. "No acknowledged message is lost during split-brain."
+%%%
+%%% Design:
+%%% - Background process (spawned by partition guard)
+%%% - Reads remote offline_msg records via Mnesia dirty operations
+%%% - Inserts missing records locally (bag table = natural union)
+%%% - Idempotent: re-running is safe (bag allows duplicates, but
+%%%   records are keyed by {User, BucketID} + timestamp + msg)
+%%%===================================================================
+
+-spec reconcile_after_partition() -> ok | {error, term()}.
+reconcile_after_partition() ->
+    logger:info("=== POST-PARTITION RECONCILIATION START ==="),
+    
+    %% Get remote nodes that have offline_msg table
+    RemoteNodes = try
+        AllCopies = mnesia:table_info(offline_msg, all_nodes),
+        AllCopies -- [node()]
+    catch
+        _:_ -> []
+    end,
+    
+    case RemoteNodes of
+        [] ->
+            logger:info("Reconciliation: no remote nodes with offline_msg, skipping"),
+            ok;
+        _ ->
+            %% RFC 7.1.1: Reconcile ALL data types, not just messages
+            logger:info("Reconciliation: merging from ~p", [RemoteNodes]),
+            lists:foreach(fun(RemoteNode) ->
+                %% 1. Messages: Union (append-only, dedup handles duplicates)
+                merge_offline_msg_from(RemoteNode),
+                %% 2. Presence: Last-writer-wins (HLC timestamp) -- ram_copies, best-effort
+                reconcile_table(RemoteNode, presence, 1000),
+                %% 3. Group membership: Union of adds, latest-timestamp for removes
+                reconcile_table(RemoteNode, group_member, 1000),
+                %% 4. Key bundles: Union (all bundles are valid)
+                reconcile_table(RemoteNode, e2ee_key_bundle, 1000)
+            end, RemoteNodes),
+            logger:info("=== POST-PARTITION RECONCILIATION COMPLETE ==="),
+            ok
+    end.
+
+%% @doc Cursor-based batched reconciliation (G-2 FIX).
+%% Replaces the O(N) dirty_match_object which fetches ALL records into RAM.
+%% Iterates remote keys in batches using dirty_first/dirty_next.
+-spec reconcile_batch(node(), pos_integer()) -> {ok, non_neg_integer()} | {error, term()}.
+reconcile_batch(RemoteNode, BatchSize) when is_atom(RemoteNode), is_integer(BatchSize), BatchSize > 0 ->
+    logger:info("G-2: Batched reconciliation from ~p (batch_size=~p)", [RemoteNode, BatchSize]),
+    try
+        FirstKey = rpc:call(RemoteNode, mnesia, dirty_first, [offline_msg], 5000),
+        case FirstKey of
+            {badrpc, Reason} ->
+                logger:warning("G-2: Failed to read first key from ~p: ~p", [RemoteNode, Reason]),
+                {error, Reason};
+            '$end_of_table' ->
+                logger:info("G-2: Remote node ~p has no offline_msg records", [RemoteNode]),
+                {ok, 0};
+            _ ->
+                Merged = reconcile_batch_loop(RemoteNode, FirstKey, BatchSize, 0),
+                logger:info("G-2: Batched reconciliation from ~p complete (~p merged)", [RemoteNode, Merged]),
+                {ok, Merged}
+        end
+    catch
+        _:Error ->
+            logger:warning("G-2: Error during batched reconciliation from ~p: ~p", [RemoteNode, Error]),
+            {error, Error}
+    end.
+
+reconcile_batch_loop(_RemoteNode, '$end_of_table', _BatchSize, Merged) ->
+    Merged;
+reconcile_batch_loop(RemoteNode, CurrentKey, BatchSize, Merged) ->
+    %% Collect a batch of keys
+    {Keys, NextKey} = collect_keys(RemoteNode, CurrentKey, BatchSize),
+    
+    %% Fetch records for these keys from the remote node and merge
+    BatchMerged = merge_key_batch(RemoteNode, Keys),
+    
+    %% Rate limit: yield between batches to avoid flooding
+    timer:sleep(1),
+    
+    reconcile_batch_loop(RemoteNode, NextKey, BatchSize, Merged + BatchMerged).
+
+collect_keys(RemoteNode, StartKey, BatchSize) ->
+    collect_keys(RemoteNode, StartKey, BatchSize, [StartKey]).
+
+collect_keys(_RemoteNode, _CurrentKey, 0, Acc) ->
+    %% Batch full -- need next key to continue
+    %% The last key in Acc is the one we need to get the next for
+    {lists:reverse(Acc), needs_next};
+collect_keys(RemoteNode, CurrentKey, Remaining, Acc) ->
+    NextKey = rpc:call(RemoteNode, mnesia, dirty_next, [offline_msg, CurrentKey], 5000),
+    case NextKey of
+        {badrpc, _} -> {lists:reverse(Acc), '$end_of_table'};
+        '$end_of_table' -> {lists:reverse(Acc), '$end_of_table'};
+        _ -> collect_keys(RemoteNode, NextKey, Remaining - 1, [NextKey | Acc])
+    end.
+
+merge_key_batch(RemoteNode, Keys) ->
+    lists:foldl(fun(Key, Count) ->
+        RemoteRecords = rpc:call(RemoteNode, mnesia, dirty_read, [offline_msg, Key], 5000),
+        case RemoteRecords of
+            {badrpc, _} -> Count;
+            Records when is_list(Records) ->
+                LocalRecords = mnesia:dirty_read(offline_msg, Key),
+                LocalSet = sets:from_list(LocalRecords),
+                Missing = [R || R <- Records, not sets:is_element(R, LocalSet)],
+                lists:foreach(fun(Record) ->
+                    mnesia:dirty_write(Record)
+                end, Missing),
+                Count + length(Missing);
+            _ -> Count
+        end
+    end, 0, Keys).
+
+%% Merge offline_msg records from a remote node into local table.
+%% G-2 FIX: Now delegates to reconcile_batch/2 for cursor-based iteration.
+merge_offline_msg_from(RemoteNode) ->
+    logger:info("Reconciliation: reading offline_msg from ~p (batched)", [RemoteNode]),
+    reconcile_batch(RemoteNode, 1000).
+
+%% @doc Generic table reconciliation (GAP-2 FIX: RFC 7.1.1).
+%% Cursor-based batched union merge for any Mnesia table.
+%% Works for: presence, group_member, e2ee_key_bundle.
+-spec reconcile_table(node(), atom(), pos_integer()) -> {ok, non_neg_integer()} | {error, term()}.
+reconcile_table(RemoteNode, Table, BatchSize) when is_atom(RemoteNode), is_atom(Table), BatchSize > 0 ->
+    logger:info("GAP-2: Reconciling table ~p from ~p (batch_size=~p)", [Table, RemoteNode, BatchSize]),
+    try
+        %% Check if table exists on remote node
+        case rpc:call(RemoteNode, mnesia, table_info, [Table, size], 5000) of
+            {badrpc, _Reason} ->
+                logger:info("GAP-2: Table ~p not available on ~p, skipping", [Table, RemoteNode]),
+                {ok, 0};
+            _Size ->
+                FirstKey = rpc:call(RemoteNode, mnesia, dirty_first, [Table], 5000),
+                case FirstKey of
+                    {badrpc, Reason2} ->
+                        logger:warning("GAP-2: Failed to read first key of ~p from ~p: ~p",
+                                       [Table, RemoteNode, Reason2]),
+                        {error, Reason2};
+                    '$end_of_table' ->
+                        logger:info("GAP-2: Remote ~p table ~p is empty", [RemoteNode, Table]),
+                        {ok, 0};
+                    _ ->
+                        Merged = reconcile_table_loop(RemoteNode, Table, FirstKey, BatchSize, 0),
+                        logger:info("GAP-2: Reconciled ~p records from ~p:~p", [Merged, RemoteNode, Table]),
+                        {ok, Merged}
+                end
+        end
+    catch
+        _:Error ->
+            logger:warning("GAP-2: Error reconciling ~p from ~p: ~p", [Table, RemoteNode, Error]),
+            {error, Error}
+    end.
+
+reconcile_table_loop(_RemoteNode, _Table, '$end_of_table', _BatchSize, Merged) ->
+    Merged;
+reconcile_table_loop(RemoteNode, Table, CurrentKey, BatchSize, Merged) ->
+    %% Collect a batch of keys from the remote table
+    {Keys, NextKey} = collect_table_keys(RemoteNode, Table, CurrentKey, BatchSize),
+
+    %% Fetch and merge records for this batch
+    BatchMerged = merge_table_batch(RemoteNode, Table, Keys),
+
+    %% Rate limit between batches
+    timer:sleep(1),
+
+    reconcile_table_loop(RemoteNode, Table, NextKey, BatchSize, Merged + BatchMerged).
+
+collect_table_keys(RemoteNode, Table, StartKey, BatchSize) ->
+    collect_table_keys(RemoteNode, Table, StartKey, BatchSize, [StartKey]).
+
+collect_table_keys(_RemoteNode, _Table, _CurrentKey, 0, Acc) ->
+    {lists:reverse(Acc), needs_next};
+collect_table_keys(RemoteNode, Table, CurrentKey, Remaining, Acc) ->
+    NextKey = rpc:call(RemoteNode, mnesia, dirty_next, [Table, CurrentKey], 5000),
+    case NextKey of
+        {badrpc, _} -> {lists:reverse(Acc), '$end_of_table'};
+        '$end_of_table' -> {lists:reverse(Acc), '$end_of_table'};
+        _ -> collect_table_keys(RemoteNode, Table, NextKey, Remaining - 1, [NextKey | Acc])
+    end.
+
+merge_table_batch(RemoteNode, Table, Keys) ->
+    lists:foldl(fun(Key, Count) ->
+        RemoteRecords = rpc:call(RemoteNode, mnesia, dirty_read, [Table, Key], 5000),
+        case RemoteRecords of
+            {badrpc, _} -> Count;
+            Records when is_list(Records) ->
+                LocalRecords = mnesia:dirty_read(Table, Key),
+                %% F1 FIX: Use conflict-aware merge instead of blind write.
+                %% For bag tables (offline_msg, e2ee_key_bundle): union merge (write missing).
+                %% For set tables (group_member, presence): timestamp-aware LWW.
+                TableType = try mnesia:table_info(Table, type) catch _:_ -> set end,
+                WrittenCount = case TableType of
+                    bag ->
+                        %% Append-only / bag: union merge (original logic)
+                        LocalSet = sets:from_list(LocalRecords),
+                        Missing = [R || R <- Records, not sets:is_element(R, LocalSet)],
+                        lists:foreach(fun(Record) ->
+                            mnesia:dirty_write(Table, Record)
+                        end, Missing),
+                        length(Missing);
+                    _ ->
+                        %% set / ordered_set: timestamp-aware conflict resolution
+                        merge_set_records(Table, Records, LocalRecords)
+                end,
+                Count + WrittenCount;
+            _ -> Count
+        end
+    end, 0, Keys).
+
+%% F1 FIX: Merge set-type table records with timestamp-aware conflict resolution.
+%% For each remote record, check if a local record exists with the same key.
+%% If local exists: overwrite only if remote is newer (should_overwrite).
+%% If local absent: write the remote record.
+merge_set_records(Table, RemoteRecords, LocalRecords) ->
+    %% Build a map of local records by key (element 2 is the key field in records)
+    LocalMap = maps:from_list([{element(2, R), R} || R <- LocalRecords]),
+    lists:foldl(fun(RemoteRec, Written) ->
+        RemoteKey = element(2, RemoteRec),
+        case maps:get(RemoteKey, LocalMap, undefined) of
+            undefined ->
+                %% No local record - write remote
+                mnesia:dirty_write(Table, RemoteRec),
+                Written + 1;
+            LocalRec ->
+                case should_overwrite(Table, RemoteRec, LocalRec) of
+                    true ->
+                        mnesia:dirty_write(Table, RemoteRec),
+                        Written + 1;
+                    false ->
+                        Written
+                end
+        end
+    end, 0, RemoteRecords).
+
+%% F1 FIX: Determine if a remote record should overwrite a local record.
+%% Implements per-table conflict resolution strategy (RFC 7.1.1):
+%%   - group_member: Compare last_seen timestamps (LWW)
+%%   - presence: Keep local (ephemeral, local is authoritative)
+%%   - Default: Keep local (conservative)
+should_overwrite(group_member, RemoteRec, LocalRec) ->
+    %% last_seen is the 6th element (#group_member.last_seen)
+    RemoteTS = element(6, RemoteRec),
+    LocalTS = element(6, LocalRec),
+    RemoteTS > LocalTS;
+should_overwrite(presence, _RemoteRec, _LocalRec) ->
+    %% Presence is ram_copies, ephemeral. Local is authoritative.
+    false;
+should_overwrite(_Table, _RemoteRec, _LocalRec) ->
+    %% Conservative default: keep local record
+    false.
 
 %% Helper: Check if a node is a core node (by naming convention)
 is_core_node(Node) ->

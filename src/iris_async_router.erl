@@ -72,20 +72,29 @@ route(User, Msg) ->
     route(User, Msg, #{}).
 
 %% @doc Route with options (including msg_id for tracking)
-%% AUDIT FIX: Always returns ok or {ok, offline} - never silently drops
--spec route(binary(), binary(), map()) -> ok | {ok, offline}.
+%% G-1 FIX: Returns {error, queue_overflow} if outbox is saturated (NACK).
+%% This prevents silent message loss per RFC 7.2 / NFR-8.
+-spec route(binary(), binary(), map()) -> ok | {ok, offline} | {error, queue_overflow}.
 route(User, Msg, Opts) ->
-    %% Record attempt
-    incr_metric(route_attempt),
-    
-    PoolSize = get_pool_size(),
-    ShardId = (erlang:phash2(User, PoolSize) + 1),
-    Name = list_to_atom("iris_async_router_" ++ integer_to_list(ShardId)),
-    
-    %% Include msg_id if provided for tracking
-    MsgId = maps:get(msg_id, Opts, undefined),
-    gen_server:cast(Name, {route, User, Msg, MsgId}),
-    ok.
+    %% G-1 FIX: Synchronous pre-flight overflow check before async cast.
+    %% Uses the O(1) ETS counter from G-3 -- cheap on the hot path.
+    case preflight_overflow_check(User) of
+        ok ->
+            %% Record attempt
+            incr_metric(route_attempt),
+            
+            PoolSize = get_pool_size(),
+            ShardId = (erlang:phash2(User, PoolSize) + 1),
+            Name = list_to_atom("iris_async_router_" ++ integer_to_list(ShardId)),
+            
+            %% Include msg_id if provided for tracking
+            MsgId = maps:get(msg_id, Opts, undefined),
+            gen_server:cast(Name, {route, User, Msg, MsgId}),
+            ok;
+        {error, queue_overflow} = Err ->
+            incr_metric(route_failure),
+            Err
+    end.
 
 -spec route_async(binary(), binary()) -> ok.
 route_async(User, Msg) ->
@@ -274,12 +283,13 @@ route_to_remote(User, Msg, MsgId, State) ->
 
 %% FIX: Sequenced remote routing - routes across edges/cores with sequence number
 %% This was missing, causing cross-edge messages to be stored offline directly
+%% F2 FIX: Process synchronously (NO spawn) to preserve FIFO ordering (RFC 1.3).
+%% The shard GenServer already serializes casts, so inline processing guarantees
+%% that seq N completes before seq N+1 starts. The RPC timeout cost (~5s max)
+%% is acceptable for sequenced messages where correctness > throughput.
 route_sequenced_remote(User, Msg, SeqNo, State) ->
-    Self = self(),
-    spawn(fun() ->
-        Result = do_sequenced_remote_route(User, Msg, SeqNo),
-        gen_server:cast(Self, {route_complete, Result})
-    end),
+    Result = do_sequenced_remote_route(User, Msg, SeqNo),
+    gen_server:cast(self(), {route_complete, Result}),
     {noreply, State}.
 
 do_sequenced_remote_route(User, Msg, SeqNo) ->
@@ -653,6 +663,29 @@ route_via_outbox_or_offline(User, Msg, MsgId) ->
                     logger:warning("Region bridge failed for ~p: ~p, falling back to offline",
                                    [User, Reason]),
                     store_offline_guaranteed(User, Msg, MsgId)
+            end
+    end.
+
+%% G-1 FIX: Synchronous pre-flight check for outbox overflow.
+%% If iris_region_bridge is running (multi-region mode) and the target
+%% region's queue is at capacity, return {error, queue_overflow} immediately.
+%% The caller can then NACK the client instead of false-ACKing.
+preflight_overflow_check(User) ->
+    case whereis(iris_region_bridge) of
+        undefined ->
+            %% Single-region mode -- no outbox queue to overflow
+            ok;
+        _Pid ->
+            TargetRegion = get_target_region(User),
+            MaxQueue = iris_region_bridge:get_max_queue_size(),
+            Depth = iris_region_bridge:get_queue_depth_fast(TargetRegion),
+            case Depth >= MaxQueue of
+                true ->
+                    logger:warning("G-1: Pre-flight NACK for ~p: queue depth ~p >= max ~p",
+                                   [User, Depth, MaxQueue]),
+                    {error, queue_overflow};
+                false ->
+                    ok
             end
     end.
 

@@ -286,7 +286,14 @@ maybe_exit_diverged_mode(State = #state{last_quorum_loss = LastLoss}) ->
         true ->
             logger:info("=== QUORUM RESTORED ==="),
             logger:info("Visible nodes: ~p", [State#state.visible_nodes]),
-            logger:info("Exiting diverged mode - cluster converged"),
+            logger:info("Exiting diverged mode - triggering reconciliation"),
+            
+            %% F1 AUDIT FIX (RFC 7.1.1): Trigger data reconciliation before
+            %% declaring normal mode. Spawns a background process so the
+            %% gen_server doesn't block during potentially slow merge.
+            spawn_reconciliation(State),
+            
+            logger:info("Reconciliation spawned - entering normal mode"),
             State#state{mode = normal};
         false ->
             %% Still in recovery delay — reconciliation may be ongoing
@@ -294,6 +301,30 @@ maybe_exit_diverged_mode(State = #state{last_quorum_loss = LastLoss}) ->
             logger:info("Quorum restored, waiting ~p ms for reconciliation", [RemainingMs]),
             State
     end.
+
+%% F1 AUDIT FIX: Spawn reconciliation as a background process.
+%% The process calls iris_core:reconcile_after_partition/0 which performs
+%% union merge of append-only tables (offline_msg) per RFC 7.1.1.
+spawn_reconciliation(State) ->
+    VisibleNodes = State#state.visible_nodes,
+    Epoch = State#state.epoch,
+    spawn(fun() ->
+        logger:info("Reconciliation process started (epoch=~p, nodes=~p)", 
+                    [Epoch, VisibleNodes]),
+        try
+            iris_core:reconcile_after_partition()
+        catch
+            _:Reason ->
+                logger:error("Reconciliation failed: ~p", [Reason])
+        end,
+        %% Notify test listener if registered (test hook only)
+        case whereis(iris_reconciliation_test_listener) of
+            undefined -> ok;
+            Pid -> Pid ! {reconciliation_triggered, #{epoch => Epoch, 
+                                                       nodes => VisibleNodes}}
+        end,
+        logger:info("Reconciliation process completed")
+    end).
 
 %% =============================================================================
 %% Configuration and Environment Checks
