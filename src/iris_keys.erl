@@ -36,6 +36,9 @@
 %% Admin API
 -export([delete_user_keys/1, list_users/0]).
 
+%% Exported for testing (F3 audit: quorum write durability)
+-export([store_key_bundle_durable/2]).
+
 %% Metrics API
 -export([get_opk_metrics/0]).
 
@@ -369,14 +372,10 @@ store_key_bundle_durable(UserId, Record) ->
             case iris_quorum_write:write_durable(e2ee_key_bundle, UserId, Record) of
                 ok -> ok;
                 {error, quorum_not_reached} ->
-                    %% Fallback: try local sync_transaction
-                    %% This is still durable on this node
-                    logger:warning("Quorum write failed for key bundle ~p, using local fallback", [UserId]),
-                    F = fun() -> mnesia:write(e2ee_key_bundle, Record, write) end,
-                    case mnesia:sync_transaction(F) of
-                        {atomic, ok} -> ok;
-                        {aborted, Reason} -> {error, Reason}
-                    end;
+                    %% F3 AUDIT FIX: CP > AP for key bundles. Do NOT fallback
+                    %% to single-node write. Propagate failure; clients should retry.
+                    logger:error("Quorum write failed for key bundle ~p, rejecting (CP > AP)", [UserId]),
+                    {error, quorum_not_reached};
                 {error, Reason} ->
                     {error, Reason}
             end

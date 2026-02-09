@@ -865,7 +865,7 @@ def test_libfaketime_local_hlc():
                 log("  libfaketime not installed on CI runner")
                 log("  Real clock injection deferred to tier2 Docker tests")
                 log_test("libfaketime HLC", True, 
-                        "N/A (CI runner without libfaketime, deferred to tier2 Docker)")
+                        "DEFERRED (CI runner, real injection in Docker tier2)")
                 return
             log("  libfaketime not installed locally")
             log("  Install with: apt-get install libfaketime")
@@ -1000,6 +1000,22 @@ def main():
     log(f"Passed: {passed}")
     log(f"Failed: {failed}")
     
+    # F2 AUDIT FIX: CI gate -- ensure protocol-level tests actually ran.
+    # If we're in CI without real clock injection, at least 3 of the protocol
+    # tests (ordering, dedup, presence, reconnect) must have passed with actual
+    # server verification, not vacuously.
+    if IS_CI and not REAL_CLOCK_INJECTION:
+        vacuous_markers = ["N/A", "DEFERRED", "Server not available", "not running"]
+        real_passes = sum(
+            1 for _, p, msg in results
+            if p and not any(m in msg for m in vacuous_markers)
+        )
+        if real_passes < 3:
+            log(f"\nFAIL: CI mode requires at least 3 protocol-level skew tests "
+                f"to pass with real verification (got {real_passes})")
+            log("  This prevents vacuous passes from masking NFR-16 gaps")
+            return 1
+
     if failed == 0:
         log("\nPASS: All clock skew tolerance tests passed")
         if REAL_CLOCK_INJECTION:
