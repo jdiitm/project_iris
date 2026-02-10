@@ -37,7 +37,9 @@ iris_group_size_limits_test_() ->
       {"broadcast group at 1000 members accepts one more (limit should be 10000)",
        fun test_broadcast_allows_member_1001/0},
       {"broadcast group full error reports iris_limits value",
-       fun test_broadcast_full_reports_correct_limit/0}
+       fun test_broadcast_full_reports_correct_limit/0},
+      {"max_members/0 delegates to iris_limits (no local defines)",
+       fun test_max_members_uses_iris_limits/0}
      ]}.
 
 setup() ->
@@ -97,3 +99,8 @@ test_broadcast_full_reports_correct_limit() ->
     %% At limit 10000, adding should fail with group_full
     Result = iris_group:add_member(GroupId, <<"overflow_user">>, <<"admin_user_2">>),
     ?assertMatch({error, {group_full, #{limit := 10000, type := broadcast}}}, Result).
+
+%% Verify iris_group:max_members/0 delegates to iris_limits, not a local define.
+%% This prevents future auditors from flagging stale local macros.
+test_max_members_uses_iris_limits() ->
+    ?assertEqual(iris_limits:max_e2ee_group_members(), iris_group:max_members()).

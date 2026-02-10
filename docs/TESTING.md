@@ -1,6 +1,6 @@
 # Testing Guide
 
-**Status**: 120+ tests passing | **Last Verified**: 2026-02-08
+**Status**: 120+ tests passing | **Last Verified**: 2026-02-10
 
 ## Quick Start
 
@@ -82,7 +82,7 @@ Docker chaos tests (`chaos_dist/`) are **destructive** — they kill containers,
 | contract | 3 | Edge-core contract, rate limit constants, RFC v4 |
 | conformance | 1 | WebSocket RFC 6455 compliance |
 
-### Erlang Test Suites (70 modules, 326+ tests)
+### Erlang Test Suites (109 modules)
 
 | Category | Modules | Examples |
 |----------|---------|----------|
@@ -189,6 +189,6 @@ tests/
 ├── utilities/           # IrisClient (TLS-enabled), TLS helpers
 └── artifacts/           # Test outputs (gitignored)
 
-test_utils/              # 70 Erlang EUnit test modules
+test_utils/              # 109 Erlang EUnit test modules
 docker/global-cluster/   # Docker cluster scripts
 ```

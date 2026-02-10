@@ -27,12 +27,14 @@ NIF_ZSTD_LDFLAGS = $(if $(ZSTD_LIBDIR),-L$(ZSTD_LIBDIR),) -lzstd
 
 all: check_deps nif $(BEAM_FILES) $(APP_FILES) $(APPUP_FILES)
 
-# Build zstd NIF shared object
+# Build zstd NIF shared object (optional: requires libzstd-dev)
 nif: $(NIF_SO)
 
 $(NIF_SO): $(NIF_SRC)
 	@mkdir -p priv
-	$(CC) $(NIF_CFLAGS) $(NIF_ZSTD_CFLAGS) -o $@ $< $(NIF_ZSTD_LDFLAGS)
+	@$(CC) $(NIF_CFLAGS) $(NIF_ZSTD_CFLAGS) -o $@ $< $(NIF_ZSTD_LDFLAGS) 2>/dev/null \
+		&& echo "NIF: zstd compiled successfully" \
+		|| echo "NIF: zstd skipped (libzstd-dev not installed — zstd compression unavailable)"
 
 ebin/%.app: src/%.app.src
 	cp $< $@

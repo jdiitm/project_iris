@@ -5,7 +5,7 @@
 [![Erlang](https://img.shields.io/badge/Erlang-OTP%2026%2B-blue)](https://www.erlang.org/)
 
 > **Status**: Development / Pre-alpha. Tested at **10K concurrent connections** locally.
-> Full test suite (120+ tests) passing with TLS enforced. Last verified: 2026-02-08.
+> Full test suite (120+ tests) passing with TLS enforced. Last verified: 2026-02-10.
 > Architecture designed for 1M+ users per region. See [Scalability Analysis](docs/SCALABILITY_ANALYSIS.md).
 
 ## What This Is
@@ -35,12 +35,12 @@ See [DEPLOYMENT.md](docs/DEPLOYMENT.md) for architecture diagrams and setup.
 
 - **Mnesia RAM**: `disc_copies` loads all data into RAM at startup. >32 GB data requires multi-region sharding.
 - **Test sleeps**: ~500 `time.sleep()` calls remain in tests (RFC Section 13.2 violation). See [audit](docs/audit/time_sleep_audit.md).
-- **mTLS inter-node**: Configurable but not enforced (NFR-15 deferred pending PKI infrastructure).
-- **Key change notification**: Identity key change detected + metric emitted, but peer notification protocol is PENDING_DESIGN.
+- **mTLS inter-node**: Enforced in production (`enforce_mtls` defaults to `true` when `env=production`). Cluster manager blocks replication without SSL distribution.
+- **Key change notification**: Implemented -- detection, contact tracking (Mnesia-persisted), online delivery (direct pid), offline delivery (durable storage), opcode 0x1A.
 
 ---
 
-## Modules (57 total)
+## Modules (58 total)
 
 ### Edge Layer
 
@@ -99,7 +99,8 @@ See [DEPLOYMENT.md](docs/DEPLOYMENT.md) for architecture diagrams and setup.
 | `iris_metrics` | Counters (msg_in/out, ack_sent, dedup_hit), SLI/SLO computation |
 | `iris_trace` | Distributed tracing (trace_id/span_id propagation across RPCs) |
 | `iris_limits` | Hard operational limits (RFC Section 8) |
-| `iris_cluster_manager` | Auto-wire replication on node join/leave |
+| `iris_cluster_manager` | Auto-wire replication on node join/leave, mTLS pre-check |
+| `iris_mailbox_guard` | Bounded mailbox protection + CoDel AQM (Active Queue Management) |
 
 ---
 
@@ -147,7 +148,7 @@ cd docker/global-cluster
 | Feature | Implementation | Status |
 |---------|---------------|--------|
 | TLS 1.2/1.3 | Enforced on all client connections | Verified |
-| mTLS (inter-node) | Configurable via `docker-compose.mtls.yml` | Deferred (NFR-15) |
+| mTLS (inter-node) | Enforced in production; cluster manager pre-check | Verified (NFR-15) |
 | JWT Authentication | EdDSA (Ed25519) primary; HMAC-SHA256 legacy | Verified |
 | JWT Replay Protection | `jti` nonce tracking in ETS with TTL cleanup | Implemented |
 | Rate Limiting | Per-user token bucket + distributed `pg` gossip | Verified |
@@ -178,8 +179,8 @@ See [DEPLOYMENT.md](docs/DEPLOYMENT.md) for TLS and certificate setup.
 
 ```
 project_iris/
-├── src/                    # 57 Erlang source modules (20K lines)
-├── test_utils/             # 70 Erlang EUnit test modules (326+ tests)
+├── src/                    # 58 Erlang source modules (20K+ lines)
+├── test_utils/             # 109 Erlang EUnit test modules
 ├── tests/
 │   ├── run_all_tests.sh    # Authoritative test runner
 │   ├── suites/             # 13 test categories

@@ -12,7 +12,7 @@
 %% 2. Creator becomes first admin with full permissions
 %% 3. Admins can add/remove members and promote/demote admins
 %% 4. Members can only send messages to the group
-%% 5. Maximum 1000 members per group (per RFC)
+%% 5. Maximum members per group enforced via iris_limits (10,000 broadcast / 256 E2EE)
 %% 6. Group metadata stored in Mnesia for durability
 %% =============================================================================
 
@@ -59,10 +59,6 @@
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
 -define(SERVER, ?MODULE).
-%% A2 FIX: DEPRECATED local defines -- use iris_limits as single source of truth.
-%% These are kept only for backward compatibility with code that references them.
--define(MAX_GROUP_MEMBERS, 1000).         %% DEPRECATED: use iris_limits:max_broadcast_group_members()
--define(MAX_E2EE_GROUP_MEMBERS, 256).     %% DEPRECATED: use iris_limits:max_e2ee_group_members()
 -define(MAX_GROUP_NAME_LEN, 256).
 -define(MAX_GROUPS_PER_USER, 100).
 
@@ -635,7 +631,7 @@ do_add_member(GroupId, UserId, AddedBy) ->
 
 %% @doc Return the maximum number of members per E2EE group (RFC FR-19).
 -spec max_members() -> pos_integer().
-max_members() -> ?MAX_E2EE_GROUP_MEMBERS.
+max_members() -> iris_limits:max_e2ee_group_members().
 
 %% @doc Check if a group has sender keys (indicating E2EE usage)
 -spec has_sender_keys(binary()) -> boolean().

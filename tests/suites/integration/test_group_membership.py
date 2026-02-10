@@ -320,27 +320,33 @@ def test_sender_keys():
     %% Create group
     {ok, GroupId} = iris_group:create_group(<<"Sender Keys">>, <<"alice">>),
     
+    %% GAP-1: Sender keys must be >= 80 bytes (E2EE encrypted envelope).
+    %% Use deterministic 128-byte blobs so we can pattern-match on retrieval.
+    SK1 = binary:copy(<<"A">>, 128),
+    SK2 = binary:copy(<<"B">>, 128),
+    RotateKey = binary:copy(<<"C">>, 128),
+    
     %% Store sender key
-    ok = iris_group:store_sender_key(GroupId, <<"alice">>, <<"key1">>, <<"secretkey">>),
+    ok = iris_group:store_sender_key(GroupId, <<"alice">>, <<"key1">>, SK1),
     
     %% Retrieve sender key
     {ok, Key1} = iris_group:get_sender_key(GroupId, <<"alice">>, <<"key1">>),
     
     %% Store another key
-    ok = iris_group:store_sender_key(GroupId, <<"alice">>, <<"key2">>, <<"secretkey2">>),
+    ok = iris_group:store_sender_key(GroupId, <<"alice">>, <<"key2">>, SK2),
     
     %% Get all keys
     AllKeys = iris_group:get_all_sender_keys(GroupId, <<"alice">>),
     
     %% Rotate key
-    {ok, NewKeyId} = iris_group:rotate_sender_key(GroupId, <<"alice">>, <<"newkey">>),
+    {ok, NewKeyId} = iris_group:rotate_sender_key(GroupId, <<"alice">>, RotateKey),
     {ok, RotatedKey} = iris_group:get_sender_key(GroupId, <<"alice">>, NewKeyId),
     
     %% Non-existent key
     R1 = iris_group:get_sender_key(GroupId, <<"alice">>, <<"nonexistent">>),
     
     case {Key1, length(AllKeys), RotatedKey, R1} of
-        {<<"secretkey">>, 2, <<"newkey">>, {error, not_found}} ->
+        {SK1, 2, RotateKey, {error, not_found}} ->
             io:format(\"PASS: Sender keys work~n\");
         Other ->
             io:format(\"FAIL: ~p~n\", [Other])
@@ -369,7 +375,7 @@ def test_group_deletion():
     %% Create group with member and sender key
     {ok, GroupId} = iris_group:create_group(<<"Delete Test">>, <<"admin">>),
     ok = iris_group:add_member(GroupId, <<"member">>, <<"admin">>),
-    ok = iris_group:store_sender_key(GroupId, <<"admin">>, <<"sk1">>, <<"keydata">>),
+    ok = iris_group:store_sender_key(GroupId, <<"admin">>, <<"sk1">>, binary:copy(<<"K">>, 128)),
     
     %% Verify exists
     {ok, _} = iris_group:get_group(GroupId),

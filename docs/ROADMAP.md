@@ -1,6 +1,6 @@
 # Project Iris: 5B DAU Roadmap
 
-**Last Updated**: 2026-02-08  
+**Last Updated**: 2026-02-10  
 **Status**: Active Development  
 **Target**: WhatsApp/Telegram-class scale (5 Billion Daily Active Users)
 
@@ -63,7 +63,7 @@
 | Inbox overflow protection | ✅ Done | 10K limit in `iris_core.erl` (GAP-6) |
 | Outbox TTL enforcement | ✅ Done | 7-day cleanup in drain timer (GAP-1) |
 | Queue depth alerting | ✅ Done | 50% metric (GAP-2) |
-| Mailbox AQM (drop policy) | ❌ Pending | RFC: CoDel vs RED for latency-sensitive path |
+| Mailbox AQM (drop policy) | ✅ Done | CoDel implemented in `iris_mailbox_guard.erl` |
 | Cross-region Mnesia auto-setup | ⚠️ Partial | Docker volume config |
 
 ### RFC Required: Cross-Region Queue
@@ -125,9 +125,9 @@ See [Scalability Analysis](SCALABILITY_ANALYSIS.md) for measured metrics and ext
 | Item | Blocker | Owner | ETA |
 |------|---------|-------|-----|
 | Cross-region queue | Design RFC | TBD | - |
-| AQM/backpressure | Drop policy RFC | TBD | - |
+| ~~AQM/backpressure~~ | ~~Drop policy RFC~~ | ~~Done~~ | ✅ CoDel implemented |
 | Partition drill | CI infra | TBD | - |
-| "Messi Test" | AQM implementation | TBD | - |
+| "Messi Test" | Requires 64GB+ RAM infra | TBD | - |
 
 ---
 
@@ -142,14 +142,13 @@ See [Scalability Analysis](SCALABILITY_ANALYSIS.md) for measured metrics and ext
 
 **Recommendation**: `disk_log` for simplicity, with khepri as future upgrade path.
 
-### 2. Mailbox Overflow Policy
+### 2. ~~Mailbox Overflow Policy~~ — DECIDED
 
-**Options**:
-- Tail Drop (simple, unfair to late messages)
-- RED (Random Early Detection - probabilistic)
-- CoDel (Controlled Delay - latency-focused)
-
-**Recommendation**: CoDel for latency-sensitive messaging.
+**Decision**: CoDel (Controlled Delay) — implemented in `iris_mailbox_guard.erl` (2026-02-10).
+- Exports `codel_new/0,1`, `codel_check/3` (pure functions for unit testing)
+- Burst-tolerant: allows short bursts above target without dropping
+- Latency-focused: drops only when sojourn time exceeds target for a full interval
+- Tested in `iris_codel_tests.erl` (5 tests)
 
 ### 3. Worker Pool Strategy
 
@@ -184,7 +183,7 @@ See [Scalability Analysis](SCALABILITY_ANALYSIS.md) for measured metrics and ext
 ### Phase 2
 - [x] Messages survive cross-region link failure (queue durability)
 - [x] Inbox overflow protection (10K limit)
-- [ ] Celebrity accounts don't crash shards (AQM/CoDel)
+- [x] Celebrity accounts don't crash shards (AQM/CoDel in `iris_mailbox_guard`)
 - [ ] Cross-region Mnesia auto-initializes
 
 ### Phase 3

@@ -128,9 +128,9 @@ def test_sender_key_storage():
         GroupId = <<"test_group_{generate_id()}">>,
         UserId = <<"test_user_{generate_id()}">>,
         
-        %% Store a sender key
+        %% Store a sender key (>= 80 bytes: GAP-1 rejects plaintext-sized keys)
         KeyId = <<"key123">>,
-        SenderKey = crypto:strong_rand_bytes(32),
+        SenderKey = crypto:strong_rand_bytes(128),
         
         ok = iris_group:store_sender_key(GroupId, UserId, KeyId, SenderKey),
         
@@ -175,9 +175,9 @@ def test_member_reconnect_sync():
         OfflineMemberId = <<"offline_{generate_id()}">>,
         ok = iris_group:add_member(GroupId, OfflineMemberId, CreatorId),
         
-        %% Store a sender key
+        %% Store a sender key (>= 80 bytes: GAP-1 rejects plaintext-sized keys)
         NewKeyId = <<"new_key_{generate_id()}">>,
-        NewSenderKey = crypto:strong_rand_bytes(32),
+        NewSenderKey = crypto:strong_rand_bytes(128),
         iris_group:store_sender_key(GroupId, CreatorId, NewKeyId, NewSenderKey),
         
         %% Call handle_member_reconnect and verify format
@@ -228,7 +228,7 @@ def test_get_sender_keys_since():
         
         %% Store some old keys
         OldTime = erlang:system_time(second) - 100,
-        iris_group:store_sender_key(GroupId, UserId1, <<"old_key">>, crypto:strong_rand_bytes(32)),
+        iris_group:store_sender_key(GroupId, UserId1, <<"old_key">>, crypto:strong_rand_bytes(128)),
         
         %% Wait a moment
         timer:sleep(100),
@@ -236,7 +236,7 @@ def test_get_sender_keys_since():
         
         %% Store new keys
         timer:sleep(100),
-        iris_group:store_sender_key(GroupId, UserId2, <<"new_key">>, crypto:strong_rand_bytes(32)),
+        iris_group:store_sender_key(GroupId, UserId2, <<"new_key">>, crypto:strong_rand_bytes(128)),
         
         %% Query keys since middle time
         Keys = iris_group:get_sender_keys_since(GroupId, MiddleTime),
