@@ -59,10 +59,10 @@
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
 -define(SERVER, ?MODULE).
-%% Use centralized limits from iris_limits module (RFC-001 v3.0 Section 8)
-%% Legacy defines kept for backward compatibility but actual limits come from iris_limits
--define(MAX_GROUP_MEMBERS, 1000).         %% Broadcast groups (see iris_limits:max_broadcast_group_members())
--define(MAX_E2EE_GROUP_MEMBERS, 256).     %% E2EE groups (see iris_limits:max_e2ee_group_members())
+%% A2 FIX: DEPRECATED local defines -- use iris_limits as single source of truth.
+%% These are kept only for backward compatibility with code that references them.
+-define(MAX_GROUP_MEMBERS, 1000).         %% DEPRECATED: use iris_limits:max_broadcast_group_members()
+-define(MAX_E2EE_GROUP_MEMBERS, 256).     %% DEPRECATED: use iris_limits:max_e2ee_group_members()
 -define(MAX_GROUP_NAME_LEN, 256).
 -define(MAX_GROUPS_PER_USER, 100).
 
@@ -590,9 +590,10 @@ do_add_member(GroupId, UserId, AddedBy) ->
                             %% Determine group type and apply appropriate limit
                             %% Check if group has E2EE sender keys to determine type
                             IsE2EE = has_sender_keys(GroupId),
+                            %% A2 FIX: Use iris_limits as single source of truth (NFR-27)
                             Limit = case IsE2EE of
-                                true -> ?MAX_E2EE_GROUP_MEMBERS;
-                                false -> ?MAX_GROUP_MEMBERS
+                                true -> iris_limits:max_e2ee_group_members();
+                                false -> iris_limits:max_broadcast_group_members()
                             end,
                             case Count >= Limit of
                                 true -> 

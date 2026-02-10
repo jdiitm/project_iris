@@ -7,19 +7,18 @@
 %% "When a user's Identity Key changes, the server MUST notify all active
 %% sessions that have communicated with that user."
 %%
-%% STATUS: PENDING_DESIGN
+%% STATUS: IMPLEMENTED (GAP-13 + G2 audit)
 %%
-%% Current implementation (GAP-13):
-%%   - Identity key change DETECTION is implemented in iris_keys.erl
-%%   - A metric (iris_identity_key_changes) is incremented on change
-%%   - A warning log is emitted
-%%   - Notification to peers is NOT yet implemented (requires mini-RFC)
+%% Implementation (iris_keys.erl):
+%%   - Identity key change DETECTION via detect_identity_key_change/2
+%%   - Metric (iris_identity_key_changes) incremented on change
+%%   - Contact tracking via record_key_contact/2 (Mnesia-persisted key_contact table)
+%%   - On IK change, all contacts are notified:
+%%     * Online contacts: direct pid delivery (Pid ! {deliver_msg, AlertPacket})
+%%     * Offline contacts: durable offline storage (iris_core:store_offline_durable)
+%%   - Protocol: opcode 0x1A (key_change_alert) in iris_proto.erl
 %%
-%% Required for full compliance:
-%%   1. Track which users have fetched each other's key bundles (session pairs)
-%%   2. On IK change, look up all users who fetched the changed user's bundle
-%%   3. Send a server->client notification event to each affected user
-%%   4. Define a new protocol message type for key change events
+%% End-to-end delivery tests: see iris_key_change_delivery_tests.erl
 %% =============================================================================
 
 %% The detection API exists
@@ -37,15 +36,7 @@ key_change_metric_initialized_test() ->
     Metrics = iris_metrics:get_metrics(),
     ?assert(maps:is_key(iris_identity_key_changes, Metrics)).
 
-%% PENDING_DESIGN: This test should verify notification delivery
-%% Uncomment when notification logic is implemented:
-%%
-%% key_change_notifies_active_sessions_test() ->
-%%     %% Setup: Alice uploads initial bundle
-%%     iris_keys:upload_bundle(<<"alice">>, make_bundle(<<"ik1">>)),
-%%     %% Bob fetches Alice's bundle (creates a "session pair")
-%%     iris_keys:fetch_bundle(<<"alice">>),
-%%     %% Alice uploads new bundle with different IK
-%%     iris_keys:upload_bundle(<<"alice">>, make_bundle(<<"ik2">>)),
-%%     %% Bob should receive a key change notification
-%%     %% ?assert(received_key_change_notification(<<"bob">>, <<"alice">>)).
+%% G2 AUDIT: Notification delivery is now IMPLEMENTED and tested.
+%% See iris_key_change_delivery_tests.erl for end-to-end tests covering:
+%%   - online_contact_receives_key_change_alert/0
+%%   - offline_contact_gets_alert_stored_for_later_delivery/0

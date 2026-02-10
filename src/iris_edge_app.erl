@@ -38,7 +38,13 @@ stop(_State) ->
 %% ssl_dist_optfile is not set. Called from start/2.
 -spec check_mtls_enforcement() -> ok.
 check_mtls_enforcement() ->
-    case application:get_env(iris_core, enforce_mtls, false) of
+    %% G1 FIX: In production, default enforce_mtls to true (NFR-15 mandatory).
+    Env = application:get_env(iris_core, env, undefined),
+    Default = case Env of
+        production -> true;
+        _          -> false
+    end,
+    case application:get_env(iris_core, enforce_mtls, Default) of
         true ->
             case init:get_argument(ssl_dist_optfile) of
                 {ok, _} -> ok;
