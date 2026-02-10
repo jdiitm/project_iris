@@ -1,0 +1,95 @@
+%% =============================================================================
+%% Iris Production Configuration Template
+%% =============================================================================
+%%
+%% Copy this file to sys.config and fill in the REQUIRED values.
+%% All values marked REQUIRED will cause a startup failure if not set.
+%%
+%% Generated from forensic audit finding 2.1a: ephemeral keys must not be
+%% allowed in production deployments where auth_enabled=true.
+%%
+%% See also: docs/DECISIONS.md, RFC-001 Section 9-10
+%% =============================================================================
+
+[
+ {iris_core, [
+    %% Presence backend (ets for high performance, mnesia for persistence)
+    {presence_backend, ets},
+
+    %% Multi-region configuration
+    %% List all regions in the deployment
+    {regions, [<<"us-east">>, <<"us-west">>, <<"eu">>]},
+
+    %% REQUIRED: This node's region identifier
+    {region_id, <<"us-east">>},
+
+    %% REQUIRED: Core nodes for each region (for cross-region routing)
+    {region_endpoints, #{
+        <<"us-east">> => ['core_east_1@host1', 'core_east_2@host2'],
+        <<"us-west">> => ['core_west_1@host3', 'core_west_2@host4'],
+        <<"eu">> => ['core_eu_1@host5', 'core_eu_2@host6']
+    }},
+
+    %% RPO=0 durability (sync_transaction across majority)
+    %% Set to true for production, false for development
+    {multimaster_durability, true}
+ ]},
+
+ {iris_edge, [
+    %% REQUIRED: Edge listening port
+    {port, 8085},
+
+    %% REQUIRED: Enable authentication for production
+    %% When true, jwt_eddsa_private_key MUST be configured (see below)
+    {auth_enabled, true},
+
+    %% REQUIRED when auth_enabled=true: JWT HMAC secret
+    %% Must be >= 32 bytes, identical across ALL edge nodes in the cluster
+    %% Generate with: openssl rand -base64 32
+    {jwt_secret, <<"REPLACE_WITH_32_BYTE_SECRET_KEY!!">>},
+
+    %% REQUIRED when auth_enabled=true: EdDSA private key for JWT signing
+    %% Must be exactly 32 bytes (Ed25519 private key seed)
+    %% Generate with: openssl rand 32 | base64
+    %%
+    %% WARNING (Audit 2.1a): If this is NOT set and auth_enabled=true,
+    %% iris_auth will REFUSE TO START. Ephemeral keys cause a thundering
+    %% herd on restart because all tokens become invalid simultaneously.
+    %%
+    %% This key MUST be the same across all nodes to allow token validation
+    %% after client failover to a different edge node.
+    {jwt_eddsa_private_key, <<"REPLACE_WITH_32_BYTE_ED25519_PRIVATE_KEY">>},
+
+    %% Auth mode: signer (can create+validate tokens) or verifier (validate only)
+    %% Auth service nodes should be 'signer', edge-only nodes can be 'verifier'
+    {auth_mode, signer},
+
+    %% TLS configuration (REQUIRED for production, RFC NFR-14)
+    {tls_enabled, true},
+    {tls_cacertfile, "/etc/iris/certs/ca.pem"},
+    {tls_certfile, "/etc/iris/certs/server.pem"},
+    {tls_keyfile, "/etc/iris/certs/server-key.pem"},
+
+    %% REQUIRED: Core nodes this edge connects to for message routing
+    {core_nodes, [
+        'core_east_1@host1', 'core_east_2@host2'
+    ]},
+
+    %% Connection rate limit (RFC Section 10.1: 5/min/IP)
+    {conn_rate_max, 5},
+
+    %% Multi-region routing
+    {regions, [<<"us-east">>, <<"us-west">>, <<"eu">>]},
+    {region_id, <<"us-east">>},
+    {region_endpoints, #{
+        <<"us-east">> => ['core_east_1@host1', 'core_east_2@host2'],
+        <<"us-west">> => ['core_west_1@host3', 'core_west_2@host4'],
+        <<"eu">> => ['core_eu_1@host5', 'core_eu_2@host6']
+    }}
+ ]},
+
+ {kernel, [
+    %% Log level: emergency | alert | critical | error | warning | notice | info | debug
+    {logger_level, notice}
+ ]}
+].

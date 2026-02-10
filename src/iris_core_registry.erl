@@ -3,7 +3,7 @@
 
 %% API
 -export([start_link/0, join/0, leave/0]).
--export([get_core/0, get_core_for_user/1, get_all_cores/0]).
+-export([get_core/0, get_core_for_user/1, get_all_cores/0, get_fallback_cores/1]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
@@ -67,6 +67,12 @@ get_all_cores() ->
         _ ->
             []
     end.
+
+%% @doc Get all core nodes except the specified one (for fallback routing).
+%% AUDIT 2.3b FIX: Used by token_refresh to try alternate cores on failure.
+-spec get_fallback_cores(node()) -> [node()].
+get_fallback_cores(ExcludeNode) ->
+    [N || N <- get_all_cores(), N =/= ExcludeNode].
 
 %%%===================================================================
 %%% gen_server callbacks

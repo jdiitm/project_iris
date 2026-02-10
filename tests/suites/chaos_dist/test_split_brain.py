@@ -85,10 +85,11 @@ class WriteTracker:
         return [w for w in self.writes if w['acked'] and w['side'] == 'west']
 
 
-def connect_and_login(port: int, username: str) -> Optional[socket.socket]:
-    """Connect to server via TLS and login."""
-    from tests.suites.chaos_dist.utils import tls_connect_and_login
-    return tls_connect_and_login(SERVER_HOST, port, username, timeout=TIMEOUT)
+def connect_and_login(port: int, username: str, retries: int = 5) -> Optional[socket.socket]:
+    """Connect to server via TLS and login with retry logic."""
+    from tests.suites.chaos_dist.utils import tls_connect_and_login_with_retry
+    return tls_connect_and_login_with_retry(SERVER_HOST, port, username,
+                                             timeout=TIMEOUT, max_retries=retries, retry_delay=2.0)
 
 
 # Sequence counter for RFC-compliant messaging
@@ -372,9 +373,9 @@ def test_split_brain_detection():
         results["partition_created"] = True
         log("PASS: Network partition created (West isolated from backbone)")
         
-        # Wait for partition detection
-        log("Waiting 10s for partition detection...")
-        time.sleep(10)
+        # AUDIT P4 FIX: Reduced from 10s, partition detection is ~5s
+        log("Waiting for partition detection...")
+        time.sleep(6)
         
         # ================================================================
         # Phase 3: Check Partition Guard Status
@@ -452,9 +453,9 @@ def test_split_brain_detection():
         else:
             log("WARN: Failed to reconnect West core")
         
-        # Wait for recovery
-        log("Waiting 15s for cluster recovery...")
-        time.sleep(15)
+        # AUDIT P4 FIX: Reduced from 15s
+        log("Waiting for cluster recovery...")
+        time.sleep(10)
         
         log(f"East core connected nodes: {get_connected_nodes(EAST_CORE)}")
         log(f"West core connected nodes: {get_connected_nodes(WEST_CORE)}")

@@ -132,14 +132,16 @@ def test_convergence_after_partition():
         east_user = f"conv_east_{test_id}"
         west_user = f"conv_west_{test_id}"
 
-        east_sock = tls_connect_and_login(SERVER_HOST, EAST_EDGE_PORT, east_user, TIMEOUT)
-        west_sock = tls_connect_and_login(SERVER_HOST, WEST_EDGE_PORT, west_user, TIMEOUT)
+        east_sock = tls_connect_and_login_with_retry(SERVER_HOST, EAST_EDGE_PORT, east_user,
+                                                       timeout=TIMEOUT, max_retries=5, retry_delay=2.0)
+        west_sock = tls_connect_and_login_with_retry(SERVER_HOST, WEST_EDGE_PORT, west_user,
+                                                       timeout=TIMEOUT, max_retries=5, retry_delay=2.0)
 
         if not east_sock:
-            log("FAIL: Cannot connect to East edge")
+            log("FAIL: Cannot connect to East edge (after retries)")
             return False
         if not west_sock:
-            log("FAIL: Cannot connect to West edge")
+            log("FAIL: Cannot connect to West edge (after retries)")
             close_socket(east_sock)
             return False
 
@@ -163,8 +165,9 @@ def test_convergence_after_partition():
         if not docker_network_disconnect(WEST_CORE, BACKBONE_NETWORK):
             log("WARN: Failed to disconnect West core")
 
-        log("Partition created. Waiting 10s for detection...")
-        time.sleep(10)
+        # AUDIT P4 FIX: Reduced from 10s
+        log("Partition created. Waiting for detection...")
+        time.sleep(6)
 
         log(f"East connected: {get_connected_nodes(EAST_CORE)}")
         log(f"West connected: {get_connected_nodes(WEST_CORE)}")
@@ -215,8 +218,9 @@ def test_convergence_after_partition():
         else:
             log("WARN: Failed to reconnect West core")
 
-        log("Waiting 15s for convergence...")
-        time.sleep(15)
+        # AUDIT P4 FIX: Reduced from 15s
+        log("Waiting for convergence...")
+        time.sleep(10)
 
         log(f"East connected: {get_connected_nodes(EAST_CORE)}")
         log(f"West connected: {get_connected_nodes(WEST_CORE)}")

@@ -200,39 +200,50 @@ init([]) ->
     erlang:send_after(3600000, self(), cleanup_revocations),
     
     %% P1-4: Generate or load EdDSA key pair
-    {EdDSAPub, EdDSAPriv} = case application:get_env(iris_edge, jwt_eddsa_private_key) of
+    EdDSAResult = case application:get_env(iris_edge, jwt_eddsa_private_key) of
         {ok, PrivKeyBin} when is_binary(PrivKeyBin), byte_size(PrivKeyBin) =:= 32 ->
             %% Derive public key from private key
             PubKey = crypto:generate_key(eddsa, ed25519, PrivKeyBin),
             case PubKey of
-                {Pub, _Priv} -> {Pub, PrivKeyBin};
-                _ -> {undefined, undefined}
+                {Pub, _Priv} -> {configured, Pub, PrivKeyBin};
+                _ -> {configured, undefined, undefined}
             end;
         _ ->
             %% Generate ephemeral key pair (for testing/non-production)
             {Pub, Priv} = crypto:generate_key(eddsa, ed25519),
             logger:info("JWT: Generated ephemeral EdDSA key pair (set jwt_eddsa_private_key for persistence)"),
-            {Pub, Priv}
+            {ephemeral, Pub, Priv}
     end,
 
-    %% RFC Section 9.1: Auth mode determines key isolation
-    %% signer = holds private key, can create and validate tokens (auth service)
-    %% verifier = public key only, can validate but not create EdDSA tokens (edge/core)
-    AuthMode = application:get_env(iris_edge, auth_mode, signer),
-    
-    %% In verifier mode, discard the private key for security
-    {FinalPub, FinalPriv, FinalMode} = case AuthMode of
-        verifier ->
-            logger:info("JWT: Running in VERIFIER mode (no EdDSA private key)"),
-            {EdDSAPub, undefined, verifier};
-        _ ->
-            {EdDSAPub, EdDSAPriv, signer}
-    end,
-    
-    logger:info("JWT auth initialized (issuer: ~s, eddsa: ~s, mode: ~s)", 
-                [Issuer, case FinalPub of undefined -> "disabled"; _ -> "enabled" end, FinalMode]),
-    {ok, #state{secret = Secret, issuer = Issuer, eddsa_pub = FinalPub, 
-                eddsa_priv = FinalPriv, auth_mode = FinalMode}}.
+    %% AUDIT 2.1a FIX: Reject ephemeral keys when auth_enabled=true
+    %% Ephemeral keys cause thundering herd on restart: all tokens become invalid,
+    %% 100% of clients disconnect and re-login simultaneously.
+    case {EdDSAResult, application:get_env(iris_edge, auth_enabled, false)} of
+        {{ephemeral, _, _}, true} ->
+            logger:error("FATAL: auth_enabled=true but jwt_eddsa_private_key not configured. "
+                         "Ephemeral keys invalidate all tokens on restart, causing thundering herd. "
+                         "Set jwt_eddsa_private_key in config."),
+            {stop, {misconfiguration, ephemeral_key_with_auth_enabled}};
+        {{_, EdDSAPub, EdDSAPriv}, _} ->
+            %% RFC Section 9.1: Auth mode determines key isolation
+            %% signer = holds private key, can create and validate tokens (auth service)
+            %% verifier = public key only, can validate but not create EdDSA tokens (edge/core)
+            AuthMode = application:get_env(iris_edge, auth_mode, signer),
+
+            %% In verifier mode, discard the private key for security
+            {FinalPub, FinalPriv, FinalMode} = case AuthMode of
+                verifier ->
+                    logger:info("JWT: Running in VERIFIER mode (no EdDSA private key)"),
+                    {EdDSAPub, undefined, verifier};
+                _ ->
+                    {EdDSAPub, EdDSAPriv, signer}
+            end,
+
+            logger:info("JWT auth initialized (issuer: ~s, eddsa: ~s, mode: ~s)",
+                        [Issuer, case FinalPub of undefined -> "disabled"; _ -> "enabled" end, FinalMode]),
+            {ok, #state{secret = Secret, issuer = Issuer, eddsa_pub = FinalPub,
+                        eddsa_priv = FinalPriv, auth_mode = FinalMode}}
+    end.
 
 handle_call({validate, Token, Opts}, _From, State) ->
     Result = do_validate(Token, Opts, State),
@@ -544,19 +555,22 @@ persist_revocation_sync(TokenId, Timestamp) ->
 
 %% P1-H2 FIX: Push revocation to all cluster nodes for immediate effect
 %% This ensures revocation takes effect within ~60s across all nodes (RFC FR-11)
+%% AUDIT 2.1b FIX: Use rpc:call (not rpc:cast) with timeout so failures are
+%% detected and logged. Spawn wrapper kept to avoid blocking the gen_server.
 propagate_revocation(TokenId, Timestamp) ->
     %% Get all connected nodes
     Nodes = nodes(),
     case Nodes of
         [] -> ok;  %% Single node deployment
         _ ->
-            %% Async push to all nodes (fire and forget, Mnesia is source of truth)
             spawn(fun() ->
                 lists:foreach(fun(Node) ->
-                    try
-                        rpc:cast(Node, ?MODULE, receive_revocation, [TokenId, Timestamp])
-                    catch
-                        _:_ -> ok  %% Ignore errors, Mnesia will sync eventually
+                    case rpc:call(Node, ?MODULE, receive_revocation,
+                                  [TokenId, Timestamp], 2000) of
+                        ok -> ok;
+                        {badrpc, Reason} ->
+                            logger:warning("Revocation propagation to ~p failed: ~p "
+                                           "(Mnesia will sync eventually)", [Node, Reason])
                     end
                 end, Nodes)
             end)

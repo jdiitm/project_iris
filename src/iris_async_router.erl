@@ -13,6 +13,22 @@
 %% - All routing failures MUST fall back to offline storage
 %% - Every message is tracked (route_attempt → route_success | route_offline)
 %% - Zero silent message drops
+%%
+%% ORDERING CONTRACT:
+%%
+%% This module provides TWO routing paths with different ordering guarantees:
+%%
+%% 1. UNSEQUENCED (handle_cast {route, User, Msg, MsgId}):
+%%    - route_to_remote/4 spawns a separate process per message
+%%    - Delivery is guaranteed but ORDER IS NOT
+%%    - Use for: presence updates, typing indicators, fire-and-forget
+%%
+%% 2. SEQUENCED (handle_cast {route_sequenced, User, Msg, SeqNo}):
+%%    - route_sequenced_remote/4 processes INLINE (no spawn)
+%%    - FIFO ordering IS guaranteed (RFC FR-5)
+%%    - Use for: chat messages, state mutations, anything order-sensitive
+%%
+%% INVARIANT: Never route order-sensitive messages through path (1).
 %% =============================================================================
 
 -export([start_link/1, route/2, route/3, route_async/2, route_sequenced/3]).

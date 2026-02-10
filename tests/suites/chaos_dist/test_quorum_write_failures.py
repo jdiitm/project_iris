@@ -98,6 +98,9 @@ def wait_for_port(host, port, timeout=30):
     return False
 
 
+# Sequence counter for RFC-compliant messaging
+_quorum_seq_counter = [0]
+
 def send_message_via_edge(user, target, msg):
     """Send a message through the edge node. Returns True if no crash."""
     try:
@@ -111,8 +114,11 @@ def send_message_via_edge(user, target, msg):
 
         target_bytes = target.encode("utf-8")
         msg_bytes = msg.encode("utf-8")
-        packet = (bytes([0x02]) +
+        # RFC-001-AMENDMENT-001: Use opcode 0x07 (sequenced message)
+        _quorum_seq_counter[0] += 1
+        packet = (bytes([0x07]) +
                   struct.pack(">H", len(target_bytes)) + target_bytes +
+                  struct.pack(">Q", _quorum_seq_counter[0]) +
                   struct.pack(">H", len(msg_bytes)) + msg_bytes)
         sock.sendall(packet)
         time.sleep(0.5)

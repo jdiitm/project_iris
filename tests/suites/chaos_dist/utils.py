@@ -1,15 +1,18 @@
 """
 Chaos Dist Test Utilities
 
-Provides TLS-aware connection functions for chaos_dist tests.
+Provides TLS-aware connection functions and Docker cluster management
+primitives for chaos_dist tests.
 All tests in this suite connect to the Docker cluster which has TLS enabled.
 """
 
 import socket
 import ssl
 import struct
+import subprocess
+import time
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional, Tuple, List
 
 # Project root for locating certificates
 PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
@@ -47,6 +50,38 @@ def get_tls_context() -> ssl.SSLContext:
     
     _tls_context_cache = context
     return context
+
+
+def wait_for_edge_tls(host: str = "localhost", ports: List[int] = None,
+                      max_wait: int = 30) -> bool:
+    """
+    Wait until at least one edge port accepts a TLS connection.
+
+    Call this at the start of a test to avoid 0-second failures when edge
+    nodes are still booting after cluster init.
+
+    Args:
+        host: Hostname (usually 'localhost')
+        ports: List of edge ports to try (default: 8085, 8087, 8089)
+        max_wait: Maximum seconds to wait
+
+    Returns:
+        True if at least one edge responded, False on timeout.
+    """
+    if ports is None:
+        ports = [8085, 8087, 8089]
+
+    deadline = time.time() + max_wait
+    while time.time() < deadline:
+        for port in ports:
+            try:
+                sock = create_tls_socket(host, port, timeout=3)
+                sock.close()
+                return True
+            except Exception:
+                pass
+        time.sleep(1)
+    return False
 
 
 def create_tls_socket(host: str, port: int, timeout: int = DEFAULT_TIMEOUT) -> ssl.SSLSocket:
@@ -222,3 +257,277 @@ def tls_connect_and_login_with_retry(host: str, port: int, username: str,
     
     print(f"  All {max_retries + 1} login attempts failed for {username}")
     return None
+
+
+# =============================================================================
+# Docker Cluster Management Primitives
+# =============================================================================
+# Used by tests that manipulate the Docker cluster directly (partition, heal,
+# run Erlang on nodes). These wrap Docker CLI commands for portability.
+
+# Core containers in the Docker cluster (from docker-compose.yml)
+CORE_CONTAINERS = [
+    "core-east-1", "core-east-2",
+    "core-west-1", "core-west-2",
+    "core-eu-1", "core-eu-2",
+]
+
+# Docker network used for inter-region backbone connectivity
+BACKBONE_NETWORK = "global-cluster_iris_backbone"
+
+
+def get_cluster_nodes() -> List[str]:
+    """
+    List running core containers in the Docker cluster.
+
+    Returns:
+        List of container names that are currently running.
+    """
+    running = []
+    for container in CORE_CONTAINERS:
+        try:
+            result = subprocess.run(
+                ["docker", "inspect", "--format", "{{.State.Running}}", container],
+                capture_output=True, text=True, timeout=5
+            )
+            if "true" in result.stdout.lower():
+                running.append(container)
+        except Exception:
+            pass
+    return running
+
+
+def run_on_node(container: str, erlang_expr: str, timeout: int = 15) -> str:
+    """
+    Execute an Erlang expression on a Docker container and return the output.
+
+    Spawns a short-lived hidden Erlang node inside the container that evaluates
+    the expression via ``io:format`` and exits.
+
+    Args:
+        container: Docker container name (e.g. "core-east-1")
+        erlang_expr: Erlang expression to evaluate (must NOT end with a period)
+        timeout: Command timeout in seconds
+
+    Returns:
+        Stdout from the Erlang evaluation (stripped).
+    """
+    # Derive the Erlang sname from the container name (e.g. core-east-1 -> core_east_1@coreeast1)
+    # We run a *new* hidden node and RPC into the target.
+    target_sname = _container_to_sname(container)
+
+    eval_code = (
+        f"Res = rpc:call('{target_sname}', erlang, apply, "
+        f"[fun() -> {erlang_expr} end, []]), "
+        f"io:format(\"~p\", [Res]), init:stop()."
+    )
+
+    cmd = [
+        "docker", "exec", container,
+        "erl", "-noshell", "-hidden",
+        "-sname", f"tmp_rpc_{int(time.time() * 1000) % 100000}",
+        "-setcookie", "iris_secret",
+        "-eval", eval_code,
+    ]
+
+    try:
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=timeout
+        )
+        return result.stdout.strip()
+    except subprocess.TimeoutExpired:
+        return "<timeout>"
+    except Exception as e:
+        return f"<error: {e}>"
+
+
+def partition_nodes(node_a: str, node_b: str) -> bool:
+    """
+    Create a network partition between two Docker containers by disconnecting
+    ``node_b`` from the backbone network.
+
+    Args:
+        node_a: Container that stays connected (unused, kept for API symmetry)
+        node_b: Container to disconnect from the backbone
+
+    Returns:
+        True if the disconnect command succeeded.
+    """
+    try:
+        result = subprocess.run(
+            ["docker", "network", "disconnect", BACKBONE_NETWORK, node_b],
+            capture_output=True, text=True, timeout=10
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
+def heal_partition(node_a: str, node_b: str) -> bool:
+    """
+    Heal a network partition by reconnecting ``node_b`` to the backbone.
+
+    Args:
+        node_a: Container that stayed connected (unused, kept for API symmetry)
+        node_b: Container to reconnect to the backbone
+
+    Returns:
+        True if the reconnect command succeeded.
+    """
+    try:
+        result = subprocess.run(
+            ["docker", "network", "connect", BACKBONE_NETWORK, node_b],
+            capture_output=True, text=True, timeout=10
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
+def wait_for_condition(check_fn, timeout: float = 30.0, interval: float = 1.0,
+                       description: str = "condition") -> bool:
+    """
+    Poll until check_fn() returns True or timeout.
+    
+    AUDIT PHASE 4 FIX: Replaces time.sleep(N) in chaos tests with
+    deterministic polling per RFC Section 13.2.
+    
+    Args:
+        check_fn: Callable returning True when condition is met
+        timeout: Maximum seconds to wait
+        interval: Seconds between polls
+        description: Human-readable description for debugging
+    
+    Returns:
+        True if condition met, False on timeout
+    """
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            if check_fn():
+                return True
+        except Exception:
+            pass
+        time.sleep(interval)
+    return False
+
+
+def wait_for_container_running(container: str, timeout: float = 30.0) -> bool:
+    """Poll until a Docker container is running."""
+    def check():
+        result = subprocess.run(
+            ["docker", "inspect", "--format", "{{.State.Running}}", container],
+            capture_output=True, text=True, timeout=5
+        )
+        return "true" in result.stdout.lower()
+    return wait_for_condition(check, timeout=timeout, interval=2.0,
+                              description=f"container {container} running")
+
+
+def wait_for_container_stopped(container: str, timeout: float = 30.0) -> bool:
+    """Poll until a Docker container is stopped."""
+    def check():
+        result = subprocess.run(
+            ["docker", "inspect", "--format", "{{.State.Running}}", container],
+            capture_output=True, text=True, timeout=5
+        )
+        return "false" in result.stdout.lower()
+    return wait_for_condition(check, timeout=timeout, interval=1.0,
+                              description=f"container {container} stopped")
+
+
+def wait_for_cluster_ready(max_wait: int = 60) -> bool:
+    """
+    Poll until at least 2 core containers are running.
+
+    Args:
+        max_wait: Maximum seconds to wait.
+
+    Returns:
+        True if the cluster is ready within the timeout.
+    """
+    deadline = time.time() + max_wait
+    while time.time() < deadline:
+        nodes = get_cluster_nodes()
+        if len(nodes) >= 2:
+            return True
+        time.sleep(2)
+    return False
+
+
+def reconnect_edge_to_core(edge_container: str = "edge-east-1",
+                           core_node: str = "core_east_1@coreeast1",
+                           cookie: str = "iris_secret") -> bool:
+    """
+    Reconnect an edge node to a core node after the core is killed/restarted.
+
+    After a core container is killed and restarted, edge nodes lose their
+    Erlang distribution connection. This pings the core from the edge to
+    re-establish the connection (same mechanism as init_cluster.sh reconnect_edges).
+
+    Args:
+        edge_container: Docker container name of the edge node
+        core_node: Erlang sname of the core node (e.g. core_east_1@coreeast1)
+        cookie: Erlang distribution cookie
+
+    Returns:
+        True if the reconnect command ran (best-effort).
+    """
+    try:
+        random_id = int(time.time() * 1000) % 100000
+        subprocess.run(
+            ["docker", "exec", edge_container, "sh", "-c",
+             f"erl -noshell -sname reconn_{random_id} -setcookie {cookie} "
+             f"-eval \"net_adm:ping('{core_node}'), halt(0).\""],
+            capture_output=True, timeout=15
+        )
+        # Give the edge a moment to re-establish routing
+        time.sleep(2)
+        return True
+    except Exception:
+        return False
+
+
+# Mapping of core containers to their primary edge containers and snames
+CORE_TO_EDGE = {
+    "core-east-1": ("edge-east-1", "core_east_1@coreeast1"),
+    "core-east-2": ("edge-east-2", "core_east_2@coreeast2"),
+    "core-west-1": ("edge-west-1", "core_west_1@corewest1"),
+    "core-west-2": ("edge-west-2", "core_west_2@corewest2"),
+    "core-eu-1":   ("edge-eu-1",   "core_eu_1@coreeu1"),
+    "core-eu-2":   ("edge-eu-2",   "core_eu_2@coreeu2"),
+}
+
+
+def reconnect_edges_after_core_restart(core_container: str) -> None:
+    """
+    Reconnect all relevant edge nodes after a core container is restarted.
+
+    Looks up the primary edge for the given core and reconnects it.
+    Also reconnects edge-east-1 as a fallback (it's the most commonly
+    used edge in tests on port 8085).
+
+    Args:
+        core_container: Docker container name of the restarted core
+    """
+    if core_container in CORE_TO_EDGE:
+        edge, core_sname = CORE_TO_EDGE[core_container]
+        reconnect_edge_to_core(edge, core_sname)
+
+    # Always reconnect edge-east-1 (port 8085) since most tests target it
+    if core_container != "core-east-1":
+        reconnect_edge_to_core("edge-east-1", _container_to_sname(core_container))
+
+
+def _container_to_sname(container: str) -> str:
+    """
+    Convert a Docker container name to the Erlang -sname used inside it.
+
+    Mapping (from docker-compose.yml):
+        core-east-1  -> core_east_1@coreeast1
+        core-west-2  -> core_west_2@corewest2
+        core-eu-1    -> core_eu_1@coreeu1
+    """
+    node_part = container.replace("-", "_")             # core_east_1
+    host_part = container.replace("-", "")              # coreeast1
+    return f"{node_part}@{host_part}"

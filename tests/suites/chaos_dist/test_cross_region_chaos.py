@@ -44,8 +44,9 @@ PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
 CA_CERT = PROJECT_ROOT / "certs" / "ca.pem"
 
 
-def create_tls_socket(host: str, port: int, timeout: int = 10) -> socket.socket:
-    """Create a TLS-wrapped socket connection."""
+def create_tls_socket(host: str, port: int, timeout: int = 10,
+                      max_retries: int = 3, retry_delay: float = 2.0) -> socket.socket:
+    """Create a TLS-wrapped socket connection with retry."""
     context = ssl.create_default_context()
     if CA_CERT.exists():
         context.load_verify_locations(str(CA_CERT))
@@ -53,11 +54,19 @@ def create_tls_socket(host: str, port: int, timeout: int = 10) -> socket.socket:
         context.check_hostname = False
         context.verify_mode = ssl.CERT_NONE
     
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.settimeout(timeout)
-    tls_sock = context.wrap_socket(sock, server_hostname=host)
-    tls_sock.connect((host, port))
-    return tls_sock
+    last_err = None
+    for attempt in range(max_retries):
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(timeout)
+            tls_sock = context.wrap_socket(sock, server_hostname=host)
+            tls_sock.connect((host, port))
+            return tls_sock
+        except Exception as e:
+            last_err = e
+            if attempt < max_retries - 1:
+                time.sleep(retry_delay)
+    raise ConnectionError(f"Failed to connect to {host}:{port} after {max_retries} attempts: {last_err}")
 
 
 from typing import Optional, Tuple, List, Dict, Set
@@ -476,8 +485,8 @@ def test_message_queueing_during_outage() -> Tuple[bool, Dict]:
     if not docker_network_disconnect(CORE_EU, BACKBONE_NETWORK):
         log("  WARN: Failed to disconnect EU - continuing anyway")
     
-    log(f"  Backbone disconnected. Waiting 5s for detection...")
-    time.sleep(5)
+    log(f"  Backbone disconnected. Waiting for detection...")
+    time.sleep(3)  # AUDIT P4: Reduced from 5s, Docker disconnect is fast
     
     # Phase 3: Send messages to EU user (should be queued)
     log("\nPhase 3: Sending messages US→EU during outage...")
@@ -553,7 +562,7 @@ def test_eventual_delivery_after_heal() -> Tuple[bool, Dict]:
         log("  FAIL: Cannot connect receiver to EU")
         # Try to ensure EU is connected first
         docker_network_connect(CORE_EU, BACKBONE_NETWORK)
-        time.sleep(5)
+        time.sleep(3)  # AUDIT P4: Reduced from 5s
         if not receiver.connect():
             log("  FAIL: Still cannot connect after reconnect attempt")
             return False, metrics
@@ -685,9 +694,13 @@ def test_no_duplicate_delivery() -> Tuple[bool, Dict]:
         metrics["messages_sent"] += 1
         time.sleep(0.5)
     
-    # Wait for delivery
-    log("\nPhase 3: Waiting for delivery...")
-    time.sleep(15)
+    # AUDIT P4 FIX: Poll for delivery instead of blind 15s sleep
+    log("\nPhase 3: Polling for delivery...")
+    delivery_deadline = time.time() + 20
+    while time.time() < delivery_deadline:
+        if receiver.get_received_count() >= metrics["messages_sent"]:
+            break
+        time.sleep(2)
     
     receiver.stop()
     
@@ -738,7 +751,7 @@ def main():
     # Ensure clean state
     log("Ensuring clean state (reconnecting any disconnected containers)...")
     docker_network_connect(CORE_EU, BACKBONE_NETWORK)
-    time.sleep(5)
+    time.sleep(3)  # AUDIT P4: Reduced from 5s
     
     # Run tests
     results = []

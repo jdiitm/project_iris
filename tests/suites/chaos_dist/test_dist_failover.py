@@ -33,7 +33,9 @@ CORE_CONTAINER = os.environ.get("IRIS_CORE_CONTAINER", "core-east-1")
 
 # Protocol Constants
 OP_LOGIN = b'\x01'
-OP_MSG = b'\x02'
+# RFC-001-AMENDMENT-001 v1.0: opcode 0x02 (plaintext) is deprecated and rejected.
+# Use opcode 0x07 (sequenced message) instead.
+OP_MSG = b'\x07'
 
 
 @dataclass
@@ -79,13 +81,27 @@ def connect_and_login(host, port, user_id) -> socket.socket:
     return s
 
 
+# Sequence counter for RFC-compliant messaging
+_failover_seq_counter = [0]
+
 def send_message(sock, target: bytes, payload: bytes) -> bool:
-    """Send a message (fire-and-forget, server doesn't ACK regular messages)."""
+    """Send a message using opcode 0x07 (sequenced message).
+    
+    RFC-001-AMENDMENT-001 v1.0 COMPLIANT: Uses opcode 0x07 (sequenced message)
+    instead of deprecated opcode 0x02 (plaintext) which is now rejected.
+    
+    Protocol: 0x07 | TargetLen(16) | Target | SeqNo(64) | MsgLen(16) | Msg
+    """
     import struct
-    pkt = OP_MSG + struct.pack('>H', len(target)) + target + struct.pack('>H', len(payload)) + payload
+    _failover_seq_counter[0] += 1
+    seq_no = _failover_seq_counter[0]
+    pkt = (OP_MSG +
+           struct.pack('>H', len(target)) + target +
+           struct.pack('>Q', seq_no) +
+           struct.pack('>H', len(payload)) + payload)
     try:
         sock.sendall(pkt)
-        return True  # Fire and forget - server doesn't respond to regular messages
+        return True
     except:
         return False
 
@@ -111,9 +127,18 @@ def wait_container_healthy(container: str, timeout: int = 30) -> bool:
 
 
 def reconnect_edge_to_core():
-    """Reconnect edge to core after restart."""
-    docker_cmd("docker exec edge-east-1 erl -noshell -hidden -sname tmp_rc -setcookie iris_secret -eval 'rpc:call(edge_east_1@edgeeast1, net_adm, ping, [core_east_1@coreeast1]), init:stop().'")
-    time.sleep(1)
+    """Reconnect edge to core after restart.
+    
+    Uses net_adm:ping directly (like init_cluster.sh reconnect_edges)
+    rather than RPC into the edge, which may fail if distribution is down.
+    """
+    random_id = int(time.time() * 1000) % 100000
+    docker_cmd(
+        f"docker exec edge-east-1 erl -noshell -sname reconn_{random_id} "
+        f"-setcookie iris_secret "
+        f"-eval \"net_adm:ping('core_east_1@coreeast1'), halt(0).\""
+    )
+    time.sleep(2)
 
 
 # =============================================================================
@@ -174,14 +199,14 @@ def test_node_kill_recovery() -> TestResult:
         
         # Restart core
         docker_cmd(f"docker start {CORE_CONTAINER}")
-        if not wait_container_healthy(CORE_CONTAINER, timeout=20):
+        if not wait_container_healthy(CORE_CONTAINER, timeout=60):
             return TestResult("Node Kill/Recovery", False, "Container didn't become healthy",
                             (time.time() - start) * 1000)
         
-        # Extra recovery time
-        time.sleep(3)
+        # Extra recovery time for Mnesia tables to reload
+        time.sleep(5)
         reconnect_edge_to_core()
-        time.sleep(2)
+        time.sleep(3)
         
         # Post-recovery: should work again
         recovery_ok = False

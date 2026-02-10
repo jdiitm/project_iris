@@ -3,6 +3,25 @@ State-Based Assertions for Messaging Tests
 
 Deterministic assertions that don't rely on timing.
 Validates messaging semantics: delivery, ordering, no-loss, no-duplication.
+
+CLOCK MONOTONICITY NOTE (Audit Finding 3, Phase 5b):
+
+    time.monotonic() and time.monotonic_ns() measure host-side elapsed time.
+    They continue advancing even when Docker containers are paused/unpaused
+    (docker pause / docker unpause).
+
+    During container pause, the Erlang VM inside the container is frozen --
+    no messages are processed, no timers fire. But the host clock keeps
+    ticking. This means:
+
+    1. Latency measurements that span a container pause will be INFLATED
+       (they include the pause duration as perceived by the client).
+    2. This is CORRECT from the client's perspective -- clients experience
+       the full pause as actual latency.
+    3. In chaos tests that pause/unpause containers, high latency measurements
+       are EXPECTED and should not be treated as test failures.
+    4. If you need container-local time, use Erlang's erlang:monotonic_time()
+       via RPC -- but be aware it freezes during pause.
 """
 
 import time

@@ -304,7 +304,10 @@ cluster_up() {
     cd "$CLUSTER_DIR"
     if bash "$CLUSTER_SCRIPT" up > "$LOG_DIR/cluster_up.log" 2>&1; then
         cd "$PROJECT_ROOT"
-        echo -e "  ${GREEN}Cluster ready${NC}"
+        echo -e "  ${GREEN}Cluster ready (cores)${NC}"
+        # Wait for at least one edge node to accept TLS connections.
+        # init_cluster.sh only checks core nodes; edge nodes may still be starting.
+        wait_for_edge_ready
         return 0
     else
         cd "$PROJECT_ROOT"
@@ -312,6 +315,28 @@ cluster_up() {
         tail -20 "$LOG_DIR/cluster_up.log"
         return 1
     fi
+}
+
+# Wait for at least one edge node to accept TCP connections on its TLS port.
+# This prevents tests from failing at 0s because the edge isn't ready yet.
+wait_for_edge_ready() {
+    local max_wait=30
+    local ports="8085 8087 8089"  # edge-east-1, edge-west-1, edge-eu-1
+    local attempt=0
+    
+    while [ $attempt -lt $max_wait ]; do
+        for port in $ports; do
+            if nc -z localhost "$port" 2>/dev/null; then
+                echo -e "  ${GREEN}Edge ready (port $port)${NC}"
+                # Give a brief extra moment for TLS listener stabilization
+                sleep 2
+                return 0
+            fi
+        done
+        attempt=$((attempt + 1))
+        sleep 1
+    done
+    echo -e "  ${YELLOW}[WARN] No edge nodes responded after ${max_wait}s - tests may fail${NC}"
 }
 
 # Run Docker test with FRESH cluster (proven pattern)

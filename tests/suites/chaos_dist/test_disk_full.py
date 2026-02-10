@@ -238,8 +238,8 @@ def free_disk(container_name, fill_file="/var/lib/mnesia/fillfile"):
 # Connection and Messaging
 # =============================================================================
 
-def connect_tls():
-    """Create TLS connection to Iris edge."""
+def connect_tls(max_retries=5, retry_delay=2.0):
+    """Create TLS connection to Iris edge with retry logic."""
     context = ssl.create_default_context()
     ca_cert = PROJECT_ROOT / "certs" / "ca.pem"
     if ca_cert.exists():
@@ -248,11 +248,19 @@ def connect_tls():
         context.check_hostname = False
         context.verify_mode = ssl.CERT_NONE
     
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.settimeout(TIMEOUT)
-    tls_sock = context.wrap_socket(sock, server_hostname=SERVER_HOST)
-    tls_sock.connect((SERVER_HOST, SERVER_PORT))
-    return tls_sock
+    last_err = None
+    for attempt in range(max_retries):
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(TIMEOUT)
+            tls_sock = context.wrap_socket(sock, server_hostname=SERVER_HOST)
+            tls_sock.connect((SERVER_HOST, SERVER_PORT))
+            return tls_sock
+        except Exception as e:
+            last_err = e
+            if attempt < max_retries - 1:
+                time.sleep(retry_delay)
+    raise ConnectionError(f"Failed to connect after {max_retries} attempts: {last_err}")
 
 
 def login(sock, username):

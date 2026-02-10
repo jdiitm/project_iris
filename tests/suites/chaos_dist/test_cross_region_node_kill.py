@@ -122,6 +122,9 @@ def wait_for_port(host, port, timeout=30):
     return False
 
 
+# Sequence counter for RFC-compliant messaging
+_xr_seq_counter = [0]
+
 def login_and_send(host, port, user, target, messages):
     """Login to an edge node and send messages cross-region."""
     sock = create_tls_socket(host, port)
@@ -137,8 +140,11 @@ def login_and_send(host, port, user, target, messages):
     for msg in messages:
         target_bytes = target.encode("utf-8")
         msg_bytes = msg.encode("utf-8")
-        packet = (bytes([0x02]) +
+        # RFC-001-AMENDMENT-001: Use opcode 0x07 (sequenced message)
+        _xr_seq_counter[0] += 1
+        packet = (bytes([0x07]) +
                   struct.pack(">H", len(target_bytes)) + target_bytes +
+                  struct.pack(">Q", _xr_seq_counter[0]) +
                   struct.pack(">H", len(msg_bytes)) + msg_bytes)
         try:
             sock.sendall(packet)
@@ -279,8 +285,9 @@ def test_bulk_messages_during_partition_and_kill():
             log("  WARNING: Bridge did not come back within timeout")
             return True  # Infrastructure issue
 
+        # AUDIT P4 FIX: Reduced from 10s
         log("  Bridge restored. Waiting for message redelivery...")
-        time.sleep(10)
+        time.sleep(5)
 
         # Connect receiver to collect
         received = collect_messages(SERVER_HOST, EDGE_EU_PORT, receiver, timeout=DELIVERY_WAIT)

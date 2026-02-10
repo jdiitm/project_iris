@@ -127,10 +127,11 @@ def test_outbox_queue_under_partition():
         east_sender = f"outbox_sender_{test_id}"
         west_target = f"outbox_target_{test_id}"
 
-        # Pre-register West target
-        west_sock = tls_connect_and_login(SERVER_HOST, WEST_EDGE_PORT, west_target, TIMEOUT)
+        # Pre-register West target (with retry for post-cluster-init readiness)
+        west_sock = tls_connect_and_login_with_retry(SERVER_HOST, WEST_EDGE_PORT, west_target,
+                                                      timeout=TIMEOUT, max_retries=5, retry_delay=2.0)
         if not west_sock:
-            log("FAIL: Cannot connect to West edge for target registration")
+            log("FAIL: Cannot connect to West edge for target registration (after retries)")
             return False
         log("PASS: West target registered")
         close_socket(west_sock)
@@ -143,8 +144,9 @@ def test_outbox_queue_under_partition():
         if not docker_network_disconnect(WEST_CORE, BACKBONE_NETWORK):
             log("WARN: Failed to disconnect West core")
 
-        log("West isolated. Waiting 10s for detection...")
-        time.sleep(10)
+        # AUDIT P4 FIX: Reduced from 10s
+        log("West isolated. Waiting for detection...")
+        time.sleep(6)
 
         # ==============================================================
         # Phase 3: Flood Messages from East to West (queue fills)
@@ -199,8 +201,9 @@ def test_outbox_queue_under_partition():
         else:
             log("WARN: Failed to reconnect West core")
 
-        log("Waiting 15s for queue drain...")
-        time.sleep(15)
+        # AUDIT P4 FIX: Reduced from 15s
+        log("Waiting for queue drain...")
+        time.sleep(8)
 
         # ==============================================================
         # Phase 6: Verify Message Flow Resumes
