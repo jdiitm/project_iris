@@ -89,6 +89,20 @@ iris_region_bridge_limits_test_() ->
 %% Tests
 %% =============================================================================
 
+%% Helper: bulk-insert records into Mnesia AND set the ETS depth counter.
+%% The depth counter is maintained by iris_region_bridge for O(1) overflow checks.
+bulk_insert_and_set_counter(Region, Count) ->
+    lists:foreach(fun(I) ->
+        MsgId = list_to_binary(io_lib:format("~s_msg_~p", [Region, I])),
+        Now = erlang:system_time(millisecond),
+        mnesia:dirty_write({cross_region_outbound,
+            MsgId, Region, <<"user1">>, <<"data">>,
+            pending, 0, Now, 0, undefined})
+    end, lists:seq(1, Count)),
+    %% G-3: Set the ETS depth counter to match the Mnesia state
+    try ets:insert(iris_region_bridge_depth, {{queue_depth, Region}, Count})
+    catch error:badarg -> ok end.
+
 test_queue_accepts_under_limit() ->
     %% A single message should be accepted
     Result = iris_region_bridge:send_cross_region(
@@ -99,14 +113,7 @@ test_queue_rejects_at_overflow() ->
     %% Fill queue to max_queue_size for a region, then verify next is rejected
     Region = <<"overflow_region">>,
     MaxSize = iris_region_bridge:get_max_queue_size(),
-    %% Insert MaxSize records directly into Mnesia for speed
-    lists:foreach(fun(I) ->
-        MsgId = list_to_binary("overflow_msg_" ++ integer_to_list(I)),
-        Now = erlang:system_time(millisecond),
-        mnesia:dirty_write({cross_region_outbound,
-            MsgId, Region, <<"user1">>, <<"data">>,
-            pending, 0, Now, 0, undefined})
-    end, lists:seq(1, MaxSize)),
+    bulk_insert_and_set_counter(Region, MaxSize),
     %% Now the next message should be rejected
     Result = iris_region_bridge:send_cross_region(Region, <<"user2">>, <<"rejected">>),
     ?assertMatch({error, {queue_overflow, _}}, Result).
@@ -115,13 +122,7 @@ test_queue_nack_includes_retry_hint() ->
     %% Overflow error should include retry_after hint
     Region = <<"nack_region">>,
     MaxSize = iris_region_bridge:get_max_queue_size(),
-    lists:foreach(fun(I) ->
-        MsgId = list_to_binary("nack_msg_" ++ integer_to_list(I)),
-        Now = erlang:system_time(millisecond),
-        mnesia:dirty_write({cross_region_outbound,
-            MsgId, Region, <<"user1">>, <<"data">>,
-            pending, 0, Now, 0, undefined})
-    end, lists:seq(1, MaxSize)),
+    bulk_insert_and_set_counter(Region, MaxSize),
     Result = iris_region_bridge:send_cross_region(Region, <<"user2">>, <<"test">>),
     ?assertMatch({error, {queue_overflow, #{retry_after := _}}}, Result).
 
@@ -130,13 +131,7 @@ test_queue_depth_per_region() ->
     RegionA = <<"full_region_a">>,
     RegionC = <<"empty_region_c">>,
     MaxSize = iris_region_bridge:get_max_queue_size(),
-    lists:foreach(fun(I) ->
-        MsgId = list_to_binary("per_region_" ++ integer_to_list(I)),
-        Now = erlang:system_time(millisecond),
-        mnesia:dirty_write({cross_region_outbound,
-            MsgId, RegionA, <<"user1">>, <<"data">>,
-            pending, 0, Now, 0, undefined})
-    end, lists:seq(1, MaxSize)),
+    bulk_insert_and_set_counter(RegionA, MaxSize),
     %% Region A full
     ResultA = iris_region_bridge:send_cross_region(RegionA, <<"u">>, <<"msg">>),
     ?assertMatch({error, {queue_overflow, _}}, ResultA),
@@ -148,21 +143,17 @@ test_queue_resumes_after_drain() ->
     %% After clearing a full queue, new messages should be accepted again
     Region = <<"drain_region">>,
     MaxSize = iris_region_bridge:get_max_queue_size(),
-    lists:foreach(fun(I) ->
-        MsgId = list_to_binary("drain_msg_" ++ integer_to_list(I)),
-        Now = erlang:system_time(millisecond),
-        mnesia:dirty_write({cross_region_outbound,
-            MsgId, Region, <<"user1">>, <<"data">>,
-            pending, 0, Now, 0, undefined})
-    end, lists:seq(1, MaxSize)),
+    bulk_insert_and_set_counter(Region, MaxSize),
     %% Verify full
     ?assertMatch({error, {queue_overflow, _}},
                  iris_region_bridge:send_cross_region(Region, <<"u">>, <<"x">>)),
-    %% Clear all entries for this region
+    %% Clear all entries for this region AND reset counter
     lists:foreach(fun(I) ->
-        MsgId = list_to_binary("drain_msg_" ++ integer_to_list(I)),
+        MsgId = list_to_binary(io_lib:format("~s_msg_~p", [Region, I])),
         mnesia:dirty_delete(cross_region_outbound, MsgId)
     end, lists:seq(1, MaxSize)),
+    try ets:insert(iris_region_bridge_depth, {{queue_depth, Region}, 0})
+    catch error:badarg -> ok end,
     %% Now should accept
     Result = iris_region_bridge:send_cross_region(Region, <<"u">>, <<"accepted">>),
     ?assertEqual(ok, Result).

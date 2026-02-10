@@ -29,6 +29,8 @@
 -export([check_and_mark/1, is_duplicate/1, mark_seen/1]).
 -export([get_stats/0]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
+%% Exported for testing (bloom filter race verification)
+-export([add_to_bloom/1, check_bloom/1, init_bloom_partition/1]).
 
 -define(SERVER, ?MODULE).
 -define(TABLE, iris_dedup_seen).
@@ -253,6 +255,12 @@ handle_cast(bloom_fp_in_is_duplicate, State) ->
         bloom_checks = State#state.bloom_checks + 1
     }};
 
+handle_cast({add_to_bloom, MsgId}, State) ->
+    %% F2 AUDIT FIX: Serialize bloom writes through gen_server to prevent
+    %% TOCTOU race in concurrent add_to_bloom calls.
+    add_to_bloom_internal(MsgId),
+    {noreply, State};
+
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
@@ -379,8 +387,22 @@ check_bloom_all_partitions(Hashes, Partition) ->
             check_bloom_all_partitions(Hashes, Partition + 1)
     end.
 
-%% Add message ID to current bloom partition
+%% Add message ID to current bloom partition.
+%% F2 AUDIT FIX: Route through gen_server to serialize writes and eliminate
+%% the TOCTOU race (ets:lookup -> modify -> ets:insert). The gen_server is
+%% single-threaded, so concurrent callers' bit-sets can never overwrite
+%% each other. The hot path (ets:insert_new in check_and_mark) remains lockfree.
 add_to_bloom(MsgId) ->
+    case whereis(?SERVER) of
+        undefined ->
+            %% Gen_server not running (shouldn't happen in production)
+            add_to_bloom_internal(MsgId);
+        _Pid ->
+            gen_server:cast(?SERVER, {add_to_bloom, MsgId})
+    end.
+
+%% Internal: actually performs the bloom write. Called only from gen_server.
+add_to_bloom_internal(MsgId) ->
     Partition = get_current_partition(),
     Hashes = bloom_hashes(MsgId),
     case ets:lookup(?BLOOM_TABLE, Partition) of
@@ -390,7 +412,7 @@ add_to_bloom(MsgId) ->
         [] ->
             %% Partition doesn't exist, initialize it first
             init_bloom_partition(Partition),
-            add_to_bloom(MsgId)
+            add_to_bloom_internal(MsgId)
     end.
 
 %% Generate k hash values for bloom filter
@@ -440,18 +462,18 @@ cleanup_old_bloom_partitions(_CurrentPartition) ->
 %% P0-FIX: Dedup Log (Mnesia-backed verification for bloom false positives)
 %% =============================================================================
 
-%% Write message ID to dedup_log for later verification
-%% Uses async dirty_write for performance (eventual consistency OK for dedup)
+%% Write message ID to dedup_log for later verification.
+%% GAP-3 FIX: Synchronous dirty_write (was async spawn, creating a crash window).
+%% RFC 6.2 requires "Atomically deduplicate" -- the dedup_log entry MUST exist
+%% before check_and_mark returns, so a node crash cannot cause re-processing.
+%% dirty_write latency is ~0.1-0.5ms on disc_copies -- acceptable on hot path.
 write_dedup_log(MsgId, Timestamp) ->
-    %% Async write to avoid blocking hot path
-    spawn(fun() ->
-        try
-            mnesia:dirty_write({dedup_log, MsgId, Timestamp})
-        catch
-            _:Reason ->
-                logger:warning("Dedup log write failed for ~p: ~p", [MsgId, Reason])
-        end
-    end),
+    try
+        mnesia:dirty_write({dedup_log, MsgId, Timestamp})
+    catch
+        _:Reason ->
+            logger:warning("Dedup log write failed for ~p: ~p", [MsgId, Reason])
+    end,
     ok.
 
 %% Cleanup dedup_log entries older than 7 days

@@ -1,6 +1,12 @@
 -module(iris_group_tests).
 -include_lib("eunit/include/eunit.hrl").
 
+%% GAP-1: Helper to generate test keys ≥80 bytes (simulates E2EE-encrypted blob)
+test_encrypted_key(Seed) ->
+    H1 = crypto:hash(sha512, Seed),
+    H2 = crypto:hash(sha512, <<Seed/binary, "_extra">>),
+    <<H1/binary, H2/binary>>.
+
 %% =============================================================================
 %% Unit Tests for iris_group.erl
 %% RFC Reference: FR-13 (Group Messaging)
@@ -235,8 +241,8 @@ test_sender_keys() ->
     {ok, GroupId} = iris_group:create_group(<<"Sender Key Test">>, Creator),
     iris_group:add_member(GroupId, Member, Creator),
     
-    %% Store sender key
-    SenderKey = crypto:strong_rand_bytes(32),
+    %% Store sender key (GAP-1: must be ≥80 bytes encrypted blob)
+    SenderKey = crypto:strong_rand_bytes(128),
     KeyId = <<"key_001">>,
     ?assertEqual(ok, iris_group:store_sender_key(GroupId, Creator, KeyId, SenderKey)),
     
@@ -248,16 +254,16 @@ test_sender_keys() ->
     ?assertEqual({error, not_found}, 
                  iris_group:get_sender_key(GroupId, Creator, <<"nonexistent">>)),
     
-    %% Store another key
-    SenderKey2 = crypto:strong_rand_bytes(32),
+    %% Store another key (GAP-1: must be ≥80 bytes)
+    SenderKey2 = crypto:strong_rand_bytes(128),
     iris_group:store_sender_key(GroupId, Creator, <<"key_002">>, SenderKey2),
     
     %% Get all keys
     Keys = iris_group:get_all_sender_keys(GroupId, Creator),
     ?assertEqual(2, length(Keys)),
     
-    %% Rotate key
-    NewKey = crypto:strong_rand_bytes(32),
+    %% Rotate key (GAP-1: must be ≥80 bytes)
+    NewKey = crypto:strong_rand_bytes(128),
     {ok, NewKeyId} = iris_group:rotate_sender_key(GroupId, Creator, NewKey),
     ?assert(is_binary(NewKeyId)),
     
@@ -273,7 +279,7 @@ test_delete_group() ->
     
     %% Add member and sender key
     iris_group:add_member(GroupId, Member, Creator),
-    iris_group:store_sender_key(GroupId, Creator, <<"sk1">>, <<"key_data">>),
+    iris_group:store_sender_key(GroupId, Creator, <<"sk1">>, test_encrypted_key(<<"sk1">>)),
     
     %% Delete group
     ?assertEqual(ok, iris_group:delete_group(GroupId, Creator)),
@@ -339,8 +345,8 @@ test_e2ee_detection() ->
     %% Initially no sender keys - not E2EE
     ?assertNot(iris_group:has_sender_keys(GroupId)),
     
-    %% Add a sender key - now E2EE
-    SenderKey = crypto:strong_rand_bytes(32),
+    %% Add a sender key - now E2EE (GAP-1: must be ≥80 bytes)
+    SenderKey = crypto:strong_rand_bytes(128),
     KeyId = <<"e2ee_key_001">>,
     ok = iris_group:store_sender_key(GroupId, Creator, KeyId, SenderKey),
     
@@ -378,7 +384,7 @@ test_e2ee_limit_error() ->
     {ok, GroupId} = iris_group:create_group(<<"E2EE Limit Test">>, Creator),
     
     %% Add sender key to make it E2EE
-    ok = iris_group:store_sender_key(GroupId, Creator, <<"key1">>, <<"key_data">>),
+    ok = iris_group:store_sender_key(GroupId, Creator, <<"key1">>, test_encrypted_key(<<"key1">>)),
     ?assert(iris_group:has_sender_keys(GroupId)),
     
     %% Add some members successfully
@@ -402,7 +408,7 @@ test_e2ee_group_hard_limit() ->
     {ok, GroupId} = iris_group:create_group(<<"Hard Limit Test">>, Creator),
     
     %% Mark group as E2EE by storing a sender key
-    ok = iris_group:store_sender_key(GroupId, Creator, <<"hk1">>, <<"key_data">>),
+    ok = iris_group:store_sender_key(GroupId, Creator, <<"hk1">>, test_encrypted_key(<<"hk1">>)),
     ?assert(iris_group:has_sender_keys(GroupId)),
     
     %% Add 255 members (creator is member #1, so 255 more = 256 total)
@@ -446,8 +452,8 @@ test_member_reconnect() ->
     
     %% Store some sender keys after member joined
     timer:sleep(10),  %% Ensure time passes
-    ok = iris_group:store_sender_key(GroupId, Creator, <<"key1">>, <<"data1">>),
-    ok = iris_group:store_sender_key(GroupId, Member, <<"key2">>, <<"data2">>),
+    ok = iris_group:store_sender_key(GroupId, Creator, <<"key1">>, test_encrypted_key(<<"data1">>)),
+    ok = iris_group:store_sender_key(GroupId, Member, <<"key2">>, test_encrypted_key(<<"data2">>)),
     
     %% Member reconnects
     {ok, UpdatedKeys} = iris_group:handle_member_reconnect(GroupId, Member),
@@ -468,8 +474,8 @@ test_keys_since() ->
     timer:sleep(1000),
     
     %% Add keys
-    ok = iris_group:store_sender_key(GroupId, Creator, <<"key1">>, <<"data1">>),
-    ok = iris_group:store_sender_key(GroupId, Creator, <<"key2">>, <<"data2">>),
+    ok = iris_group:store_sender_key(GroupId, Creator, <<"key1">>, test_encrypted_key(<<"data1">>)),
+    ok = iris_group:store_sender_key(GroupId, Creator, <<"key2">>, test_encrypted_key(<<"data2">>)),
     
     %% Get keys since before
     Keys = iris_group:get_sender_keys_since(GroupId, Before),

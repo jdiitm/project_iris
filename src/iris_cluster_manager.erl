@@ -23,6 +23,7 @@
 
 -export([start_link/0]).
 -export([get_status/0, force_replication/0]).
+-export([check_replication_mtls/0]).  %% NFR-15: mTLS pre-check for replication
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
@@ -230,20 +231,48 @@ maybe_schedule_retry(Node, RetryCount, State) ->
     logger:error("Max retries (~p) exceeded for node ~p", [RetryCount, Node]),
     State.
 
+%% @doc NFR-15: Pre-check that mTLS is configured before allowing replication.
+%% In production, refuse to replicate over plaintext Erlang distribution.
+-spec check_replication_mtls() -> ok | {error, mtls_required}.
+check_replication_mtls() ->
+    Env = application:get_env(iris_core, env, undefined),
+    Default = case Env of
+        production -> true;
+        _          -> false
+    end,
+    EnforceMtls = application:get_env(iris_core, enforce_mtls, Default),
+    case EnforceMtls of
+        true ->
+            case init:get_argument(ssl_dist_optfile) of
+                {ok, _} -> ok;
+                error ->
+                    logger:error("NFR-15: Refusing replication -- mTLS mandated but ssl_dist_optfile not set"),
+                    {error, mtls_required}
+            end;
+        false ->
+            ok
+    end.
+
 %% Perform the actual replication
 do_replication() ->
-    try
-        %% Call iris_core's replication function
-        case whereis(iris_core) of
-            undefined ->
-                %% iris_core not running as a named process, try direct call
-                iris_core:init_cross_region_replication();
-            _ ->
-                iris_core:init_cross_region_replication()
-        end,
-        ok
-    catch
-        Class:Reason:Stack ->
-            logger:error("Replication failed: ~p:~p~n~p", [Class, Reason, Stack]),
-            {error, {Class, Reason}}
+    %% NFR-15 FIX: Check mTLS before establishing inter-node replication
+    case check_replication_mtls() of
+        {error, mtls_required} = Err ->
+            Err;
+        ok ->
+            try
+                %% Call iris_core's replication function
+                case whereis(iris_core) of
+                    undefined ->
+                        %% iris_core not running as a named process, try direct call
+                        iris_core:init_cross_region_replication();
+                    _ ->
+                        iris_core:init_cross_region_replication()
+                end,
+                ok
+            catch
+                Class:Reason:Stack ->
+                    logger:error("Replication failed: ~p:~p~n~p", [Class, Reason, Stack]),
+                    {error, {Class, Reason}}
+            end
     end.

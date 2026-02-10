@@ -18,6 +18,9 @@
 -export([check_mailbox/1]).
 -export([get_stats/0]).
 
+%% AQM: CoDel (Controlled Delay) algorithm -- pure functions for unit testing
+-export([codel_new/0, codel_new/1, codel_check/3]).
+
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
 -define(SERVER, ?MODULE).
@@ -246,3 +249,107 @@ get_process_details(Procs) ->
         end,
         maps:put(Name, #{pid => Pid, queue_len => Len}, Acc)
     end, #{}, Procs).
+
+%% =============================================================================
+%% CoDel (Controlled Delay) Active Queue Management
+%% =============================================================================
+%% Reference: Nichols & Jacobson, "Controlling Queue Delay" (2012)
+%%
+%% CoDel tracks the MINIMUM sojourn time (time a message sits in the queue)
+%% over a sliding interval. If the minimum sojourn stays above a target for
+%% an entire interval, CoDel enters dropping mode. Drop rate increases with
+%% 1/sqrt(count) to converge quickly. Dropping stops immediately when sojourn
+%% drops below target.
+%%
+%% Pure functions: codel_new/0,1 and codel_check/3 are stateless and testable.
+%% =============================================================================
+
+%% @doc Create a new CoDel state with default parameters.
+-spec codel_new() -> map().
+codel_new() ->
+    codel_new(#{}).
+
+%% @doc Create a new CoDel state with custom parameters.
+%% Options: target_ms (default 5), interval_ms (default 100).
+-spec codel_new(map()) -> map().
+codel_new(Opts) ->
+    #{
+        target_ms      => maps:get(target_ms, Opts, 5),
+        interval_ms    => maps:get(interval_ms, Opts, 100),
+        first_above_time => 0,      %% When sojourn first exceeded target (0 = not tracking)
+        drop_next      => 0,        %% Next scheduled drop time
+        drop_count     => 0,        %% Consecutive drops in current episode
+        dropping       => false     %% Currently in dropping mode?
+    }.
+
+%% @doc CoDel check: given current sojourn time and wall clock, decide ok or drop.
+%% SojournMs: how long the head-of-line message has been in the queue (milliseconds).
+%% NowMs: current monotonic time in milliseconds.
+%% Returns {ok, NewState} or {drop, NewState}.
+-spec codel_check(non_neg_integer(), non_neg_integer(), map()) -> {ok | drop, map()}.
+codel_check(SojournMs, NowMs, State) ->
+    #{target_ms := Target, interval_ms := Interval,
+      first_above_time := FirstAbove,
+      dropping := Dropping} = State,
+
+    case SojournMs < Target of
+        true ->
+            %% Below target: reset tracking, exit dropping mode
+            State1 = State#{first_above_time => 0, dropping => false},
+            {ok, State1};
+        false ->
+            %% Above target
+            State1 = case FirstAbove of
+                0 ->
+                    %% First time above target in this window: start tracking
+                    State#{first_above_time => NowMs + Interval};
+                _ ->
+                    State
+            end,
+            case Dropping of
+                true ->
+                    %% Already dropping: check if it's time for the next drop
+                    codel_dropping(NowMs, State1);
+                false ->
+                    %% Not dropping yet: check if we've been above target for a full interval
+                    codel_not_dropping(NowMs, State1)
+            end
+    end.
+
+%% In non-dropping state: enter dropping if above target for full interval
+codel_not_dropping(NowMs, State = #{first_above_time := FirstAbove}) ->
+    case NowMs >= FirstAbove andalso FirstAbove > 0 of
+        true ->
+            %% Been above target for a full interval: enter dropping mode
+            #{interval_ms := Interval} = State,
+            State1 = State#{
+                dropping => true,
+                drop_count => 1,
+                drop_next => NowMs + codel_control_law(Interval, 1)
+            },
+            {drop, State1};
+        false ->
+            {ok, State}
+    end.
+
+%% In dropping state: schedule drops at 1/sqrt(count) intervals
+codel_dropping(NowMs, State = #{drop_next := DropNext, drop_count := Count,
+                                 interval_ms := Interval}) ->
+    case NowMs >= DropNext of
+        true ->
+            %% Time for next drop
+            NewCount = Count + 1,
+            State1 = State#{
+                drop_count => NewCount,
+                drop_next => NowMs + codel_control_law(Interval, NewCount)
+            },
+            {drop, State1};
+        false ->
+            %% Not yet time for next drop
+            {ok, State}
+    end.
+
+%% CoDel control law: interval / sqrt(count)
+%% This makes drops increasingly aggressive as the queue stays full.
+codel_control_law(Interval, Count) ->
+    round(Interval / math:sqrt(Count)).

@@ -1,6 +1,6 @@
 # Architectural Decisions & Design Rationale
 
-**Last Updated**: 2026-02-08  
+**Last Updated**: 2026-02-10  
 **Status**: Current (RFC-001 v4.0 Aligned, TLS Enforced)
 
 ---
@@ -269,7 +269,7 @@ nuke_and_recreate_table(Table) ->
 
 **Test Counts** (as of 2026-02-08):
 - Python test files: ~146 across 13 suites
-- Erlang test modules: 70 (326+ individual EUnit tests)
+- Erlang test modules: 109 EUnit test modules
 - CI Tier 0: 124+ tests passing
 - Chaos_dist tests: 25 (Docker required, TLS enabled)
 - See [TESTING.md](TESTING.md) for current counts
@@ -295,7 +295,7 @@ nuke_and_recreate_table(Table) ->
 | Item | Resolution |
 |------|------------|
 | UUIDv7 message IDs | Implemented in `iris_uuid.erl` with server-side validation |
-| mTLS inter-node (NFR-15) | Configurable; test exists (`test_mtls_inter_node.py`); full enforcement deferred pending PKI |
+| mTLS inter-node (NFR-15) | **Enforced in production** (`enforce_mtls=true` when `env=production`); `iris_cluster_manager` blocks replication without SSL dist |
 | Inbox overflow protection | 10K limit enforced in `iris_core.erl` (GAP-6) |
 | Outbox TTL | 7-day cleanup in `iris_region_bridge.erl` (GAP-1) |
 
@@ -306,13 +306,13 @@ nuke_and_recreate_table(Table) ->
 | Cross-region Mnesia replication | 2-3 days | Docker volume config |
 | `ra` library integration (full CP) | 1-2 days | External dependency |
 | 5B user architecture | 2-3 months | Storage rewrite |
-| Key change peer notification | 1-2 weeks | Protocol design needed (GAP-13 PENDING_DESIGN) |
+| Key change peer notification | Done | IMPLEMENTED: detect + contact track + deliver via opcode 0x1A (GAP-13) |
 
 ---
 
 ## 9. Module Overview
 
-See the [README](../README.md#modules-57-total) for the full module reference (57 modules, grouped by layer).
+See the [README](../README.md#modules-58-total) for the full module reference (58 modules, grouped by layer).
 
 ---
 
@@ -330,15 +330,14 @@ The Chief Architect forensic audit identified several items requiring separate R
 | **Effort** | 2-3 weeks |
 | **Blocked By** | Design RFC required for queue semantics (FIFO vs priority, TTL, overflow) |
 
-### P1 - Mailbox Overflow Protection (AQM)
+### ~~P1 - Mailbox Overflow Protection (AQM)~~ — DONE
 
 | Attribute | Value |
 |-----------|-------|
 | **Issue** | "Messi Test" - 1M messages to single user causes mailbox overflow |
 | **Impact** | Celebrity/popular user accounts can crash their shard process |
-| **Fix** | Active Queue Management with backpressure signaling |
-| **Effort** | 1-2 weeks |
-| **Blocked By** | Requires RFC for drop policy (tail drop vs RED vs CoDel) |
+| **Fix** | CoDel (Controlled Delay) AQM implemented in `iris_mailbox_guard.erl` |
+| **Status** | **IMPLEMENTED** (2026-02-10). Exports `codel_new/0,1`, `codel_check/3`. Tested in `iris_codel_tests.erl`. |
 
 ### P2 - Network Partition Drill Infrastructure
 

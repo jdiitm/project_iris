@@ -226,6 +226,11 @@ get_stats() ->
 init([]) ->
     process_flag(trap_exit, true),
     
+    %% F3 AUDIT FIX: Enable scheduler_wall_time so CPU fallback works
+    %% even when iris_efficiency_monitor is not running.
+    %% Without this, get_scheduler_utilization() returns 0.0 (blind).
+    erlang:system_flag(scheduler_wall_time, true),
+    
     %% Create ETS tables for lockfree operation
     %% Flow control table (level, counters)
     ets:new(?FLOW_ETS, [named_table, public, {write_concurrency, true}, {read_concurrency, true}]),
@@ -521,8 +526,11 @@ detect_cascade(Health) ->
     end, {0, 0}, Health),
     
     Total = TotalSuccess + TotalFailure,
+    %% F3 AUDIT FIX: Require minimum sample size before declaring cascade.
+    %% Without this, a single failure (ratio=1.0) incorrectly triggers
+    %% LEVEL_SHED global backpressure in low-traffic scenarios.
     case Total of
-        0 -> false;
+        N when N < 10 -> false;
         _ ->
             FailureRatio = TotalFailure / Total,
             FailureRatio > ?CASCADE_FAILURE_THRESHOLD

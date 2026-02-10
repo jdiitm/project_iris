@@ -79,18 +79,34 @@ All gap closures from 2026-02-07 and 2026-02-08 in a single table.
 | GAP-4 | NFR-31 | No span instrumentation | `new_span`/`end_span` on 7 operations | Span metrics via `iris_trace` |
 | GAP-1 | Section 7.2 | Outbox TTL not enforced | `cleanup_expired_outbox/0` in drain timer | `OUTBOX_TTL_MS = 604800000` |
 | GAP-2 | Section 7.2 | No 50% queue depth alert | `iris_outbox_queue_warning` metric | `iris_metrics.erl` |
-| GAP-13 | Amendment 5.3.2 | No key change notification | IK change detection + metric in `iris_keys.erl` | `iris_key_change_notify_tests.erl` |
+| GAP-13 | Amendment 5.3.2 | No key change notification | IK change detection + Mnesia contact tracking + online/offline delivery via opcode 0x1A | `iris_key_change_notify_tests.erl`, `iris_key_change_delivery_tests.erl` |
 | GAP-15 | Section 9.1 | No JWT replay protection | `jti` ETS table with TTL cleanup | `iris_auth.erl` |
 | GAP-3 | NFR-17 | Distributed rate limiting | Already via `pg` gossip | `test_distributed_rate_limit.py` |
 
 ---
 
-## Remaining Gaps
+## Previously Deferred (Now Resolved)
 
 | Item | Status | Notes |
 |------|--------|-------|
-| NFR-15 mTLS (inter-node) | **Deferred** | Requires PKI infrastructure; test exists: `test_mtls_enforcement.py` |
-| Amendment 5.3.2 Key Change Notification | **PARTIAL** | Detection + metric done; peer notification protocol PENDING_DESIGN |
+| NFR-15 mTLS (inter-node) | **Enforced in production** | `check_mtls_enforcement` defaults `enforce_mtls=true` when `env=production`; `iris_cluster_manager` blocks replication without SSL dist |
+| Amendment 5.3.2 Key Change Notification | **IMPLEMENTED** | Detection + contact tracking (Mnesia) + online/offline delivery via opcode 0x1A; tested in `iris_key_change_delivery_tests.erl` |
+
+---
+
+## RFC v4.0 Forensic Audit Fixes (2026-02-09 — 2026-02-10)
+
+| Finding | RFC/NFR | Problem | Fix | Test |
+|---------|---------|---------|-----|------|
+| F1 | Section 7.1.1 | Split-brain blind overwrite | LWW for `group_member`, union merge for `bag` tables in `iris_core:merge_table_batch/3` | `iris_reconcile_conflict_tests.erl` |
+| F2 | NFR-11 | `spawn` breaks FIFO for sequenced messages | Synchronous inline processing in `iris_async_router.erl` | `iris_sequenced_fifo_tests.erl` |
+| F3 | NFR-1 | WAL on tmpfs allows RPO=0 violation | Production crashes if WAL is on tmpfs | `iris_wal_tmpfs_enforcement_tests.erl` |
+| G1 | NFR-15 | mTLS defaults to `false` | `enforce_mtls=true` in production; cluster manager pre-check | `iris_mtls_production_tests.erl`, `iris_cluster_mtls_tests.erl` |
+| A2 | NFR-27 | Group size hardcoded 1000 vs iris_limits 10000 | Use `iris_limits` as single source of truth | `iris_group_size_limits_tests.erl` |
+| GAP-1 | Amendment 5.3.1 | Safety number modulo bias | Uniform byte-pair extraction | `iris_safety_number_bias_tests.erl` |
+| GAP-2 | Amendment 6.3 | No sender key rotation on member removal | Invalidate all sender keys for remaining members | `iris_sender_key_rotation_tests.erl` |
+| GAP-3 | Amendment 5.3.2 | Key contacts in RAM-only ETS | Mnesia-persisted `iris_key_contacts` table | `iris_key_contacts_persist_tests.erl` |
+| AQM | Roadmap Phase 2 | No CoDel/RED drop policy | CoDel algorithm in `iris_mailbox_guard.erl` | `iris_codel_tests.erl` |
 
 ---
 

@@ -6,6 +6,38 @@ All notable changes to Iris Messaging System.
 
 ### Added
 
+#### RFC v4.0 Forensic Audit Fixes (2026-02-09 — 2026-02-10)
+
+**Closed multiple forensic audit findings via TDD. Erlang test modules expanded from 70 to 109.**
+
+- **Security & mTLS**:
+  - mTLS defaults to enforced in production (`enforce_mtls=true` when `env=production`) (G1 FIX)
+  - `iris_cluster_manager` blocks replication without SSL distribution (NFR-15 FIX)
+  - HMAC-JWT default changed to `false` (strict EdDSA mode)
+  - Quorum write fallback removed for key bundles (CP over AP)
+
+- **Cryptographic Fixes (Amendment 1.3)**:
+  - Safety number generation bias eliminated (uniform byte-pair extraction) (GAP-1)
+  - Sender key rotation on member removal (all keys invalidated) (GAP-2)
+  - Key contact tracking persisted to Mnesia (survives restart) (GAP-3)
+  - Key change notification: full online + offline delivery via opcode 0x1A (GAP-13)
+
+- **Data Integrity**:
+  - Split-brain reconciliation: LWW for `group_member`, union merge for `bag` tables (F1)
+  - Sequenced message routing: synchronous inline processing (FIFO guarantee) (F2)
+  - WAL tmpfs enforcement: production crashes if WAL is on RAM-only filesystem (F3)
+
+- **Operational**:
+  - Group size limits use `iris_limits` as single source of truth (A2 FIX)
+  - CoDel Active Queue Management in `iris_mailbox_guard` (burst-tolerant, latency-focused)
+  - Clock skew test fails if `libfaketime` missing in Docker
+
+- **Testing**:
+  - 39 new Erlang EUnit test modules (70 → 109)
+  - Tests cover: CoDel AQM, mTLS enforcement, group size limits, reconciliation conflicts,
+    WAL tmpfs, FIFO sequencing, key change delivery, safety number bias, sender key rotation,
+    key contacts persistence, dedup sync writes, and more
+
 #### RFC v4.0 Compliance Gaps (2026-02-07 — 2026-02-08)
 
 **Closed 19 RFC v4.0 compliance gaps via TDD. Test suite expanded from ~115 to 120+ tests.**
@@ -31,7 +63,7 @@ All notable changes to Iris Messaging System.
   - `msg_in`/`msg_out`/`ack_sent` counters wired to production paths (GAP-5)
   - Span instrumentation on 7 key session operations (GAP-4)
   - 50% outbox queue depth alert metric (GAP-2)
-  - Identity key change detection + metric (GAP-13, notification PENDING_DESIGN)
+  - Identity key change detection + metric + contact notification (GAP-13, IMPLEMENTED)
   - Distributed tracing `traced_rpc/4` for Edge→Core propagation
 
 - **Infrastructure**:

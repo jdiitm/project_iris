@@ -17,6 +17,7 @@
 %% Cluster durability exports
 -export([get_durability_mode/0, get_secondary_node/0]).
 -export([accept_remote_wal/1]).  %% Called via RPC on secondary node
+-export([validate_wal_storage/2]).  %% F3 FIX: Exported for test validation
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
 -define(POOL_SIZE, 8).
@@ -104,8 +105,15 @@ init([ShardId]) ->
     ok = filelib:ensure_dir(WalDir ++ "/"),
     
     %% P1-H6 FIX: Validate WAL directory is on persistent storage
-    validate_wal_storage(WalDir, ShardId),
-    
+    %% F3 FIX: Crash at startup if WAL is on tmpfs in production
+    case validate_wal_storage(WalDir, ShardId) of
+        {error, tmpfs_in_production} ->
+            {stop, {wal_on_tmpfs_in_production, WalDir}};
+        ok ->
+            init_open_wal(ShardId, WalDir)
+    end.
+
+init_open_wal(ShardId, WalDir) ->
     %% Open disk_log for this shard
     LogName = list_to_atom("iris_wal_" ++ integer_to_list(ShardId)),
     LogFile = WalDir ++ "/shard_" ++ integer_to_list(ShardId) ++ ".wal",
@@ -149,13 +157,20 @@ get_wal_directory() ->
     end.
 
 %% P1-H6 FIX: Validate WAL directory is suitable for durability
+%% F3 FIX: In production, tmpfs WAL is a hard error (RPO=0 violation).
 validate_wal_storage(WalDir, ShardId) ->
     %% Check if directory is on tmpfs (RAM-only filesystem)
     %% This is a best-effort check - may not work on all systems
+    Env = application:get_env(iris_core, env, undefined),
     case ShardId of
         1 ->
             %% Only log warning once (from shard 1)
             case is_tmpfs(WalDir) of
+                true when Env =:= production ->
+                    logger:error("FATAL: WAL directory is on tmpfs in production!"),
+                    logger:error("Path: ~s", [WalDir]),
+                    logger:error("RPO=0 requires persistent storage for WAL."),
+                    {error, tmpfs_in_production};
                 true ->
                     logger:warning("======================================================="),
                     logger:warning("WARNING: WAL directory appears to be on tmpfs!"),
@@ -165,11 +180,13 @@ validate_wal_storage(WalDir, ShardId) ->
                     logger:warning("This defeats the purpose of write-ahead logging."),
                     logger:warning(""),
                     logger:warning("Configure iris_core.wal_directory to a persistent path."),
-                    logger:warning("=======================================================");
+                    logger:warning("======================================================="),
+                    ok;
                 false ->
                     ok;
                 unknown ->
-                    logger:info("WAL directory: ~s (could not verify persistence)", [WalDir])
+                    logger:info("WAL directory: ~s (could not verify persistence)", [WalDir]),
+                    ok
             end;
         _ ->
             ok
@@ -381,20 +398,29 @@ do_cluster_wal_write(Log, Entry, Key, Timestamp, Msg, NewSeqNo, State) ->
             }};
         {ok, {error, RemoteReason}} ->
             %% Local succeeded, remote failed - degraded durability
-            %% Log warning but still ACK (graceful degradation)
-            case Secondary of
-                undefined -> ok;  %% Expected in single-node
-                _ -> logger:warning("Remote WAL failed (~p), local-only durability: ~p", 
-                                   [Secondary, RemoteReason])
-            end,
-            NewPending = [{Key, Timestamp, Msg, NewSeqNo} | State#state.pending],
-            {ok, State#state{
-                pending = NewPending,
-                pending_count = State#state.pending_count + 1,
-                seq_no = NewSeqNo,
-                writes_wal = State#state.writes_wal + 1,
-                remote_failures = State#state.remote_failures + 1
-            }};
+            %% F4 AUDIT FIX: Check strict mode. In strict mode, remote failure
+            %% is a hard error (CP > AP for cluster durability promises).
+            case application:get_env(iris_core, cluster_durability_strict, false) of
+                true ->
+                    logger:error("Strict cluster durability: remote WAL failed (~p): ~p",
+                                [Secondary, RemoteReason]),
+                    {error, remote_wal_failed};
+                false ->
+                    %% Existing behavior: graceful degradation (best_effort)
+                    case Secondary of
+                        undefined -> ok;  %% Expected in single-node
+                        _ -> logger:warning("Remote WAL failed (~p), local-only durability: ~p", 
+                                           [Secondary, RemoteReason])
+                    end,
+                    NewPending = [{Key, Timestamp, Msg, NewSeqNo} | State#state.pending],
+                    {ok, State#state{
+                        pending = NewPending,
+                        pending_count = State#state.pending_count + 1,
+                        seq_no = NewSeqNo,
+                        writes_wal = State#state.writes_wal + 1,
+                        remote_failures = State#state.remote_failures + 1
+                    }}
+            end;
         {{error, LocalReason}, _} ->
             %% Local failed - cannot proceed
             logger:error("Local WAL write failed: ~p", [LocalReason]),

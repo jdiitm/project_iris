@@ -12,7 +12,7 @@
 %% 2. Creator becomes first admin with full permissions
 %% 3. Admins can add/remove members and promote/demote admins
 %% 4. Members can only send messages to the group
-%% 5. Maximum 1000 members per group (per RFC)
+%% 5. Maximum members per group enforced via iris_limits (10,000 broadcast / 256 E2EE)
 %% 6. Group metadata stored in Mnesia for durability
 %% =============================================================================
 
@@ -59,10 +59,6 @@
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
 -define(SERVER, ?MODULE).
-%% Use centralized limits from iris_limits module (RFC-001 v3.0 Section 8)
-%% Legacy defines kept for backward compatibility but actual limits come from iris_limits
--define(MAX_GROUP_MEMBERS, 1000).         %% Broadcast groups (see iris_limits:max_broadcast_group_members())
--define(MAX_E2EE_GROUP_MEMBERS, 256).     %% E2EE groups (see iris_limits:max_e2ee_group_members())
 -define(MAX_GROUP_NAME_LEN, 256).
 -define(MAX_GROUPS_PER_USER, 100).
 
@@ -248,16 +244,30 @@ is_admin(GroupId, UserId) ->
 %% =============================================================================
 
 %% @doc Store a sender key for a user in a group.
--spec store_sender_key(binary(), binary(), binary(), binary()) -> ok.
-store_sender_key(GroupId, UserId, KeyId, SenderKey) ->
-    Record = #group_sender_key{
-        key = {GroupId, UserId, KeyId},
-        sender_key = SenderKey,
-        created_at = erlang:system_time(second),
-        chain_index = 0
-    },
-    mnesia:dirty_write(group_sender_key, Record),
-    ok.
+%% GAP-1 FIX: RFC Amendment 6.3 requires Sender Keys be "distributed via 1:1
+%% E2EE pairwise sessions". The server must only store E2EE-encrypted blobs,
+%% never plaintext key material. A raw Sender Key is ~64 bytes (chain_key +
+%% signature_key). An E2EE-encrypted envelope is 128+ bytes (IV + ciphertext +
+%% MAC + header). Keys below 80 bytes are rejected as likely plaintext.
+-define(MIN_ENCRYPTED_SENDER_KEY_SIZE, 80).
+-spec store_sender_key(binary(), binary(), binary(), binary()) -> ok | {error, key_must_be_encrypted}.
+store_sender_key(GroupId, UserId, KeyId, EncryptedKeyBlob) ->
+    case byte_size(EncryptedKeyBlob) < ?MIN_ENCRYPTED_SENDER_KEY_SIZE of
+        true ->
+            logger:error("GAP-1: Rejected likely-plaintext sender key for group=~s user=~s "
+                         "(~p bytes < ~p minimum). Keys MUST be E2EE-encrypted before storage.",
+                         [GroupId, UserId, byte_size(EncryptedKeyBlob), ?MIN_ENCRYPTED_SENDER_KEY_SIZE]),
+            {error, key_must_be_encrypted};
+        false ->
+            Record = #group_sender_key{
+                key = {GroupId, UserId, KeyId},
+                sender_key = EncryptedKeyBlob,
+                created_at = erlang:system_time(second),
+                chain_index = 0
+            },
+            mnesia:dirty_write(group_sender_key, Record),
+            ok
+    end.
 
 %% @doc Get a specific sender key.
 -spec get_sender_key(binary(), binary(), binary()) -> {ok, binary()} | {error, not_found}.
@@ -278,11 +288,13 @@ get_all_sender_keys(GroupId, UserId) ->
     mnesia:dirty_select(group_sender_key, MatchSpec).
 
 %% @doc Rotate sender key for a user. Generates a new KeyId.
--spec rotate_sender_key(binary(), binary(), binary()) -> {ok, binary()}.
+-spec rotate_sender_key(binary(), binary(), binary()) -> {ok, binary()} | {error, key_must_be_encrypted}.
 rotate_sender_key(GroupId, UserId, NewSenderKey) ->
     KeyId = generate_key_id(),
-    store_sender_key(GroupId, UserId, KeyId, NewSenderKey),
-    {ok, KeyId}.
+    case store_sender_key(GroupId, UserId, KeyId, NewSenderKey) of
+        ok -> {ok, KeyId};
+        {error, _} = Err -> Err
+    end.
 
 %% =============================================================================
 %% AUDIT FIX: Member Reconnect and Key Sync
@@ -574,9 +586,10 @@ do_add_member(GroupId, UserId, AddedBy) ->
                             %% Determine group type and apply appropriate limit
                             %% Check if group has E2EE sender keys to determine type
                             IsE2EE = has_sender_keys(GroupId),
+                            %% A2 FIX: Use iris_limits as single source of truth (NFR-27)
                             Limit = case IsE2EE of
-                                true -> ?MAX_E2EE_GROUP_MEMBERS;
-                                false -> ?MAX_GROUP_MEMBERS
+                                true -> iris_limits:max_e2ee_group_members();
+                                false -> iris_limits:max_broadcast_group_members()
                             end,
                             case Count >= Limit of
                                 true -> 
@@ -618,7 +631,7 @@ do_add_member(GroupId, UserId, AddedBy) ->
 
 %% @doc Return the maximum number of members per E2EE group (RFC FR-19).
 -spec max_members() -> pos_integer().
-max_members() -> ?MAX_E2EE_GROUP_MEMBERS.
+max_members() -> iris_limits:max_e2ee_group_members().
 
 %% @doc Check if a group has sender keys (indicating E2EE usage)
 -spec has_sender_keys(binary()) -> boolean().
@@ -661,14 +674,20 @@ do_remove_member_impl(GroupId, UserId) ->
         %% Remove member
         mnesia:delete(group_member, {GroupId, UserId}, write),
         
-        %% Remove sender keys
-        KeyMatchSpec = [{
-            #group_sender_key{key = {GroupId, UserId, '_'}, _ = '_'},
+        %% GAP-2 AUDIT FIX (RFC Amendment 6.3 item 4):
+        %% "On member removal: All remaining members generate new Sender Keys"
+        %%
+        %% Delete ALL sender keys for the entire group, not just the removed
+        %% member's keys. This invalidates the removed member's knowledge of
+        %% existing Sender Keys, preventing them from decrypting future messages.
+        %% Remaining members will generate and distribute new keys on reconnect.
+        AllKeyMatchSpec = [{
+            #group_sender_key{key = {GroupId, '_', '_'}, _ = '_'},
             [],
             ['$_']
         }],
-        Keys = mnesia:select(group_sender_key, KeyMatchSpec, write),
-        [mnesia:delete_object(group_sender_key, K, write) || K <- Keys],
+        AllKeys = mnesia:select(group_sender_key, AllKeyMatchSpec, write),
+        [mnesia:delete_object(group_sender_key, K, write) || K <- AllKeys],
         
         %% Update member count
         [Group] = mnesia:read(group, GroupId, write),
@@ -680,7 +699,12 @@ do_remove_member_impl(GroupId, UserId) ->
     end,
     
     case mnesia:transaction(F) of
-        {atomic, ok} -> ok;
+        {atomic, ok} ->
+            %% GAP-2 AUDIT FIX: Log for observability. Remaining members will
+            %% receive new keys via handle_member_reconnect/2 protocol.
+            logger:info("GAP-2: All sender keys invalidated for group ~s "
+                       "(member ~s removed, rotation required)", [GroupId, UserId]),
+            ok;
         {aborted, Reason} -> {error, Reason}
     end.
 

@@ -11,18 +11,24 @@
 %%   - iris_proto:decode key_change_alert   — decode notification opcode 0x1A
 %% =============================================================================
 
--define(CONTACTS_TABLE, iris_key_contacts).
-
 setup() ->
-    %% Create the ETS table that the implementation will use
-    case ets:info(?CONTACTS_TABLE) of
-        undefined -> ets:new(?CONTACTS_TABLE, [bag, named_table, public]);
-        _ -> ets:delete_all_objects(?CONTACTS_TABLE)
-    end,
+    %% GAP-3 FIX: key contacts now use Mnesia, not ETS.
+    %% Start Mnesia and create the key_contact table for unit tests.
+    catch mnesia:stop(),
+    mnesia:delete_schema([node()]),
+    mnesia:create_schema([node()]),
+    mnesia:start(),
+    catch mnesia:create_table(key_contact, [
+        {attributes, [owner, fetcher]},
+        {ram_copies, [node()]},
+        {type, bag}
+    ]),
+    mnesia:wait_for_tables([key_contact], 5000),
     ok.
 
 cleanup(_) ->
-    catch ets:delete_all_objects(?CONTACTS_TABLE),
+    catch mnesia:clear_table(key_contact),
+    catch mnesia:stop(),
     ok.
 
 %% Test: Recording a contact and retrieving it
@@ -88,7 +94,7 @@ session_setup() ->
     %% Start iris_keys gen_server (creates tables + ETS)
     {ok, KeysPid} = iris_keys:start_link(),
     %% Ensure contacts table is clean
-    catch ets:delete_all_objects(iris_key_contacts),
+    catch mnesia:clear_table(key_contact),
     %% Ensure rate limiter is running (needed by iris_session)
     RlPid = case whereis(iris_rate_limiter) of
         undefined ->
@@ -105,7 +111,7 @@ session_setup() ->
 
 session_cleanup({KeysPid, _RlPid}) ->
     catch gen_server:stop(KeysPid, normal, 1000),
-    catch ets:delete_all_objects(iris_key_contacts),
+    catch mnesia:clear_table(key_contact),
     application:unset_env(iris_edge, auth_enabled),
     application:stop(mnesia),
     ok.
