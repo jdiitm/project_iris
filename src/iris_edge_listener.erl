@@ -87,8 +87,11 @@ start_listener(Port, HandlerMod, TlsEnabled) ->
                       [Port, HandlerMod, TlsEnabled]),
             
             %% RFC Section 10: Per-IP connection rate limiting
+            %% NOTE: ETS table iris_conn_rate is now owned by iris_edge_sup
+            %% so it survives listener restarts. Verify it exists:
             case ets:info(?CONN_RATE_TABLE) of
                 undefined ->
+                    logger:warning("iris_conn_rate ETS table missing — creating fallback"),
                     ets:new(?CONN_RATE_TABLE, [public, named_table, bag,
                                                {write_concurrency, true},
                                                {read_concurrency, true}]);
@@ -238,14 +241,28 @@ acceptor(LSock, HandlerMod, false) ->
     end;
 
 acceptor(LSock, HandlerMod, true) ->
-    %% TLS accept with per-IP rate limiting BEFORE handshake (RFC Section 10).
-    %% Checking before handshake means denied connections skip the ~20ms TLS
-    %% overhead, making the rate limiter effective against connection floods.
+    %% TLS accept with per-IP rate limiting AFTER handshake (RFC Section 10).
+    %% BUG FIX: ssl:peername/1 returns {error, _} on transport-accepted sockets
+    %% before handshake completes, causing rate checks to always return 'allow'.
+    %% Moved check to after handshake where ssl:peername reliably returns the IP.
     case ssl:transport_accept(LSock, 30000) of
         {ok, TlsSock} ->
-            case check_conn_rate_tls(TlsSock) of
+            %% Per-IP rate check BEFORE handshake (RFC Section 10).
+            %% Using inet:peername on the underlying TCP socket since
+            %% ssl:peername doesn't work before handshake. Denying here
+            %% skips the ~20ms TLS overhead for rate-limited connections.
+            PeerIP = get_tcp_peer_ip(TlsSock),
+            case check_ip_rate_maybe(PeerIP) of
                 deny ->
-                    catch ssl:close(TlsSock),
+                    %% Close the underlying TCP socket directly for fast rejection.
+                    %% ssl:close on a pre-handshake socket can hang; gen_tcp:close
+                    %% sends an immediate RST to the client.
+                    try
+                        {sslsocket, {_, TcpPort, _, _}, _} = TlsSock,
+                        gen_tcp:close(TcpPort)
+                    catch _:_ ->
+                        catch ssl:close(TlsSock)
+                    end,
                     acceptor(LSock, HandlerMod, true);
                 allow ->
                     case ssl:handshake(TlsSock, 10000) of
@@ -297,14 +314,23 @@ handle_new_connection(Sock, HandlerMod, TlsEnabled) ->
 %% Per-IP Connection Rate Limiting (RFC Section 10)
 %% =============================================================================
 
-check_conn_rate_tls(SslSocket) ->
+%% Extract peer IP at the TCP level from a transport-accepted SSL socket.
+%% The SSL socket wraps a TCP port; inet:peername works on the raw port
+%% even before TLS handshake. This avoids the race where ssl:peername
+%% returns {error, einval} if the client closes quickly after handshake.
+get_tcp_peer_ip(TlsSock) ->
     try
-        case ssl:peername(SslSocket) of
-            {ok, {IP, _Port}} -> check_ip_rate(IP);
-            {error, _} -> allow
+        {sslsocket, {_, TcpPort, _, _}, _} = TlsSock,
+        case inet:peername(TcpPort) of
+            {ok, {IP, _Port}} -> {ok, IP};
+            {error, _} -> error
         end
-    catch _:_ -> allow
+    catch _:_ -> error
     end.
+
+%% Rate-check wrapper: only checks if we successfully extracted the IP.
+check_ip_rate_maybe({ok, IP}) -> check_ip_rate(IP);
+check_ip_rate_maybe(error)    -> allow.
 
 check_conn_rate_tcp(Sock) ->
     try

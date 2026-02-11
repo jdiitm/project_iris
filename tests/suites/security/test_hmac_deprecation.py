@@ -77,6 +77,7 @@ def test_messaging_with_eddsa_only_mode():
         "mnesia:wait_for_tables([revoked_tokens], 5000), "
         "application:set_env(iris_edge, jwt_secret, <<\"test_secret_hmac_deprecation_key!\">>), "
         "application:set_env(iris_edge, auth_enabled, true), "
+        "application:set_env(iris_edge, jwt_eddsa_private_key, crypto:strong_rand_bytes(32)), "
         "{ok, _} = iris_auth:start_link(), "
         "application:set_env(iris_edge, allow_hmac_jwt, false), "
         "{ok, T} = iris_auth:create_token(<<\"test\">>), "

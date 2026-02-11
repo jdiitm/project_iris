@@ -81,10 +81,10 @@ def test_empty_version_list():
         except socket.timeout:
             pass
 
-        # Send a CBOR_MSG (0x10) with empty version list
-        # CBOR map: {"version": [], "capabilities": []}
-        cbor_payload = b"\xa2\x67version\x80\x6ccapabilities\x80"
-        packet = bytes([0x10]) + struct.pack(">H", len(cbor_payload)) + cbor_payload
+        # Send VERSION_NEGOTIATE (0x0C) with empty version list
+        # CBOR map: {"versions": [], "capabilities": []}
+        cbor_payload = b"\xa2\x68versions\x80\x6ccapabilities\x80"
+        packet = bytes([0x0C]) + struct.pack(">I", len(cbor_payload)) + cbor_payload
         sock.sendall(packet)
         time.sleep(0.3)
 
@@ -121,9 +121,9 @@ def test_unsupported_version():
         except socket.timeout:
             pass
 
-        # CBOR: {"version": [99], "capabilities": []}
-        cbor_payload = b"\xa2\x67version\x81\x18\x63\x6ccapabilities\x80"
-        packet = bytes([0x10]) + struct.pack(">H", len(cbor_payload)) + cbor_payload
+        # VERSION_NEGOTIATE (0x0C) CBOR: {"versions": [99], "capabilities": []}
+        cbor_payload = b"\xa2\x68versions\x81\x18\x63\x6ccapabilities\x80"
+        packet = bytes([0x0C]) + struct.pack(">I", len(cbor_payload)) + cbor_payload
         sock.sendall(packet)
         time.sleep(0.3)
 
@@ -162,9 +162,9 @@ def test_unknown_capability():
         except socket.timeout:
             pass
 
-        # CBOR: {"version": [1], "capabilities": ["quantum_e2ee"]}
-        cbor_payload = b"\xa2\x67version\x81\x01\x6ccapabilities\x81\x6cquantum_e2ee"
-        packet = bytes([0x10]) + struct.pack(">H", len(cbor_payload)) + cbor_payload
+        # VERSION_NEGOTIATE (0x0C) CBOR: {"versions": [1], "capabilities": ["quantum_e2ee"]}
+        cbor_payload = b"\xa2\x68versions\x81\x01\x6ccapabilities\x81\x6cquantum_e2ee"
+        packet = bytes([0x0C]) + struct.pack(">I", len(cbor_payload)) + cbor_payload
         sock.sendall(packet)
         time.sleep(0.3)
 

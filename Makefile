@@ -98,19 +98,19 @@ start_core: all
 	$(ERL) -noshell -noinput $(ERL_FLAGS) -pa ebin -sname iris_core$(NODE_SUFFIX) -setcookie iris_secret -config $(CONFIG) -eval "application:ensure_all_started(iris_core)" >core.log 2>&1 &
 
 start_edge1: all
-	$(ERL) -noshell -noinput $(ERL_FLAGS) -pa ebin -sname iris_edge1$(NODE_SUFFIX) -setcookie iris_secret -config $(CONFIG) -iris_edge port 8085 -eval "application:ensure_all_started(iris_edge)" >edge1.log 2>&1 &
+	$(ERL) -noshell -noinput $(ERL_FLAGS) -pa ebin -sname iris_edge1$(NODE_SUFFIX) -setcookie iris_secret -config $(CONFIG) -iris_edge port $(or $(EDGE1_PORT),8085) -eval "application:ensure_all_started(iris_edge)" >edge1.log 2>&1 &
 
 start_edge2: all
-	$(ERL) -noshell -noinput $(ERL_FLAGS) -pa ebin -sname iris_edge2$(NODE_SUFFIX) -setcookie iris_secret -config $(CONFIG) -iris_edge port 8086 -eval "application:ensure_all_started(iris_edge)" >edge2.log 2>&1 &
+	$(ERL) -noshell -noinput $(ERL_FLAGS) -pa ebin -sname iris_edge2$(NODE_SUFFIX) -setcookie iris_secret -config $(CONFIG) -iris_edge port $(or $(EDGE2_PORT),8086) -eval "application:ensure_all_started(iris_edge)" >edge2.log 2>&1 &
 
 start_edge3: all
-	$(ERL) -noshell -noinput $(ERL_FLAGS) -pa ebin -sname iris_edge3$(NODE_SUFFIX) -setcookie iris_secret -config $(CONFIG) -iris_edge port 8087 -eval "application:ensure_all_started(iris_edge)" >edge3.log 2>&1 &
+	$(ERL) -noshell -noinput $(ERL_FLAGS) -pa ebin -sname iris_edge3$(NODE_SUFFIX) -setcookie iris_secret -config $(CONFIG) -iris_edge port $(or $(EDGE3_PORT),8087) -eval "application:ensure_all_started(iris_edge)" >edge3.log 2>&1 &
 
 start_edge4: all
-	$(ERL) -noshell -noinput $(ERL_FLAGS) -pa ebin -sname iris_edge4$(NODE_SUFFIX) -setcookie iris_secret -config $(CONFIG) -iris_edge port 8088 -eval "application:ensure_all_started(iris_edge)" >edge4.log 2>&1 &
+	$(ERL) -noshell -noinput $(ERL_FLAGS) -pa ebin -sname iris_edge4$(NODE_SUFFIX) -setcookie iris_secret -config $(CONFIG) -iris_edge port $(or $(EDGE4_PORT),8088) -eval "application:ensure_all_started(iris_edge)" >edge4.log 2>&1 &
 
 start_edge5: all
-	$(ERL) -noshell -noinput $(ERL_FLAGS) -pa ebin -sname iris_edge5$(NODE_SUFFIX) -setcookie iris_secret -config $(CONFIG) -iris_edge port 8089 -eval "application:ensure_all_started(iris_edge)" >edge5.log 2>&1 &
+	$(ERL) -noshell -noinput $(ERL_FLAGS) -pa ebin -sname iris_edge5$(NODE_SUFFIX) -setcookie iris_secret -config $(CONFIG) -iris_edge port $(or $(EDGE5_PORT),8089) -eval "application:ensure_all_started(iris_edge)" >edge5.log 2>&1 &
 
 # ... (Previous targets)
 

@@ -77,12 +77,17 @@ def build_login_v1(user_id):
     return b'\x01' + user_id.encode('utf-8')
 
 
-def build_send_v1(target, message):
-    """Build V1 SEND packet: 0x02 + target_len(2) + target + msg_len(2) + msg"""
+def build_send_v1(target, message, seq_no=1):
+    """Build sequenced SEND packet: 0x07 + target_len(2) + target + seq(8) + msg_len(2) + msg
+    
+    RFC-001-AMENDMENT-001 v1.0: Opcode 0x02 (plaintext) is DEPRECATED and REJECTED.
+    Must use opcode 0x07 (sequenced) with a sequence number.
+    """
     target_bytes = target.encode('utf-8')
     msg_bytes = message.encode('utf-8')
-    return (b'\x02' + 
+    return (b'\x07' + 
             struct.pack('>H', len(target_bytes)) + target_bytes +
+            struct.pack('>Q', seq_no) +
             struct.pack('>H', len(msg_bytes)) + msg_bytes)
 
 
@@ -107,16 +112,19 @@ def build_login_v2(user_id, client_version="2.0.0", platform="test"):
     return base + extra
 
 
-def build_send_v2(target, message, priority=0, ttl=86400):
+def build_send_v2(target, message, priority=0, ttl=86400, seq_no=1):
     """
-    Build hypothetical V2 SEND with priority and TTL.
+    Build hypothetical V2 SEND with priority and TTL extensions.
     Servers should process base message and ignore unknown extensions.
+    
+    Uses opcode 0x07 (sequenced) as base — opcode 0x02 is REJECTED in v1.0.
     """
     target_bytes = target.encode('utf-8')
     msg_bytes = message.encode('utf-8')
-    # Base V1 format
-    base = (b'\x02' + 
+    # Base V1 format (using current opcode 0x07)
+    base = (b'\x07' + 
             struct.pack('>H', len(target_bytes)) + target_bytes +
+            struct.pack('>Q', seq_no) +
             struct.pack('>H', len(msg_bytes)) + msg_bytes)
     # V2 extensions (server may ignore)
     extra = struct.pack('>B', priority) + struct.pack('>I', ttl)
@@ -279,11 +287,11 @@ def test_truncated_packet():
         time.sleep(0.5)
         s1.close()
         
-        # Test 2: Truncated send (partial header)
+        # Test 2: Truncated send (partial header using current opcode 0x07)
         s2 = get_connection()
         send_raw(s2, build_login_v1("trunc_user"))
         recv_response(s2, timeout=1)
-        send_raw(s2, b'\x02\x00')  # Send opcode + partial length
+        send_raw(s2, b'\x07\x00')  # Send opcode + partial length
         time.sleep(0.5)
         s2.close()
         

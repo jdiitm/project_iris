@@ -67,6 +67,7 @@ def test_eddsa_token_creation_and_validation():
 
         application:set_env(iris_edge, jwt_secret, <<"eddsa_test_secret_32bytes_long!!">>),
         application:set_env(iris_edge, auth_enabled, true),
+        application:set_env(iris_edge, jwt_eddsa_private_key, crypto:strong_rand_bytes(32)),
         {ok, _} = iris_auth:start_link(),
 
         %% Create EdDSA token
@@ -120,6 +121,7 @@ def test_tampered_eddsa_token_rejected():
 
         application:set_env(iris_edge, jwt_secret, <<"tamper_test_secret_32bytes_long!">>),
         application:set_env(iris_edge, auth_enabled, true),
+        application:set_env(iris_edge, jwt_eddsa_private_key, crypto:strong_rand_bytes(32)),
         {ok, _} = iris_auth:start_link(),
 
         {ok, Token} = iris_auth:create_eddsa_token(<<"bob">>),
@@ -174,6 +176,7 @@ def test_hmac_backward_compatibility():
         application:set_env(iris_edge, jwt_secret, <<"compat_test_secret_32bytes_long!">>),
         application:set_env(iris_edge, auth_enabled, true),
         application:set_env(iris_edge, allow_hmac_jwt, true),
+        application:set_env(iris_edge, jwt_eddsa_private_key, crypto:strong_rand_bytes(32)),
         {ok, _} = iris_auth:start_link(),
 
         %% Create HMAC token (traditional, requires explicit allow_hmac_jwt)
@@ -225,6 +228,7 @@ def test_eddsa_public_key_available():
 
         application:set_env(iris_edge, jwt_secret, <<"pubkey_test_secret_32bytes_long!">>),
         application:set_env(iris_edge, auth_enabled, true),
+        application:set_env(iris_edge, jwt_eddsa_private_key, crypto:strong_rand_bytes(32)),
         {ok, _} = iris_auth:start_link(),
 
         case iris_auth:get_eddsa_public_key() of

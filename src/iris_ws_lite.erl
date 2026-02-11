@@ -43,7 +43,14 @@ wait_for_socket(enter, _OldState, _Data) ->
     keep_state_and_data;
 wait_for_socket(cast, {socket_ready, Socket}, Data) ->
     sock_setopts(Socket, [{active, once}]),
-    {next_state, handshake, Data#data{socket = Socket}}.
+    {next_state, handshake, Data#data{socket = Socket}};
+%% Socket closed/error before handshake even began
+wait_for_socket(info, {Closed, _}, Data)
+  when Closed =:= tcp_closed; Closed =:= ssl_closed ->
+    {stop, normal, Data};
+wait_for_socket(info, {Error, _, _}, Data)
+  when Error =:= tcp_error; Error =:= ssl_error ->
+    {stop, normal, Data}.
 
 %% STATE: handshake (HTTP Upgrade)
 handshake(enter, _OldState, _Data) ->
@@ -70,7 +77,15 @@ handshake(info, {Proto, Socket, Bin}, Data = #data{buffer = Buff})
         error ->
             io:format("WS: Handshake Error~n"),
             {stop, normal, Data}
-    end.
+    end;
+
+%% Handle socket close/error during handshake (prevents function_clause crash)
+handshake(info, {Closed, _}, Data)
+  when Closed =:= tcp_closed; Closed =:= ssl_closed ->
+    {stop, normal, Data};
+handshake(info, {Error, _, _}, Data)
+  when Error =:= tcp_error; Error =:= ssl_error ->
+    {stop, normal, Data}.
 
 %% STATE: connected (WebSocket Frames)
 connected(enter, _OldState, _Data) ->

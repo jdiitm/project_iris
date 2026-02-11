@@ -88,7 +88,7 @@ class ClusterManager:
         except Exception:
             return "localhost"
     
-    def _run_make(self, target: str, timeout: int = 60) -> bool:
+    def _run_make(self, target: str, timeout: int = 60, edge_port: int = 0, edge_id: int = 0) -> bool:
         """Run a make target with NODE_SUFFIX and CONFIG if set."""
         try:
             suffix = os.environ.get("IRIS_NODE_SUFFIX", "")
@@ -99,6 +99,11 @@ class ClusterManager:
             # INF-004: Pass TLS config if specified
             if self.config_path:
                 cmd.append(f"CONFIG={self.config_path}")
+            
+            # Pass dynamic port override so the Makefile uses the
+            # dynamically allocated port instead of the hardcoded default.
+            if edge_port > 0 and edge_id > 0:
+                cmd.append(f"EDGE{edge_id}_PORT={edge_port}")
             
             result = subprocess.run(
                 cmd,
@@ -337,7 +342,8 @@ class ClusterManager:
             print(f"[Cluster] Starting edge node {edge_id} on port {port} (attempt {attempt}/{self.max_retries})...")
             
             make_target = f"start_edge{edge_id}"
-            success = self._run_make(make_target, timeout=self.startup_timeout)
+            success = self._run_make(make_target, timeout=self.startup_timeout,
+                                     edge_port=port, edge_id=edge_id)
             
             if wait and success:
                 if self.wait_for_port(port, timeout=self.startup_timeout):
