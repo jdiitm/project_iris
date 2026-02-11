@@ -37,15 +37,19 @@ $(NIF_SO): $(NIF_SRC)
 		|| echo "NIF: zstd skipped (libzstd-dev not installed — zstd compression unavailable)"
 
 ebin/%.app: src/%.app.src
+	@mkdir -p ebin
 	cp $< $@
 
 ebin/%.appup: src/%.appup.src
+	@mkdir -p ebin
 	cp $< $@
 
 ebin/%.beam: src/%.erl
+	@mkdir -p ebin
 	$(ERLC) -o ebin $<
 
 ebin/%.beam: test_utils/%.erl
+	@mkdir -p ebin
 	$(ERLC) -o ebin $<
 
 check_deps:
@@ -53,13 +57,22 @@ check_deps:
 
 # Run unit tests
 test: $(BEAM_FILES)
-	@echo "Running EUnit tests..."
+	@echo "Running EUnit tests (standalone subset)..."
 	@$(ERL) -pa ebin -noshell -eval "case eunit:test([iris_session_tests, iris_proto_tests, iris_shard_tests, iris_ingress_guard_tests], []) of ok -> init:stop(0); error -> init:stop(1) end."
 
 # Run tests with verbose output
 test-verbose: $(BEAM_FILES)
 	@echo "Running EUnit tests (verbose)..."
 	@$(ERL) -pa ebin -noshell -eval "case eunit:test([iris_session_tests, iris_proto_tests, iris_shard_tests, iris_ingress_guard_tests], [verbose]) of ok -> init:stop(0); error -> init:stop(1) end."
+
+# Run ALL 101 EUnit test modules (requires application infrastructure)
+test-eunit-all: $(BEAM_FILES)
+	@echo "Running all EUnit tests (101 modules, needs app infrastructure)..."
+	@$(ERL) -pa ebin -noshell -eval " \
+		Beams = filelib:wildcard(\"ebin/*_tests.beam\"), \
+		Mods = [list_to_atom(filename:basename(B, \".beam\")) || B <- Beams], \
+		io:format(\"Discovered ~p test modules~n\", [length(Mods)]), \
+		case eunit:test(Mods, []) of ok -> init:stop(0); error -> init:stop(1) end."
 
 # Run all tests via unified test runner
 test-all: $(BEAM_FILES)
@@ -91,26 +104,29 @@ ERL_FLAGS := $(shell ./scripts/auto_tune.sh)
 # Config file (without .config extension)
 CONFIG ?= config/test
 
+# Erlang distribution cookie (override for production: make start COOKIE=my_secret)
+COOKIE ?= iris_secret
+
 # Start both core and edge nodes
 start: start_core start_edge1
 
 start_core: all
-	$(ERL) -noshell -noinput $(ERL_FLAGS) -pa ebin -sname iris_core$(NODE_SUFFIX) -setcookie iris_secret -config $(CONFIG) -eval "application:ensure_all_started(iris_core)" >core.log 2>&1 &
+	$(ERL) -noshell -noinput $(ERL_FLAGS) -pa ebin -sname iris_core$(NODE_SUFFIX) -setcookie $(COOKIE) -config $(CONFIG) -eval "application:ensure_all_started(iris_core)" >core.log 2>&1 &
 
 start_edge1: all
-	$(ERL) -noshell -noinput $(ERL_FLAGS) -pa ebin -sname iris_edge1$(NODE_SUFFIX) -setcookie iris_secret -config $(CONFIG) -iris_edge port $(or $(EDGE1_PORT),8085) -eval "application:ensure_all_started(iris_edge)" >edge1.log 2>&1 &
+	$(ERL) -noshell -noinput $(ERL_FLAGS) -pa ebin -sname iris_edge1$(NODE_SUFFIX) -setcookie $(COOKIE) -config $(CONFIG) -iris_edge port $(or $(EDGE1_PORT),8085) -eval "application:ensure_all_started(iris_edge)" >edge1.log 2>&1 &
 
 start_edge2: all
-	$(ERL) -noshell -noinput $(ERL_FLAGS) -pa ebin -sname iris_edge2$(NODE_SUFFIX) -setcookie iris_secret -config $(CONFIG) -iris_edge port $(or $(EDGE2_PORT),8086) -eval "application:ensure_all_started(iris_edge)" >edge2.log 2>&1 &
+	$(ERL) -noshell -noinput $(ERL_FLAGS) -pa ebin -sname iris_edge2$(NODE_SUFFIX) -setcookie $(COOKIE) -config $(CONFIG) -iris_edge port $(or $(EDGE2_PORT),8086) -eval "application:ensure_all_started(iris_edge)" >edge2.log 2>&1 &
 
 start_edge3: all
-	$(ERL) -noshell -noinput $(ERL_FLAGS) -pa ebin -sname iris_edge3$(NODE_SUFFIX) -setcookie iris_secret -config $(CONFIG) -iris_edge port $(or $(EDGE3_PORT),8087) -eval "application:ensure_all_started(iris_edge)" >edge3.log 2>&1 &
+	$(ERL) -noshell -noinput $(ERL_FLAGS) -pa ebin -sname iris_edge3$(NODE_SUFFIX) -setcookie $(COOKIE) -config $(CONFIG) -iris_edge port $(or $(EDGE3_PORT),8087) -eval "application:ensure_all_started(iris_edge)" >edge3.log 2>&1 &
 
 start_edge4: all
-	$(ERL) -noshell -noinput $(ERL_FLAGS) -pa ebin -sname iris_edge4$(NODE_SUFFIX) -setcookie iris_secret -config $(CONFIG) -iris_edge port $(or $(EDGE4_PORT),8088) -eval "application:ensure_all_started(iris_edge)" >edge4.log 2>&1 &
+	$(ERL) -noshell -noinput $(ERL_FLAGS) -pa ebin -sname iris_edge4$(NODE_SUFFIX) -setcookie $(COOKIE) -config $(CONFIG) -iris_edge port $(or $(EDGE4_PORT),8088) -eval "application:ensure_all_started(iris_edge)" >edge4.log 2>&1 &
 
 start_edge5: all
-	$(ERL) -noshell -noinput $(ERL_FLAGS) -pa ebin -sname iris_edge5$(NODE_SUFFIX) -setcookie iris_secret -config $(CONFIG) -iris_edge port $(or $(EDGE5_PORT),8089) -eval "application:ensure_all_started(iris_edge)" >edge5.log 2>&1 &
+	$(ERL) -noshell -noinput $(ERL_FLAGS) -pa ebin -sname iris_edge5$(NODE_SUFFIX) -setcookie $(COOKIE) -config $(CONFIG) -iris_edge port $(or $(EDGE5_PORT),8089) -eval "application:ensure_all_started(iris_edge)" >edge5.log 2>&1 &
 
 # ... (Previous targets)
 
@@ -176,116 +192,3 @@ certs:
 certs-clean:
 	@echo "Removing certificates..."
 	@rm -f certs/*.pem certs/*.key certs/*.srl 2>/dev/null || true
-# =============================================================================
-# Comprehensive Test Runner
-# =============================================================================
-
-# Run all 88 tests with Docker cluster
-test-all-docker:
-	@echo "Running comprehensive test suite (88 tests)..."
-	@./scripts/run_all_tests.sh
-
-# Quick test run (skip slow tests)
-test-quick:
-	@echo "Running quick test suite..."
-	@./scripts/run_all_tests.sh --quick
-
-# Verify test setup
-test-verify:
-	@echo "Verifying test infrastructure..."
-	@docker ps | grep -q "edge-east-1" || (echo "Docker cluster not running. Run: make cluster-up" && exit 1)
-	@python3 -c "import socket; s=socket.socket(); s.settimeout(2); s.connect(('localhost', 8085)); s.close()" || (echo "Cannot connect to edge node" && exit 1)
-	@[ -f certs/ca.pem ] || (echo "Certificates missing. Run: make certs" && exit 1)
-	@echo "✓ All prerequisites met"
-
-# =============================================================================
-# Deterministic Docker Test Environment
-# =============================================================================
-
-# Run all tests in Docker (fully deterministic)
-test-docker:
-	@echo "Running tests in Docker (seed=$(TEST_SEED:-42))..."
-	docker build -t iris-test -f docker/test/Dockerfile .
-	docker run --rm \
-		-e TEST_SEED=$${TEST_SEED:-42} \
-		-e CI=true \
-		iris-test
-
-# Run tests with custom seed for reproduction
-test-docker-seed:
-	@echo "Running tests with seed=$(SEED)..."
-	docker run --rm \
-		-e TEST_SEED=$(SEED) \
-		-e CI=true \
-		iris-test
-
-# Run specific suite in Docker
-test-docker-suite:
-	@echo "Running suite $(SUITE) in Docker..."
-	docker run --rm \
-		-e TEST_SEED=$${TEST_SEED:-42} \
-		-e CI=true \
-		iris-test \
-		./tests/run_all_tests.sh --docker-only
-
-# Run full cluster tests in Docker
-test-docker-cluster:
-	@echo "Running full cluster tests..."
-	docker-compose -f docker/test/docker-compose.test.yml up --build --abort-on-container-exit
-	docker-compose -f docker/test/docker-compose.test.yml down -v
-
-# Run cross-region latency test (requires Docker global cluster)
-test-cross-region: cluster-up
-	@echo "Running cross-region latency test..."
-	@echo "Waiting for cluster to stabilize (30s)..."
-	@sleep 30
-	@python3 tests/suites/chaos_dist/test_cross_region_latency.py
-	@echo "Cross-region test complete"
-
-# =============================================================================
-# Cluster-Dependent Tests (chaos_dist)
-# =============================================================================
-
-# Run all cluster-dependent tests (cross-region, multi-master durability)
-# This target manages the full cluster lifecycle
-test-cluster-dist: all
-	@echo "=============================================="
-	@echo "Running Cluster-Dependent Tests"
-	@echo "=============================================="
-	@echo ""
-	@echo "Step 1: Starting Docker global cluster..."
-	@docker/global-cluster/cluster.sh up
-	@echo ""
-	@echo "Step 2: Verifying cluster readiness..."
-	@python3 scripts/verify_cluster_ready.py --quick || (echo "Cluster not ready!" && make cluster-down && exit 1)
-	@echo ""
-	@echo "Step 3: Running cross-region latency test..."
-	@python3 tests/suites/chaos_dist/test_cross_region_latency.py || true
-	@echo ""
-	@echo "Step 4: Running multi-master durability test..."
-	@python3 tests/suites/chaos_dist/test_multimaster_durability.py || true
-	@echo ""
-	@echo "Step 5: Running ack durability test..."
-	@python3 tests/suites/chaos_dist/test_ack_durability.py || true
-	@echo ""
-	@echo "Step 6: Stopping cluster..."
-	@make cluster-down
-	@echo ""
-	@echo "=============================================="
-	@echo "Cluster-Dependent Tests Complete"
-	@echo "=============================================="
-
-# Verify cluster is ready for tests
-cluster-verify:
-	@python3 scripts/verify_cluster_ready.py
-
-# Quick cluster verification (skip cross-region delivery test)
-cluster-verify-quick:
-	@python3 scripts/verify_cluster_ready.py --quick
-
-# Clean Docker test artifacts
-test-docker-clean:
-	@echo "Cleaning Docker test artifacts..."
-	-docker rmi iris-test 2>/dev/null
-	-docker-compose -f docker/test/docker-compose.test.yml down -v 2>/dev/null
-	@echo "Docker test artifacts cleaned"

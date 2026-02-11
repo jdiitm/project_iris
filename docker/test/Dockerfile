@@ -9,7 +9,7 @@
 # Seed:    docker run --rm -e TEST_SEED=12345 iris-test
 # =============================================================================
 
-FROM erlang:25-alpine
+FROM erlang:26-alpine
 
 # Install Python, dependencies, and clock manipulation tools
 # libfaketime is REQUIRED for NFR-16 (Clock Skew Tolerance) testing

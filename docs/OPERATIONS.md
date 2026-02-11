@@ -1,6 +1,6 @@
 # Operations Guide
 
-**Last Updated**: 2026-02-10 | **TLS Enforced**
+**Last Updated**: 2026-02-11 | **TLS Enforced**
 
 ## Quick Reference
 
@@ -72,8 +72,8 @@ mnesia:table_info(offline_msg, size).
 %% Check specific user
 mnesia:dirty_read(offline_msg, <<"user_id">>).
 
-%% Force redeliver
-iris_offline_storage:redeliver(<<"user_id">>).
+%% Retrieve pending messages
+iris_offline_storage:retrieve(<<"user_id">>, 100).
 ```
 
 ---
@@ -122,7 +122,6 @@ iris_partition_guard:is_safe_for_writes().
 3. Start core first: `make start_core && sleep 10`
 4. Verify: `mnesia:system_info(tables)`
 5. Start edges: `make start_edge1`
-6. Mesh: `make mesh`
 
 ---
 
@@ -138,8 +137,9 @@ application:start(iris_core).
 
 ### From WAL
 
+WAL replay happens automatically on `iris_durable_batcher` startup. Restart the application to trigger it:
 ```erlang
-iris_durable_batcher:replay_wal().
+application:stop(iris_core), application:start(iris_core).
 ```
 
 ### Corruption Recovery
@@ -296,7 +296,7 @@ mnesia:table_info(offline_msg, size).
 | `iris_outbox_queue_warning` | Outbox queue ≥50% capacity alerts |
 | `iris_identity_key_changes` | E2EE identity key change events |
 
-Read via: `iris_metrics:get(CounterName)` or `iris_metrics:get_all()`.
+Read via: `iris_metrics:get_metrics()` (returns map of all counters).
 
 ### Alerts to Configure
 

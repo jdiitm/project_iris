@@ -1,6 +1,6 @@
 # Architectural Decisions & Design Rationale
 
-**Last Updated**: 2026-02-10  
+**Last Updated**: 2026-02-11  
 **Status**: Current (RFC-001 v4.0 Aligned, TLS Enforced)
 
 ---
@@ -26,15 +26,14 @@ Project Iris is a global-scale messaging platform implementing **Hardened AP** s
 - Split-brain detection via `iris_partition_guard`
 - Explicit acknowledgment guarantees
 
-**Optional CP Mode**: True linearizable consistency via Raft
-- Enabled via `{consistency_mode, cp}` config
-- Uses `ra` library (RabbitMQ's Raft implementation)
-- Module: `iris_raft.erl`
+**Optional CP Mode**: Deferred (not yet implemented)
+- Would require `ra` library (RabbitMQ's Raft implementation)
+- Enabled via `{consistency_mode, cp}` config (currently inert)
 
 **Rationale**:
 - True CP requires replacing Mnesia (2-3 month effort)
 - Hardened AP provides explicit guarantees for most use cases
-- CP mode available for critical data (audit logs, financial transactions)
+- CP mode deferred until production demand justifies the effort
 
 ---
 
@@ -45,7 +44,7 @@ Project Iris is a global-scale messaging platform implementing **Hardened AP** s
 **Primary Interface**: `iris_store.erl`
 - Single API with clear durability options: `guaranteed | best_effort | quorum`
 - Partition-aware writes (blocked during detected partitions)
-- Legacy `iris_storage.erl` maintained for backwards compatibility
+- Legacy `iris_storage.erl` removed (zero callers; `iris_store.erl` is the sole storage API)
 
 **Quorum Writes**: `iris_quorum_write.erl`
 - Majority (N/2+1) of replicas must ACK before returning
@@ -267,11 +266,10 @@ nuke_and_recreate_table(Table) ->
 4. Docker as canonical execution environment
 5. **TLS enforced** on all client connections (NFR-14)
 
-**Test Counts** (as of 2026-02-08):
-- Python test files: ~146 across 13 suites
-- Erlang test modules: 109 EUnit test modules
-- CI Tier 0: 124+ tests passing
-- Chaos_dist tests: 25 (Docker required, TLS enabled)
+**Test Counts** (as of 2026-02-11):
+- Python test files: 156 across 12 suites
+- Erlang test modules: 101 EUnit test modules + 6 support modules
+- Chaos_dist tests: 27 (Docker required, TLS enabled)
 - See [TESTING.md](TESTING.md) for current counts
 
 **TLS Test Infrastructure** (Feb 2026):
@@ -306,13 +304,12 @@ nuke_and_recreate_table(Table) ->
 | Cross-region Mnesia replication | 2-3 days | Docker volume config |
 | `ra` library integration (full CP) | 1-2 days | External dependency |
 | 5B user architecture | 2-3 months | Storage rewrite |
-| Key change peer notification | Done | IMPLEMENTED: detect + contact track + deliver via opcode 0x1A (GAP-13) |
 
 ---
 
 ## 9. Module Overview
 
-See the [README](../README.md#modules-58-total) for the full module reference (58 modules, grouped by layer).
+See the [README](../README.md#modules-56-total) for the full module reference (56 modules, grouped by layer).
 
 ---
 
@@ -320,15 +317,14 @@ See the [README](../README.md#modules-58-total) for the full module reference (5
 
 The Chief Architect forensic audit identified several items requiring separate RFCs or infrastructure work. These are tracked here for future implementation.
 
-### P1 - Cross-Region Persistent Queue
+### ~~P1 - Cross-Region Persistent Queue~~ — DONE
 
 | Attribute | Value |
 |-----------|-------|
 | **Issue** | Messages to offline cross-region users are tried once then stored locally |
 | **Impact** | Messages can be stranded on local nodes if cross-region link is down |
-| **Fix** | Implement persistent queue using `disk_log` or `khepri` |
-| **Effort** | 2-3 weeks |
-| **Blocked By** | Design RFC required for queue semantics (FIFO vs priority, TTL, overflow) |
+| **Fix** | Mnesia `disc_copies` persistent queue in `iris_region_bridge.erl` |
+| **Status** | **IMPLEMENTED**. FIFO ordering, 7-day TTL, 10K queue depth limit, overflow rejection. |
 
 ### ~~P1 - Mailbox Overflow Protection (AQM)~~ — DONE
 
@@ -349,15 +345,14 @@ The Chief Architect forensic audit identified several items requiring separate R
 | **Effort** | 1 week |
 | **Blocked By** | Docker infrastructure changes, CI pipeline updates |
 
-### P3 - iris_router_pool Cleanup
+### P3 - iris_router_pool Assessment
 
 | Attribute | Value |
 |-----------|-------|
-| **Issue** | Orphaned worker pool module not used |
-| **Impact** | Dead code, maintenance burden |
-| **Decision** | Deprecate (ephemeral spawn + circuit breaker sufficient) |
-| **Effort** | 0.5 days |
-| **Blocked By** | None (low priority cleanup) |
+| **Issue** | Worker pool module with limited usage |
+| **Impact** | Referenced by `iris_mailbox_monitor` for pool monitoring |
+| **Decision** | Keep for now (ephemeral spawn + circuit breaker is primary path) |
+| **Effort** | N/A |
 
 ### Implemented Fixes (2026-02-03)
 
