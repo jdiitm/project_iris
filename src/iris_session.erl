@@ -742,7 +742,7 @@ handle_packet({token_refresh, RefreshToken}, User, _Pid, _Mod) ->
     TrResponse = case TrResult of
         {ok, _UserId, NewRefresh} ->
             %% Step 2: Create access token locally on Edge
-            case catch iris_auth:create_token(User) of
+            try iris_auth:create_token(User) of
                 {ok, NewAccess} ->
                     AccessBin = ensure_binary(NewAccess),
                     RefreshBin = ensure_binary(NewRefresh),
@@ -754,6 +754,10 @@ handle_packet({token_refresh, RefreshToken}, User, _Pid, _Mod) ->
                 _ ->
                     %% Access token creation failed -- return explicit error
                     logger:error("TOKEN_REFRESH: Access token creation failed for ~p", [User]),
+                    {ok, User, [{send, encode_error(<<"token_creation_failed">>)}]}
+            catch
+                _:Reason ->
+                    logger:error("TOKEN_REFRESH: Access token creation crashed for ~p: ~p", [User, Reason]),
                     {ok, User, [{send, encode_error(<<"token_creation_failed">>)}]}
             end;
         {error, token_reused} ->
@@ -959,12 +963,15 @@ complete_login(User, TransportPid) ->
     iris_session_cache:store(SessionId, User),
     
     %% Generate refresh token (RFC FR-11a) -- best-effort via Core RPC
-    RefreshTokenPart = case catch iris_circuit_breaker:call(CoreNode, iris_auth, create_refresh_token, [User]) of
+    RefreshTokenPart = try iris_circuit_breaker:call(CoreNode, iris_auth, create_refresh_token, [User]) of
         {ok, RT} ->
             RTBin = ensure_binary(RT),
             <<(byte_size(RTBin)):16, RTBin/binary>>;
         _ ->
             <<0:16>>  %% No refresh token available
+    catch
+        _:_ ->
+            <<0:16>>  %% No refresh token available (RPC/circuit breaker failure)
     end,
     
     %% Response: LOGIN_OK + SessionIdLen(16) + SessionId + RefreshTokenLen(16) + RefreshToken
@@ -1002,7 +1009,7 @@ deliver_offline_messages(User) ->
 
 %% Get offline queue depth with failover to other cores
 get_offline_queue_depth_with_failover(User, PrimaryCore) ->
-    case catch rpc:call(PrimaryCore, iris_core, get_offline_queue_depth, [User], 2000) of
+    case rpc:call(PrimaryCore, iris_core, get_offline_queue_depth, [User], 2000) of
         N when is_integer(N) -> 
             N;
         {badrpc, _Reason} ->
@@ -1020,7 +1027,7 @@ get_queue_depth_from_any(_User, []) ->
 get_queue_depth_from_any(User, [Core | Rest]) ->
     case net_adm:ping(Core) of
         pong ->
-            case catch rpc:call(Core, iris_core, get_offline_queue_depth, [User], 2000) of
+            case rpc:call(Core, iris_core, get_offline_queue_depth, [User], 2000) of
                 N when is_integer(N) -> N;
                 _ -> get_queue_depth_from_any(User, Rest)
             end;

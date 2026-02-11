@@ -60,7 +60,7 @@ cd docker/global-cluster
 
 ---
 
-## Test Suites (156 Python + 102 Erlang tests)
+## Test Suites (156 Python + 101 Erlang tests)
 
 | Suite | Tests | Requires | TLS |
 |-------|-------|----------|-----|

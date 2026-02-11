@@ -1,6 +1,6 @@
 # RFC-001 Compliance Status
 
-**Status**: 156 Python + 102 Erlang tests pass | **TLS Enforced** | **Last Updated**: 2026-02-11
+**Status**: 156 Python + 101 Erlang tests pass | **TLS Enforced** | **Last Updated**: 2026-02-11
 
 ## Verification Status Legend
 

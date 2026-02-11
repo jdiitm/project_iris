@@ -53,13 +53,22 @@ check_deps:
 
 # Run unit tests
 test: $(BEAM_FILES)
-	@echo "Running EUnit tests..."
+	@echo "Running EUnit tests (standalone subset)..."
 	@$(ERL) -pa ebin -noshell -eval "case eunit:test([iris_session_tests, iris_proto_tests, iris_shard_tests, iris_ingress_guard_tests], []) of ok -> init:stop(0); error -> init:stop(1) end."
 
 # Run tests with verbose output
 test-verbose: $(BEAM_FILES)
 	@echo "Running EUnit tests (verbose)..."
 	@$(ERL) -pa ebin -noshell -eval "case eunit:test([iris_session_tests, iris_proto_tests, iris_shard_tests, iris_ingress_guard_tests], [verbose]) of ok -> init:stop(0); error -> init:stop(1) end."
+
+# Run ALL 101 EUnit test modules (requires application infrastructure)
+test-eunit-all: $(BEAM_FILES)
+	@echo "Running all EUnit tests (101 modules, needs app infrastructure)..."
+	@$(ERL) -pa ebin -noshell -eval " \
+		Beams = filelib:wildcard(\"ebin/*_tests.beam\"), \
+		Mods = [list_to_atom(filename:basename(B, \".beam\")) || B <- Beams], \
+		io:format(\"Discovered ~p test modules~n\", [length(Mods)]), \
+		case eunit:test(Mods, []) of ok -> init:stop(0); error -> init:stop(1) end."
 
 # Run all tests via unified test runner
 test-all: $(BEAM_FILES)
@@ -91,26 +100,29 @@ ERL_FLAGS := $(shell ./scripts/auto_tune.sh)
 # Config file (without .config extension)
 CONFIG ?= config/test
 
+# Erlang distribution cookie (override for production: make start COOKIE=my_secret)
+COOKIE ?= iris_secret
+
 # Start both core and edge nodes
 start: start_core start_edge1
 
 start_core: all
-	$(ERL) -noshell -noinput $(ERL_FLAGS) -pa ebin -sname iris_core$(NODE_SUFFIX) -setcookie iris_secret -config $(CONFIG) -eval "application:ensure_all_started(iris_core)" >core.log 2>&1 &
+	$(ERL) -noshell -noinput $(ERL_FLAGS) -pa ebin -sname iris_core$(NODE_SUFFIX) -setcookie $(COOKIE) -config $(CONFIG) -eval "application:ensure_all_started(iris_core)" >core.log 2>&1 &
 
 start_edge1: all
-	$(ERL) -noshell -noinput $(ERL_FLAGS) -pa ebin -sname iris_edge1$(NODE_SUFFIX) -setcookie iris_secret -config $(CONFIG) -iris_edge port $(or $(EDGE1_PORT),8085) -eval "application:ensure_all_started(iris_edge)" >edge1.log 2>&1 &
+	$(ERL) -noshell -noinput $(ERL_FLAGS) -pa ebin -sname iris_edge1$(NODE_SUFFIX) -setcookie $(COOKIE) -config $(CONFIG) -iris_edge port $(or $(EDGE1_PORT),8085) -eval "application:ensure_all_started(iris_edge)" >edge1.log 2>&1 &
 
 start_edge2: all
-	$(ERL) -noshell -noinput $(ERL_FLAGS) -pa ebin -sname iris_edge2$(NODE_SUFFIX) -setcookie iris_secret -config $(CONFIG) -iris_edge port $(or $(EDGE2_PORT),8086) -eval "application:ensure_all_started(iris_edge)" >edge2.log 2>&1 &
+	$(ERL) -noshell -noinput $(ERL_FLAGS) -pa ebin -sname iris_edge2$(NODE_SUFFIX) -setcookie $(COOKIE) -config $(CONFIG) -iris_edge port $(or $(EDGE2_PORT),8086) -eval "application:ensure_all_started(iris_edge)" >edge2.log 2>&1 &
 
 start_edge3: all
-	$(ERL) -noshell -noinput $(ERL_FLAGS) -pa ebin -sname iris_edge3$(NODE_SUFFIX) -setcookie iris_secret -config $(CONFIG) -iris_edge port $(or $(EDGE3_PORT),8087) -eval "application:ensure_all_started(iris_edge)" >edge3.log 2>&1 &
+	$(ERL) -noshell -noinput $(ERL_FLAGS) -pa ebin -sname iris_edge3$(NODE_SUFFIX) -setcookie $(COOKIE) -config $(CONFIG) -iris_edge port $(or $(EDGE3_PORT),8087) -eval "application:ensure_all_started(iris_edge)" >edge3.log 2>&1 &
 
 start_edge4: all
-	$(ERL) -noshell -noinput $(ERL_FLAGS) -pa ebin -sname iris_edge4$(NODE_SUFFIX) -setcookie iris_secret -config $(CONFIG) -iris_edge port $(or $(EDGE4_PORT),8088) -eval "application:ensure_all_started(iris_edge)" >edge4.log 2>&1 &
+	$(ERL) -noshell -noinput $(ERL_FLAGS) -pa ebin -sname iris_edge4$(NODE_SUFFIX) -setcookie $(COOKIE) -config $(CONFIG) -iris_edge port $(or $(EDGE4_PORT),8088) -eval "application:ensure_all_started(iris_edge)" >edge4.log 2>&1 &
 
 start_edge5: all
-	$(ERL) -noshell -noinput $(ERL_FLAGS) -pa ebin -sname iris_edge5$(NODE_SUFFIX) -setcookie iris_secret -config $(CONFIG) -iris_edge port $(or $(EDGE5_PORT),8089) -eval "application:ensure_all_started(iris_edge)" >edge5.log 2>&1 &
+	$(ERL) -noshell -noinput $(ERL_FLAGS) -pa ebin -sname iris_edge5$(NODE_SUFFIX) -setcookie $(COOKIE) -config $(CONFIG) -iris_edge port $(or $(EDGE5_PORT),8089) -eval "application:ensure_all_started(iris_edge)" >edge5.log 2>&1 &
 
 # ... (Previous targets)
 
