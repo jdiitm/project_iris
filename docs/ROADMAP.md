@@ -1,6 +1,6 @@
 # Project Iris: 5B DAU Roadmap
 
-**Last Updated**: 2026-02-10  
+**Last Updated**: 2026-02-11  
 **Status**: Active Development  
 **Target**: WhatsApp/Telegram-class scale (5 Billion Daily Active Users)
 
@@ -17,7 +17,7 @@
 | E2EE | ✅ Working | Signal Protocol implemented |
 | Cross-Region | ✅ Hardened | Multi-node disc_copies, TLS enabled |
 | **TLS Security** | ✅ **Enforced** | All client connections require TLS |
-| **Test Suite** | ✅ **100% Pass** | 120+ tests, all TLS-enabled |
+| **Test Suite** | ✅ **100% Pass** | 156 Python + 102 Erlang tests, all TLS-enabled |
 | **RFC v4.0 Compliance** | ✅ **19 gaps closed** | See [RFC_COMPLIANCE.md](RFC_COMPLIANCE.md) |
 | **Operational Limits** | ✅ **Enforced** | Inbox 10K, payload 64KB, session 100K |
 | Scalability (10K) | ✅ Validated | Local testing with metrics |
@@ -28,7 +28,7 @@
 - Closed 19 RFC v4.0 compliance gaps via TDD
 - Inbox 10K limit, payload 64KB limit, outbox 7-day TTL enforced
 - JWT replay protection, key isolation, version negotiation
-- Test suite expanded to 120+ (from 115+), all passing
+- Test suite expanded to 156 Python + 102 Erlang tests (from 115+), all passing
 - Session cache bounded (100K), dedup Mnesia cross-check added
 - Edge listener hardened, Docker image aligned to OTP 26
 
@@ -53,7 +53,7 @@
 
 ---
 
-## Phase 2: Durability & Distribution (Next Sprint)
+## Phase 2: Durability & Distribution ✅ MOSTLY COMPLETE
 
 **Goal**: Ensure data survives chaos.
 
@@ -65,22 +65,6 @@
 | Queue depth alerting | ✅ Done | 50% metric (GAP-2) |
 | Mailbox AQM (drop policy) | ✅ Done | CoDel implemented in `iris_mailbox_guard.erl` |
 | Cross-region Mnesia auto-setup | ⚠️ Partial | Docker volume config |
-
-### RFC Required: Cross-Region Queue
-
-**Questions to Answer**:
-1. FIFO vs Priority ordering?
-2. TTL for queued messages?
-3. Overflow behavior (drop oldest vs reject new)?
-4. Persistent storage backend (disk_log vs khepri)?
-
-### RFC Required: Active Queue Management
-
-**Questions to Answer**:
-1. Drop policy: Tail Drop vs RED vs CoDel?
-2. Backpressure signaling to senders?
-3. Per-user vs per-shard limits?
-4. Celebrity account handling?
 
 ---
 
@@ -124,8 +108,6 @@ See [Scalability Analysis](SCALABILITY_ANALYSIS.md) for measured metrics and ext
 
 | Item | Blocker | Owner | ETA |
 |------|---------|-------|-----|
-| Cross-region queue | Design RFC | TBD | - |
-| ~~AQM/backpressure~~ | ~~Drop policy RFC~~ | ~~Done~~ | ✅ CoDel implemented |
 | Partition drill | CI infra | TBD | - |
 | "Messi Test" | Requires 64GB+ RAM infra | TBD | - |
 
@@ -133,14 +115,12 @@ See [Scalability Analysis](SCALABILITY_ANALYSIS.md) for measured metrics and ext
 
 ## Architecture Decisions Pending
 
-### 1. Cross-Region Message Queue
+### 1. ~~Cross-Region Message Queue~~ — DECIDED
 
-**Options**:
-- `disk_log` (built-in, proven)
-- `khepri` (RabbitMQ's new storage)
-- External queue (Kafka, SQS)
-
-**Recommendation**: `disk_log` for simplicity, with khepri as future upgrade path.
+**Decision**: Mnesia `disc_copies` with `sync_transaction` — implemented in `iris_region_bridge.erl`.
+- FIFO ordering via `cross_region_outbound` table
+- 7-day TTL with automatic cleanup
+- Overflow rejection at 10K queue depth
 
 ### 2. ~~Mailbox Overflow Policy~~ — DECIDED
 
@@ -168,7 +148,7 @@ See [Scalability Analysis](SCALABILITY_ANALYSIS.md) for measured metrics and ext
 
 ### Phase 1.5: Test Stabilization (Complete - 2026-02-03)
 - [x] TLS enforced on all client connections (NFR-14)
-- [x] 120+ tests passing (100%)
+- [x] 156 Python + 102 Erlang tests passing (100%)
 - [x] All chaos_dist tests working with Docker cluster
 - [x] Reliable message protocol (ACKs) properly implemented
 - [x] Cross-region durability validated (RPO=0)

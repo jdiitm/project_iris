@@ -1,6 +1,6 @@
 # Deployment Guide
 
-**Last Updated**: 2026-02-10 | **TLS Required**
+**Last Updated**: 2026-02-11 | **TLS Required**
 
 ## Architecture
 
@@ -286,7 +286,7 @@ See [OPERATIONS.md](OPERATIONS.md) for incident response, failover procedures, d
 | `tls_cacertfile` | string | - | Path to CA certificate for client verification |
 | `tls_verify` | atom | `verify_none` | `verify_none` or `verify_peer` (for mTLS) |
 | `tls_versions` | list | `['tlsv1.3', 'tlsv1.2']` | Allowed TLS versions |
-| `conn_rate_max` | integer | `50` | Per-IP connections/sec limit |
+| `conn_rate_max` | integer | `5` | Per-IP connections/min limit (RFC 10.1) |
 | `router_pool_size` | integer | auto-tuned | Override auto-tuned router pool (75% of schedulers) |
 
 ---

@@ -126,7 +126,7 @@ jobs:
   # TIER 1: Docker Chaos Tests (Nightly + Main Push)
   # ===========================================================================
   # Runs: run_all_tests.sh --docker-only
-  # Covers: 18 Docker chaos tests (fresh cluster per test) + NFR-15 mTLS
+  # Covers: 27 Docker chaos tests (fresh cluster per test) + NFR-15 mTLS
   # Requires: Docker daemon (ubuntu-latest provides this)
   #
   # Triggers:

@@ -5,11 +5,9 @@ This directory contains the Docker configuration for deterministic test executio
 ## Quick Start
 
 ```bash
-# Run all tests (deterministic)
-make test-docker
-
-# Run with custom seed for reproduction
-TEST_SEED=12345 make test-docker
+# Build and run all tests in Docker (deterministic)
+docker build -t iris-test -f docker/test/Dockerfile .
+docker run --rm -e TEST_SEED=42 -e CI=true iris-test
 
 # Run quick tests (non-Docker)
 ./tests/run_all_tests.sh --quick
@@ -73,7 +71,7 @@ To reproduce a specific test failure:
 
 2. Run with that seed:
    ```bash
-   TEST_SEED=42 make test-docker
+   docker run --rm -e TEST_SEED=42 -e CI=true iris-test
    ```
 
 3. If it still fails, the issue is deterministic. If it passes, the issue is environmental.

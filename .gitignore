@@ -1,10 +1,12 @@
 # Erlang/OTP
 ebin/*.beam
 ebin/*.app
+ebin/*.appup
 *.beam
 *.dump
 erl_crash.dump
 *.plt
+priv/*.so
 
 # Mnesia
 Mnesia*/

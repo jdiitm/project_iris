@@ -1,6 +1,6 @@
 # RFC-001 Compliance Status
 
-**Status**: 120+ tests pass | **TLS Enforced** | **Last Updated**: 2026-02-08
+**Status**: 156 Python + 102 Erlang tests pass | **TLS Enforced** | **Last Updated**: 2026-02-11
 
 ## Verification Status Legend
 
@@ -104,8 +104,8 @@ All gap closures from 2026-02-07 and 2026-02-08 in a single table.
 | G1 | NFR-15 | mTLS defaults to `false` | `enforce_mtls=true` in production; cluster manager pre-check | `iris_mtls_production_tests.erl`, `iris_cluster_mtls_tests.erl` |
 | A2 | NFR-27 | Group size hardcoded 1000 vs iris_limits 10000 | Use `iris_limits` as single source of truth | `iris_group_size_limits_tests.erl` |
 | GAP-1 | Amendment 5.3.1 | Safety number modulo bias | Uniform byte-pair extraction | `iris_safety_number_bias_tests.erl` |
-| GAP-2 | Amendment 6.3 | No sender key rotation on member removal | Invalidate all sender keys for remaining members | `iris_sender_key_rotation_tests.erl` |
-| GAP-3 | Amendment 5.3.2 | Key contacts in RAM-only ETS | Mnesia-persisted `iris_key_contacts` table | `iris_key_contacts_persist_tests.erl` |
+| GAP-2 | Amendment 6.3 | No sender key rotation on member removal | Invalidate all sender keys for remaining members | `iris_group_sender_key_rotation_tests.erl` |
+| GAP-3 | Amendment 5.3.2 | Key contacts in RAM-only ETS | Mnesia-persisted `iris_key_contacts` table | `iris_key_contacts_persistence_tests.erl` |
 | AQM | Roadmap Phase 2 | No CoDel/RED drop policy | CoDel algorithm in `iris_mailbox_guard.erl` | `iris_codel_tests.erl` |
 
 ---

@@ -77,11 +77,11 @@ This amendment adds End-to-End Encryption (E2EE) and Group Messaging as **launch
 | NFR-28 | Sender Key distribution | ≤500ms | Time to distribute key to all members |
 | NFR-29 | Group roster query | ≤50ms P99 | Time to fetch member list |
 
-> **Implementation Note (NFR-27):** The current implementation (`iris_group.erl`) supports
-> up to 1000 members, exceeding the RFC baseline of 256. Performance testing has validated
-> that NFR-26 (≤200ms P99 fan-out latency) is maintained at this higher limit. The RFC
-> target of 256 represents a conservative baseline; the implementation delivers better
-> capacity without compromising latency guarantees.
+> **Implementation Note (NFR-27):** The current implementation uses `iris_limits` as the
+> single source of truth: `max_e2ee_group_members() -> 256` (E2EE groups via Sender Keys)
+> and `max_broadcast_group_members() -> 10000` (non-E2EE broadcast groups). The 256 limit
+> for E2EE groups matches the RFC baseline. Broadcast groups support much larger membership
+> since they do not require pairwise key distribution.
 
 ---
 

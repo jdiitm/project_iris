@@ -60,18 +60,22 @@ cd docker/global-cluster
 
 ---
 
-## Test Suites (75+ tests total)
+## Test Suites (156 Python + 102 Erlang tests)
 
 | Suite | Tests | Requires | TLS |
 |-------|-------|----------|-----|
-| `unit` | 2 | Local compile | N/A |
-| `integration` | 22+ | TLS server | ✅ |
-| `e2e` | 5+ | TLS server | ✅ |
-| `security` | 7+ | TLS server | ✅ |
-| `resilience` | 3 | TLS server | ✅ |
-| `stress` | 14 | TLS server | ✅ |
-| `chaos_dist` | 18 | Docker cluster | ✅ |
-| `performance_light` | 6 | TLS server | ✅ |
+| `unit` | 4 | Local compile | N/A |
+| `integration` | 40 | TLS server | ✅ |
+| `e2e` | 11 | TLS server | ✅ |
+| `security` | 23 | TLS server | ✅ |
+| `resilience` | 8 | TLS server | ✅ |
+| `stress` | 18 | TLS server | ✅ |
+| `chaos_dist` | 27 | Docker cluster | ✅ |
+| `chaos_controlled` | 2 | Self-managed | ✅ |
+| `performance_light` | 8 | TLS server | ✅ |
+| `compatibility` | 8 | TLS server | ✅ |
+| `contract` | 6 | TLS server | ✅ |
+| `conformance` | 1 | TLS server | ✅ |
 
 ---
 

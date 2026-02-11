@@ -28,14 +28,14 @@ All three tests have been moved back to the active test suite:
 ## Running These Tests
 
 ```bash
-# With Docker cluster
-make test-cross-region
+# Via the authoritative test runner (fresh cluster per test)
+./tests/run_all_tests.sh --docker-only
 
 # Or manually:
 cd docker/global-cluster
-docker compose up -d
-bash init_cluster.sh
-python3 tests/suites/chaos_dist/test_cross_region_latency.py
+./cluster.sh up
+python3 ../../tests/suites/chaos_dist/test_cross_region_latency.py
+./cluster.sh down
 ```
 
 ## Notes

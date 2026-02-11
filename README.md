@@ -1,11 +1,11 @@
 # Project Iris: WhatsApp-Class Messaging Engine
 
-[![Tests](https://img.shields.io/badge/tests-120%2B%20passing-brightgreen)](tests/run_all_tests.sh)
+[![Tests](https://img.shields.io/badge/tests-156%2B%20passing-brightgreen)](tests/run_all_tests.sh)
 [![TLS](https://img.shields.io/badge/TLS-enforced-green)](docs/DEPLOYMENT.md)
 [![Erlang](https://img.shields.io/badge/Erlang-OTP%2026%2B-blue)](https://www.erlang.org/)
 
 > **Status**: Development / Pre-alpha. Tested at **10K concurrent connections** locally.
-> Full test suite (120+ tests) passing with TLS enforced. Last verified: 2026-02-10.
+> Full test suite (156 Python + 102 Erlang tests) passing with TLS enforced. Last verified: 2026-02-11.
 > Architecture designed for 1M+ users per region. See [Scalability Analysis](docs/SCALABILITY_ANALYSIS.md).
 
 ## What This Is
@@ -133,7 +133,7 @@ cd docker/global-cluster
 
 ## Testing
 
-**120+ tests** across 13 suites. See [TESTING.md](docs/TESTING.md) for full details.
+**156 Python + 102 Erlang tests** across 12 suites. See [TESTING.md](docs/TESTING.md) for full details.
 
 ```bash
 ./tests/run_all_tests.sh              # Full suite
@@ -180,21 +180,21 @@ See [DEPLOYMENT.md](docs/DEPLOYMENT.md) for TLS and certificate setup.
 ```
 project_iris/
 ├── src/                    # 58 Erlang source modules (20K+ lines)
-├── test_utils/             # 109 Erlang EUnit test modules
+├── test_utils/             # 102 Erlang EUnit test modules + 6 support modules
 ├── tests/
 │   ├── run_all_tests.sh    # Authoritative test runner
-│   ├── suites/             # 13 test categories
-│   │   ├── unit/           # Property-based (Hypothesis)
-│   │   ├── integration/    # Core message flow (37 tests)
+│   ├── suites/             # 12 test categories
+│   │   ├── unit/           # Property-based (Hypothesis, 4 tests)
+│   │   ├── integration/    # Core message flow (40 tests)
 │   │   ├── e2e/            # End-to-end scenarios (11 tests)
 │   │   ├── security/       # TLS, auth, fuzz, rate limiting (23 tests)
-│   │   ├── resilience/     # Fault tolerance (7 tests)
+│   │   ├── resilience/     # Fault tolerance (8 tests)
 │   │   ├── stress/         # Load testing (18 tests)
 │   │   ├── performance_light/ # Benchmarks, NFR gates (8 tests)
-│   │   ├── chaos_dist/     # Docker chaos (25 tests, fresh cluster each)
+│   │   ├── chaos_dist/     # Docker chaos (27 tests, fresh cluster each)
 │   │   ├── chaos_controlled/ # Combined chaos (2 tests)
-│   │   ├── compatibility/  # Protocol versions, HLC migration (7 tests)
-│   │   ├── contract/       # Edge-core + RFC contracts (3 tests)
+│   │   ├── compatibility/  # Protocol versions, HLC migration (8 tests)
+│   │   ├── contract/       # Edge-core + RFC contracts (6 tests)
 │   │   └── conformance/    # WebSocket RFC 6455 (1 test)
 │   ├── framework/          # ClusterManager, assertions, wait utilities
 │   └── utilities/          # IrisClient (TLS-enabled), TLS helpers

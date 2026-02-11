@@ -1,6 +1,6 @@
 # Testing Guide
 
-**Status**: 120+ tests passing | **Last Verified**: 2026-02-10
+**Status**: 156 Python + 102 Erlang tests passing | **Last Verified**: 2026-02-11
 
 ## Quick Start
 
@@ -65,24 +65,24 @@ Docker chaos tests (`chaos_dist/`) are **destructive** — they kill containers,
 
 ## Test Suites
 
-### Python Test Suites (~146 files)
+### Python Test Suites (156 files)
 
 | Suite | Files | Description |
 |-------|-------|-------------|
 | unit | 4 | Property-based tests (Hypothesis) |
-| integration | 37 | Core message flow, dedup, metrics, presence |
+| integration | 40 | Core message flow, dedup, metrics, presence |
 | e2e | 11 | End-to-end scenarios (conversation, key verification, ratchet) |
 | security | 23 | TLS, JWT, fuzz, CBOR, rate limiting, sender keys |
-| resilience | 7 | Fault tolerance, connection resume, clock skew |
+| resilience | 8 | Fault tolerance, connection resume, clock skew |
 | performance_light | 8 | Benchmarks, CPU, memory (NFR-19 hard gate) |
 | stress | 18 | Load testing, fan-out, soak, reconnect storm |
-| chaos_dist | 25 | Docker-based chaos (SIGKILL, partition, disk full) |
+| chaos_dist | 27 | Docker-based chaos (SIGKILL, partition, disk full) |
 | chaos_controlled | 2 | Combined chaos (self-managed cluster) |
-| compatibility | 7 | Protocol versions, HLC migration, compression |
-| contract | 3 | Edge-core contract, rate limit constants, RFC v4 |
+| compatibility | 8 | Protocol versions, HLC migration, compression |
+| contract | 6 | Edge-core contract, rate limit constants, RFC v4 |
 | conformance | 1 | WebSocket RFC 6455 compliance |
 
-### Erlang Test Suites (109 modules)
+### Erlang Test Suites (102 test modules + 6 support modules)
 
 | Category | Modules | Examples |
 |----------|---------|----------|
@@ -184,11 +184,11 @@ pkill -9 -f "beam.smp.*iris_"
 tests/
 ├── run_all_tests.sh     # Authoritative test runner
 ├── conftest.py          # Seeded randomness, deterministic IDs
-├── suites/              # Test suites by category (13 suites)
+├── suites/              # Test suites by category (12 suites)
 ├── framework/           # ClusterManager, assertions, wait utilities
 ├── utilities/           # IrisClient (TLS-enabled), TLS helpers
 └── artifacts/           # Test outputs (gitignored)
 
-test_utils/              # 109 Erlang EUnit test modules
+test_utils/              # 102 Erlang EUnit test modules + 6 support modules
 docker/global-cluster/   # Docker cluster scripts
 ```
