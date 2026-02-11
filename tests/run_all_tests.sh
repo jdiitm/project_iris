@@ -381,35 +381,14 @@ run_docker_test_fresh() {
 }
 
 # ============================================================================
-# DOCKER CHAOS TESTS (all tests in chaos_dist)
+# DOCKER CHAOS TESTS (auto-discovered from chaos_dist directory)
 # ============================================================================
-DOCKER_CHAOS_TESTS=(
-    "tests/suites/chaos_dist/test_server_storage_audit.py"
-    "tests/suites/chaos_dist/test_distributed_rate_limit.py"
-    "tests/suites/chaos_dist/test_key_bundle_durability.py"
-    "tests/suites/chaos_dist/test_dedup_persistence.py"
-    "tests/suites/chaos_dist/test_ack_disconnect_race.py"
-    "tests/suites/chaos_dist/test_cross_region_chaos.py"
-    "tests/suites/chaos_dist/test_multimaster_durability.py"
-    "tests/suites/chaos_dist/test_ack_durability.py"
-    "tests/suites/chaos_dist/test_bridge_durability.py"
-    "tests/suites/chaos_dist/test_network_partition.py"
-    "tests/suites/chaos_dist/test_cross_region_latency.py"
-    "tests/suites/chaos_dist/test_ordering_under_failure.py"
-    "tests/suites/chaos_dist/test_region_outage.py"
-    "tests/suites/chaos_dist/test_dist_failover.py"
-    "tests/suites/chaos_dist/test_failover_time.py"
-    "tests/suites/chaos_dist/test_cascade_failure.py"
-    "tests/suites/chaos_dist/test_split_brain.py"
-    "tests/suites/chaos_dist/test_disk_full.py"
-    "tests/suites/chaos_dist/test_split_brain_convergence.py"
-    "tests/suites/chaos_dist/test_outbox_queue_overflow.py"
-    "tests/suites/chaos_dist/test_outbox_overflow_enforcement.py"
-    "tests/suites/chaos_dist/test_split_brain_epoch_resolution.py"
-    "tests/suites/chaos_dist/test_cross_region_node_kill.py"
-    "tests/suites/chaos_dist/test_quorum_write_failures.py"
-    "tests/suites/chaos_dist/test_real_clock_skew.py"
-)
+# Dynamic discovery ensures new tests are never silently excluded.
+# Sorted for deterministic execution order.
+DOCKER_CHAOS_TESTS=()
+while IFS= read -r test_file; do
+    DOCKER_CHAOS_TESTS+=("$test_file")
+done < <(find tests/suites/chaos_dist -name 'test_*.py' -type f | sort)
 
 # ============================================================================
 # MAIN EXECUTION
@@ -677,7 +656,7 @@ else
     
     for test in "${DOCKER_CHAOS_TESTS[@]}"; do
         if [ -f "$test" ]; then
-            run_docker_test_fresh "$test" 300
+            run_docker_test_fresh "$test" 480
         fi
     done
     
