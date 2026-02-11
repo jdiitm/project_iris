@@ -14,6 +14,7 @@ import time
 import socket
 import struct
 import os
+import ssl
 
 # Add project root to sys.path
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -21,11 +22,28 @@ project_root = os.path.abspath(os.path.join(current_dir, "../../.."))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
+# TLS CA certificate
+CA_CERT = os.path.join(project_root, "certs", "ca.pem")
+
+# Auto-incrementing sequence number for send_msg
+_seq_counter = 0
+
 
 def get_connection(port=8085):
-    """Get a socket connection to the edge node."""
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.settimeout(5.0)
+    """Get a TLS socket connection to the edge node.
+    
+    The server requires TLS (RFC NFR-14). Plain TCP connections will
+    fail or be rejected, causing test timeouts.
+    """
+    raw = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    raw.settimeout(5.0)
+    ctx = ssl.create_default_context()
+    if os.path.exists(CA_CERT):
+        ctx.load_verify_locations(CA_CERT)
+    else:
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+    s = ctx.wrap_socket(raw, server_hostname='localhost')
     s.connect(('localhost', port))
     return s
 
@@ -38,10 +56,19 @@ def login(sock, user):
 
 
 def send_msg(sock, target, msg):
-    """Send a message."""
+    """Send a sequenced message (opcode 0x07).
+    
+    RFC-001-AMENDMENT-001 v1.0: Opcode 0x02 (plaintext) is DEPRECATED
+    and REJECTED. Must use opcode 0x07 (sequenced) with a sequence number.
+    """
+    global _seq_counter
+    _seq_counter += 1
     target_bytes = target.encode('utf-8') if isinstance(target, str) else target
     msg_bytes = msg.encode('utf-8') if isinstance(msg, str) else msg
-    packet = b'\x02' + struct.pack('>H', len(target_bytes)) + target_bytes + struct.pack('>H', len(msg_bytes)) + msg_bytes
+    packet = (b'\x07' +
+              struct.pack('>H', len(target_bytes)) + target_bytes +
+              struct.pack('>Q', _seq_counter) +
+              struct.pack('>H', len(msg_bytes)) + msg_bytes)
     sock.sendall(packet)
 
 
@@ -92,8 +119,10 @@ def test_truncated_packet():
         login(s, "trunc_tester")
         
         # Send message with header claiming 1000 bytes but only send 10
+        # Uses opcode 0x07 (sequenced) — opcode 0x02 is REJECTED in v1.0
         target = b"target"
-        s.sendall(b'\x02' + struct.pack('>H', len(target)) + target + struct.pack('>H', 1000))
+        s.sendall(b'\x07' + struct.pack('>H', len(target)) + target +
+                  struct.pack('>Q', 999) + struct.pack('>H', 1000))
         s.sendall(b'only10byte')
         
         time.sleep(0.5)
@@ -274,11 +303,18 @@ def test_rapid_connection_flood():
     sockets = []
     
     try:
-        # Open many connections rapidly
+        # Open many TLS connections rapidly (server requires TLS)
+        ctx = ssl.create_default_context()
+        if os.path.exists(CA_CERT):
+            ctx.load_verify_locations(CA_CERT)
+        else:
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
         for i in range(num_connections):
             try:
-                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                s.settimeout(2.0)
+                raw = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                raw.settimeout(2.0)
+                s = ctx.wrap_socket(raw, server_hostname='localhost')
                 s.connect(('localhost', 8085))
                 sockets.append(s)
             except:
@@ -391,12 +427,13 @@ def test_binary_message():
         s = get_connection()
         login(s, "binary_tester")
         
-        # Send binary data (all possible byte values)
+        # Send binary data (all possible byte values) using opcode 0x07 (sequenced)
         binary_msg = bytes(range(256))
         target = "target"
         target_bytes = target.encode('utf-8')
         
-        packet = b'\x02' + struct.pack('>H', len(target_bytes)) + target_bytes + struct.pack('>H', len(binary_msg)) + binary_msg
+        packet = (b'\x07' + struct.pack('>H', len(target_bytes)) + target_bytes +
+                  struct.pack('>Q', 1) + struct.pack('>H', len(binary_msg)) + binary_msg)
         s.sendall(packet)
         
         time.sleep(0.2)

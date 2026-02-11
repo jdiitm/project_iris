@@ -48,12 +48,14 @@ def log(msg):
 SERVER_HOST = os.environ.get("IRIS_HOST", "localhost")
 SERVER_PORT = int(os.environ.get("IRIS_PORT", "8085"))
 CONTAINER_NAME = os.environ.get("IRIS_CORE_CONTAINER", "core-east-1")
+IS_CI = os.environ.get("CI", "").lower() in ("true", "1")
+CI_TIMEOUT_FACTOR = 2 if IS_CI else 1
 TIMEOUT = 10
-RECOVERY_TIMEOUT = 60
+RECOVERY_TIMEOUT = 60 * CI_TIMEOUT_FACTOR
 
 
-def connect_tls():
-    """Create TLS connection to Iris edge."""
+def connect_tls(max_retries=5, retry_delay=2.0):
+    """Create TLS connection to Iris edge with retry logic."""
     context = ssl.create_default_context()
     ca_cert = PROJECT_ROOT / "certs" / "ca.pem"
     if ca_cert.exists():
@@ -62,11 +64,19 @@ def connect_tls():
         context.check_hostname = False
         context.verify_mode = ssl.CERT_NONE
     
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.settimeout(TIMEOUT)
-    tls_sock = context.wrap_socket(sock, server_hostname=SERVER_HOST)
-    tls_sock.connect((SERVER_HOST, SERVER_PORT))
-    return tls_sock
+    last_err = None
+    for attempt in range(max_retries):
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(TIMEOUT)
+            tls_sock = context.wrap_socket(sock, server_hostname=SERVER_HOST)
+            tls_sock.connect((SERVER_HOST, SERVER_PORT))
+            return tls_sock
+        except Exception as e:
+            last_err = e
+            if attempt < max_retries - 1:
+                time.sleep(retry_delay)
+    raise ConnectionError(f"Failed to connect after {max_retries} attempts: {last_err}")
 
 
 def connect_plaintext():
@@ -255,11 +265,17 @@ def wait_for_container_healthy(container_name, timeout=60):
 
 
 def reconnect_edge_to_core(edge_container="edge-east-1", core_node="core_east_1@coreeast1"):
-    """Reconnect edge to core after core restart (hidden nodes don't auto-reconnect)."""
+    """Reconnect edge to core after core restart.
+    
+    Uses net_adm:ping directly (like init_cluster.sh reconnect_edges).
+    """
     print(f"  Reconnecting edge to core...")
-    cmd = f"docker exec {edge_container} erl -noshell -hidden -sname tmp_reconn -setcookie iris_secret -eval 'rpc:call(edge_east_1@edgeeast1, net_adm, ping, [{core_node}]), init:stop().'"
+    random_id = int(time.time() * 1000) % 100000
+    cmd = (f"docker exec {edge_container} erl -noshell "
+           f"-sname reconn_{random_id} -setcookie iris_secret "
+           f"-eval \"net_adm:ping('{core_node}'), halt(0).\"")
     result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
-    time.sleep(1)  # Give time for connection to establish
+    time.sleep(2)  # Give time for connection to establish
     return result.returncode == 0
 
 
@@ -363,8 +379,10 @@ def ensure_cluster_healthy():
                     ["docker", "compose", "-f", str(compose_file), "up", "-d"],
                     cwd=str(docker_dir), capture_output=True, timeout=180
                 )
-                log("  Waiting for containers (60s)...")
-                time.sleep(60)
+                # AUDIT P4 FIX: Poll for containers instead of blind 60s sleep
+                log("  Polling for containers to start...")
+                from tests.suites.chaos_dist.utils import wait_for_condition, wait_for_container_running
+                wait_for_container_running("core-east-1", timeout=90)
             except Exception as e:
                 log(f"  Full restart failed: {e}")
         
@@ -382,7 +400,7 @@ def ensure_cluster_healthy():
             )
             if result.returncode == 0:
                 log("  Reinitialization successful, waiting for propagation...")
-                time.sleep(20)
+                time.sleep(10)  # AUDIT P4: Reduced from 20s, init_cluster.sh handles sync
             else:
                 log(f"  Reinitialization returned non-zero: {result.returncode}")
                 for line in (result.stdout + result.stderr).strip().split('\n')[-3:]:
@@ -475,8 +493,9 @@ def test_ack_implies_durability():
         print("  ⚠️ Container not healthy, but may still work")
     
     # Extra wait for Mnesia to fully recover (disc_copies tables load slowly)
-    print("  Waiting additional 20s for Mnesia recovery...")
-    time.sleep(20)
+    # AUDIT P4 FIX: Reduced from 20s, container health check above covers most of this
+    print("  Waiting for Mnesia recovery...")
+    time.sleep(10)
     
     # Reconnect edge to core (hidden nodes don't auto-reconnect)
     print("  Reconnecting edge to core after restart...")
@@ -604,12 +623,14 @@ def restore_cluster_state():
                 ["docker", "compose", "-f", str(compose_file), "down", "--remove-orphans", "-v"],
                 cwd=str(docker_dir), capture_output=True, timeout=60
             )
-            time.sleep(5)
+            time.sleep(3)  # Brief settle after down
             subprocess.run(
                 ["docker", "compose", "-f", str(compose_file), "up", "-d"],
                 cwd=str(docker_dir), capture_output=True, timeout=180
             )
-            time.sleep(60)
+            # AUDIT P4 FIX: Poll for container readiness instead of blind 60s
+            from tests.suites.chaos_dist.utils import wait_for_container_running
+            wait_for_container_running("core-east-1", timeout=90)
             
             init_script = docker_dir / "init_cluster.sh"
             if init_script.exists():

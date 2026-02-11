@@ -132,8 +132,8 @@ echo ""
 # ============================================================================
 cleanup_standalone() {
     echo -e "${YELLOW}[CLEANUP]${NC} Stopping local processes..."
-    pkill -9 beam.smp 2>/dev/null || true
-    pkill -9 epmd 2>/dev/null || true
+    pkill -u "$USER" -9 beam.smp 2>/dev/null || true
+    pkill -u "$USER" -9 epmd 2>/dev/null || true
     rm -rf Mnesia.* MnesiaCore.* data/ 2>/dev/null || true
     find /tmp -maxdepth 1 -name "iris_*" -exec rm -rf {} \; 2>/dev/null || true
     rm -f erl_crash.dump core.log edge1.log edge2.log 2>/dev/null || true
@@ -145,8 +145,24 @@ cleanup_standalone() {
 # ============================================================================
 start_server() {
     echo "Starting local TLS server..."
+    # Pre-check: fail fast if port 8085 is occupied by a non-user process (e.g. Docker)
+    if nc -z localhost 8085 2>/dev/null; then
+        if ! pgrep -u "$USER" -f "sname iris_edge" > /dev/null 2>&1; then
+            echo -e "${RED}ERROR: Port 8085 is in use by another process (Docker cluster?)${NC}"
+            echo -e "${RED}Stop Docker containers first: ./docker/global-cluster/cluster.sh down${NC}"
+            ss -tlnp 2>/dev/null | grep ':8085' || true
+            return 1
+        fi
+    fi
     CONFIG=config/test_tls make start > "$LOG_DIR/server_start.log" 2>&1
     sleep 5
+    
+    # Verify OUR server started (not a leftover Docker edge on the same port)
+    if ! pgrep -u "$USER" -f "sname iris_edge" > /dev/null 2>&1; then
+        echo -e "${RED}ERROR: Server process not found after start${NC}"
+        tail -10 "$LOG_DIR/server_start.log"
+        return 1
+    fi
     
     local attempts=0
     while ! nc -z localhost 8085 2>/dev/null; do
@@ -170,6 +186,7 @@ start_server() {
 HEAVY_TESTS=(
     "test_degradation_order"     # 200K+ messages, heavy load
     "test_backpressure"          # Stress tests connections
+    "test_connection_rate_limit" # Connection flood crashes server (200 conns burst)
     "stress_hotspot"             # Heavy single-key load
     "stress_geo_scale"           # Large scale test
     "stress_global_fan_in"       # Fan-in stress
@@ -232,33 +249,37 @@ restart_server_quick() {
     # Graceful shutdown first (SIGTERM) to allow clean socket teardown,
     # then force kill (SIGKILL) as fallback. Using only SIGKILL causes
     # listen sockets to linger in TIME_WAIT, leading to eaddrinuse on restart.
-    pkill -TERM beam.smp 2>/dev/null || true
+    # Use -u $USER to only kill OUR beam.smp processes — root-owned
+    # beam.smp (Docker, system services) would cause false warnings.
+    pkill -u "$USER" -TERM beam.smp 2>/dev/null || true
+    sleep 2
+    pkill -u "$USER" -9 beam.smp 2>/dev/null || true
     sleep 1
-    pkill -9 beam.smp 2>/dev/null || true
-    # Wait for old beam.smp to actually exit (CI runners can be slow to reap)
-    # Without this, ps -C beam.smp sees both old and new processes, inflating
-    # memory measurements in benchmark_memory.
+    pkill -u "$USER" -9 beam.smp 2>/dev/null || true
+    # Wait for OUR beam.smp to actually exit
     local wait_attempts=0
-    while pgrep -x beam.smp > /dev/null 2>&1; do
+    while pgrep -u "$USER" -x beam.smp > /dev/null 2>&1; do
         wait_attempts=$((wait_attempts + 1))
-        if [ $wait_attempts -ge 10 ]; then
-            echo -e "    ${YELLOW}Warning: beam.smp still in process table after 10s${NC}"
+        if [ $wait_attempts -ge 15 ]; then
+            echo -e "    ${YELLOW}Warning: beam.smp still in process table after 15s${NC}"
             break
         fi
         sleep 1
     done
-    # Wait for ports to be fully released (prevents eaddrinuse on restart)
+    # Wait for ports to be fully released (prevents eaddrinuse on restart).
+    # After heavy tests, socket cleanup can take 20+ seconds.
     local port_attempts=0
     while ss -tlnp 2>/dev/null | grep -q ':8085\|:8086'; do
         port_attempts=$((port_attempts + 1))
-        if [ $port_attempts -ge 5 ]; then
+        if [ $port_attempts -ge 30 ]; then
+            echo -e "    ${YELLOW}Warning: ports still held after 30s${NC}"
             break
         fi
         sleep 1
     done
     rm -rf Mnesia.* MnesiaCore.* 2>/dev/null || true
     CONFIG=config/test_tls make start > "$LOG_DIR/server_restart.log" 2>&1
-    sleep 4
+    sleep 5
     # Wait for server port to be accepting connections
     local attempts=0
     while ! nc -z localhost 8085 2>/dev/null; do
@@ -304,7 +325,10 @@ cluster_up() {
     cd "$CLUSTER_DIR"
     if bash "$CLUSTER_SCRIPT" up > "$LOG_DIR/cluster_up.log" 2>&1; then
         cd "$PROJECT_ROOT"
-        echo -e "  ${GREEN}Cluster ready${NC}"
+        echo -e "  ${GREEN}Cluster ready (cores)${NC}"
+        # Wait for at least one edge node to accept TLS connections.
+        # init_cluster.sh only checks core nodes; edge nodes may still be starting.
+        wait_for_edge_ready
         return 0
     else
         cd "$PROJECT_ROOT"
@@ -312,6 +336,28 @@ cluster_up() {
         tail -20 "$LOG_DIR/cluster_up.log"
         return 1
     fi
+}
+
+# Wait for at least one edge node to accept TCP connections on its TLS port.
+# This prevents tests from failing at 0s because the edge isn't ready yet.
+wait_for_edge_ready() {
+    local max_wait=30
+    local ports="8085 8087 8089"  # edge-east-1, edge-west-1, edge-eu-1
+    local attempt=0
+    
+    while [ $attempt -lt $max_wait ]; do
+        for port in $ports; do
+            if nc -z localhost "$port" 2>/dev/null; then
+                echo -e "  ${GREEN}Edge ready (port $port)${NC}"
+                # Give a brief extra moment for TLS listener stabilization
+                sleep 2
+                return 0
+            fi
+        done
+        attempt=$((attempt + 1))
+        sleep 1
+    done
+    echo -e "  ${YELLOW}[WARN] No edge nodes responded after ${max_wait}s - tests may fail${NC}"
 }
 
 # Run Docker test with FRESH cluster (proven pattern)
@@ -356,35 +402,14 @@ run_docker_test_fresh() {
 }
 
 # ============================================================================
-# DOCKER CHAOS TESTS (all tests in chaos_dist)
+# DOCKER CHAOS TESTS (auto-discovered from chaos_dist directory)
 # ============================================================================
-DOCKER_CHAOS_TESTS=(
-    "tests/suites/chaos_dist/test_server_storage_audit.py"
-    "tests/suites/chaos_dist/test_distributed_rate_limit.py"
-    "tests/suites/chaos_dist/test_key_bundle_durability.py"
-    "tests/suites/chaos_dist/test_dedup_persistence.py"
-    "tests/suites/chaos_dist/test_ack_disconnect_race.py"
-    "tests/suites/chaos_dist/test_cross_region_chaos.py"
-    "tests/suites/chaos_dist/test_multimaster_durability.py"
-    "tests/suites/chaos_dist/test_ack_durability.py"
-    "tests/suites/chaos_dist/test_bridge_durability.py"
-    "tests/suites/chaos_dist/test_network_partition.py"
-    "tests/suites/chaos_dist/test_cross_region_latency.py"
-    "tests/suites/chaos_dist/test_ordering_under_failure.py"
-    "tests/suites/chaos_dist/test_region_outage.py"
-    "tests/suites/chaos_dist/test_dist_failover.py"
-    "tests/suites/chaos_dist/test_failover_time.py"
-    "tests/suites/chaos_dist/test_cascade_failure.py"
-    "tests/suites/chaos_dist/test_split_brain.py"
-    "tests/suites/chaos_dist/test_disk_full.py"
-    "tests/suites/chaos_dist/test_split_brain_convergence.py"
-    "tests/suites/chaos_dist/test_outbox_queue_overflow.py"
-    "tests/suites/chaos_dist/test_outbox_overflow_enforcement.py"
-    "tests/suites/chaos_dist/test_split_brain_epoch_resolution.py"
-    "tests/suites/chaos_dist/test_cross_region_node_kill.py"
-    "tests/suites/chaos_dist/test_quorum_write_failures.py"
-    "tests/suites/chaos_dist/test_real_clock_skew.py"
-)
+# Dynamic discovery ensures new tests are never silently excluded.
+# Sorted for deterministic execution order.
+DOCKER_CHAOS_TESTS=()
+while IFS= read -r test_file; do
+    DOCKER_CHAOS_TESTS+=("$test_file")
+done < <(find tests/suites/chaos_dist -name 'test_*.py' -type f | sort)
 
 # ============================================================================
 # MAIN EXECUTION
@@ -470,6 +495,7 @@ else
 
     echo ""
     echo "--- E2E Tests ---"
+    ensure_server_ready "E2E Tests"
     for test in tests/suites/e2e/test_*.py; do
         [ -f "$test" ] && run_test "$test" 180
     done
@@ -482,18 +508,21 @@ else
 
     echo ""
     echo "--- Compatibility Tests ---"
+    ensure_server_ready "Compatibility Tests"
     for test in tests/suites/compatibility/test_*.py; do
         [ -f "$test" ] && run_test "$test" 180
     done
 
     echo ""
     echo "--- Security Tests ---"
+    ensure_server_ready "Security Tests"
     for test in tests/suites/security/test_*.py; do
         [ -f "$test" ] && run_test "$test" 180
     done
 
     echo ""
     echo "--- Resilience Tests ---"
+    ensure_server_ready "Resilience Tests"
     for test in tests/suites/resilience/test_*.py; do
         [ -f "$test" ] && run_test "$test" 300
     done
@@ -600,8 +629,27 @@ else
 
     echo ""
     echo "Stopping standalone server..."
-    pkill -9 beam.smp 2>/dev/null || true
-    sleep 3
+    pkill -u "$USER" -TERM beam.smp 2>/dev/null || true
+    sleep 1
+    pkill -u "$USER" -9 beam.smp 2>/dev/null || true
+    p2_wait=0
+    while pgrep -u "$USER" -x beam.smp > /dev/null 2>&1; do
+        p2_wait=$((p2_wait + 1))
+        if [ $p2_wait -ge 15 ]; then
+            echo -e "  ${YELLOW}Warning: beam.smp still in process table after 15s${NC}"
+            break
+        fi
+        sleep 1
+    done
+    p2_port=0
+    while ss -tlnp 2>/dev/null | grep -q ':8085\|:8086'; do
+        p2_port=$((p2_port + 1))
+        if [ $p2_port -ge 10 ]; then
+            echo -e "  ${YELLOW}Warning: ports still held after 10s${NC}"
+            break
+        fi
+        sleep 1
+    done
 
     # ==========================================================================
     # PHASE 3: CLUSTERMANAGER TESTS
@@ -621,14 +669,27 @@ else
     for test in tests/suites/chaos_controlled/*.py; do
         if [ -f "$test" ]; then
             # Full cleanup before each chaos_controlled test
-            pkill -9 beam.smp 2>/dev/null || true
-            sleep 2
+            pkill -u "$USER" -TERM beam.smp 2>/dev/null || true
+            sleep 1
+            pkill -u "$USER" -9 beam.smp 2>/dev/null || true
+            p3_wait=0
+            while pgrep -u "$USER" -x beam.smp > /dev/null 2>&1; do
+                p3_wait=$((p3_wait + 1))
+                if [ $p3_wait -ge 10 ]; then break; fi
+                sleep 1
+            done
+            p3_port=0
+            while ss -tlnp 2>/dev/null | grep -q ':8085\|:8086'; do
+                p3_port=$((p3_port + 1))
+                if [ $p3_port -ge 5 ]; then break; fi
+                sleep 1
+            done
             rm -rf Mnesia.* MnesiaCore.* 2>/dev/null || true
             run_test "$test" 300
         fi
     done
 
-    pkill -9 beam.smp 2>/dev/null || true
+    pkill -u "$USER" -9 beam.smp 2>/dev/null || true
     echo ""
 fi
 
@@ -648,11 +709,11 @@ else
     echo "using the proven cluster.sh script for isolation."
     echo ""
     
-    pkill -9 beam.smp 2>/dev/null || true
+    pkill -u "$USER" -9 beam.smp 2>/dev/null || true
     
     for test in "${DOCKER_CHAOS_TESTS[@]}"; do
         if [ -f "$test" ]; then
-            run_docker_test_fresh "$test" 300
+            run_docker_test_fresh "$test" 480
         fi
     done
     

@@ -41,8 +41,9 @@ PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
 CA_CERT = PROJECT_ROOT / "certs" / "ca.pem"
 
 
-def create_tls_socket(host: str, port: int, timeout: int = 10) -> socket.socket:
-    """Create a TLS-wrapped socket connection."""
+def create_tls_socket(host: str, port: int, timeout: int = 10,
+                      max_retries: int = 3, retry_delay: float = 2.0) -> socket.socket:
+    """Create a TLS-wrapped socket connection with retry."""
     context = ssl.create_default_context()
     if CA_CERT.exists():
         context.load_verify_locations(str(CA_CERT))
@@ -50,14 +51,26 @@ def create_tls_socket(host: str, port: int, timeout: int = 10) -> socket.socket:
         context.check_hostname = False
         context.verify_mode = ssl.CERT_NONE
     
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.settimeout(timeout)
-    tls_sock = context.wrap_socket(sock, server_hostname=host)
-    tls_sock.connect((host, port))
-    return tls_sock
+    last_err = None
+    for attempt in range(max_retries):
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(timeout)
+            tls_sock = context.wrap_socket(sock, server_hostname=host)
+            tls_sock.connect((host, port))
+            return tls_sock
+        except Exception as e:
+            last_err = e
+            if attempt < max_retries - 1:
+                time.sleep(retry_delay)
+    raise ConnectionError(f"Failed to connect to {host}:{port} after {max_retries} attempts: {last_err}")
 
 # Determinism
 TEST_SEED = int(os.environ.get("TEST_SEED", 42))
+
+# CI-aware timeout scaling
+IS_CI = os.environ.get("CI", "").lower() in ("true", "1")
+CI_TIMEOUT_FACTOR = 2 if IS_CI else 1
 
 # Configuration
 SERVER_HOST = os.environ.get("IRIS_HOST", "localhost")
@@ -146,6 +159,27 @@ def start_container(container: str) -> bool:
         text=True
     )
     return result.returncode == 0
+
+
+def _reconnect_edge_after_core_restart(core_container: str) -> None:
+    """Reconnect edge node to restarted core (Erlang dist doesn't auto-reconnect)."""
+    log("  Reconnecting edge to core after restart...")
+    try:
+        from tests.suites.chaos_dist.utils import reconnect_edges_after_core_restart
+        reconnect_edges_after_core_restart(core_container)
+    except ImportError:
+        # Fallback: inline reconnection for edge-east-1
+        try:
+            random_id = int(time.time() * 1000) % 100000
+            subprocess.run(
+                ["docker", "exec", "edge-east-1", "sh", "-c",
+                 f"erl -noshell -sname reconn_{random_id} -setcookie iris_secret "
+                 f"-eval \"net_adm:ping('core_east_1@coreeast1'), halt(0).\""],
+                capture_output=True, timeout=15
+            )
+            time.sleep(2)
+        except Exception:
+            pass
 
 
 def wait_for_container_healthy(container: str, timeout: int = 60) -> bool:
@@ -653,9 +687,12 @@ def test_queue_survives_graceful_stop() -> Tuple[bool, Dict]:
     if not wait_for_container_healthy(CORE_EAST_1, RECOVERY_WAIT):
         log("  WARN: Container not healthy, but checking queue anyway...")
     
-    # Extra wait for Mnesia to fully recover
-    log("  Waiting 20s for Mnesia recovery...")
-    time.sleep(20)
+    # AUDIT P4 FIX: Reduced from 20s, container health check covers recovery
+    log("  Waiting for Mnesia recovery...")
+    time.sleep(10)
+    
+    # Reconnect edge to core after restart
+    _reconnect_edge_after_core_restart(CORE_EAST_1)
     
     # Check queue depth after restart
     metrics["queue_after_restart"] = get_bridge_queue_depth(CORE_EAST_1)
@@ -756,8 +793,12 @@ def test_queue_survives_hard_kill() -> Tuple[bool, Dict]:
     if not wait_for_container_healthy(CORE_EAST_1, RECOVERY_WAIT):
         log("  WARN: Container not fully healthy")
     
-    log("  Waiting 20s for Mnesia recovery and sync...")
-    time.sleep(20)
+    # AUDIT P4 FIX: Reduced from 20s
+    log("  Waiting for Mnesia recovery and sync...")
+    time.sleep(10)
+    
+    # Reconnect edge to core after restart
+    _reconnect_edge_after_core_restart(CORE_EAST_1)
     
     metrics["queue_after_restart"] = get_bridge_queue_depth(CORE_EAST_1)
     log(f"  Queue depth after restart: {metrics['queue_after_restart']}")

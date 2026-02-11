@@ -72,44 +72,46 @@ def create_typing_packet(target_user: str) -> bytes:
     """
     Create a typing indicator packet.
     
-    Protocol: 0x08 | TargetLen(2) | Target
+    Protocol: 0x70 | TargetLen(2) | Target
     """
     target_bytes = target_user.encode('utf-8')
-    return bytes([0x08]) + struct.pack('>H', len(target_bytes)) + target_bytes
+    return bytes([0x70]) + struct.pack('>H', len(target_bytes)) + target_bytes
 
 
 def create_stop_typing_packet(target_user: str) -> bytes:
     """
     Create a stop typing indicator packet.
     
-    Protocol: 0x09 | TargetLen(2) | Target
+    Protocol: 0x71 | TargetLen(2) | Target
     """
     target_bytes = target_user.encode('utf-8')
-    return bytes([0x09]) + struct.pack('>H', len(target_bytes)) + target_bytes
+    return bytes([0x71]) + struct.pack('>H', len(target_bytes)) + target_bytes
 
 
 def parse_typing_notification(data: bytes) -> dict:
     """
-    Parse an incoming typing notification.
+    Parse an incoming typing relay notification from server.
     
-    Expected format: 0x08 | SenderLen(2) | Sender | State(1)
+    Expected format: 0x72 | SenderLen(2) | Sender | TypingStatus(1)
+    where TypingStatus: 1 = typing, 0 = stopped
     """
     if len(data) < 4:
         return {"error": "too short"}
     
     opcode = data[0]
-    if opcode not in (0x08, 0x09):
-        return {"error": f"wrong opcode: {opcode}"}
+    if opcode != 0x72:
+        return {"error": f"wrong opcode: 0x{opcode:02x}"}
     
     sender_len = struct.unpack('>H', data[1:3])[0]
-    if len(data) < 3 + sender_len:
+    if len(data) < 3 + sender_len + 1:
         return {"error": "incomplete"}
     
     sender = data[3:3+sender_len].decode('utf-8', errors='replace')
+    typing_status = data[3+sender_len]
     
     return {
         "sender": sender,
-        "typing": opcode == 0x08,  # 0x08 = typing, 0x09 = stopped
+        "typing": typing_status == 1,
     }
 
 
@@ -222,19 +224,17 @@ def test_typing_sla_latency():
         sender = create_client_with_retry()
         sender.login(sender_user)
         
-        # Set receiver to non-blocking with short timeout for latency measurement
-        receiver.sock.settimeout(0.1)
-        
         # Measure latency for multiple typing indicators
         latencies = []
         num_samples = 5
         
         for i in range(num_samples):
-            # Drain any pending data
+            # Drain any pending data (short timeout)
+            receiver.sock.settimeout(0.2)
             try:
                 while True:
                     receiver.sock.recv(1024)
-            except socket.timeout:
+            except (socket.timeout, OSError):
                 pass
             
             # Send typing indicator
@@ -245,6 +245,7 @@ def test_typing_sla_latency():
             # Wait for notification
             received_time = None
             deadline = start_time + 5.0  # 5s max wait
+            receiver.sock.settimeout(0.1)
             
             while time.perf_counter() < deadline:
                 try:
@@ -256,6 +257,8 @@ def test_typing_sla_latency():
                             break
                 except socket.timeout:
                     continue
+                except OSError:
+                    break
             
             if received_time:
                 latency = (received_time - start_time) * 1000  # ms

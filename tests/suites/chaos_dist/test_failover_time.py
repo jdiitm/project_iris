@@ -79,10 +79,18 @@ class TrafficMonitor:
             return self.recovery_time
 
 
-def connect():
-    """Create TLS connection."""
+def connect(max_retries=5, retry_delay=2.0):
+    """Create TLS connection with retry logic."""
     from tests.suites.chaos_dist.utils import create_tls_socket
-    return create_tls_socket(SERVER_HOST, SERVER_PORT, timeout=5)
+    last_err = None
+    for attempt in range(max_retries):
+        try:
+            return create_tls_socket(SERVER_HOST, SERVER_PORT, timeout=5)
+        except Exception as e:
+            last_err = e
+            if attempt < max_retries - 1:
+                time.sleep(retry_delay)
+    raise ConnectionError(f"Failed to connect after {max_retries} attempts: {last_err}")
 
 
 def login(sock, username):
@@ -327,9 +335,9 @@ def restore_cluster_state():
         
         if result.returncode == 0:
             print(f"[cleanup] Container {CONTAINER_NAME} restarted")
-            # Give it time to rejoin the cluster
-            print("[cleanup] Waiting for container to stabilize (15s)...")
-            time.sleep(15)
+            # AUDIT P4 FIX: Reduced from 15s
+            print("[cleanup] Waiting for container to stabilize...")
+            time.sleep(8)
             
             # Verify it's running
             check = subprocess.run(

@@ -45,27 +45,42 @@ def test_epoch_increments_during_partition():
         log("  SKIP: Need at least 2 nodes")
         return True
 
-    node_a = nodes[0]
+    # Pick nodes from DIFFERENT regions so backbone disconnect actually isolates them.
+    # Same-region nodes share the regional network and stay connected even without backbone.
+    east_nodes = [n for n in nodes if "east" in n]
+    west_nodes = [n for n in nodes if "west" in n]
 
-    # Check initial epoch
-    result = run_on_node(node_a, "maps:get(epoch, iris_partition_guard:get_status())")
+    if not east_nodes or not west_nodes:
+        log("  SKIP: Need nodes in both East and West regions")
+        return True
+
+    node_a = east_nodes[0]   # stays connected (majority side)
+    node_b = west_nodes[0]   # gets disconnected from backbone (minority side)
+    log(f"  Partitioning {node_b} from backbone (cross-region)")
+    log(f"  Majority: {node_a} (5/6 nodes), Minority: {node_b} (1/6 nodes)")
+
+    # Check initial epoch on minority node (before partition)
+    result = run_on_node(node_b, "maps:get(epoch, iris_partition_guard:get_status())")
     initial_epoch = int(result)
-    log(f"  Initial epoch: {initial_epoch}")
+    log(f"  Initial epoch on {node_b}: {initial_epoch}")
 
-    # Partition
-    partition_nodes(nodes[0], nodes[1])
-    time.sleep(10)  # Allow partition detection
+    # Partition: disconnect node_b from backbone.
+    # node_b sees only itself (1/6 = 16% < 50% quorum) → enters diverged, epoch++
+    # node_a still sees 5/6 nodes (83% > 50%) → stays normal
+    partition_nodes(node_a, node_b)
+    # Wait for Erlang distribution timeout (net_ticktime=10s) + partition guard check (5s)
+    time.sleep(18)
 
-    # Check epoch after partition
-    result = run_on_node(node_a, "maps:get(epoch, iris_partition_guard:get_status())")
+    # Check epoch on the MINORITY side where quorum was lost
+    result = run_on_node(node_b, "maps:get(epoch, iris_partition_guard:get_status())")
     post_partition_epoch = int(result)
-    log(f"  Post-partition epoch: {post_partition_epoch}")
+    log(f"  Post-partition epoch on {node_b}: {post_partition_epoch}")
 
     assert post_partition_epoch > initial_epoch, \
-        f"Epoch should increment on partition: {post_partition_epoch} > {initial_epoch}"
+        f"Epoch should increment on minority node losing quorum: {post_partition_epoch} > {initial_epoch}"
 
     # Heal
-    heal_partition(nodes[0], nodes[1])
+    heal_partition(node_a, node_b)
     time.sleep(5)
 
     log("  PASS")
@@ -85,7 +100,14 @@ def test_resolution_on_heal():
         log("  SKIP: Need at least 2 nodes")
         return True
 
-    node_a, node_b = nodes[0], nodes[1]
+    east_nodes = [n for n in nodes if "east" in n]
+    west_nodes = [n for n in nodes if "west" in n]
+
+    if not east_nodes or not west_nodes:
+        log("  SKIP: Need nodes in both East and West regions")
+        return True
+
+    node_a, node_b = east_nodes[0], west_nodes[0]
 
     # Verify resolve_authority works
     code = (

@@ -78,35 +78,41 @@ def check_container_running(container: str) -> bool:
         return False
 
 
-def connect_to_server():
-    """Connect to Iris server with TLS or plaintext auto-detection."""
-    # Try TLS first
-    try:
-        context = ssl.create_default_context()
-        ca_cert = PROJECT_ROOT / "certs" / "ca.pem"
-        if ca_cert.exists():
-            context.load_verify_locations(str(ca_cert))
-        else:
-            context.check_hostname = False
-            context.verify_mode = ssl.CERT_NONE
+def connect_to_server(max_retries: int = 5, retry_delay: float = 2.0):
+    """Connect to Iris server with TLS or plaintext auto-detection and retry."""
+    last_err = None
+    for attempt in range(max_retries):
+        if attempt > 0:
+            time.sleep(retry_delay)
+        # Try TLS first
+        try:
+            context = ssl.create_default_context()
+            ca_cert = PROJECT_ROOT / "certs" / "ca.pem"
+            if ca_cert.exists():
+                context.load_verify_locations(str(ca_cert))
+            else:
+                context.check_hostname = False
+                context.verify_mode = ssl.CERT_NONE
+            
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(10)
+            tls_sock = context.wrap_socket(sock, server_hostname=SERVER_HOST)
+            tls_sock.connect((SERVER_HOST, SERVER_PORT))
+            return tls_sock
+        except Exception as e:
+            last_err = e
         
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(10)
-        tls_sock = context.wrap_socket(sock, server_hostname=SERVER_HOST)
-        tls_sock.connect((SERVER_HOST, SERVER_PORT))
-        return tls_sock
-    except Exception:
-        pass
+        # Fall back to plaintext
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(10)
+            sock.connect((SERVER_HOST, SERVER_PORT))
+            return sock
+        except Exception as e:
+            last_err = e
     
-    # Fall back to plaintext
-    try:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(10)
-        sock.connect((SERVER_HOST, SERVER_PORT))
-        return sock
-    except Exception as e:
-        log(f"  Connection failed: {e}")
-        return None
+    log(f"  Connection failed after {max_retries} attempts: {last_err}")
+    return None
 
 
 def login(sock, username: str) -> bool:

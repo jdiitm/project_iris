@@ -43,7 +43,14 @@ wait_for_socket(enter, _OldState, _Data) ->
     keep_state_and_data;
 wait_for_socket(cast, {socket_ready, Socket}, Data) ->
     sock_setopts(Socket, [{active, once}]),
-    {next_state, handshake, Data#data{socket = Socket}}.
+    {next_state, handshake, Data#data{socket = Socket}};
+%% Socket closed/error before handshake even began
+wait_for_socket(info, {Closed, _}, Data)
+  when Closed =:= tcp_closed; Closed =:= ssl_closed ->
+    {stop, normal, Data};
+wait_for_socket(info, {Error, _, _}, Data)
+  when Error =:= tcp_error; Error =:= ssl_error ->
+    {stop, normal, Data}.
 
 %% STATE: handshake (HTTP Upgrade)
 handshake(enter, _OldState, _Data) ->
@@ -70,7 +77,15 @@ handshake(info, {Proto, Socket, Bin}, Data = #data{buffer = Buff})
         error ->
             io:format("WS: Handshake Error~n"),
             {stop, normal, Data}
-    end.
+    end;
+
+%% Handle socket close/error during handshake (prevents function_clause crash)
+handshake(info, {Closed, _}, Data)
+  when Closed =:= tcp_closed; Closed =:= ssl_closed ->
+    {stop, normal, Data};
+handshake(info, {Error, _, _}, Data)
+  when Error =:= tcp_error; Error =:= ssl_error ->
+    {stop, normal, Data}.
 
 %% STATE: connected (WebSocket Frames)
 connected(enter, _OldState, _Data) ->
@@ -98,6 +113,16 @@ connected(info, {deliver_msg, Msg}, Data = #data{socket = Socket}) ->
     %% Wrap in Binary Frame (Opcode 2)
     Frame = encode_frame(binary, Msg),
     sock_send(Socket, Frame),
+    keep_state_and_data;
+
+%% AUDIT 2.3a FIX: Handle session_overload from heap check
+connected(info, session_overload, Data = #data{socket = Socket}) ->
+    logger:warning("Session ~p: heap limit approaching, sending SERVER_OVERLOAD",
+                   [Data#data.user]),
+    sock_send(Socket, encode_frame(binary, <<"SERVER_OVERLOAD">>)),
+    {stop, {shutdown, heap_limit}, Data};
+
+connected(info, _Other, _Data) ->
     keep_state_and_data.
 
 %% Frame Processing Loop
@@ -111,7 +136,18 @@ process_ws_frames(Buff, Data = #data{socket = Socket, user = User}) ->
                     %% Delegate Protocol Logic
                     {ok, NewUser, Actions} = iris_session:handle_packet(Packet, User, self(), ?MODULE),
                     handle_actions(Actions, Socket),
-                    process_ws_frames(Rest, NewData#data{user = NewUser});
+                    %% AUDIT 2.3a FIX: Check heap_size after packet processing.
+                    %% If approaching the max_heap_size limit (80% of 1M words),
+                    %% send SERVER_OVERLOAD and stop gracefully instead of abrupt kill.
+                    case check_heap_size() of
+                        ok ->
+                            process_ws_frames(Rest, NewData#data{user = NewUser});
+                        overload ->
+                            logger:warning("Session ~p: heap_size exceeded soft limit, closing gracefully",
+                                           [NewUser]),
+                            sock_send(Socket, encode_frame(binary, <<"SERVER_OVERLOAD">>)),
+                            {stop, {shutdown, heap_limit}, NewData#data{user = NewUser}}
+                    end;
                 close -> {stop, normal, Data}
             end;
         more ->
@@ -128,6 +164,17 @@ handle_actions([{send_batch, Bins} | T], Socket) ->
     handle_actions(T, Socket);
 handle_actions([close | _], Socket) ->
     sock_send(Socket, encode_frame(close, <<>>)).
+
+%% AUDIT 2.3a FIX: Soft heap limit check (80% of 1M words = 800K words).
+%% Called after each packet to detect approaching the max_heap_size limit
+%% and send SERVER_OVERLOAD before the hard limit triggers.
+-define(HEAP_SOFT_LIMIT, 800000).  %% 80% of 1,000,000 words (~6.4MB)
+
+check_heap_size() ->
+    case erlang:process_info(self(), heap_size) of
+        {heap_size, Size} when Size > ?HEAP_SOFT_LIMIT -> overload;
+        _ -> ok
+    end.
 
 %% WS Logic
 handle_frame_op(ping, _, Data) -> 

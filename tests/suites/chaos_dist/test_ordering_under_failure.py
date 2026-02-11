@@ -80,10 +80,20 @@ class SimpleClient:
         self.buffer = b""
         self.seq_counter = 0  # Sequence counter for RFC-compliant messaging
     
-    def connect(self):
-        """Establish TLS connection."""
+    def connect(self, max_retries=5, retry_delay=2.0):
+        """Establish TLS connection with retry for post-cluster-init readiness."""
         from tests.suites.chaos_dist.utils import create_tls_socket
-        self.sock = create_tls_socket(self.host, self.port, timeout=TIMEOUT)
+        last_err = None
+        for attempt in range(max_retries):
+            try:
+                self.sock = create_tls_socket(self.host, self.port, timeout=TIMEOUT)
+                return
+            except Exception as e:
+                last_err = e
+                if attempt < max_retries - 1:
+                    import time
+                    time.sleep(retry_delay)
+        raise ConnectionError(f"Failed to connect after {max_retries} attempts: {last_err}")
     
     def close(self):
         """Close connection."""

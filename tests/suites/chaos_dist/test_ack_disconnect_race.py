@@ -46,8 +46,10 @@ PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
 SERVER_HOST = os.environ.get("IRIS_HOST", "localhost")
 SERVER_PORT = int(os.environ.get("IRIS_PORT", "8085"))
 CONTAINER_NAME = os.environ.get("IRIS_CORE_CONTAINER", "core-east-1")
+IS_CI = os.environ.get("CI", "").lower() in ("true", "1")
+CI_TIMEOUT_FACTOR = 2 if IS_CI else 1
 TIMEOUT = 10
-RECOVERY_TIMEOUT = 90
+RECOVERY_TIMEOUT = 90 * CI_TIMEOUT_FACTOR
 RACE_WINDOW_MS = 100  # Kill server within this many ms of ACK
 
 # Results tracking
@@ -124,8 +126,8 @@ def check_server_health(max_retries=5, retry_delay=10):
     return False
 
 
-def connect_tls():
-    """Create TLS connection to Iris edge."""
+def connect_tls(max_retries=5, retry_delay=2.0):
+    """Create TLS connection to Iris edge with retry logic."""
     context = ssl.create_default_context()
     ca_cert = PROJECT_ROOT / "certs" / "ca.pem"
     if ca_cert.exists():
@@ -134,11 +136,19 @@ def connect_tls():
         context.check_hostname = False
         context.verify_mode = ssl.CERT_NONE
     
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.settimeout(TIMEOUT)
-    tls_sock = context.wrap_socket(sock, server_hostname=SERVER_HOST)
-    tls_sock.connect((SERVER_HOST, SERVER_PORT))
-    return tls_sock
+    last_err = None
+    for attempt in range(max_retries):
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(TIMEOUT)
+            tls_sock = context.wrap_socket(sock, server_hostname=SERVER_HOST)
+            tls_sock.connect((SERVER_HOST, SERVER_PORT))
+            return tls_sock
+        except Exception as e:
+            last_err = e
+            if attempt < max_retries - 1:
+                time.sleep(retry_delay)
+    raise ConnectionError(f"Failed to connect after {max_retries} attempts: {last_err}")
 
 
 def login(sock, username):
@@ -234,6 +244,27 @@ def wait_for_server_ready(timeout: int = RECOVERY_TIMEOUT) -> bool:
         except Exception:
             time.sleep(1)
     return False
+
+
+def reconnect_edge_to_core():
+    """Reconnect edge-east-1 to core-east-1 after core restart."""
+    try:
+        from tests.suites.chaos_dist.utils import reconnect_edges_after_core_restart
+        reconnect_edges_after_core_restart(CONTAINER_NAME)
+    except ImportError:
+        # Fallback: inline reconnection
+        try:
+            cookie = os.environ.get("IRIS_COOKIE", "iris_secret")
+            random_id = int(time.time() * 1000) % 100000
+            subprocess.run(
+                ["docker", "exec", "edge-east-1", "sh", "-c",
+                 f"erl -noshell -sname reconn_{random_id} -setcookie {cookie} "
+                 f"-eval \"net_adm:ping('core_east_1@coreeast1'), halt(0).\""],
+                capture_output=True, timeout=15
+            )
+            time.sleep(2)
+        except Exception:
+            pass
 
 
 def fetch_offline_messages(username: str) -> list:
@@ -379,6 +410,8 @@ def test_ack_disconnect_race():
         log_test("ACK-disconnect race", False, "Container did not restart in time")
         return False
     
+    reconnect_edge_to_core()
+    
     if not wait_for_server_ready():
         log_test("ACK-disconnect race", False, "Server did not become ready")
         return False
@@ -486,6 +519,8 @@ def test_rapid_ack_disconnect_cycles():
         log_test("Rapid ACK-disconnect", False, "Container did not restart")
         return False
     
+    reconnect_edge_to_core()
+    
     if not wait_for_server_ready():
         log_test("Rapid ACK-disconnect", False, "Server did not become ready")
         return False
@@ -580,6 +615,8 @@ def test_zero_delay_disconnect():
     if not wait_for_container_ready(CONTAINER_NAME):
         log_test("Zero-delay disconnect", False, "Container did not restart")
         return False
+    
+    reconnect_edge_to_core()
     
     if not wait_for_server_ready():
         log_test("Zero-delay disconnect", False, "Server did not become ready")

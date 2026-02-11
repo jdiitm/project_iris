@@ -81,10 +81,18 @@ def generate_unique_id():
     return ''.join(random.choices(string.ascii_lowercase + string.digits, k=8))
 
 
-def connect(host, port):
-    """Create TLS connection."""
+def connect(host, port, max_retries=5, retry_delay=2.0):
+    """Create TLS connection with retry logic for post-cluster-init readiness."""
     from tests.suites.chaos_dist.utils import create_tls_socket
-    return create_tls_socket(host, port, timeout=TIMEOUT)
+    last_err = None
+    for attempt in range(max_retries):
+        try:
+            return create_tls_socket(host, port, timeout=TIMEOUT)
+        except Exception as e:
+            last_err = e
+            if attempt < max_retries - 1:
+                time.sleep(retry_delay)
+    raise ConnectionError(f"Failed to connect to {host}:{port} after {max_retries} attempts: {last_err}")
 
 
 def login(sock, username):
@@ -388,7 +396,7 @@ def reinit_cluster_replication():
         
         if result.returncode == 0:
             log("Replication initialized successfully")
-            time.sleep(10)  # Let it settle
+            time.sleep(5)  # AUDIT P4: Reduced from 10s
             return True
         else:
             log(f"Init script returned {result.returncode}")

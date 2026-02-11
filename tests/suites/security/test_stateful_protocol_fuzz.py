@@ -217,12 +217,14 @@ def test_interleaved_valid_invalid():
         time.sleep(0.2)
 
         success_count = 0
+        seq_no = 0
         for i in range(20):
             if i % 2 == 0:
-                # Valid: send message (opcode 0x02)
+                # Valid: send message (opcode 0x07 sequenced message)
                 target = b"interleave_target"
                 msg = f"valid_msg_{i}".encode("utf-8")
-                packet = bytes([0x02]) + struct.pack(">H", len(target)) + target + struct.pack(">H", len(msg)) + msg
+                seq_no += 1
+                packet = bytes([0x07]) + struct.pack(">H", len(target)) + target + struct.pack(">Q", seq_no) + struct.pack(">H", len(msg)) + msg
                 try:
                     sock.sendall(packet)
                     success_count += 1

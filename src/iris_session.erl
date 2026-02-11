@@ -156,7 +156,9 @@ handle_packet({login, LoginData}, _Current, TransportPid, _Mod) ->
     %% AUDIT3 FIX: Protect against session memory bloat
     %% NFR-26 FIX: Increased from 100000 to 1000000 words to support 1000-member groups
     %% 1000000 words = ~8MB, sufficient for large group roster/fanout operations
-    process_flag(max_heap_size, #{size => 1000000, kill => true}), %% ~8MB limit
+    %% AUDIT 2.3a FIX: kill => false allows graceful close instead of TCP reset.
+    %% iris_ws_lite checks heap_size after packet handling and sends SERVER_OVERLOAD.
+    process_flag(max_heap_size, #{size => 1000000, kill => false, error_logger => true}), %% ~8MB soft limit
     
     %% RFC Section 10.1: Check failed-login rate limit first
     Result = case iris_auth:check_login_rate(User) of
@@ -734,7 +736,9 @@ handle_packet({token_refresh, RefreshToken}, User, _Pid, _Mod) ->
     iris_trace:new_span(<<"session.token_refresh">>),
     CoreNode = get_core_node(),
     %% Step 1: Validate and rotate on Core (mnesia-only, no gen_server needed)
-    TrResult = iris_circuit_breaker:call(CoreNode, iris_auth, validate_and_rotate_refresh, [RefreshToken]),
+    %% AUDIT 2.3b FIX: Use call_with_fallback to try alternate cores on failure
+    FallbackCores = iris_core_registry:get_fallback_cores(CoreNode),
+    TrResult = iris_circuit_breaker:call_with_fallback(CoreNode, iris_auth, validate_and_rotate_refresh, [RefreshToken], FallbackCores),
     TrResponse = case TrResult of
         {ok, _UserId, NewRefresh} ->
             %% Step 2: Create access token locally on Edge

@@ -71,19 +71,32 @@ def connect_tls():
     return tls_sock
 
 
-def connect_auto():
-    """Connect with auto-detection of TLS mode."""
-    # Try TLS first
-    try:
-        return connect_tls()
-    except Exception:
-        pass
+def connect_auto(max_retries: int = 5, retry_delay: float = 2.0):
+    """Connect with auto-detection of TLS mode and retry logic.
     
-    # Fall back to plaintext
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.settimeout(TIMEOUT)
-    sock.connect((SERVER_HOST, SERVER_PORT))
-    return sock
+    Edge nodes may not be fully ready immediately after cluster init.
+    Retry a few times before giving up.
+    """
+    last_err = None
+    for attempt in range(max_retries):
+        if attempt > 0:
+            time.sleep(retry_delay)
+        # Try TLS first
+        try:
+            return connect_tls()
+        except Exception as e:
+            last_err = e
+        
+        # Fall back to plaintext
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(TIMEOUT)
+            sock.connect((SERVER_HOST, SERVER_PORT))
+            return sock
+        except Exception as e:
+            last_err = e
+    
+    raise ConnectionError(f"Failed to connect after {max_retries} attempts: {last_err}")
 
 
 def login(sock, username):
@@ -262,11 +275,17 @@ def wait_for_container_healthy(container_name, timeout=60):
 
 
 def reconnect_edge_to_core(edge_container="edge-east-1", core_node="core_east_1@coreeast1"):
-    """Reconnect edge to core after core restart."""
+    """Reconnect edge to core after core restart.
+    
+    Uses net_adm:ping directly (like init_cluster.sh reconnect_edges).
+    """
     log("  Reconnecting edge to core...")
-    cmd = f"docker exec {edge_container} erl -noshell -hidden -sname tmp_reconn -setcookie iris_secret -eval 'rpc:call(edge_east_1@edgeeast1, net_adm, ping, [{core_node}]), init:stop().'"
+    random_id = int(time.time() * 1000) % 100000
+    cmd = (f"docker exec {edge_container} erl -noshell "
+           f"-sname reconn_{random_id} -setcookie iris_secret "
+           f"-eval \"net_adm:ping('{core_node}'), halt(0).\"")
     result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
-    time.sleep(1)
+    time.sleep(2)
     return result.returncode == 0
 
 
@@ -403,8 +422,9 @@ def test_dedup_survives_sigkill():
         log("  Container not healthy, but continuing...")
     
     # Wait for Mnesia recovery
-    log("  Waiting 20s for Mnesia recovery...")
-    time.sleep(20)
+    # AUDIT P4 FIX: Reduced from 20s
+    log("  Waiting for Mnesia recovery...")
+    time.sleep(10)
     
     # Reconnect edge to core
     reconnect_edge_to_core()

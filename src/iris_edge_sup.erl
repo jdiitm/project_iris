@@ -42,6 +42,12 @@ init([]) ->
                              {read_concurrency, true}, 
                              {write_concurrency, true}]),
     
+    %% Per-IP connection rate limiting table (RFC Section 10)
+    %% Owned by supervisor so it survives listener crashes.
+    ets:new(iris_conn_rate, [public, named_table, bag,
+                             {write_concurrency, true},
+                             {read_concurrency, true}]),
+    
     %% Session cache for connection resume (RFC Section 3.4)
     iris_session_cache:start(),
     

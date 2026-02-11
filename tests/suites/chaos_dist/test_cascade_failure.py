@@ -150,6 +150,25 @@ def start_container(container: str) -> bool:
         return False
 
 
+def _reconnect_edge_after_core_restart(core_container: str) -> None:
+    """Reconnect edge node to restarted core."""
+    try:
+        from tests.suites.chaos_dist.utils import reconnect_edges_after_core_restart
+        reconnect_edges_after_core_restart(core_container)
+    except ImportError:
+        try:
+            random_id = int(time.time() * 1000) % 100000
+            subprocess.run(
+                ["docker", "exec", "edge-east-1", "sh", "-c",
+                 f"erl -noshell -sname reconn_{random_id} -setcookie iris_secret "
+                 f"-eval \"net_adm:ping('core_east_1@coreeast1'), halt(0).\""],
+                capture_output=True, timeout=15
+            )
+            time.sleep(2)
+        except Exception:
+            pass
+
+
 def count_running_cores() -> int:
     """Count running core containers."""
     count = 0
@@ -359,6 +378,7 @@ def run_cascade_failure_test() -> dict:
         if results["killed_node"]:
             start_container(results["killed_node"])
             time.sleep(10)  # Let it rejoin
+            _reconnect_edge_after_core_restart(results["killed_node"])
         
         # Test recovery
         generator.start("recovery", CONFIG['recovery_seconds'])
@@ -378,6 +398,7 @@ def run_cascade_failure_test() -> dict:
         # Try to restore killed node
         if results.get("killed_node"):
             start_container(results["killed_node"])
+            _reconnect_edge_after_core_restart(results["killed_node"])
     
     return results
 

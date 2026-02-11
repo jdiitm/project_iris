@@ -35,8 +35,10 @@ PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
 
 # Test configuration
 SERVER_HOST = os.environ.get("IRIS_HOST", "localhost")
+IS_CI = os.environ.get("CI", "").lower() in ("true", "1")
+CI_TIMEOUT_FACTOR = 2 if IS_CI else 1
 TIMEOUT = 10
-RECOVERY_TIMEOUT = 120
+RECOVERY_TIMEOUT = 120 * CI_TIMEOUT_FACTOR
 
 # Region topology (from docker-compose)
 REGIONS = {
@@ -165,6 +167,25 @@ def kill_region(region: str) -> bool:
     return success
 
 
+def _reconnect_edge_after_core_restart(core_container: str) -> None:
+    """Reconnect edge node to restarted core."""
+    try:
+        from tests.suites.chaos_dist.utils import reconnect_edges_after_core_restart
+        reconnect_edges_after_core_restart(core_container)
+    except ImportError:
+        try:
+            random_id = int(time.time() * 1000) % 100000
+            subprocess.run(
+                ["docker", "exec", "edge-east-1", "sh", "-c",
+                 f"erl -noshell -sname reconn_{random_id} -setcookie iris_secret "
+                 f"-eval \"net_adm:ping('core_east_1@coreeast1'), halt(0).\""],
+                capture_output=True, timeout=15
+            )
+            time.sleep(2)
+        except Exception:
+            pass
+
+
 def start_region(region: str) -> bool:
     """Start all containers in a region."""
     if region not in REGIONS:
@@ -183,6 +204,10 @@ def start_region(region: str) -> bool:
         if not start_container(container):
             success = False
     
+    # Reconnect edges to cores after region restart
+    for core in REGIONS[region]["cores"]:
+        _reconnect_edge_after_core_restart(core)
+    
     return success
 
 
@@ -195,8 +220,8 @@ def region_healthy(region: str) -> bool:
     return all(check_container_running(c) for c in all_containers)
 
 
-def connect_tls(port: int):
-    """Create TLS connection to edge."""
+def connect_tls(port: int, max_retries=5, retry_delay=2.0):
+    """Create TLS connection to edge with retry logic."""
     context = ssl.create_default_context()
     ca_cert = PROJECT_ROOT / "certs" / "ca.pem"
     if ca_cert.exists():
@@ -205,11 +230,19 @@ def connect_tls(port: int):
         context.check_hostname = False
         context.verify_mode = ssl.CERT_NONE
     
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.settimeout(TIMEOUT)
-    tls_sock = context.wrap_socket(sock, server_hostname=SERVER_HOST)
-    tls_sock.connect((SERVER_HOST, port))
-    return tls_sock
+    last_err = None
+    for attempt in range(max_retries):
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(TIMEOUT)
+            tls_sock = context.wrap_socket(sock, server_hostname=SERVER_HOST)
+            tls_sock.connect((SERVER_HOST, port))
+            return tls_sock
+        except Exception as e:
+            last_err = e
+            if attempt < max_retries - 1:
+                time.sleep(retry_delay)
+    raise ConnectionError(f"Failed to connect to port {port} after {max_retries} attempts: {last_err}")
 
 
 def login(sock, username: str) -> bool:
@@ -384,8 +417,9 @@ def test_region_isolation_queuing():
     
     log(f"     {target_region} region recovered")
     
+    # AUDIT P4 FIX: Reduced from 10s
     # Additional wait for message delivery
-    time.sleep(10)
+    time.sleep(5)
     
     # Step 4: Fetch messages as receiver
     log(f"  5. Fetching messages as receiver...")
@@ -502,7 +536,8 @@ def test_catastrophic_region_failure():
         return False
     
     log(f"     Region recovered from catastrophic failure")
-    time.sleep(15)
+    # AUDIT P4 FIX: Reduced from 15s
+    time.sleep(8)
     
     # Step 4: Verify messages
     log(f"  5. Verifying message delivery...")
@@ -603,7 +638,7 @@ def test_multi_region_cross_queuing():
         log_test("Multi-region queuing", False, "EU did not recover")
         return False
     
-    time.sleep(10)
+    time.sleep(5)  # AUDIT P4: Reduced from 10s
     
     # Fetch messages
     log(f"  5. Verifying messages...")
