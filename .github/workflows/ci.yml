@@ -172,6 +172,8 @@ jobs:
         with:
           path: ebin
           key: ebin-${{ hashFiles('src/**/*.erl', 'test_utils/**/*.erl') }}
+      - name: Compile
+        run: make all          
 
       - name: Run Docker Chaos Tests (proven scripts)
         run: |
@@ -244,6 +246,8 @@ jobs:
         run: |
           pip install -r requirements-test.txt
           sudo apt-get update -qq && sudo apt-get install -y -qq libzstd-dev
+      - name: Compile
+        run: make all
 
       - name: Run Full Test Suite
         run: |
