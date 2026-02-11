@@ -742,36 +742,6 @@ store_offline_any_node([Node | Rest], User, Msg) ->
     end.
 
 %% =============================================================================
-%% RFC FR-5: Sequenced offline storage for FIFO ordering
-%% =============================================================================
-%% Store message with client-provided sequence number as timestamp.
-%% This guarantees FIFO ordering on retrieval.
-store_offline_sequenced(User, Msg, SeqNo, State) ->
-    Nodes = get_discovery_nodes(),
-    case store_offline_sequenced_any_node(Nodes, User, Msg, SeqNo) of
-        ok ->
-            incr_metric(route_offline),
-            {noreply, State#state{routed_offline = State#state.routed_offline + 1}};
-        {error, _Reason} ->
-            %% Fallback to local storage with sequence
-            logger:warning("Sequenced offline storage failed for ~p, storing locally", [User]),
-            case catch iris_offline_storage:store_with_seq(User, Msg, SeqNo) of
-                ok -> ok;
-                _ -> ok  %% Best effort
-            end,
-            incr_metric(route_offline),
-            {noreply, State#state{routed_offline = State#state.routed_offline + 1}}
-    end.
-
-store_offline_sequenced_any_node([], _User, _Msg, _SeqNo) ->
-    {error, all_nodes_failed};
-store_offline_sequenced_any_node([Node | Rest], User, Msg, SeqNo) ->
-    case rpc:call(Node, iris_offline_storage, store_with_seq, [User, Msg, SeqNo], 5000) of
-        ok -> ok;
-        {ok, _} -> ok;
-        _ -> store_offline_sequenced_any_node(Rest, User, Msg, SeqNo)
-    end.
-
 %% Local fallback storage
 store_offline_local(User, Msg, MsgId) ->
     %% Store in local Mnesia (will be synced when cluster is healthy)

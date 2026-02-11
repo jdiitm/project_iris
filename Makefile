@@ -37,15 +37,19 @@ $(NIF_SO): $(NIF_SRC)
 		|| echo "NIF: zstd skipped (libzstd-dev not installed — zstd compression unavailable)"
 
 ebin/%.app: src/%.app.src
+	@mkdir -p ebin
 	cp $< $@
 
 ebin/%.appup: src/%.appup.src
+	@mkdir -p ebin
 	cp $< $@
 
 ebin/%.beam: src/%.erl
+	@mkdir -p ebin
 	$(ERLC) -o ebin $<
 
 ebin/%.beam: test_utils/%.erl
+	@mkdir -p ebin
 	$(ERLC) -o ebin $<
 
 check_deps:
