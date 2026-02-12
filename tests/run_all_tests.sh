@@ -186,7 +186,11 @@ start_server() {
 HEAVY_TESTS=(
     "test_degradation_order"     # 200K+ messages, heavy load
     "test_backpressure"          # Stress tests connections
+    "test_backpressure_collapse" # Backpressure stress
     "test_connection_rate_limit" # Connection flood crashes server (200 conns burst)
+    "test_churn"                 # Connect/disconnect storms crash edge under load
+    "test_reconnect_storm"       # Reconnection floods can crash edge
+    "test_dedup_bloom_accuracy"  # High-volume dedup, needs fresh server state
     "stress_hotspot"             # Heavy single-key load
     "stress_geo_scale"           # Large scale test
     "stress_global_fan_in"       # Fan-in stress
@@ -453,6 +457,35 @@ else
     }
     echo -e "  ${GREEN}Compilation successful${NC}"
 
+    echo ""
+    echo "--- EUnit Tests ---"
+    printf "  %-50s" "EUnit (all discovered modules)"
+    make test > "$LOG_DIR/eunit.log" 2>&1
+    if [ $? -eq 0 ]; then
+        echo -e "${GREEN}PASS${NC}"
+        TOTAL_PASS=$((TOTAL_PASS + 1))
+    else
+        echo -e "${RED}FAIL${NC}"
+        TOTAL_FAIL=$((TOTAL_FAIL + 1))
+        FAILED_TESTS+=("EUnit")
+    fi
+
+    echo ""
+    echo "--- Property-Based Tests ---"
+    printf "  %-50s" "Protocol Properties (iris_proto_props)"
+    ERL_CMD="erl -pa ebin -noshell -eval \"case iris_proto_props:test_all() of ok -> init:stop(0); error -> init:stop(1) end.\""
+    eval $ERL_CMD > "$LOG_DIR/proto_props.log" 2>&1
+    if [ $? -eq 0 ]; then
+        echo -e "${GREEN}PASS${NC}"
+        TOTAL_PASS=$((TOTAL_PASS + 1))
+    else
+        echo -e "${RED}FAIL${NC}"
+        TOTAL_FAIL=$((TOTAL_FAIL + 1))
+        FAILED_TESTS+=("iris_proto_props")
+    fi
+
+    echo ""
+    echo "--- Python Unit Tests ---"
     for test in tests/suites/unit/test_*.py; do
         [ -f "$test" ] && run_test "$test" 60
     done
@@ -657,8 +690,8 @@ else
     p2_port=0
     while ss -tlnp 2>/dev/null | grep -q ':8085\|:8086'; do
         p2_port=$((p2_port + 1))
-        if [ $p2_port -ge 10 ]; then
-            echo -e "  ${YELLOW}Warning: ports still held after 10s${NC}"
+        if [ $p2_port -ge 30 ]; then
+            echo -e "  ${YELLOW}Warning: ports still held after 30s — forcing with SO_REUSEADDR${NC}"
             break
         fi
         sleep 1
@@ -672,12 +705,13 @@ else
     echo "============================================================================"
     echo "  (Each test manages its own cluster - server restart between tests)"
 
-    # Unset CONFIG for Phase 3: chaos_controlled tests start their OWN cluster
-    # via ClusterManager or direct `make` calls. Each test manages its own
-    # server lifecycle and configuration independently. Without unsetting
-    # CONFIG, child `make start_*` commands inherit CONFIG=config/test_tls,
-    # which may conflict with the test's own cluster configuration.
-    unset CONFIG
+    # Reset CONFIG to plain-TCP baseline for Phase 3: chaos_controlled tests
+    # start their OWN cluster via ClusterManager or direct `make` calls.
+    # Phase 2 used config/test_tls (TLS-enabled); Phase 3 tests that need
+    # TLS configure it themselves. Using config/test as a working baseline
+    # ensures `make start` succeeds (config/sys doesn't exist, and the
+    # .app defaults require TLS certs that aren't at the default paths).
+    export CONFIG=config/test
 
     for test in tests/suites/chaos_controlled/*.py; do
         if [ -f "$test" ]; then
@@ -694,7 +728,7 @@ else
             p3_port=0
             while ss -tlnp 2>/dev/null | grep -q ':8085\|:8086'; do
                 p3_port=$((p3_port + 1))
-                if [ $p3_port -ge 5 ]; then break; fi
+                if [ $p3_port -ge 15 ]; then break; fi
                 sleep 1
             done
             rm -rf Mnesia.* MnesiaCore.* 2>/dev/null || true

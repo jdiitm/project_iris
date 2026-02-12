@@ -70,6 +70,19 @@ start(_StartType, _StartArgs) ->
             ok
     end,
 
+    %% AUDIT FIX: Warn operators if critical cluster lists are empty in production.
+    %% These are safe no-ops in test but deployment hazards in production.
+    case application:get_env(iris_core, expected_cluster_nodes, []) of
+        [] -> logger:warning("PRODUCTION WARNING: expected_cluster_nodes is empty -- "
+                             "partition guard is DISABLED, split-brain is undetectable");
+        _ -> ok
+    end,
+    case application:get_env(iris_edge, core_nodes, []) of
+        [] -> logger:warning("PRODUCTION WARNING: core_nodes is empty -- "
+                             "edge nodes cannot route messages to core");
+        _ -> ok
+    end,
+
     supervisor:start_link({local, ?SERVER}, ?MODULE, []).
 
 stop(_State) ->
@@ -711,7 +724,11 @@ nuke_and_recreate_table(Table) ->
 %% Internal: Actually perform the dangerous table nuke operation
 do_nuke_and_recreate(Table) ->
     %% Step 1: Delete from Mnesia (may fail if table is in bad state)
-    catch mnesia:delete_table(Table),
+    try mnesia:delete_table(Table)
+    catch Class:Reason ->
+        logger:warning("mnesia:delete_table(~p) during nuke failed: ~p:~p (expected if table corrupted)",
+                       [Table, Class, Reason])
+    end,
     timer:sleep(500),
     %% Step 2: Delete disc files directly (the nuclear option)
     MnesiaDir = mnesia:system_info(directory),
@@ -725,92 +742,49 @@ do_nuke_and_recreate(Table) ->
     mnesia:wait_for_tables([Table], 10000),
     logger:info("Table ~p recreated successfully", [Table]).
 
-%% Recreate a single table with its original definition
-recreate_table(offline_msg) ->
-    mnesia:create_table(offline_msg, [
-        {disc_copies, [node()]},
-        {attributes, [key, timestamp, msg]},
-        {type, bag}
-    ]);
-recreate_table(user_meta) ->
-    mnesia:create_table(user_meta, [
-        {disc_copies, [node()]},
-        {attributes, [user, bucket_count]}
-    ]);
-recreate_table(user_status) ->
-    mnesia:create_table(user_status, [
-        {disc_copies, [node()]},
-        {attributes, [user, last_seen]}
-    ]);
-recreate_table(revoked_tokens) ->
-    mnesia:create_table(revoked_tokens, [
-        {disc_copies, [node()]},
-        {attributes, [jti, timestamp]}
-    ]);
-recreate_table(dedup_log) ->
-    mnesia:create_table(dedup_log, [
-        {disc_copies, [node()]},
-        {attributes, [msg_id, timestamp]},
-        {type, set}
-    ]);
-recreate_table(refresh_tokens) ->
-    mnesia:create_table(refresh_tokens, [
-        {disc_copies, [node()]},
-        {attributes, [token_id, user_id, family_id, used, created_at, expires_at]},
-        {type, set}
-    ]);
+%% =============================================================================
+%% AUDIT FIX: Single source of truth for Mnesia table definitions.
+%% Returns {StorageType, Options} so callers only supply the node list.
+%% =============================================================================
+table_spec(presence) ->
+    {ram_copies, [{attributes, [user, node, pid]}]};
+table_spec(offline_msg) ->
+    {disc_copies, [{attributes, [key, timestamp, msg]}, {type, bag}]};
+table_spec(user_meta) ->
+    {disc_copies, [{attributes, [user, bucket_count]}]};
+table_spec(user_status) ->
+    {disc_copies, [{attributes, [user, last_seen]}]};
+table_spec(revoked_tokens) ->
+    {disc_copies, [{attributes, [jti, timestamp]}]};
+table_spec(dedup_log) ->
+    {disc_copies, [{attributes, [msg_id, timestamp]}, {type, set}]};
+table_spec(refresh_tokens) ->
+    {disc_copies, [{attributes, [token_id, user_id, family_id, used, created_at, expires_at]}, {type, set}]};
+table_spec(user_blocks) ->
+    {disc_copies, [{attributes, [key, blocker, blocked, created_at]}, {type, set}]};
+table_spec(user_reports) ->
+    {disc_copies, [{attributes, [id, reporter, reported, reason, created_at]}, {type, bag}]}.
+
+%% Recreate a single table with its original definition (recovery path)
 recreate_table(Table) ->
-    logger:error("Unknown table to recreate: ~p", [Table]).
+    case erlang:function_exported(?MODULE, table_spec, 1) andalso
+         (catch table_spec(Table)) of
+        {StorageType, Opts} ->
+            mnesia:create_table(Table, [{StorageType, [node()]} | Opts]);
+        _ ->
+            logger:error("Unknown table to recreate: ~p", [Table])
+    end.
 
 %% Internal: Create tables (only called when seeding)
 create_tables(Nodes) ->
-    mnesia:create_table(presence, [
-        {ram_copies, Nodes},
-        {attributes, [user, node, pid]}
-    ]),
-    mnesia:create_table(offline_msg, [
-        {disc_copies, Nodes},
-        {attributes, [key, timestamp, msg]},
-        {type, bag}
-    ]),
-    mnesia:create_table(user_meta, [
-        {disc_copies, Nodes},
-        {attributes, [user, bucket_count]}
-    ]),
-    mnesia:create_table(user_status, [
-        {disc_copies, Nodes},
-        {attributes, [user, last_seen]}
-    ]),
-    %% P0-4 FIX: Add revoked_tokens table for distributed auth revocation
-    mnesia:create_table(revoked_tokens, [
-        {disc_copies, Nodes},
-        {attributes, [jti, timestamp]}
-    ]),
-    %% P0-FIX: Add dedup_log table for bloom filter false positive verification
-    %% Keyed by MsgId, stores timestamp for 7-day TTL cleanup
-    mnesia:create_table(dedup_log, [
-        {disc_copies, Nodes},
-        {attributes, [msg_id, timestamp]},
-        {type, set}
-    ]),
-    %% RFC FR-11a: Refresh token table for token refresh flow
-    mnesia:create_table(refresh_tokens, [
-        {disc_copies, Nodes},
-        {attributes, [token_id, user_id, family_id, used, created_at, expires_at]},
-        {type, set}
-    ]),
-    %% FR-8b: User safety tables (block/report)
-    mnesia:create_table(user_blocks, [
-        {disc_copies, Nodes},
-        {attributes, [key, blocker, blocked, created_at]},
-        {type, set}
-    ]),
-    mnesia:create_table(user_reports, [
-        {disc_copies, Nodes},
-        {attributes, [id, reporter, reported, reason, created_at]},
-        {type, bag}
-    ]),
-    mnesia:wait_for_tables([presence, offline_msg, user_meta, user_status, revoked_tokens, dedup_log, refresh_tokens, user_blocks, user_reports], 5000),
+    AllTables = [presence, offline_msg, user_meta, user_status,
+                 revoked_tokens, dedup_log, refresh_tokens,
+                 user_blocks, user_reports],
+    lists:foreach(fun(Table) ->
+        {StorageType, Opts} = table_spec(Table),
+        mnesia:create_table(Table, [{StorageType, Nodes} | Opts])
+    end, AllTables),
+    mnesia:wait_for_tables(AllTables, 5000),
     logger:info("Tables created.").
 
 %% Legacy wrapper for specific node lists (unused now but kept for API compat)

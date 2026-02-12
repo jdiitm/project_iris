@@ -32,7 +32,7 @@ nif: $(NIF_SO)
 
 $(NIF_SO): $(NIF_SRC)
 	@mkdir -p priv
-	@$(CC) $(NIF_CFLAGS) $(NIF_ZSTD_CFLAGS) -o $@ $< $(NIF_ZSTD_LDFLAGS) 2>/dev/null \
+	@$(CC) $(NIF_CFLAGS) $(NIF_ZSTD_CFLAGS) -o $@ $< $(NIF_ZSTD_LDFLAGS) \
 		&& echo "NIF: zstd compiled successfully" \
 		|| echo "NIF: zstd skipped (libzstd-dev not installed — zstd compression unavailable)"
 

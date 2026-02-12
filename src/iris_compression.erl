@@ -25,7 +25,13 @@ compress(zlib, Data) ->
     end;
 compress(zstd, Data) ->
     %% Real zstd via NIF (RFC Section 11.1: "zstd (recommended)")
-    iris_zstd_nif:compress(Data).
+    %% AUDIT FIX: Graceful degradation if NIF .so is not loaded
+    try iris_zstd_nif:compress(Data)
+    catch
+        error:undef -> {error, zstd_nif_not_available};
+        error:nif_not_loaded -> {error, zstd_nif_not_available};
+        error:{nif_not_loaded, _} -> {error, zstd_nif_not_available}
+    end.
 
 %% @doc Decompress data with the given algorithm.
 -spec decompress(zstd | zlib, binary()) -> {ok, binary()} | {error, term()}.
@@ -38,7 +44,13 @@ decompress(zlib, Compressed) ->
     end;
 decompress(zstd, Data) ->
     %% Real zstd via NIF (RFC Section 11.1)
-    iris_zstd_nif:decompress(Data).
+    %% AUDIT FIX: Graceful degradation if NIF .so is not loaded
+    try iris_zstd_nif:decompress(Data)
+    catch
+        error:undef -> {error, zstd_nif_not_available};
+        error:nif_not_loaded -> {error, zstd_nif_not_available};
+        error:{nif_not_loaded, _} -> {error, zstd_nif_not_available}
+    end.
 
 %% @doc Maybe compress based on payload size. Skips payloads <= 128 bytes.
 -spec maybe_compress(zstd | zlib, binary()) -> {compressed, binary()} | {uncompressed, binary()}.

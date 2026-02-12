@@ -1284,7 +1284,10 @@ relay_typing_indicator(Target, Sender, IsTyping) ->
                     {online, TargetNode, TargetPid} when is_pid(TargetPid) ->
                         %% Send to remote node
                         TypingPacket = iris_proto:encode_typing_relay(Sender, IsTyping),
-                        catch rpc:cast(TargetNode, erlang, send, [TargetPid, {deliver_typing, TypingPacket}]);
+                        try rpc:cast(TargetNode, erlang, send, [TargetPid, {deliver_typing, TypingPacket}])
+                        catch Class:Reason ->
+                            logger:warning("typing relay to ~p failed: ~p:~p", [TargetNode, Class, Reason])
+                        end;
                     _ ->
                         %% Target offline - discard typing indicator (expected behavior)
                         ok

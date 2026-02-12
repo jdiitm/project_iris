@@ -237,8 +237,8 @@ fan_in_loop(Sock, Id, StatsPid, EndTime) ->
 %% NOTE: We can't track individual message latency because the MsgId changes
 %% when routed through the system. Instead, we track approximate latency
 %% based on when we receive ANY message relative to our recent sends.
-handle_incoming(Sock, <<16, IdLen:16, MsgId:IdLen/binary, _MsgLen:32, _Msg/binary>>, StatsPid) ->
-    %% Reliable message received - send ACK
+handle_incoming(Sock, <<16#11, IdLen:16, MsgId:IdLen/binary, _MsgLen:32, _Msg/binary>>, StatsPid) ->
+    %% Reliable message received - send ACK (opcode 0x11 per PROTOCOL_V1_FREEZE v1.1)
     sock_send(Sock, <<3, MsgId/binary>>),
     RecvTime = erlang:monotonic_time(microsecond),
     

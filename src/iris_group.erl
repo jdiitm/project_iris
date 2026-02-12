@@ -158,7 +158,8 @@ remove_member(GroupId, UserId, RemovedBy) ->
 -spec get_members(binary()) -> {ok, [map()]} | {error, term()}.
 get_members(GroupId) ->
     %% Check ETS roster cache first (populated on miss, invalidated on mutations).
-    case catch ets:lookup(iris_group_roster_cache, GroupId) of
+    %% NOTE: try/catch guards against ETS table not yet created during startup
+    case try ets:lookup(iris_group_roster_cache, GroupId) catch error:badarg -> [] end of
         [{GroupId, Cached}] ->
             {ok, Cached};
         _ ->
@@ -168,7 +169,9 @@ get_members(GroupId) ->
                     %% Key-range iteration on ordered_set: O(k) where k = group members,
                     %% instead of O(n) full table scan via dirty_select/dirty_match_object.
                     Members = get_members_by_prefix(GroupId),
-                    catch ets:insert(iris_group_roster_cache, {GroupId, Members}),
+                    %% Cache insert may fail if ETS table not yet created during startup
+                    try ets:insert(iris_group_roster_cache, {GroupId, Members})
+                    catch error:badarg -> ok end,
                     {ok, Members}
             end
     end.
@@ -388,12 +391,14 @@ handle_call({delete_group, GroupId, UserId}, _From, State) ->
 
 handle_call({add_member, GroupId, UserId, AddedBy}, _From, State) ->
     Result = do_add_member(GroupId, UserId, AddedBy),
-    catch ets:delete(iris_group_roster_cache, GroupId),
+    %% Cache invalidation may fail if ETS table not yet created during startup
+    try ets:delete(iris_group_roster_cache, GroupId) catch error:badarg -> ok end,
     {reply, Result, State};
 
 handle_call({remove_member, GroupId, UserId, RemovedBy}, _From, State) ->
     Result = do_remove_member(GroupId, UserId, RemovedBy),
-    catch ets:delete(iris_group_roster_cache, GroupId),
+    %% Cache invalidation may fail if ETS table not yet created during startup
+    try ets:delete(iris_group_roster_cache, GroupId) catch error:badarg -> ok end,
     {reply, Result, State};
 
 handle_call({promote_admin, GroupId, UserId, PromotedBy}, _From, State) ->
@@ -476,7 +481,11 @@ init_tables() ->
     end,
     
     %% Add secondary index on group_member for user lookups
-    catch mnesia:add_table_index(group_member, role),
+    %% May return {aborted, already_exists} on restart -- expected
+    try mnesia:add_table_index(group_member, role)
+    catch IdxClass:IdxReason ->
+        logger:debug("add_table_index(group_member, role) skipped: ~p:~p", [IdxClass, IdxReason])
+    end,
     
     %% Wait for all tables to be available
     Tables = [group, group_member, group_sender_key],
@@ -485,10 +494,15 @@ init_tables() ->
         {timeout, BadTables} ->
             logger:warning("Timeout waiting for tables: ~p", [BadTables]),
             %% Try to force load
-            lists:foreach(fun(T) -> catch mnesia:force_load_table(T) end, BadTables),
+            lists:foreach(fun(T) ->
+                try mnesia:force_load_table(T)
+                catch FLClass:FLReason ->
+                    logger:warning("force_load_table(~p) failed: ~p:~p", [T, FLClass, FLReason])
+                end
+            end, BadTables),
             ok;
-        {error, Reason} ->
-            logger:error("Failed to wait for tables: ~p", [Reason]),
+        {error, WaitReason} ->
+            logger:error("Failed to wait for tables: ~p", [WaitReason]),
             ok
     end.
 

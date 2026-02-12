@@ -360,7 +360,10 @@ record_span_metrics(SpanName, DurationUs, Status) ->
     
     %% Standard latency histogram
     MetricName = binary_to_atom(<<"span_", SpanName/binary, "_duration_ms">>, utf8),
-    catch iris_metrics:observe(MetricName, DurationMs),
+    try iris_metrics:observe(MetricName, DurationMs)
+    catch Class1:Reason1 ->
+        logger:debug("metrics observe(~p) failed: ~p:~p", [MetricName, Class1, Reason1])
+    end,
     
     %% Status counter
     StatusMetric = case Status of
@@ -369,4 +372,7 @@ record_span_metrics(SpanName, DurationUs, Status) ->
         {error, _} -> 
             binary_to_atom(<<"span_", SpanName/binary, "_error">>, utf8)
     end,
-    catch iris_metrics:inc(StatusMetric).
+    try iris_metrics:inc(StatusMetric)
+    catch Class2:Reason2 ->
+        logger:debug("metrics inc(~p) failed: ~p:~p", [StatusMetric, Class2, Reason2])
+    end.

@@ -110,13 +110,15 @@ lookup(User) ->
 %% @doc Get all nodes in the cluster (for fallback when shard is unassigned)
 get_all_cluster_nodes() ->
     %% Get Mnesia db_nodes as authoritative cluster membership
-    case catch mnesia:system_info(running_db_nodes) of
+    %% Mnesia may not be started yet during early startup
+    try mnesia:system_info(running_db_nodes) of
         Nodes when is_list(Nodes) -> 
             %% Exclude self since we already checked local
             [N || N <- Nodes, N =/= node()];
         _ -> 
             %% Fallback to nodes()
             nodes()
+    catch _:_ -> nodes()
     end.
 
 %% @doc Lookup user on specific nodes (try until success)

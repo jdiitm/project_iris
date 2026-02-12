@@ -93,11 +93,18 @@ do_put(guaranteed, Table, Key, Value, _Opts) ->
 do_put(best_effort, Table, Key, Value, _Opts) ->
     %% Async transaction: Fast but may lose data on crash
     %% Use ONLY for non-critical data (typing indicators, read receipts)
-    spawn(fun() ->
-        F = fun() -> mnesia:write({Table, Key, Value}) end,
-        mnesia:activity(transaction, F)
-    end),
-    ok;
+    %% AUDIT FIX: Bound spawns to prevent scheduler exhaustion under load
+    case erlang:system_info(process_count) < erlang:system_info(process_limit) - 1000 of
+        true ->
+            spawn(fun() ->
+                F = fun() -> mnesia:write({Table, Key, Value}) end,
+                mnesia:activity(transaction, F)
+            end),
+            ok;
+        false ->
+            logger:warning("best_effort write dropped: process limit approaching"),
+            {error, overloaded}
+    end;
 
 do_put(quorum, Table, Key, Value, Opts) ->
     %% Quorum write: Majority of replicas must ACK

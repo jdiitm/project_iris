@@ -39,8 +39,12 @@ start() ->
 
 %% @doc Stop the session cache (delete ETS tables).
 stop() ->
-    catch ets:delete(?SESSION_TABLE),
-    catch ets:delete(?MESSAGE_TABLE),
+    try ets:delete(?SESSION_TABLE)
+    catch _:_ -> ok  %% Table may not exist during shutdown
+    end,
+    try ets:delete(?MESSAGE_TABLE)
+    catch _:_ -> ok  %% Table may not exist during shutdown
+    end,
     ok.
 
 %% @doc Store a session with user_id. Sets sequence counter to 0.

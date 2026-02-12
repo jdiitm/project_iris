@@ -16,7 +16,12 @@ setup() ->
     %% iris_auth:start_link() creates the ETS tables we need
     case whereis(iris_auth) of
         undefined ->
+            %% Clean up any orphaned ETS tables from previous test crashes
+            try ets:delete(iris_auth_revoked) catch error:badarg -> ok end,
+            try ets:delete(iris_auth_failed_logins) catch error:badarg -> ok end,
             %% Need to set required config for iris_auth to start
+            %% Set auth_enabled=false so ephemeral keys are allowed
+            application:set_env(iris_edge, auth_enabled, false),
             application:set_env(iris_edge, allow_random_secret, true),
             {ok, Pid} = iris_auth:start_link(),
             {started, Pid};
@@ -25,7 +30,9 @@ setup() ->
     end.
 
 cleanup({started, _Pid}) ->
-    gen_server:stop(iris_auth);
+    gen_server:stop(iris_auth),
+    application:unset_env(iris_edge, auth_enabled),
+    application:unset_env(iris_edge, allow_random_secret);
 cleanup({existing, _Pid}) ->
     ok.
 

@@ -6,6 +6,14 @@
 start(_Type, _Args) ->
     logger:info("Starting Iris Edge Application..."),
     
+    %% AUDIT FIX: Warn if zstd NIF is not available
+    case filelib:is_file("priv/iris_zstd_nif.so") of
+        true -> ok;
+        false ->
+            logger:warning("zstd NIF not loaded (priv/iris_zstd_nif.so missing) -- "
+                           "zstd compression unavailable, clients will fall back to zlib")
+    end,
+    
     %% Start the root supervisor which manages all Edge components:
     %% - ETS tables (owned by supervisor)
     %% - Circuit Breaker

@@ -366,9 +366,11 @@ get_available_nodes() ->
     case whereis(iris_shard) of
         undefined ->
             %% Fallback: use Mnesia running nodes or connected nodes
-            case catch mnesia:system_info(running_db_nodes) of
+            %% Mnesia may not be started yet during early startup
+            try mnesia:system_info(running_db_nodes) of
                 Nodes when is_list(Nodes) -> Nodes;
                 _ -> [node() | nodes()]
+            catch _:_ -> [node() | nodes()]
             end;
         _ ->
             %% Use shard module for node discovery
