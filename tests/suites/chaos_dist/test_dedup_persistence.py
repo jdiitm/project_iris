@@ -428,7 +428,21 @@ def test_dedup_survives_sigkill():
     
     # Reconnect edge to core
     reconnect_edge_to_core()
-    time.sleep(2)
+    
+    # Wait for edge TLS listener to be ready (not just TCP-level)
+    log("  Waiting for edge TLS to accept connections...")
+    edge_ready = False
+    for _ in range(15):
+        try:
+            probe = connect_tls()
+            probe.close()
+            edge_ready = True
+            break
+        except Exception:
+            time.sleep(2)
+    if not edge_ready:
+        log("FAIL: Edge TLS listener not ready after core recovery")
+        return False
     
     log(f"\n8. Sending SAME message ID again (retry scenario)")
     log(f"   This simulates client retry after server crash")

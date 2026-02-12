@@ -128,8 +128,9 @@ prop_encode_decode_roundtrip() ->
         case is_binary(Encoded) andalso byte_size(Encoded) > 0 of
             true ->
                 %% Decode and verify structure
-                <<Opcode:8, Rest/binary>> = Encoded,
-                Opcode == 16 orelse throw({bad_opcode, Opcode});
+                %% encode_reliable_msg uses opcode 0x11 (17) per PROTOCOL_V1_FREEZE v1.1
+                <<Opcode:8, _Rest/binary>> = Encoded,
+                Opcode == 16#11 orelse throw({bad_opcode, Opcode});
             false ->
                 throw(empty_encoding)
         end,

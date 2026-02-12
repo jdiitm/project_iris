@@ -264,7 +264,10 @@ acceptor(LSock, HandlerMod, true) ->
                         gen_tcp:close(TcpPort)
                     catch Class:Reason ->
                         logger:warning("iris_edge_listener: TLS socket close fallback: ~p:~p", [Class, Reason]),
-                        catch ssl:close(TlsSock)
+                        try ssl:close(TlsSock) catch C2:R2 ->
+                            logger:debug("ssl:close also failed: ~p:~p", [C2, R2]),
+                            ok
+                        end
                     end,
                     acceptor(LSock, HandlerMod, true);
                 allow ->
@@ -274,7 +277,10 @@ acceptor(LSock, HandlerMod, true) ->
                             acceptor(LSock, HandlerMod, true);
                         {error, Reason} ->
                             logger:warning("TLS handshake failed: ~p", [Reason]),
-                            catch ssl:close(TlsSock),
+                            try ssl:close(TlsSock) catch C3:R3 ->
+                                logger:debug("Post-handshake ssl:close failed: ~p:~p", [C3, R3]),
+                                ok
+                            end,
                             acceptor(LSock, HandlerMod, true)
                     end
             end;

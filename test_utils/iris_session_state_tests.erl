@@ -45,18 +45,20 @@ setup() ->
             end;
         Pid -> Pid
     end,
+    %% Initialize session cache ETS tables (needed by iris_session:complete_login)
+    iris_session_cache:start(),
     %% Disable auth for most tests (we have separate auth_required tests)
     application:set_env(iris_edge, auth_enabled, false),
     RateLimiterPid.
 
 cleanup(RateLimiterPid) ->
-    catch ets:delete_all_objects(local_presence_v2),
-    catch ets:delete_all_objects(presence_cache),
+    try ets:delete_all_objects(local_presence_v2) catch _:_ -> ok end,
+    try ets:delete_all_objects(presence_cache) catch _:_ -> ok end,
     application:unset_env(iris_edge, auth_enabled),
     %% Stop rate limiter if we started it
     case RateLimiterPid of
-        undefined -> ok;
-        Pid when is_pid(Pid) -> catch gen_server:stop(Pid, normal, 1000)
+        Pid when is_pid(Pid) -> catch gen_server:stop(Pid, normal, 1000);
+        _ -> ok  %% ok, undefined, or other non-pid value
     end,
     ok.
 

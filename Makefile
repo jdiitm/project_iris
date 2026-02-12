@@ -32,7 +32,7 @@ nif: $(NIF_SO)
 
 $(NIF_SO): $(NIF_SRC)
 	@mkdir -p priv
-	@$(CC) $(NIF_CFLAGS) $(NIF_ZSTD_CFLAGS) -o $@ $< $(NIF_ZSTD_LDFLAGS) 2>/dev/null \
+	@$(CC) $(NIF_CFLAGS) $(NIF_ZSTD_CFLAGS) -o $@ $< $(NIF_ZSTD_LDFLAGS) \
 		&& echo "NIF: zstd compiled successfully" \
 		|| echo "NIF: zstd skipped (libzstd-dev not installed — zstd compression unavailable)"
 
@@ -55,24 +55,50 @@ ebin/%.beam: test_utils/%.erl
 check_deps:
 	@$(ERL) -noshell -eval 'case code:lib_dir(mnesia) of {error, _} -> io:format("Error: mnesia application not found in Erlang lib (~s).~n", [code:root_dir()]), init:stop(1); _ -> init:stop(0) end.' || (echo "FAILED: Valid Erlang with Mnesia not found. Please set ERL variable." && exit 1)
 
-# Run unit tests
+# Run unit tests (discovers all *_tests.beam modules automatically)
 test: $(BEAM_FILES)
+	@echo "Running all EUnit tests..."
+	@$(ERL) -pa ebin -noshell -eval " \
+		Beams = filelib:wildcard(\"ebin/*_tests.beam\"), \
+		Mods = [list_to_atom(filename:basename(B, \".beam\")) || B <- Beams], \
+		io:format(\"Discovered ~p test modules~n\", [length(Mods)]), \
+		case eunit:test(Mods, []) of ok -> init:stop(0); error -> init:stop(1) end."
+
+# Run the original 4-module standalone subset (no app infrastructure needed)
+test-standalone: $(BEAM_FILES)
 	@echo "Running EUnit tests (standalone subset)..."
 	@$(ERL) -pa ebin -noshell -eval "case eunit:test([iris_session_tests, iris_proto_tests, iris_shard_tests, iris_ingress_guard_tests], []) of ok -> init:stop(0); error -> init:stop(1) end."
 
 # Run tests with verbose output
 test-verbose: $(BEAM_FILES)
 	@echo "Running EUnit tests (verbose)..."
-	@$(ERL) -pa ebin -noshell -eval "case eunit:test([iris_session_tests, iris_proto_tests, iris_shard_tests, iris_ingress_guard_tests], [verbose]) of ok -> init:stop(0); error -> init:stop(1) end."
-
-# Run ALL 101 EUnit test modules (requires application infrastructure)
-test-eunit-all: $(BEAM_FILES)
-	@echo "Running all EUnit tests (101 modules, needs app infrastructure)..."
 	@$(ERL) -pa ebin -noshell -eval " \
 		Beams = filelib:wildcard(\"ebin/*_tests.beam\"), \
 		Mods = [list_to_atom(filename:basename(B, \".beam\")) || B <- Beams], \
 		io:format(\"Discovered ~p test modules~n\", [length(Mods)]), \
-		case eunit:test(Mods, []) of ok -> init:stop(0); error -> init:stop(1) end."
+		case eunit:test(Mods, [verbose]) of ok -> init:stop(0); error -> init:stop(1) end."
+
+# Run tests with code coverage analysis
+test-cover: $(BEAM_FILES)
+	@echo "Running EUnit tests with coverage..."
+	@mkdir -p coverage
+	@$(ERL) -pa ebin -noshell -eval " \
+		cover:start(), \
+		Beams = filelib:wildcard(\"ebin/*.beam\"), \
+		lists:foreach(fun(B) -> cover:compile_beam(B) end, Beams), \
+		TestBeams = filelib:wildcard(\"ebin/*_tests.beam\"), \
+		Mods = [list_to_atom(filename:basename(B, \".beam\")) || B <- TestBeams], \
+		io:format(\"Discovered ~p test modules~n\", [length(Mods)]), \
+		eunit:test(Mods, []), \
+		AllMods = cover:modules(), \
+		lists:foreach(fun(M) -> cover:analyse_to_file(M, \"coverage/\" ++ atom_to_list(M) ++ \".COVER.html\", [html]) end, AllMods), \
+		{result, Results, _} = cover:analyse(AllMods, coverage, module), \
+		{TotalCov, TotalNot} = lists:foldl(fun({_M, {C, N}}, {AC, AN}) -> {AC+C, AN+N} end, {0, 0}, Results), \
+		Total = TotalCov + TotalNot, \
+		Pct = case Total of 0 -> 0; _ -> TotalCov * 100 div Total end, \
+		io:format(\"~nCoverage: ~p/~p lines (~p%)~n\", [TotalCov, Total, Pct]), \
+		io:format(\"HTML reports in coverage/~n\"), \
+		init:stop()."
 
 # Run all tests via unified test runner
 test-all: $(BEAM_FILES)
@@ -105,28 +131,34 @@ ERL_FLAGS := $(shell ./scripts/auto_tune.sh)
 CONFIG ?= config/test
 
 # Erlang distribution cookie (override for production: make start COOKIE=my_secret)
-COOKIE ?= iris_secret
+# Also reads IRIS_COOKIE env var for container/cloud deployments.
+COOKIE ?= $(or $(IRIS_COOKIE),iris_secret)
+
+# Distribution mode: sname (single host, default) or name (cross-host FQDN)
+# Use: make start DIST_MODE=name for multi-host clusters
+DIST_MODE ?= sname
 
 # Start both core and edge nodes
 start: start_core start_edge1
 
 start_core: all
-	$(ERL) -noshell -noinput $(ERL_FLAGS) -pa ebin -sname iris_core$(NODE_SUFFIX) -setcookie $(COOKIE) -config $(CONFIG) -eval "application:ensure_all_started(iris_core)" >core.log 2>&1 &
+	@if [ "$(COOKIE)" = "iris_secret" ]; then echo "WARNING: Using default cookie. Set COOKIE or IRIS_COOKIE for production."; fi
+	$(ERL) -noshell -noinput $(ERL_FLAGS) -pa ebin -$(DIST_MODE) iris_core$(NODE_SUFFIX) -setcookie $(COOKIE) -config $(CONFIG) -eval "application:ensure_all_started(iris_core)" >core.log 2>&1 &
 
 start_edge1: all
-	$(ERL) -noshell -noinput $(ERL_FLAGS) -pa ebin -sname iris_edge1$(NODE_SUFFIX) -setcookie $(COOKIE) -config $(CONFIG) -iris_edge port $(or $(EDGE1_PORT),8085) -eval "application:ensure_all_started(iris_edge)" >edge1.log 2>&1 &
+	$(ERL) -noshell -noinput $(ERL_FLAGS) -pa ebin -$(DIST_MODE) iris_edge1$(NODE_SUFFIX) -setcookie $(COOKIE) -config $(CONFIG) -iris_edge port $(or $(EDGE1_PORT),8085) -eval "application:ensure_all_started(iris_edge)" >edge1.log 2>&1 &
 
 start_edge2: all
-	$(ERL) -noshell -noinput $(ERL_FLAGS) -pa ebin -sname iris_edge2$(NODE_SUFFIX) -setcookie $(COOKIE) -config $(CONFIG) -iris_edge port $(or $(EDGE2_PORT),8086) -eval "application:ensure_all_started(iris_edge)" >edge2.log 2>&1 &
+	$(ERL) -noshell -noinput $(ERL_FLAGS) -pa ebin -$(DIST_MODE) iris_edge2$(NODE_SUFFIX) -setcookie $(COOKIE) -config $(CONFIG) -iris_edge port $(or $(EDGE2_PORT),8086) -eval "application:ensure_all_started(iris_edge)" >edge2.log 2>&1 &
 
 start_edge3: all
-	$(ERL) -noshell -noinput $(ERL_FLAGS) -pa ebin -sname iris_edge3$(NODE_SUFFIX) -setcookie $(COOKIE) -config $(CONFIG) -iris_edge port $(or $(EDGE3_PORT),8087) -eval "application:ensure_all_started(iris_edge)" >edge3.log 2>&1 &
+	$(ERL) -noshell -noinput $(ERL_FLAGS) -pa ebin -$(DIST_MODE) iris_edge3$(NODE_SUFFIX) -setcookie $(COOKIE) -config $(CONFIG) -iris_edge port $(or $(EDGE3_PORT),8087) -eval "application:ensure_all_started(iris_edge)" >edge3.log 2>&1 &
 
 start_edge4: all
-	$(ERL) -noshell -noinput $(ERL_FLAGS) -pa ebin -sname iris_edge4$(NODE_SUFFIX) -setcookie $(COOKIE) -config $(CONFIG) -iris_edge port $(or $(EDGE4_PORT),8088) -eval "application:ensure_all_started(iris_edge)" >edge4.log 2>&1 &
+	$(ERL) -noshell -noinput $(ERL_FLAGS) -pa ebin -$(DIST_MODE) iris_edge4$(NODE_SUFFIX) -setcookie $(COOKIE) -config $(CONFIG) -iris_edge port $(or $(EDGE4_PORT),8088) -eval "application:ensure_all_started(iris_edge)" >edge4.log 2>&1 &
 
 start_edge5: all
-	$(ERL) -noshell -noinput $(ERL_FLAGS) -pa ebin -sname iris_edge5$(NODE_SUFFIX) -setcookie $(COOKIE) -config $(CONFIG) -iris_edge port $(or $(EDGE5_PORT),8089) -eval "application:ensure_all_started(iris_edge)" >edge5.log 2>&1 &
+	$(ERL) -noshell -noinput $(ERL_FLAGS) -pa ebin -$(DIST_MODE) iris_edge5$(NODE_SUFFIX) -setcookie $(COOKIE) -config $(CONFIG) -iris_edge port $(or $(EDGE5_PORT),8089) -eval "application:ensure_all_started(iris_edge)" >edge5.log 2>&1 &
 
 # ... (Previous targets)
 
@@ -140,9 +172,17 @@ start_edge_dist: all
 	$(ERL) -noshell -noinput $(ERL_FLAGS) -pa ebin -name $(NAME) -setcookie $(COOKIE) -config $(CONFIG) -eval "application:ensure_all_started(iris_edge)" >edge.log 2>&1 &
 
 stop:
-	@echo "Stopping nodes..."
-	@-pkill -f "beam.smp.*iris_" 2>/dev/null; true
+	@echo "Stopping nodes gracefully..."
+	@$(ERL) -noshell -sname iris_stop_$$PPID -setcookie $(COOKIE) \
+	    -eval "rpc:call('iris_core@$(HOSTNAME)', init, stop, []), \
+	           rpc:call('iris_edge1@$(HOSTNAME)', init, stop, []), \
+	           init:stop()." 2>/dev/null || true
 	@echo "Nodes stopped."
+
+stop-force:
+	@echo "Force-killing iris nodes..."
+	@-pkill -f "beam.smp.*iris_" 2>/dev/null; true
+	@echo "Nodes force-killed."
 
 # =============================================================================
 # Global Cluster Simulation (Docker)

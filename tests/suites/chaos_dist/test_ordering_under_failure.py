@@ -113,11 +113,7 @@ class SimpleClient:
         # Wait for LOGIN_OK
         try:
             response = self.sock.recv(1024)
-            if b"LOGIN_OK" in response:
-                import time
-                time.sleep(0.05)  # Ensure server-side registration completes
-                return True
-            return False
+            return b"LOGIN_OK" in response
         except:
             return False
     
@@ -282,8 +278,7 @@ def test_basic_ordering():
             sender.send_message(receiver_name, f"ORDER_TEST_{i:05d}_payload")
             time.sleep(0.02)
         
-        # Receive and verify
-        time.sleep(1)
+        # Receive and verify (recv_messages has its own timeout)
         received = receiver.recv_messages(timeout=5)
         
         sender.close()
@@ -374,9 +369,9 @@ def test_ordering_during_edge_pause():
             time.sleep(0.1)
         
         pause_thread.join(timeout=5)
-        time.sleep(2)  # Allow recovery
         
-        received = receiver.recv_messages(timeout=5)
+        # Allow recovery -- recv_messages timeout covers the wait
+        received = receiver.recv_messages(timeout=7)
         
         sender.close()
         receiver.close()
@@ -443,7 +438,6 @@ def test_ordering_with_jitter():
             jitter = random.uniform(0.01, 0.1)
             time.sleep(jitter)
         
-        time.sleep(1)
         received = receiver.recv_messages(timeout=5)
         
         sender.close()
@@ -526,7 +520,6 @@ def test_ordering_during_reconnect():
             time.sleep(0.02)
         
         sender2.close()
-        time.sleep(1)
         
         received = receiver.recv_messages(timeout=5)
         receiver.close()
@@ -595,7 +588,6 @@ def test_concurrent_senders():
                 sender.send_message(receiver_name, f"ORDER_TEST_{seq:05d}_s{s_id}")
                 time.sleep(0.01)
         
-        time.sleep(1)
         received = receiver.recv_messages(timeout=5)
         
         for _, sender in senders:

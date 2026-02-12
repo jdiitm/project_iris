@@ -31,7 +31,9 @@ setup() ->
 
     case whereis(iris_auth) of
         undefined ->
+            TestEdDSAKey = crypto:hash(sha256, <<"iris_revocation_test_key_determ">>),
             application:set_env(iris_edge, jwt_secret, <<"revocation_timing_test_secret_k!">>),
+            application:set_env(iris_edge, jwt_eddsa_private_key, TestEdDSAKey),
             application:set_env(iris_edge, auth_enabled, true),
             application:set_env(iris_edge, allow_hmac_jwt, true),
             {ok, Pid} = iris_auth:start_link(),
@@ -43,7 +45,9 @@ setup() ->
 cleanup({started, _Pid}) ->
     gen_server:stop(iris_auth),
     application:unset_env(iris_edge, allow_hmac_jwt),
-    catch mnesia:delete_table(revoked_tokens),
+    application:unset_env(iris_edge, jwt_eddsa_private_key),
+    application:unset_env(iris_edge, auth_enabled),
+    try mnesia:delete_table(revoked_tokens) catch _:_ -> ok end,
     application:stop(mnesia);
 cleanup({existing, _Pid}) ->
     ok.

@@ -22,7 +22,13 @@ start_link() ->
 
 init([]) ->
     %% Ensure PG (Default Scope) is started safely
-    try pg:start_link() catch _:_ -> ok end,
+    try pg:start_link()
+    catch
+        error:{already_started, _} -> ok;
+        Class:Reason ->
+            logger:warning("pg:start_link() failed in edge_sup: ~p:~p (non-fatal)", [Class, Reason]),
+            ok
+    end,
 
     %% Get configuration
     {ok, Port} = application:get_env(iris_edge, port),
@@ -62,6 +68,16 @@ init([]) ->
     
     %% Child specifications
     Children = [
+        %% Health Check HTTP endpoint (/health, /ready, /metrics)
+        #{
+            id => iris_health_handler,
+            start => {iris_health_handler, start_link, []},
+            restart => permanent,
+            shutdown => 5000,
+            type => worker,
+            modules => [iris_health_handler]
+        },
+
         %% Circuit Breaker - protects against Core node failures
         #{
             id => iris_circuit_breaker,

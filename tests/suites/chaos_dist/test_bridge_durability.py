@@ -741,7 +741,7 @@ def test_queue_survives_hard_kill() -> Tuple[bool, Dict]:
         log("\nWARN: core-east-2 not running")
         log("      Hard kill durability requires multi-node replication")
         log("      Skipping this test (would likely fail without replication)")
-        return True, metrics  # Skip, not fail
+        return None, metrics  # AUDIT MITIGATION P1-1: Skip, not pass
     
     # Phase 1: Queue messages
     log("\nPhase 1: Queueing messages for cross-region delivery...")
@@ -911,7 +911,7 @@ def test_eventual_delivery_after_recovery() -> Tuple[bool, Dict]:
         return True, metrics  # Partial success
     elif metrics["messages_sent"] == 0:
         log("  SKIP: No messages were sent successfully")
-        return True, metrics  # Skip, not fail
+        return None, metrics  # AUDIT MITIGATION P1-1: Skip, not pass
     else:
         log(f"  FAIL: Only {metrics['delivery_rate']:.1f}% delivery rate")
         return False, metrics
@@ -983,16 +983,21 @@ def main():
     
     passed_count = 0
     failed_count = 0
+    skipped_count = 0
     
     for name, result in results:
-        status = "PASS" if result else "FAIL"
-        print(f"  [{status}] {name}")
-        if result:
+        if result is None:
+            status = "SKIP"
+            skipped_count += 1
+        elif result:
+            status = "PASS"
             passed_count += 1
         else:
+            status = "FAIL"
             failed_count += 1
+        print(f"  [{status}] {name}")
     
-    print(f"\nTotal: {passed_count}/{len(results)} passed")
+    print(f"\nTotal: {passed_count} passed, {skipped_count} skipped, {failed_count} failed")
     
     # Print key metrics
     print("\nKey Metrics:")
@@ -1009,14 +1014,18 @@ def main():
         m = all_metrics["delivery"]
         print(f"  Delivery rate: {m.get('delivery_rate', 0):.1f}%")
     
-    if failed_count == 0:
+    if failed_count > 0:
+        print(f"\nFAIL: {failed_count} test(s) failed")
+        return 1
+    elif passed_count == 0 and skipped_count > 0:
+        # AUDIT MITIGATION P1-1: All tests skipped -- exit 2, not 0
+        print("\nSKIP: All tests skipped (infrastructure unavailable)")
+        return 2
+    else:
         print("\nPASS: Bridge durability tests passed")
         print("  RFC NFR-6 (Message Durability): COMPLIANT")
         print("  RFC NFR-8 (RPO=0): COMPLIANT")
         return 0
-    else:
-        print(f"\nFAIL: {failed_count} test(s) failed")
-        return 1
 
 
 if __name__ == "__main__":

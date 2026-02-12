@@ -4,7 +4,13 @@
 setup() ->
     {ok, _} = iris_ingress_guard:start_link().
 cleanup(_) ->
-    exit(whereis(iris_ingress_guard), kill).
+    case whereis(iris_ingress_guard) of
+        undefined -> ok;
+        Pid ->
+            unlink(Pid),
+            exit(Pid, shutdown),
+            timer:sleep(10)
+    end.
 
 basic_limit_test_() ->
     {setup, fun setup/0, fun cleanup/1, fun() ->

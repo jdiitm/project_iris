@@ -69,5 +69,12 @@ compress_outbound_zstd_test() ->
     Payload = binary:copy(<<$F>>, 200),
     Packet = <<16#11, Payload/binary>>,
     Result = iris_edge_conn:maybe_compress_outbound(Caps, Packet),
-    <<ResultOpcode:8, _/binary>> = Result,
-    ?assertEqual(16#91, ResultOpcode).
+    case iris_compression:compress(zstd, Payload) of
+        {ok, _} ->
+            %% NIF available: packet should be compressed (opcode | 0x80)
+            <<ResultOpcode:8, _/binary>> = Result,
+            ?assertEqual(16#91, ResultOpcode);
+        {error, zstd_nif_not_available} ->
+            %% NIF not loaded: packet returned uncompressed
+            ?assertEqual(Packet, Result)
+    end.

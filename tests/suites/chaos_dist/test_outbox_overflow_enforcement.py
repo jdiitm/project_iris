@@ -88,32 +88,41 @@ def test_overflow_nack_under_partition():
             max_size = 10000
         log(f"  Max queue size: {max_size}")
 
-        # Send all messages in a single Erlang call to avoid 10K+ docker exec invocations.
-        # Target <<"us-west">> which is now unreachable — drain delivery fails fast
-        # (nodedown is immediate, not a 5s RPC timeout) so the batch isn't starved.
+        # Send messages in chunks to avoid long-running RPC calls that drop
+        # the temp node's Erlang distribution connection (net_ticktime=10s).
+        # Each chunk is a separate short-lived RPC (~10-20s), same assertion
+        # logic — we observe the actual NACK return from send_cross_region.
         batch_size = max_size + 100
-        log(f"  Sending {batch_size} messages in batch (single Erlang call)...")
-        batch_result = run_on_node(sender, f'''
-            logger:set_primary_config(level, none),
-            Overflow = lists:foldl(fun(I, Acc) ->
-                User = list_to_binary("user_" ++ integer_to_list(I)),
-                Msg = list_to_binary("msg_" ++ integer_to_list(I)),
-                case iris_region_bridge:send_cross_region(<<"us-west">>, User, Msg) of
-                    {{error, {{queue_overflow, _}}}} -> Acc + 1;
-                    _ -> Acc
-                end
-            end, 0, lists:seq(1, {batch_size})),
-            logger:set_primary_config(level, notice),
-            Overflow
-        ''', timeout=300)
+        chunk_size = 2000
+        log(f"  Sending {batch_size} messages in chunks of {chunk_size}...")
 
-        # Extract the overflow count from result (may have trailing logger noise)
-        match = re.search(r'(\d+)', str(batch_result).strip())
-        if match:
-            overflow_count = int(match.group(1))
-        else:
-            log(f"  Could not parse overflow count from: {batch_result}")
-            overflow_count = 0
+        # Suppress noisy logging during batch
+        run_on_node(sender, "logger:set_primary_config(level, none), ok", timeout=10)
+
+        overflow_count = 0
+        for chunk_start in range(1, batch_size + 1, chunk_size):
+            chunk_end = min(chunk_start + chunk_size - 1, batch_size)
+            chunk_expr = f'''
+                lists:foldl(fun(I, Acc) ->
+                    User = list_to_binary("user_" ++ integer_to_list(I)),
+                    Msg = list_to_binary("msg_" ++ integer_to_list(I)),
+                    case iris_region_bridge:send_cross_region(<<"us-west">>, User, Msg) of
+                        {{error, {{queue_overflow, _}}}} -> Acc + 1;
+                        _ -> Acc
+                    end
+                end, 0, lists:seq({chunk_start}, {chunk_end}))
+            '''
+            chunk_result = run_on_node(sender, chunk_expr, timeout=120)
+            match = re.search(r'(\d+)', str(chunk_result).strip())
+            if match:
+                chunk_overflow = int(match.group(1))
+                overflow_count += chunk_overflow
+                log(f"    Chunk [{chunk_start}..{chunk_end}]: {chunk_overflow} overflows")
+            else:
+                log(f"    Chunk [{chunk_start}..{chunk_end}]: parse error: {chunk_result}")
+
+        # Restore logging
+        run_on_node(sender, "logger:set_primary_config(level, notice), ok", timeout=10)
 
         log(f"  Overflow NACKs received: {overflow_count}")
         assert overflow_count > 0, \

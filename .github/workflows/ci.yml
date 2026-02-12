@@ -192,7 +192,16 @@ jobs:
           
           # Start mTLS cluster
           docker compose -f docker-compose.yml -f docker-compose.mtls.yml up -d
-          sleep 60
+          
+          # Poll for cluster readiness instead of fixed sleep
+          echo "Waiting for mTLS cluster to be ready..."
+          for i in $(seq 1 60); do
+            if docker exec core-east-1 epmd -names 2>/dev/null | grep -q core_east_1; then
+              echo "Cluster ready after ${i}s"
+              break
+            fi
+            sleep 1
+          done
           
           # Verify mTLS
           ./cluster.sh verify-mtls || echo "mTLS verification completed"

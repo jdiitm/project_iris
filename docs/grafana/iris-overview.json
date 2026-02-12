@@ -1,0 +1,101 @@
+{
+  "annotations": { "list": [] },
+  "description": "Project Iris - Messaging Engine Overview",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "title": "Message Throughput",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "targets": [
+        { "expr": "rate(iris_msg_in[5m])", "legendFormat": "msg_in/s" },
+        { "expr": "rate(iris_msg_out[5m])", "legendFormat": "msg_out/s" },
+        { "expr": "rate(iris_ack_sent[5m])", "legendFormat": "ack/s" }
+      ]
+    },
+    {
+      "title": "E2E Latency (P50/P95/P99)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "targets": [
+        { "expr": "histogram_quantile(0.50, rate(iris_e2e_latency_bucket[5m]))", "legendFormat": "P50" },
+        { "expr": "histogram_quantile(0.95, rate(iris_e2e_latency_bucket[5m]))", "legendFormat": "P95" },
+        { "expr": "histogram_quantile(0.99, rate(iris_e2e_latency_bucket[5m]))", "legendFormat": "P99" }
+      ]
+    },
+    {
+      "title": "Durability SLI (99.999% target)",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 8 },
+      "targets": [
+        { "expr": "iris_msg_acked / (iris_msg_acked + iris_msg_lost) * 100", "legendFormat": "Durability %" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "steps": [
+              { "color": "red", "value": 0 },
+              { "color": "yellow", "value": 99.9 },
+              { "color": "green", "value": 99.999 }
+            ]
+          },
+          "unit": "percent"
+        }
+      }
+    },
+    {
+      "title": "Active Connections",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 8 },
+      "targets": [
+        { "expr": "iris_active_connections", "legendFormat": "connections" }
+      ]
+    },
+    {
+      "title": "Dedup Hit Rate",
+      "type": "gauge",
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 8 },
+      "targets": [
+        { "expr": "rate(iris_dedup_hit[5m]) / (rate(iris_msg_in[5m]) + 0.001) * 100", "legendFormat": "Dedup %" }
+      ]
+    },
+    {
+      "title": "Node Health",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 8 },
+      "targets": [
+        { "expr": "up{job=\"iris\"}", "legendFormat": "{{ instance }}" }
+      ]
+    },
+    {
+      "title": "DB Write Latency",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+      "targets": [
+        { "expr": "histogram_quantile(0.50, rate(iris_db_write_latency_bucket[5m]))", "legendFormat": "P50" },
+        { "expr": "histogram_quantile(0.99, rate(iris_db_write_latency_bucket[5m]))", "legendFormat": "P99" }
+      ]
+    },
+    {
+      "title": "Rate Limiting",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+      "targets": [
+        { "expr": "rate(iris_rate_limited[5m])", "legendFormat": "rate_limited/s" },
+        { "expr": "rate(iris_conn_rejected[5m])", "legendFormat": "conn_rejected/s" }
+      ]
+    }
+  ],
+  "schemaVersion": 39,
+  "tags": ["iris", "messaging"],
+  "templating": { "list": [] },
+  "time": { "from": "now-1h", "to": "now" },
+  "title": "Iris Messaging Engine - Overview",
+  "uid": "iris-overview",
+  "version": 1
+}

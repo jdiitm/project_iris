@@ -228,14 +228,18 @@ deliver_to_user(UserId, SenderId, Message) ->
 %% @doc Check if user is online (has active session).
 is_user_online(UserId) ->
     %% Try to find user in presence registry
-    case catch iris_core:lookup_user(UserId) of
+    try iris_core:lookup_user(UserId) of
         {ok, _Pid} -> true;
         _ -> false
+    catch
+        Class:Reason ->
+            logger:warning("is_user_online(~p) failed: ~p:~p", [UserId, Class, Reason]),
+            false
     end.
 
 %% @doc Send message to online user.
 send_to_user(UserId, SenderId, Message) ->
-    case catch iris_core:lookup_user(UserId) of
+    try iris_core:lookup_user(UserId) of
         {ok, Pid} ->
             %% Send via session process
             try
@@ -245,6 +249,10 @@ send_to_user(UserId, SenderId, Message) ->
                 _:_ -> {error, send_failed}
             end;
         _ ->
+            {error, user_not_found}
+    catch
+        Class:Reason ->
+            logger:warning("send_to_user(~p) lookup failed: ~p:~p", [UserId, Class, Reason]),
             {error, user_not_found}
     end.
 
@@ -259,10 +267,14 @@ store_offline_msg(UserId, SenderId, Message) ->
     },
     
     %% Store using offline storage module
-    case catch iris_offline_storage:store_durable(UserId, OfflineMsg, 1) of
+    try iris_offline_storage:store_durable(UserId, OfflineMsg, 1) of
         ok -> ok;
         {error, R} -> {error, R};
         _ -> {error, storage_failed}
+    catch
+        Class:Reason ->
+            logger:warning("store_offline_msg(~p) failed: ~p:~p", [UserId, Class, Reason]),
+            {error, storage_failed}
     end.
 
 %% @doc Split list into batches of given size.

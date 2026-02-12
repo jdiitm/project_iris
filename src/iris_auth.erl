@@ -60,7 +60,9 @@ start_link() ->
 %% Check if authentication is enabled
 -spec is_auth_enabled() -> boolean().
 is_auth_enabled() ->
-    application:get_env(iris_edge, auth_enabled, false).
+    %% AUDIT MITIGATION P0-2: Default to true (secure by default).
+    %% Test configs explicitly set auth_enabled=false.
+    application:get_env(iris_edge, auth_enabled, true).
 
 %% @doc Validate a JWT token. Returns {ok, Claims} or {error, Reason}.
 -spec validate_token(binary()) -> {ok, map()} | {error, term()}.
@@ -146,39 +148,46 @@ get_user_from_token(Token) ->
 init([]) ->
     %% P0-C4 FIX: Require explicit JWT secret configuration
     %% Random secrets cause auth failures when users connect to different nodes
-    Secret = case application:get_env(iris_edge, jwt_secret) of
-        {ok, S} when is_binary(S), byte_size(S) >= 32 -> 
-            S;
-        {ok, S} when is_list(S), length(S) >= 32 -> 
-            list_to_binary(S);
-        {ok, S} when is_binary(S) ->
-            logger:error("SECURITY: jwt_secret is too short (~p bytes). Minimum 32 bytes required.", 
-                        [byte_size(S)]),
-            error({jwt_secret_too_short, byte_size(S)});
-        {ok, S} when is_list(S) ->
-            logger:error("SECURITY: jwt_secret is too short (~p chars). Minimum 32 chars required.", 
-                        [length(S)]),
-            error({jwt_secret_too_short, length(S)});
-        undefined -> 
-            %% P0-C4: Strict enforcement based on allow_random_secret flag
-            case application:get_env(iris_edge, allow_random_secret, false) of
-                true ->
-                    logger:warning("JWT secret not configured, generating random (NOT FOR PRODUCTION)"),
-                    logger:warning("Set iris_edge.jwt_secret in production deployments"),
-                    generate_secret();
-                false ->
-                    %% P0-C4 FIX: CRASH on startup if secret not configured
-                    %% This prevents silent auth failures in production
-                    logger:error("======================================================="),
-                    logger:error("FATAL: jwt_secret not configured!"),
-                    logger:error(""),
-                    logger:error("In production: Set iris_edge.jwt_secret to a 32+ byte secret"),
-                    logger:error("For testing:   Set iris_edge.allow_random_secret = true"),
-                    logger:error(""),
-                    logger:error("Random secrets cause authentication failures when"),
-                    logger:error("users connect to different nodes in a cluster."),
-                    logger:error("======================================================="),
-                    error(jwt_secret_not_configured)
+    %% AUDIT FIX: Check IRIS_JWT_SECRET env var first (secrets management).
+    %% This allows operators to inject secrets via environment without config files.
+    Secret = case os:getenv("IRIS_JWT_SECRET") of
+        EnvVal when is_list(EnvVal), length(EnvVal) >= 32 ->
+            logger:info("JWT secret loaded from IRIS_JWT_SECRET environment variable"),
+            list_to_binary(EnvVal);
+        _ ->
+            case application:get_env(iris_edge, jwt_secret) of
+                {ok, S} when is_binary(S), byte_size(S) >= 32 -> 
+                    S;
+                {ok, S} when is_list(S), length(S) >= 32 -> 
+                    list_to_binary(S);
+                {ok, S} when is_binary(S) ->
+                    logger:error("SECURITY: jwt_secret is too short (~p bytes). Minimum 32 bytes required.", 
+                                [byte_size(S)]),
+                    error({jwt_secret_too_short, byte_size(S)});
+                {ok, S} when is_list(S) ->
+                    logger:error("SECURITY: jwt_secret is too short (~p chars). Minimum 32 chars required.", 
+                                [length(S)]),
+                    error({jwt_secret_too_short, length(S)});
+                undefined -> 
+                    %% P0-C4: Strict enforcement based on allow_random_secret flag
+                    case application:get_env(iris_edge, allow_random_secret, false) of
+                        true ->
+                            logger:warning("JWT secret not configured, generating random (NOT FOR PRODUCTION)"),
+                            logger:warning("Set iris_edge.jwt_secret or IRIS_JWT_SECRET env var"),
+                            generate_secret();
+                        false ->
+                            logger:error("======================================================="),
+                            logger:error("FATAL: jwt_secret not configured!"),
+                            logger:error(""),
+                            logger:error("In production: Set IRIS_JWT_SECRET env var (preferred)"),
+                            logger:error("            or iris_edge.jwt_secret to a 32+ byte secret"),
+                            logger:error("For testing:   Set iris_edge.allow_random_secret = true"),
+                            logger:error(""),
+                            logger:error("Random secrets cause authentication failures when"),
+                            logger:error("users connect to different nodes in a cluster."),
+                            logger:error("======================================================="),
+                            error(jwt_secret_not_configured)
+                    end
             end
     end,
     

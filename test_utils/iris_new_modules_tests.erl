@@ -58,6 +58,7 @@ setup() ->
     
     %% Start auth service with random secret enabled for testing
     application:set_env(iris_edge, allow_random_secret, true),
+    application:set_env(iris_edge, allow_hmac_jwt, true),
     AuthPid = start_service(iris_auth, fun iris_auth:start_link/0),
     
     #{dedup => DedupPid, rate_limiter => RateLimiterPid, auth => AuthPid}.
@@ -67,6 +68,8 @@ cleanup(#{dedup := DedupPid, rate_limiter := RateLimiterPid, auth := AuthPid}) -
     stop_service(AuthPid),
     stop_service(RateLimiterPid),
     stop_service(DedupPid),
+    application:unset_env(iris_edge, allow_random_secret),
+    application:unset_env(iris_edge, allow_hmac_jwt),
     ok;
 cleanup(_) ->
     ok.

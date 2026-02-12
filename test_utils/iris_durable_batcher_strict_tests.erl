@@ -19,6 +19,18 @@ setup() ->
     cleanup_shards(),
     os:cmd("rm -rf " ++ ?TEST_WAL_DIR),
     
+    %% Ensure Mnesia is running with required tables
+    application:stop(mnesia),
+    mnesia:delete_schema([node()]),
+    mnesia:create_schema([node()]),
+    mnesia:start(),
+    mnesia:create_table(offline_msg, [
+        {ram_copies, [node()]},
+        {attributes, [key, timestamp, msg]},
+        {type, bag}
+    ]),
+    mnesia:wait_for_tables([offline_msg], 5000),
+    
     %% Configure cluster durability mode and WAL directory
     application:set_env(iris_core, durability_mode, cluster),
     application:set_env(iris_core, wal_directory, ?TEST_WAL_DIR),
@@ -34,6 +46,8 @@ cleanup({started, _Pid}) ->
     application:unset_env(iris_core, durability_mode),
     application:unset_env(iris_core, wal_directory),
     application:unset_env(iris_core, cluster_durability_strict),
+    try mnesia:delete_table(offline_msg) catch _:_ -> ok end,
+    application:stop(mnesia),
     os:cmd("rm -rf " ++ ?TEST_WAL_DIR),
     ok.
 

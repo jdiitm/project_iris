@@ -173,7 +173,10 @@ try_remote_delivery(User, Packet) ->
         CoreNode ->
             case rpc:call(CoreNode, iris_core, lookup_user, [User], 1000) of
                 {online, TargetNode, TargetPid} when is_pid(TargetPid) ->
-                    catch rpc:cast(TargetNode, erlang, send, [TargetPid, {deliver_read_receipt, Packet}]);
+                    try rpc:cast(TargetNode, erlang, send, [TargetPid, {deliver_read_receipt, Packet}])
+                    catch Class:Reason ->
+                        logger:warning("read_receipt delivery to ~p failed: ~p:~p", [TargetNode, Class, Reason])
+                    end;
                 _ ->
                     %% Sender offline - discard receipt (expected behavior)
                     ok
