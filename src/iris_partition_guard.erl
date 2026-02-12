@@ -228,7 +228,11 @@ do_partition_check(State = #state{quorum_threshold = Threshold}) ->
     VisibleNodes = [node() | nodes()],
     
     %% Also check Mnesia's view of running nodes
-    MnesiaNodes = try mnesia:system_info(running_db_nodes) catch _:_ -> [] end,
+    MnesiaNodes = try mnesia:system_info(running_db_nodes)
+                  catch Class:Reason ->
+                      logger:warning("iris_partition_guard: mnesia node discovery failed: ~p:~p", [Class, Reason]),
+                      []
+                  end,
     
     %% Combine both views
     AllVisible = lists:usort(VisibleNodes ++ MnesiaNodes),
@@ -269,7 +273,10 @@ enter_diverged_mode(State) ->
     logger:warning("Partition count: ~p", [NewCount]),
     
     %% Log to metrics if available
-    try iris_metrics:increment(partition_detected) catch _:_ -> ok end,
+    try iris_metrics:increment(partition_detected)
+    catch Class:Reason ->
+        logger:warning("iris_partition_guard: metrics increment failed: ~p:~p", [Class, Reason])
+    end,
     
     State#state{
         mode = diverged,

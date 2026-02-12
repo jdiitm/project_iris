@@ -122,7 +122,10 @@ start_link(Id) ->
 get_stats(Id) ->
     Name = list_to_atom("iris_router_" ++ integer_to_list(Id)),
     try gen_server:call(Name, get_stats)
-    catch _:_ -> {0, 0} end.
+    catch Class:Reason ->
+        logger:warning("iris_router_worker:get_stats(~p) catch-all: ~p:~p", [Id, Class, Reason]),
+        {0, 0}
+    end.
 
 init([]) ->
     Ref = counters:new(2, []),

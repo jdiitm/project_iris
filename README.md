@@ -5,7 +5,7 @@
 [![Erlang](https://img.shields.io/badge/Erlang-OTP%2026%2B-blue)](https://www.erlang.org/)
 
 > **Status**: Development / Pre-alpha. Tested at **10K concurrent connections** locally.
-> Full test suite (156 Python + 101 Erlang tests) passing with TLS enforced. Last verified: 2026-02-11.
+> Full test suite (155 Python + 100 Erlang tests) passing with TLS enforced. Last verified: 2026-02-11.
 > Architecture designed for 1M+ users per region. See [Scalability Analysis](docs/SCALABILITY_ANALYSIS.md).
 
 ## What This Is
@@ -40,7 +40,7 @@ See [DEPLOYMENT.md](docs/DEPLOYMENT.md) for architecture diagrams and setup.
 
 ---
 
-## Modules (56 total)
+## Modules (55 total)
 
 ### Edge Layer
 
@@ -133,7 +133,7 @@ cd docker/global-cluster
 
 ## Testing
 
-**156 Python + 101 Erlang tests** across 12 suites. See [TESTING.md](docs/TESTING.md) for full details.
+**155 Python + 100 Erlang tests** across 12 suites. See [TESTING.md](docs/TESTING.md) for full details.
 
 ```bash
 ./tests/run_all_tests.sh              # Full suite
@@ -179,8 +179,8 @@ See [DEPLOYMENT.md](docs/DEPLOYMENT.md) for TLS and certificate setup.
 
 ```
 project_iris/
-├── src/                    # 56 Erlang source modules (20K+ lines)
-├── test_utils/             # 101 Erlang EUnit test modules + 6 support modules
+├── src/                    # 55 Erlang source modules (20K+ lines)
+├── test_utils/             # 100 Erlang EUnit test modules + 6 support modules
 ├── tests/
 │   ├── run_all_tests.sh    # Authoritative test runner
 │   ├── suites/             # 12 test categories

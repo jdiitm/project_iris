@@ -268,7 +268,7 @@ nuke_and_recreate_table(Table) ->
 
 **Test Counts** (as of 2026-02-11):
 - Python test files: 156 across 12 suites
-- Erlang test modules: 101 EUnit test modules + 6 support modules
+- Erlang test modules: 100 EUnit test modules + 6 support modules
 - Chaos_dist tests: 27 (Docker required, TLS enabled)
 - See [TESTING.md](TESTING.md) for current counts
 
@@ -309,7 +309,7 @@ nuke_and_recreate_table(Table) ->
 
 ## 9. Module Overview
 
-See the [README](../README.md#modules-56-total) for the full module reference (56 modules, grouped by layer).
+See the [README](../README.md#modules-55-total) for the full module reference (55 modules, grouped by layer).
 
 ---
 
@@ -345,14 +345,13 @@ The Chief Architect forensic audit identified several items requiring separate R
 | **Effort** | 1 week |
 | **Blocked By** | Docker infrastructure changes, CI pipeline updates |
 
-### P3 - iris_router_pool Assessment
+### P3 - iris_router_pool (Removed)
 
 | Attribute | Value |
 |-----------|-------|
-| **Issue** | Worker pool module with limited usage |
-| **Impact** | Referenced by `iris_mailbox_monitor` for pool monitoring |
-| **Decision** | Keep for now (ephemeral spawn + circuit breaker is primary path) |
-| **Effort** | N/A |
+| **Issue** | Worker pool module with zero callers, never started by any supervisor |
+| **Decision** | Removed (dead code). Ephemeral spawn + circuit breaker is the active routing path |
+| **Date** | 2026-02-11 |
 
 ### Implemented Fixes (2026-02-03)
 

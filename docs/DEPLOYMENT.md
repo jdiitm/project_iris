@@ -132,7 +132,7 @@ erl -name iris_edge@$(hostname -I | awk '{print $1}') \
 ### Application Environment
 
 ```erlang
-%% config/prod.config
+%% Example production config (create as config/prod.config)
 [
     {iris_core, [
         %% Data safety (NEVER enable in prod without operator)
@@ -334,7 +334,8 @@ cd certs/
 erl -pa ebin -config config/test_tls -eval \
     "application:ensure_all_started(iris_core), application:ensure_all_started(iris_edge)."
 
-# Production (with mTLS)
+# Production (with mTLS) — requires creating config/prod_mtls first
+# See config/sys.config.example and config/test_mtls.config as templates
 erl -pa ebin -config config/prod_mtls -eval \
     "application:ensure_all_started(iris_core), application:ensure_all_started(iris_edge)."
 ```

@@ -215,7 +215,6 @@ auto_register_known_processes() ->
     KnownProcesses = [
         {iris_core, iris_core},
         {iris_shard, iris_shard},
-        {iris_router_pool, iris_router_pool},
         {iris_flow_controller, iris_flow_controller},
         {iris_core_registry, iris_core_registry},
         {iris_presence, iris_presence},

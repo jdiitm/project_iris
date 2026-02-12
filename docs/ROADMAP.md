@@ -17,7 +17,7 @@
 | E2EE | ✅ Working | Signal Protocol implemented |
 | Cross-Region | ✅ Hardened | Multi-node disc_copies, TLS enabled |
 | **TLS Security** | ✅ **Enforced** | All client connections require TLS |
-| **Test Suite** | ✅ **100% Pass** | 156 Python + 101 Erlang tests, all TLS-enabled |
+| **Test Suite** | ✅ **100% Pass** | 155 Python + 100 Erlang tests, all TLS-enabled |
 | **RFC v4.0 Compliance** | ✅ **19 gaps closed** | See [RFC_COMPLIANCE.md](RFC_COMPLIANCE.md) |
 | **Operational Limits** | ✅ **Enforced** | Inbox 10K, payload 64KB, session 100K |
 | Scalability (10K) | ✅ Validated | Local testing with metrics |
@@ -28,7 +28,7 @@
 - Closed 19 RFC v4.0 compliance gaps via TDD
 - Inbox 10K limit, payload 64KB limit, outbox 7-day TTL enforced
 - JWT replay protection, key isolation, version negotiation
-- Test suite expanded to 156 Python + 101 Erlang tests (from 115+), all passing
+- Test suite expanded to 155 Python + 100 Erlang tests (from 115+), all passing
 - Session cache bounded (100K), dedup Mnesia cross-check added
 - Edge listener hardened, Docker image aligned to OTP 26
 
@@ -133,9 +133,8 @@ See [Scalability Analysis](SCALABILITY_ANALYSIS.md) for measured metrics and ext
 ### 3. Worker Pool Strategy
 
 **Current**: Ephemeral spawn + circuit breaker
-**Alternative**: Bounded worker pool (`iris_router_pool`)
 
-**Decision**: Keep ephemeral spawn. Bounded pool adds complexity without clear benefit given circuit breaker isolation.
+**Decision**: Keep ephemeral spawn. `iris_router_pool` was removed as dead code (2026-02-11). Bounded pool adds complexity without clear benefit given circuit breaker isolation.
 
 ---
 
@@ -148,7 +147,7 @@ See [Scalability Analysis](SCALABILITY_ANALYSIS.md) for measured metrics and ext
 
 ### Phase 1.5: Test Stabilization (Complete - 2026-02-03)
 - [x] TLS enforced on all client connections (NFR-14)
-- [x] 156 Python + 101 Erlang tests passing (100%)
+- [x] 155 Python + 100 Erlang tests passing (100%)
 - [x] All chaos_dist tests working with Docker cluster
 - [x] Reliable message protocol (ACKs) properly implemented
 - [x] Cross-region durability validated (RPO=0)

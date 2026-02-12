@@ -154,7 +154,7 @@ start_server() {
             return 1
         fi
     fi
-    CONFIG=config/test_tls make start > "$LOG_DIR/server_start.log" 2>&1
+    make start CONFIG=config/test_tls > "$LOG_DIR/server_start.log" 2>&1
     sleep 5
     
     # Verify OUR server started (not a leftover Docker edge on the same port)
@@ -245,7 +245,9 @@ run_test() {
 }
 
 # Quick server restart (used after heavy tests)
+# Optional arg: config file (defaults to config/test_tls)
 restart_server_quick() {
+    local restart_config=${1:-config/test_tls}
     # Graceful shutdown first (SIGTERM) to allow clean socket teardown,
     # then force kill (SIGKILL) as fallback. Using only SIGKILL causes
     # listen sockets to linger in TIME_WAIT, leading to eaddrinuse on restart.
@@ -278,7 +280,7 @@ restart_server_quick() {
         sleep 1
     done
     rm -rf Mnesia.* MnesiaCore.* 2>/dev/null || true
-    CONFIG=config/test_tls make start > "$LOG_DIR/server_restart.log" 2>&1
+    make start CONFIG="$restart_config" > "$LOG_DIR/server_restart.log" 2>&1
     sleep 5
     # Wait for server port to be accepting connections
     local attempts=0
@@ -517,7 +519,18 @@ else
     echo "--- Security Tests ---"
     ensure_server_ready "Security Tests"
     for test in tests/suites/security/test_*.py; do
-        [ -f "$test" ] && run_test "$test" 180
+        [ -f "$test" ] || continue
+        test_name=$(basename "$test" .py)
+        if [[ "$test_name" == "test_mtls_enforcement" ]]; then
+            # mTLS test requires server with client cert enforcement
+            echo -e "    ${YELLOW}(switching to mTLS config for $test_name)${NC}"
+            restart_server_quick config/test_mtls
+            run_test "$test" 180
+            # Restore normal TLS config for remaining security tests
+            restart_server_quick config/test_tls
+        else
+            run_test "$test" 180
+        fi
     done
 
     echo ""

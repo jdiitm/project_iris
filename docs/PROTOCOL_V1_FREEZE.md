@@ -180,7 +180,7 @@ This document is the **canonical protocol specification** for Iris. All opcodes,
 | `iris_group.erl` | Group management | ✅ Complete |
 | `iris_sender_keys.erl` | Sender Keys | ✅ Complete |
 | `iris_group_fanout.erl` | Group fan-out | ✅ Complete |
-| `iris_router_pool.erl` | Worker pool | ✅ Complete |
+| ~~`iris_router_pool.erl`~~ | Worker pool | Removed (dead code) |
 
 ### 7.2 Test Coverage
 
@@ -188,7 +188,7 @@ See [TESTING.md](TESTING.md) for authoritative counts. Summary as of 2026-02-11:
 
 | Category | Tests | Status |
 |----------|-------|--------|
-| Erlang EUnit | 101 test modules + 6 support | ✅ All passing |
+| Erlang EUnit | 100 test modules + 6 support | ✅ All passing |
 | Python integration | 40 | ✅ All passing |
 | Python e2e | 11 | ✅ All passing |
 | Python security | 23 | ✅ All passing |
@@ -221,7 +221,7 @@ New features MUST:
 ## Approval
 
 - [x] Protocol Implementation Complete (30+ opcodes)
-- [x] Test Suite Passing (156 Python + 101 Erlang tests, all TLS-enabled)
+- [x] Test Suite Passing (155 Python + 100 Erlang tests, all TLS-enabled)
 - [x] Security Review (E2EE implementation)
 - [x] Performance Validation
 
