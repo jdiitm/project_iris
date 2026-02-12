@@ -69,14 +69,26 @@ put(Table, Key, Value) ->
 %% node while maintaining durability.
 -spec put(atom(), term(), term(), map()) -> ok | {error, term()}.
 put(Table, Key, Value, Opts) ->
-    %% Check partition guard first
-    case check_write_safety() of
+    %% AUDIT 7.4: Validate key type and size at API boundary
+    case validate_key(Key) of
         ok ->
-            Durability = maps:get(durability, Opts, quorum),
-            do_put(Durability, Table, Key, Value, Opts);
-        {error, Reason} ->
-            {error, Reason}
+            case check_write_safety() of
+                ok ->
+                    Durability = maps:get(durability, Opts, quorum),
+                    do_put(Durability, Table, Key, Value, Opts);
+                {error, Reason} ->
+                    {error, Reason}
+            end;
+        {error, _} = Err ->
+            Err
     end.
+
+%% AUDIT 7.4: Validate Mnesia key type and size at API boundary
+validate_key(K) when is_atom(K) -> ok;
+validate_key(K) when is_integer(K) -> ok;
+validate_key(K) when is_binary(K), byte_size(K) =< 1024 -> ok;
+validate_key(K) when is_binary(K) -> {error, {key_too_large, byte_size(K)}};
+validate_key(K) -> {error, {invalid_key_type, K}}.
 
 do_put(guaranteed, Table, Key, Value, _Opts) ->
     %% sync_transaction: Waits for replication to ALL disc_copies nodes
@@ -97,8 +109,15 @@ do_put(best_effort, Table, Key, Value, _Opts) ->
     case erlang:system_info(process_count) < erlang:system_info(process_limit) - 1000 of
         true ->
             spawn(fun() ->
-                F = fun() -> mnesia:write({Table, Key, Value}) end,
-                mnesia:activity(transaction, F)
+                try
+                    F = fun() -> mnesia:write({Table, Key, Value}) end,
+                    mnesia:activity(transaction, F)
+                catch Class:Reason ->
+                    %% AUDIT 7.5: Make spawn failures observable
+                    logger:warning("best_effort write failed: ~p:~p table=~p",
+                                   [Class, Reason, Table]),
+                    iris_metrics:inc(best_effort_write_error)
+                end
             end),
             ok;
         false ->
@@ -112,7 +131,10 @@ do_put(quorum, Table, Key, Value, Opts) ->
     %% Falls back to guaranteed if quorum module not available
     case whereis(iris_quorum_write) of
         undefined ->
-            %% Quorum module not running - fall back to guaranteed
+            %% AUDIT 4.1: Log + metric on silent durability downgrade
+            logger:warning("quorum_write not registered -- downgrading to guaranteed "
+                           "for table=~p key=~p", [Table, Key]),
+            iris_metrics:inc(quorum_fallback_count),
             do_put(guaranteed, Table, Key, Value, Opts);
         _ ->
             Timeout = maps:get(timeout, Opts, 3000),
@@ -187,8 +209,14 @@ do_delete(guaranteed, Table, Key) ->
 
 do_delete(best_effort, Table, Key) ->
     spawn(fun() ->
-        F = fun() -> mnesia:delete({Table, Key}) end,
-        mnesia:activity(transaction, F)
+        try
+            F = fun() -> mnesia:delete({Table, Key}) end,
+            mnesia:activity(transaction, F)
+        catch Class:Reason ->
+            logger:warning("best_effort delete failed: ~p:~p table=~p",
+                           [Class, Reason, Table]),
+            iris_metrics:inc(best_effort_write_error)
+        end
     end),
     ok.
 
@@ -225,12 +253,18 @@ do_batch_put(guaranteed, Table, KeyValuePairs) ->
 
 do_batch_put(best_effort, Table, KeyValuePairs) ->
     spawn(fun() ->
-        F = fun() ->
-            lists:foreach(fun({Key, Value}) ->
-                mnesia:write({Table, Key, Value})
-            end, KeyValuePairs)
-        end,
-        mnesia:activity(transaction, F)
+        try
+            F = fun() ->
+                lists:foreach(fun({Key, Value}) ->
+                    mnesia:write({Table, Key, Value})
+                end, KeyValuePairs)
+            end,
+            mnesia:activity(transaction, F)
+        catch Class:Reason ->
+            logger:warning("best_effort batch_put failed: ~p:~p table=~p",
+                           [Class, Reason, Table]),
+            iris_metrics:inc(best_effort_write_error)
+        end
     end),
     ok.
 
@@ -317,8 +351,14 @@ do_append_inbox(guaranteed, Record) ->
 
 do_append_inbox(best_effort, Record) ->
     spawn(fun() ->
-        F = fun() -> mnesia:write(Record) end,
-        mnesia:activity(transaction, F)
+        try
+            F = fun() -> mnesia:write(Record) end,
+            mnesia:activity(transaction, F)
+        catch Class:Reason ->
+            logger:warning("best_effort inbox append failed: ~p:~p",
+                           [Class, Reason]),
+            iris_metrics:inc(best_effort_write_error)
+        end
     end),
     ok;
 

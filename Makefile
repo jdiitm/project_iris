@@ -100,6 +100,21 @@ test-cover: $(BEAM_FILES)
 		io:format(\"HTML reports in coverage/~n\"), \
 		init:stop()."
 
+# =============================================================================
+# Static Analysis (Dialyzer)
+# =============================================================================
+PLT_FILE = .iris_dialyzer.plt
+
+dialyzer-plt: $(PLT_FILE)
+
+$(PLT_FILE):
+	@echo "Building Dialyzer PLT (first run takes ~2 min)..."
+	dialyzer --build_plt --apps erts kernel stdlib mnesia crypto ssl public_key --output_plt $(PLT_FILE)
+
+dialyzer: all $(PLT_FILE)
+	@echo "Running Dialyzer static analysis..."
+	dialyzer --plt $(PLT_FILE) -r ebin/ --no_check_plt
+
 # Run all tests via unified test runner
 test-all: $(BEAM_FILES)
 	@echo "Running all tests..."

@@ -13,6 +13,7 @@
 
 -export([start_link/1, start_link/2]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
+-export([days_until_cert_expiry/1]).
 
 -record(state, {
     lsock :: gen_tcp:socket() | ssl:sslsocket(),
@@ -166,6 +167,8 @@ ensure_ssl_started() ->
 get_tls_options() ->
     CertFile = application:get_env(iris_edge, tls_certfile, "certs/server.pem"),
     KeyFile = application:get_env(iris_edge, tls_keyfile, "certs/server.key"),
+    %% AUDIT 7.2: Warn if certificate is near expiry
+    check_cert_expiry_warning(CertFile),
     
     BaseOpts = [
         {certfile, CertFile},
@@ -191,6 +194,55 @@ get_tls_options() ->
         undefined ->
             BaseOpts ++ [{verify, verify_none}]
     end.
+
+%% AUDIT 7.2: Certificate expiry detection and warning
+check_cert_expiry_warning(CertFile) ->
+    case days_until_cert_expiry(CertFile) of
+        Days when is_integer(Days), Days < 0 ->
+            logger:error("TLS certificate EXPIRED ~p days ago: ~s",
+                         [abs(Days), CertFile]);
+        Days when is_integer(Days), Days < 30 ->
+            logger:warning("TLS certificate expires in ~p days: ~s",
+                           [Days, CertFile]);
+        _ -> ok
+    end.
+
+%% @doc Return the number of days until the certificate in CertFile expires.
+%% Negative values mean the cert is already expired.
+-spec days_until_cert_expiry(string()) -> integer() | {error, term()}.
+days_until_cert_expiry(CertFile) ->
+    case file:read_file(CertFile) of
+        {ok, PemBin} ->
+            try
+                [Entry|_] = public_key:pem_decode(PemBin),
+                Cert = public_key:pem_entry_decode(Entry),
+                TBS = element(2, Cert),
+                Validity = element(6, TBS),
+                NotAfter = element(3, Validity),
+                ExpirySeconds = utc_time_to_epoch(NotAfter),
+                NowSeconds = calendar:datetime_to_gregorian_seconds(
+                    calendar:universal_time()) - 62167219200,
+                (ExpirySeconds - NowSeconds) div 86400
+            catch _:Reason ->
+                {error, Reason}
+            end;
+        {error, Reason} ->
+            {error, Reason}
+    end.
+
+%% Parse UTCTime "YYMMDDHHMMSSZ" to Unix epoch seconds
+utc_time_to_epoch({utcTime, TimeStr}) ->
+    %% UTCTime format: YYMMDDHHMMSSZ
+    [Y1, Y2, M1, M2, D1, D2, H1, H2, Min1, Min2, S1, S2, $Z] = TimeStr,
+    YY = (Y1 - $0) * 10 + (Y2 - $0),
+    Year = if YY >= 50 -> 1900 + YY; true -> 2000 + YY end,
+    Month = (M1 - $0) * 10 + (M2 - $0),
+    Day = (D1 - $0) * 10 + (D2 - $0),
+    Hour = (H1 - $0) * 10 + (H2 - $0),
+    Min = (Min1 - $0) * 10 + (Min2 - $0),
+    Sec = (S1 - $0) * 10 + (S2 - $0),
+    DateTime = {{Year, Month, Day}, {Hour, Min, Sec}},
+    calendar:datetime_to_gregorian_seconds(DateTime) - 62167219200.
 
 %% RFC NFR-14: TLS 1.3 cipher suites only
 tls_ciphers() ->

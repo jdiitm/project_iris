@@ -14,6 +14,7 @@
 %% High-Scale Messaging APIs
 -export([register_user/3, lookup_user/1]).
 -export([check_mtls_enforcement/0]).
+-export([validate_production_cookie/0, validate_production_cookie/1]).
 -export([store_offline/2, store_offline_durable/2, store_batch/2, retrieve_offline/1]).
 -export([retrieve_offline_paginated/3, get_offline_queue_depth/1, delete_offline_confirmed/2]).
 -export([get_bucket_count/1, set_bucket_count/2]).
@@ -25,6 +26,7 @@
 %%% Application Callbacks
 %%%===================================================================
 
+-spec start(atom(), term()) -> {ok, pid()} | {error, term()}.
 start(_StartType, _StartArgs) ->
     %% Rationale: Production systems use structured logging for grep-ability.
     logger:info("Starting Iris Core on node ~p", [node()]),
@@ -94,16 +96,45 @@ start(_StartType, _StartArgs) ->
         _ -> ok
     end,
 
+    %% AUDIT 4.3: Reject default cookie in production mode
+    case validate_production_cookie() of
+        ok -> ok;
+        {error, default_cookie_in_production} ->
+            init:stop(1),
+            exit(default_cookie_in_production)
+    end,
+
     supervisor:start_link({local, ?SERVER}, ?MODULE, []).
 
+-spec stop(term()) -> ok.
 stop(_State) ->
     logger:info("Stopping Iris Core on node ~p", [node()]),
     ok.
+
+%% @doc AUDIT 4.3: Validate that the default cookie is not used in production.
+-spec validate_production_cookie() -> ok | {error, default_cookie_in_production}.
+validate_production_cookie() ->
+    validate_production_cookie(erlang:get_cookie()).
+
+-spec validate_production_cookie(atom()) -> ok | {error, default_cookie_in_production}.
+validate_production_cookie(Cookie) ->
+    case application:get_env(iris_core, deployment_mode, development) of
+        production ->
+            case Cookie of
+                iris_secret ->
+                    logger:error("FATAL: Default cookie 'iris_secret' in production mode. "
+                                 "Set IRIS_COOKIE or COOKIE= for cluster security."),
+                    {error, default_cookie_in_production};
+                _ -> ok
+            end;
+        _ -> ok
+    end.
 
 %%%===================================================================
 %%% Supervisor Callbacks
 %%%===================================================================
 
+-spec init(term()) -> {ok, {supervisor:sup_flags(), [supervisor:child_spec()]}}.
 init([]) ->
     %% Rationale: strategy 'one_for_one' is replaced with a logic-based hierarchy.
     %% We use secondary supervisors for batchers to isolate their crashes.
@@ -309,6 +340,7 @@ check_mtls_enforcement() ->
 %%% FAANG-Grade Messaging APIs
 %%%===================================================================
 
+-spec register_user(binary(), node(), pid()) -> ok | {error, term()}.
 register_user(User, Node, Pid) ->
     %% FORENSIC_AUDIT_FIX: Default to ETS for lockfree presence (was mnesia).
     %% Mnesia causes global lock bottleneck at scale (~10k tx/sec limit).
@@ -332,6 +364,7 @@ register_user(User, Node, Pid) ->
             error({invalid_presence_backend, Other})
     end.
 
+-spec lookup_user(binary()) -> {ok, node(), pid()} | not_found.
 lookup_user(User) ->
     %% FORENSIC_AUDIT_FIX: Default to ETS for lockfree lookup.
     case application:get_env(iris_core, presence_backend, ets) of
@@ -346,6 +379,7 @@ lookup_user(User) ->
             end
     end.
 
+-spec store_offline(binary(), binary()) -> ok | {error, term()}.
 store_offline(User, Msg) ->
     Count = get_bucket_count(User),
     iris_offline_storage:store(User, Msg, Count).
@@ -356,6 +390,7 @@ store_offline(User, Msg) ->
 %% P0-B FIX: For multimaster durability, use sync_transaction when cluster mode
 %% RFC NFR-11: Server-side deduplication with 7-day window
 %% RFC FR-5: FIFO ordering using client-provided sequence number
+-spec store_offline_durable(binary(), binary()) -> ok | {error, term()}.
 store_offline_durable(User, Msg) ->
     %% RFC Section 8: Inbox Size limit enforcement (GAP-6 fix)
     case get_offline_queue_depth(User) >= iris_limits:max_inbox_size() of
@@ -588,6 +623,7 @@ get_status_from_disk(User) ->
 %%% Internal Functions (Hidden from External API)
 %%%===================================================================
 
+-spec init_db() -> ok.
 init_db() ->
     %% ROBUST INITIALIZATION: Config-driven with recovery support.
     %% Key insight: Check if Mnesia schema already exists before recreating.
@@ -799,6 +835,7 @@ create_tables(Nodes) ->
     logger:info("Tables created.").
 
 %% Legacy wrapper for specific node lists (unused now but kept for API compat)
+-spec init_db([node()]) -> ok.
 init_db(Nodes) ->
    init_db(). %% Ignore args, use robust logic
 
