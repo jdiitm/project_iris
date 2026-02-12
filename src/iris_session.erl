@@ -2,6 +2,7 @@
 -export([handle_packet/4, terminate/1]).
 -export([validate_e2ee_header/1]).  %% Exported for TDD (audit finding 1)
 -export([group_fanout_recipients/3]).  %% Exported for TDD (audit finding 3)
+-export([estimate_remaining_messages/3, calculate_remaining/2]).  %% AUDIT 4.4: testable queue depth
 
 -include_lib("kernel/include/inet.hrl").
 
@@ -401,14 +402,7 @@ handle_packet({get_offline_page, Cursor}, User, _Pid, _Mod) when User =/= undefi
                 _ ->
                     %% AUDIT MITIGATION P2-2: Estimate remaining messages from queue depth.
                     %% NextCursor is the bucket offset; depth - cursor gives a rough count.
-                    Remaining = try
-                        Depth = rpc:call(CoreNode, iris_core, get_offline_queue_depth, [User], 3000),
-                        case is_integer(Depth) andalso is_integer(NextCursor) of
-                            true -> max(0, Depth - NextCursor);
-                            false -> -1  %% Unknown
-                        end
-                    catch _:_ -> -1  %% Unknown -- client should treat -1 as "more exist"
-                    end,
+                    Remaining = estimate_remaining_messages(CoreNode, User, NextCursor),
                     MoreIndicator = encode_offline_more(NextCursor, Remaining),
                     {ok, User, MsgActions ++ [{send, MoreIndicator}]}
             end;
@@ -1342,3 +1336,30 @@ terminate(User) ->
                     ok
             end
     end.
+
+%% =============================================================================
+%% AUDIT 4.4: Queue depth estimation with error observability
+%% =============================================================================
+
+-spec estimate_remaining_messages(node(), binary(), integer()) -> integer().
+estimate_remaining_messages(CoreNode, User, NextCursor) ->
+    try
+        case rpc:call(CoreNode, iris_core, get_offline_queue_depth, [User], 3000) of
+            {badrpc, Reason} ->
+                logger:warning("Queue depth estimate failed: ~p (user=~p)", [Reason, User]),
+                iris_metrics:inc(queue_depth_estimate_error),
+                -1;
+            Depth when is_integer(Depth), is_integer(NextCursor) ->
+                calculate_remaining(Depth, NextCursor);
+            _ ->
+                -1
+        end
+    catch _:CatchReason ->
+        logger:warning("Queue depth estimate failed: ~p (user=~p)", [CatchReason, User]),
+        iris_metrics:inc(queue_depth_estimate_error),
+        -1
+    end.
+
+-spec calculate_remaining(integer(), integer()) -> non_neg_integer().
+calculate_remaining(Depth, NextCursor) ->
+    max(0, Depth - NextCursor).

@@ -15,6 +15,8 @@
 -export([register_user/3, lookup_user/1]).
 -export([check_mtls_enforcement/0]).
 -export([validate_production_cookie/0, validate_production_cookie/1]).
+-export([is_core_node/1]).  %% AUDIT 5.4: exported for iris_cluster_join_worker
+-export([validate_consistency_mode/0]).  %% AUDIT 4.2: CP mode hard-fail
 -export([store_offline/2, store_offline_durable/2, store_batch/2, retrieve_offline/1]).
 -export([retrieve_offline_paginated/3, get_offline_queue_depth/1, delete_offline_confirmed/2]).
 -export([get_bucket_count/1, set_bucket_count/2]).
@@ -31,14 +33,12 @@ start(_StartType, _StartArgs) ->
     %% Rationale: Production systems use structured logging for grep-ability.
     logger:info("Starting Iris Core on node ~p", [node()]),
 
-    %% AUDIT FIX: Warn loudly if operator selects unimplemented consistency_mode=cp.
-    %% Without this, CP mode is silently ignored and the node runs as AP.
-    case application:get_env(iris_core, consistency_mode, hardened_ap) of
-        cp ->
-            logger:error("consistency_mode=cp is NOT IMPLEMENTED. "
-                         "Falling back to hardened_ap. "
-                         "This node will operate in AP mode.");
-        _ -> ok
+    %% AUDIT 4.2: Validate consistency mode (fatal in production for CP)
+    case validate_consistency_mode() of
+        ok -> ok;
+        {error, cp_not_implemented} ->
+            init:stop(1),
+            exit(cp_not_implemented)
     end,
 
     %% Rationale: DB initialization is moved to a dedicated manager or
@@ -130,6 +130,26 @@ validate_production_cookie(Cookie) ->
         _ -> ok
     end.
 
+%% AUDIT 4.2: Validate consistency mode — CP is not implemented.
+%% In production, this is fatal. In development, log warning and continue.
+-spec validate_consistency_mode() -> ok | {error, cp_not_implemented}.
+validate_consistency_mode() ->
+    case application:get_env(iris_core, consistency_mode, hardened_ap) of
+        cp ->
+            case application:get_env(iris_core, deployment_mode, development) of
+                production ->
+                    logger:error("FATAL: consistency_mode=cp is NOT IMPLEMENTED. "
+                                 "Cannot guarantee CP semantics in production."),
+                    {error, cp_not_implemented};
+                _ ->
+                    logger:warning("consistency_mode=cp is NOT IMPLEMENTED. "
+                                   "Falling back to hardened_ap. "
+                                   "This node will operate in AP mode."),
+                    ok
+            end;
+        _ -> ok
+    end.
+
 %%%===================================================================
 %%% Supervisor Callbacks
 %%%===================================================================
@@ -139,14 +159,23 @@ init([]) ->
     %% Rationale: strategy 'one_for_one' is replaced with a logic-based hierarchy.
     %% We use secondary supervisors for batchers to isolate their crashes.
     
-    SupFlags = #{strategy => one_for_one,
+    %% AUDIT 5.3: rest_for_one ensures foundation services restart dependents
+    SupFlags = #{strategy => rest_for_one,
                  intensity => 10,
                  period => 60},
 
     Children = [
+        %% === Tier 1: Foundation (must start first, crashes restart everything after) ===
+
         %% Health Check HTTP endpoint (/health, /ready, /metrics)
         #{id => iris_health_handler,
           start => {iris_health_handler, start_link, []},
+          type => worker,
+          restart => permanent},
+
+        %% Metrics: Must start early -- other modules emit counters through it
+        #{id => iris_metrics,
+          start => {iris_metrics, start_link, []},
           type => worker,
           restart => permanent},
 
@@ -155,69 +184,65 @@ init([]) ->
           start => {iris_flow_controller, start_link, []},
           type => worker,
           restart => permanent},
-          
+
         %% Deduplication Service: RFC NFR-11 - 7-day dedup window with Mnesia persistence
         %% MUST start early - dedup checks happen during message processing
         #{id => iris_dedup,
           start => {iris_dedup, start_link, []},
           type => worker,
           restart => permanent},
-          
+
         %% Presence Manager: ETS-backed lockfree presence registry
         %% FORENSIC_AUDIT_FIX: Must start early - creates presence_local ETS table
         #{id => iris_presence,
           start => {iris_presence, start_link, []},
           type => worker,
           restart => permanent},
-          
+
         %% Partition Guard: Split-brain detection and safe mode
         %% AUDIT FIX: Detects cluster partitions and rejects writes to prevent divergence
         #{id => iris_partition_guard,
           start => {iris_partition_guard, start_link, []},
           type => worker,
           restart => permanent},
-          
+
+        %% === Tier 2: Services (depend on foundation, isolated from each other) ===
+
         %% Cluster Manager: Self-healing cluster topology
         %% FORENSIC_AUDIT_FIX: Monitors nodeup/nodedown and auto-wires replication
         #{id => iris_cluster_manager,
           start => {iris_cluster_manager, start_link, []},
           type => worker,
           restart => permanent},
-          
+
         %% Durable Batcher Supervisor: WAL + batched sync_transaction for durability
         #{id => iris_durable_batcher_sup,
           start => {iris_durable_batcher_sup, start_link, []},
           type => supervisor,
           restart => permanent},
-          
+
         %% Core Registry: Registers this Core with pg for Edge discovery
         #{id => iris_core_registry,
           start => {iris_core_registry, start_link, []},
           type => worker,
           restart => permanent},
-          
+
         %% Status Batcher Supervisor: Manages the 100 workers
         #{id => iris_status_batcher_sup,
           start => {iris_status_batcher_sup, start_link, [100]},
           type => supervisor,
           restart => permanent},
-          
+
         %% Group Messaging Service: Handles group creation, membership, and message fanout
         #{id => iris_group,
           start => {iris_group, start_link, []},
           type => worker,
           restart => permanent},
-          
+
         %% Shard Manager: Consistent user-to-shard mapping for horizontal scaling
         %% FIX: iris_shard was missing from supervisor - needed for message routing
         #{id => iris_shard,
           start => {iris_shard, start_link, []},
-          type => worker,
-          restart => permanent},
-
-        %% Metrics: Must start early -- other modules emit counters through it
-        #{id => iris_metrics,
-          start => {iris_metrics, start_link, []},
           type => worker,
           restart => permanent},
 
@@ -255,43 +280,20 @@ init([]) ->
         #{id => iris_efficiency_monitor,
           start => {iris_efficiency_monitor, start_link, []},
           type => worker,
-          restart => permanent}
+          restart => permanent},
+
+        %% AUDIT 5.4: Supervised cluster join worker (replaces bare spawn)
+        #{id => iris_cluster_join_worker,
+          start => {iris_cluster_join_worker, start_link, [cluster_join]},
+          type => worker,
+          restart => transient},
+
+        %% AUDIT 5.4: Supervised region wiring worker (replaces bare spawn)
+        #{id => iris_region_wiring_worker,
+          start => {iris_cluster_join_worker, start_link, [region_wiring]},
+          type => worker,
+          restart => transient}
     ],
-
-    %% Register this Core node with pg for Edge discovery
-    %% AND attempt to auto-rejoin cluster if peers are found
-    spawn(fun() -> 
-        timer:sleep(1000), % Wait for registry to start
-        iris_core_registry:join(),
-        
-        %% Auto-rejoin cluster: ping known peers and join first responder
-        KnownPeers = application:get_env(iris_core, join_seeds, []),
-        OtherPeers = [P || P <- KnownPeers, P =/= node()],
-        case lists:search(fun(P) -> net_adm:ping(P) == pong end, OtherPeers) of
-            {value, LivePeer} ->
-                logger:info("Auto-joining cluster via ~p", [LivePeer]),
-                iris_core:join_cluster(LivePeer);
-            false ->
-                logger:info("No cluster peers found, standalone mode")
-        end
-    end),
-
-    %% AUDIT FIX: Auto-wire cross-region replication if configured
-    %% Only if we are a core node
-    spawn(fun() ->
-        case application:get_env(iris_core, regions, []) of
-            [] -> ok;
-            Regions when length(Regions) > 0 ->
-                 %% Wait for cluster to stabilize
-                 timer:sleep(5000),
-                 case is_core_node(node()) of
-                     true ->
-                         logger:info("Regions configured, attempting to wire replication..."),
-                         init_cross_region_replication();
-                     false -> ok
-                 end
-        end
-    end),
 
     %% SAFETY DEFAULT: Validate presence backend configuration
     case application:get_env(iris_core, presence_backend) of

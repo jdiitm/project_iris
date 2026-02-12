@@ -51,3 +51,38 @@ core_supervisor_declares_iris_mailbox_monitor_test() ->
 core_supervisor_declares_iris_efficiency_monitor_test() ->
     Ids = get_child_ids(),
     ?assert(lists:member(iris_efficiency_monitor, Ids)).
+
+%% =============================================================================
+%% AUDIT 5.3: Supervisor Strategy Tests
+%% =============================================================================
+
+get_sup_flags() ->
+    application:ensure_started(iris_core),
+    application:set_env(iris_core, presence_backend, ets),
+    {ok, {SupFlags, _Children}} = iris_core:init([]),
+    SupFlags.
+
+core_supervisor_uses_rest_for_one_test() ->
+    SupFlags = get_sup_flags(),
+    ?assertEqual(rest_for_one, maps:get(strategy, SupFlags)).
+
+metrics_starts_before_services_test() ->
+    Ids = get_child_ids(),
+    MetricsIdx = index_of(iris_metrics, Ids),
+    %% iris_dedup, iris_group, iris_region_bridge all depend on metrics
+    %% They should come after iris_metrics in the child list
+    DedupIdx = index_of(iris_dedup, Ids),
+    GroupIdx = index_of(iris_group, Ids),
+    BridgeIdx = index_of(iris_region_bridge, Ids),
+    ?assert(MetricsIdx < DedupIdx),
+    ?assert(MetricsIdx < GroupIdx),
+    ?assert(MetricsIdx < BridgeIdx).
+
+index_of(Elem, List) ->
+    index_of(Elem, List, 1).
+index_of(_Elem, [], _N) ->
+    not_found;
+index_of(Elem, [Elem|_], N) ->
+    N;
+index_of(Elem, [_|Rest], N) ->
+    index_of(Elem, Rest, N + 1).
