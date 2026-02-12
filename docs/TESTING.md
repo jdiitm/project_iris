@@ -1,6 +1,6 @@
 # Testing Guide
 
-**Status**: 156 Python + 101 Erlang tests passing | **Last Verified**: 2026-02-11
+**Status**: 155 Python + 100 Erlang tests passing | **Last Verified**: 2026-02-11
 
 ## Quick Start
 
@@ -82,7 +82,7 @@ Docker chaos tests (`chaos_dist/`) are **destructive** — they kill containers,
 | contract | 6 | Edge-core contract, rate limit constants, RFC v4 |
 | conformance | 1 | WebSocket RFC 6455 compliance |
 
-### Erlang Test Suites (101 test modules + 6 support modules)
+### Erlang Test Suites (100 test modules + 6 support modules)
 
 | Category | Modules | Examples |
 |----------|---------|----------|
@@ -90,7 +90,7 @@ Docker chaos tests (`chaos_dist/`) are **destructive** — they kill containers,
 | Storage & dedup | 8 | `iris_dedup_tests`, `iris_store_tests`, `iris_durable_batcher_tests` |
 | Auth & security | 7 | `iris_auth_tests`, `iris_auth_eddsa_tests`, `iris_auth_key_isolation_tests` |
 | E2EE | 5 | `iris_x3dh_tests`, `iris_ratchet_tests`, `iris_keys_tests`, `iris_sender_keys_tests` |
-| Routing & sharding | 6 | `iris_shard_tests`, `iris_router_pool_tests`, `iris_region_bridge_tests` |
+| Routing & sharding | 5 | `iris_shard_tests`, `iris_region_bridge_tests` |
 | Resilience | 5 | `iris_circuit_breaker_tests`, `iris_partition_guard_tests`, `iris_flow_controller_tests` |
 | Observability | 3 | `iris_metrics_nfr_tests`, `iris_metrics_slo_tests`, `iris_trace_tests` |
 | RFC v4 gaps | 8 | `iris_inbox_limit_tests`, `iris_rfc_v4_constants_tests`, `iris_key_change_notify_tests` |
@@ -189,6 +189,6 @@ tests/
 ├── utilities/           # IrisClient (TLS-enabled), TLS helpers
 └── artifacts/           # Test outputs (gitignored)
 
-test_utils/              # 101 Erlang EUnit test modules + 6 support modules
+test_utils/              # 100 Erlang EUnit test modules + 6 support modules
 docker/global-cluster/   # Docker cluster scripts
 ```

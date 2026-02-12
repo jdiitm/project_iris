@@ -159,7 +159,9 @@ get_stats() ->
 call_shard_stats(ShardId) ->
     Name = list_to_atom("iris_async_router_" ++ integer_to_list(ShardId)),
     try gen_server:call(Name, get_stats_local, 100)
-    catch _:_ -> #{routed_local => 0, routed_remote => 0, routed_offline => 0, route_failures => 0}
+    catch Class:Reason ->
+        logger:warning("iris_async_router:call_shard_stats catch-all: ~p:~p", [Class, Reason]),
+        #{routed_local => 0, routed_remote => 0, routed_offline => 0, route_failures => 0}
     end.
 
 aggregate_stats(StatsList) ->
@@ -438,7 +440,9 @@ check_destination_rate(User) ->
         undefined -> allow;  %% Rate limiter not running
         _ -> 
             try iris_rate_limiter:check_destination(User)
-            catch _:_ -> allow  %% Fail open
+            catch Class:Reason ->
+                logger:error("iris_async_router:check_destination_rate FAIL-OPEN for ~p: ~p:~p", [User, Class, Reason]),
+                allow
             end
     end.
 
@@ -533,7 +537,9 @@ get_all_region_cores() ->
                         _ -> []
                     end
                 end, Regions)
-            catch _:_ -> []
+            catch Class:Reason ->
+                logger:warning("iris_async_router:get_region_nodes catch-all: ~p:~p", [Class, Reason]),
+                []
             end
     end.
 
@@ -713,7 +719,9 @@ get_target_region(User) ->
             <<"default">>;
         _Pid ->
             try iris_region_router:get_home_region(User)
-            catch _:_ -> <<"default">>
+            catch Class:Reason ->
+                logger:warning("iris_async_router:get_user_region catch-all: ~p:~p", [Class, Reason]),
+                <<"default">>
             end
     end.
 

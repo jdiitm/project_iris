@@ -209,9 +209,9 @@ def main():
     
     print("\nChecking server availability...")
     if not check_server_available():
-        print("  Server not reachable - skipping tests")
+        print("  ✗ FAIL: Server not reachable - cannot validate TLS enforcement")
         print("\nTo run: start server with TLS config")
-        sys.exit(0)
+        sys.exit(1)
     print("  Server is reachable")
     
     # Check if server actually has TLS enabled

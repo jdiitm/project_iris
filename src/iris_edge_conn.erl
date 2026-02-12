@@ -382,8 +382,9 @@ queue_pending_to_session_cache(SessionId, Pending) ->
             Seq + 1
         end, iris_session_cache:next_seq(SessionId), Entries),
         ok
-    catch _:_ ->
+    catch Class:Reason ->
         %% Session cache may not be available -- degrade gracefully
+        logger:warning("iris_edge_conn:restore_pending_to_cache catch-all: ~p:~p", [Class, Reason]),
         ok
     end.
 

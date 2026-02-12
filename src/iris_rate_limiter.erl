@@ -131,8 +131,9 @@ init(_Opts) ->
     GossipTimer = try
         pg:join(?GOSSIP_PG_GROUP, self()),
         erlang:send_after(?GOSSIP_INTERVAL, self(), gossip_counters)
-    catch _:_ ->
-        undefined  %% pg not available (single-node mode)
+    catch Class:Reason ->
+        logger:warning("iris_rate_limiter: pg join failed (single-node mode): ~p:~p", [Class, Reason]),
+        undefined
     end,
     
     {ok, #state{refill_timer = TRef, gossip_timer = GossipTimer}}.
@@ -190,8 +191,9 @@ handle_info(gossip_counters, State) ->
         Members = pg:get_members(?GOSSIP_PG_GROUP),
         OtherMembers = [M || M <- Members, M =/= self()],
         [gen_server:cast(M, {remote_counters, node(), LocalCounters}) || M <- OtherMembers]
-    catch _:_ ->
-        ok  %% pg not available
+    catch Class:Reason ->
+        logger:warning("iris_rate_limiter: gossip broadcast failed: ~p:~p", [Class, Reason]),
+        ok
     end,
     
     %% Reschedule

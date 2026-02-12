@@ -688,7 +688,9 @@ select_shard(User) ->
 
 get_shard_stats(ShardId) ->
     try gen_server:call(shard_name(ShardId), get_stats_local, 1000)
-    catch _:_ -> #{writes_wal => 0, writes_mnesia => 0, batch_count => 0, pending_count => 0}
+    catch Class:Reason ->
+        logger:warning("iris_durable_batcher:get_shard_stats catch-all: ~p:~p", [Class, Reason]),
+        #{writes_wal => 0, writes_mnesia => 0, batch_count => 0, pending_count => 0}
     end.
 
 aggregate_stats(StatsList) ->

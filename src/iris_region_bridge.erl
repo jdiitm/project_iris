@@ -795,6 +795,8 @@ discover_and_monitor_regions() ->
                         _ -> ok
                     end
                 end, Regions)
-            catch _:_ -> ok
+            catch Class:Reason ->
+                logger:warning("iris_region_bridge:broadcast_invalidation catch-all: ~p:~p", [Class, Reason]),
+                ok
             end
     end.

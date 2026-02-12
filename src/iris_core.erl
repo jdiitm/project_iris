@@ -1068,7 +1068,11 @@ merge_table_batch(RemoteNode, Table, Keys) ->
                 %% F1 FIX: Use conflict-aware merge instead of blind write.
                 %% For bag tables (offline_msg, e2ee_key_bundle): union merge (write missing).
                 %% For set tables (group_member, presence): timestamp-aware LWW.
-                TableType = try mnesia:table_info(Table, type) catch _:_ -> set end,
+                TableType = try mnesia:table_info(Table, type)
+                            catch Class:Reason ->
+                                logger:warning("iris_core: table_info(~p, type) failed: ~p:~p, defaulting to set", [Table, Class, Reason]),
+                                set
+                            end,
                 WrittenCount = case TableType of
                     bag ->
                         %% Append-only / bag: union merge (original logic)

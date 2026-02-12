@@ -181,10 +181,12 @@ get_tls_options() ->
     %% Optional: Client certificate verification
     case application:get_env(iris_edge, tls_cacertfile) of
         {ok, CACertFile} ->
+            Verify = application:get_env(iris_edge, tls_verify, verify_peer),
+            FailNoPeer = application:get_env(iris_edge, tls_fail_if_no_peer_cert, false),
             BaseOpts ++ [
                 {cacertfile, CACertFile},
-                {verify, verify_peer},
-                {fail_if_no_peer_cert, false}
+                {verify, Verify},
+                {fail_if_no_peer_cert, FailNoPeer}
             ];
         undefined ->
             BaseOpts ++ [{verify, verify_none}]
@@ -260,7 +262,8 @@ acceptor(LSock, HandlerMod, true) ->
                     try
                         {sslsocket, {_, TcpPort, _, _}, _} = TlsSock,
                         gen_tcp:close(TcpPort)
-                    catch _:_ ->
+                    catch Class:Reason ->
+                        logger:warning("iris_edge_listener: TLS socket close fallback: ~p:~p", [Class, Reason]),
                         catch ssl:close(TlsSock)
                     end,
                     acceptor(LSock, HandlerMod, true);
@@ -325,7 +328,9 @@ get_tcp_peer_ip(TlsSock) ->
             {ok, {IP, _Port}} -> {ok, IP};
             {error, _} -> error
         end
-    catch _:_ -> error
+    catch Class:Reason ->
+        logger:warning("iris_edge_listener:extract_tls_ip catch-all: ~p:~p", [Class, Reason]),
+        error
     end.
 
 %% Rate-check wrapper: only checks if we successfully extracted the IP.
@@ -338,7 +343,9 @@ check_conn_rate_tcp(Sock) ->
             {ok, {IP, _Port}} -> check_ip_rate(IP);
             {error, _} -> allow
         end
-    catch _:_ -> allow
+    catch Class:Reason ->
+        logger:warning("iris_edge_listener:check_conn_rate_tcp catch-all: ~p:~p", [Class, Reason]),
+        allow
     end.
 
 check_ip_rate(IP) ->

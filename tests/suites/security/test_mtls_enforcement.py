@@ -84,7 +84,10 @@ def check_prerequisites():
     # Check if server is running with TLS and if mTLS is enforced
     print("\n  Checking TLS/mTLS configuration...")
     
-    # First, check if server speaks TLS at all
+    # Check if server speaks TLS and whether mTLS is enforced.
+    # TLS 1.3 note: the initial handshake may complete even without a client
+    # cert. The server sends certificate_required AFTER the handshake, so we
+    # must attempt to send/recv data to trigger the server's cert validation.
     try:
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
         context.check_hostname = False
@@ -94,9 +97,27 @@ def check_prerequisites():
         sock.settimeout(5)
         tls_sock = context.wrap_socket(sock, server_hostname=EDGE_HOST)
         tls_sock.connect((EDGE_HOST, EDGE_PORT))
-        # If we get here, TLS connection succeeded WITHOUT client cert
-        tls_sock.close()
+        # TLS handshake succeeded — server speaks TLS.
         print(f"  ✓ Server speaks TLS")
+        # In TLS 1.3 the handshake completes before client cert validation.
+        # Send a probe byte to trigger the server's post-handshake cert check.
+        try:
+            tls_sock.send(b'\x00')
+            tls_sock.recv(1)
+        except ssl.SSLError as post_e:
+            err_post = str(post_e).lower()
+            if "certificate required" in err_post or "certificate_required" in err_post:
+                # Server rejected us after handshake — mTLS IS enforced
+                print(f"  ✓ mTLS enforced (post-handshake cert required)")
+                tls_sock.close()
+                return True, "mtls_enforced"
+        except (ConnectionResetError, BrokenPipeError, OSError):
+            # Server forcefully closed — likely mTLS enforcement
+            print(f"  ✓ mTLS appears enforced (connection reset after probe)")
+            tls_sock.close()
+            return True, "mtls_enforced"
+        # If send/recv succeeded or timed out without error, mTLS is NOT enforced
+        tls_sock.close()
         print(f"  ⚠ mTLS NOT enforced - server accepts connections without client cert")
         print("    For full mTLS testing, start with: make cluster-mtls")
         return False, "mtls_not_enforced"
@@ -152,6 +173,10 @@ def create_ssl_context(certfile=None, keyfile=None, cafile=None, verify=True):
 def try_tls_connect(context, host, port, expect_success=True):
     """
     Attempt TLS connection and return (success, error_message).
+    
+    TLS 1.3 note: The initial handshake may succeed even without a valid
+    client cert. The server's certificate_required alert arrives after the
+    handshake, so we must send data AND read the response to surface it.
     """
     try:
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -160,10 +185,31 @@ def try_tls_connect(context, host, port, expect_success=True):
         tls_sock = context.wrap_socket(sock, server_hostname=host)
         tls_sock.connect((host, port))
         
-        # If we got here, connection succeeded
-        # Try to send a login packet to verify full handshake
-        tls_sock.sendall(b'\x01test_user')
-        time.sleep(0.1)
+        # Handshake succeeded — but in TLS 1.3, the server may still reject
+        # us after validating (or failing to validate) the client certificate.
+        # Send a probe and read the response to trigger any pending alerts.
+        try:
+            tls_sock.sendall(b'\x01test_user')
+            # Read response — this surfaces any queued TLS 1.3 alerts
+            tls_sock.settimeout(2)
+            tls_sock.recv(1)
+        except ssl.SSLError as post_e:
+            err_str = str(post_e).lower()
+            if "certificate required" in err_str or "certificate_required" in err_str:
+                tls_sock.close()
+                return (False, f"Post-handshake cert required: {post_e}")
+            elif "alert" in err_str:
+                tls_sock.close()
+                return (False, f"TLS alert after handshake: {post_e}")
+            # Re-raise unexpected SSL errors
+            tls_sock.close()
+            return (False, f"SSL error after handshake: {post_e}")
+        except (ConnectionResetError, BrokenPipeError):
+            tls_sock.close()
+            return (False, "Connection reset by server (likely cert rejected)")
+        except socket.timeout:
+            # No alert within 2s — connection is genuinely alive
+            pass
         
         tls_sock.close()
         return (True, "Connection successful")
@@ -364,47 +410,38 @@ def main():
     prereq_ok, prereq_status = check_prerequisites()
     
     if prereq_status == "certs_missing":
-        print("\n⚠ Certificates not found. Run: make certs")
-        print("  Skipping mTLS tests (PASS - infrastructure not configured)")
-        return 0
+        print("\n✗ FAIL: Certificates not found. Run: make certs")
+        print("  mTLS tests cannot validate without certificates")
+        return 1
     
     if prereq_status == "server_unavailable":
-        print("\n⚠ Server not reachable.")
-        print("  Skipping mTLS tests (PASS - server not running)")
-        return 0
+        print("\n✗ FAIL: Server not reachable.")
+        print("  mTLS tests cannot validate without a running server")
+        return 1
     
     if prereq_status == "mtls_not_enforced":
         print("\n" + "=" * 60)
-        print("mTLS NOT ENFORCED - Skipping enforcement tests")
+        print("✗ FAIL: mTLS NOT ENFORCED")
         print("=" * 60)
         print("\n  The server is NOT configured to require client certificates.")
-        print("  This is expected when running with 'config/test' instead of 'config/test_mtls'.")
-        print("\n  To run full mTLS tests:")
-        print("    1. make cluster-mtls")
-        print("    2. python3 tests/suites/security/test_mtls_enforcement.py")
-        print("\n  ✓ PASS (mTLS infrastructure test - server running in non-mTLS mode)")
-        return 0
+        print("  To run: make cluster-mtls")
+        return 1
     
     if prereq_status == "no_tls":
         print("\n" + "=" * 60)
-        print("SERVER NOT RUNNING TLS - Skipping mTLS tests")
+        print("✗ FAIL: SERVER NOT RUNNING TLS")
         print("=" * 60)
         print("\n  The server is running in plain TCP mode (no TLS).")
-        print("  This is expected when running with 'config/test'.")
-        print("\n  To run full mTLS tests:")
-        print("    1. make cluster-mtls")
-        print("    2. python3 tests/suites/security/test_mtls_enforcement.py")
-        print("\n  ✓ PASS (mTLS infrastructure test - server running in non-TLS mode)")
-        return 0
+        print("  To run: make cluster-mtls")
+        return 1
     
     if prereq_status == "unknown":
         print("\n" + "=" * 60)
-        print("UNABLE TO DETERMINE mTLS STATUS")
+        print("✗ FAIL: UNABLE TO DETERMINE mTLS STATUS")
         print("=" * 60)
         print("\n  Could not determine if mTLS is enforced.")
         print("  This may be due to network issues or server configuration.")
-        print("\n  ✓ PASS (mTLS test skipped - status unknown)")
-        return 0
+        return 1
     
     # Run all 6 test scenarios (only when mTLS is actually enforced)
     print("\n  Running full mTLS enforcement tests...")
@@ -434,12 +471,6 @@ def main():
     else:
         print(f"\n✗ {failed} test(s) failed")
         print("  Review failed tests and ensure mTLS is properly configured.")
-        # Return success if only the "requires infrastructure" tests failed
-        critical_failures = [name for name, p, _ in results 
-                           if not p and "PLACEHOLDER" not in name and "not found" not in name.lower()]
-        if not critical_failures:
-            print("  (Non-critical failures only - infrastructure may not be fully configured)")
-            return 0
         return 1
 
 
