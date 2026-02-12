@@ -60,7 +60,9 @@ start_link() ->
 %% Check if authentication is enabled
 -spec is_auth_enabled() -> boolean().
 is_auth_enabled() ->
-    application:get_env(iris_edge, auth_enabled, false).
+    %% AUDIT MITIGATION P0-2: Default to true (secure by default).
+    %% Test configs explicitly set auth_enabled=false.
+    application:get_env(iris_edge, auth_enabled, true).
 
 %% @doc Validate a JWT token. Returns {ok, Claims} or {error, Reason}.
 -spec validate_token(binary()) -> {ok, map()} | {error, term()}.

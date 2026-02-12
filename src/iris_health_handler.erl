@@ -137,7 +137,9 @@ ready() ->
     MnesiaOk = try
         running = mnesia:system_info(is_running),
         true
-    catch _:_ -> false
+    catch C:R ->
+        logger:debug("Health check: Mnesia not ready (~p:~p)", [C, R]),
+        false
     end,
     CoreOk = case application:get_env(iris_edge, core_nodes, []) of
         [] -> true;  %% Core node doesn't need to check this
@@ -163,7 +165,8 @@ metrics() ->
     try
         Body = iris_metrics:export_prometheus(),
         {200, <<"text/plain; version=0.0.4; charset=utf-8">>, Body}
-    catch _:_ ->
+    catch C:R ->
+        logger:debug("Metrics export failed: ~p:~p", [C, R]),
         {503, <<"text/plain">>, <<"Metrics unavailable">>}
     end.
 

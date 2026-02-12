@@ -127,7 +127,12 @@ check_queue_overflow(TargetRegion) ->
                 ok
         end
     catch
-        _:_ -> ok  %% If depth check fails, allow the message (fail-open)
+        Class:Reason ->
+            %% AUDIT MITIGATION P0-3: Fail-closed -- reject message if depth check crashes.
+            %% Under memory pressure (the condition causing overflow), fail-open is useless.
+            logger:error("Region bridge queue depth check failed for ~s: ~p:~p",
+                         [TargetRegion, Class, Reason]),
+            {error, {queue_check_failed, TargetRegion}}
     end.
 
 do_send_cross_region(TargetRegion, UserId, Msg, Opts) ->

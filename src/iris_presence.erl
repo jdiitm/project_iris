@@ -118,7 +118,9 @@ get_all_cluster_nodes() ->
         _ -> 
             %% Fallback to nodes()
             nodes()
-    catch _:_ -> nodes()
+    catch C:R ->
+        logger:warning("Presence remote node lookup failed (~p:~p), using nodes()", [C, R]),
+        nodes()
     end.
 
 %% @doc Lookup user on specific nodes (try until success)

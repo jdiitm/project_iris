@@ -28,6 +28,10 @@ import time
 from typing import Set, List, Dict, Callable, Any, Optional
 from collections import defaultdict
 
+# AUDIT MITIGATION P1-1: Standard exit code for infrastructure skip.
+# Tests MUST use this instead of exit(0) when skipping due to missing infra.
+SKIP_EXIT_CODE = 2
+
 
 class MessageTracker:
     """

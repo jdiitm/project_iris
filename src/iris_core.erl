@@ -70,12 +70,23 @@ start(_StartType, _StartArgs) ->
             ok
     end,
 
-    %% AUDIT FIX: Warn operators if critical cluster lists are empty in production.
-    %% These are safe no-ops in test but deployment hazards in production.
-    case application:get_env(iris_core, expected_cluster_nodes, []) of
-        [] -> logger:warning("PRODUCTION WARNING: expected_cluster_nodes is empty -- "
-                             "partition guard is DISABLED, split-brain is undetectable");
-        _ -> ok
+    %% AUDIT MITIGATION P0-1: Validate critical config. Fatal in production mode.
+    case application:get_env(iris_core, deployment_mode, development) of
+        production ->
+            case application:get_env(iris_core, expected_cluster_nodes, []) of
+                [] ->
+                    logger:error("FATAL: expected_cluster_nodes is empty in production mode -- "
+                                 "split-brain is undetectable. Set expected_cluster_nodes in config."),
+                    init:stop(1),
+                    exit(expected_cluster_nodes_empty);
+                _ -> ok
+            end;
+        _ ->
+            case application:get_env(iris_core, expected_cluster_nodes, []) of
+                [] -> logger:warning("PRODUCTION WARNING: expected_cluster_nodes is empty -- "
+                                     "partition guard is DISABLED, split-brain is undetectable");
+                _ -> ok
+            end
     end,
     case application:get_env(iris_edge, core_nodes, []) of
         [] -> logger:warning("PRODUCTION WARNING: core_nodes is empty -- "

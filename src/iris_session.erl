@@ -26,7 +26,10 @@
 
 %% RFC Section 11.1: Version/Capability Negotiation
 -define(SERVER_VERSIONS, [1]).
--define(SERVER_CAPABILITIES, [<<"zstd">>, <<"zlib">>, <<"e2ee">>, <<"groups">>]).
+%% AUDIT MITIGATION P2-3: Removed <<"zstd">> -- NIF .so is not built (priv/ empty).
+%% Advertising a capability we can't fulfill is a protocol violation.
+%% Re-add <<"zstd">> once priv/iris_zstd_nif.so is reliably built by CI.
+-define(SERVER_CAPABILITIES, [<<"zlib">>, <<"e2ee">>, <<"groups">>]).
 
 %% @doc Check if a feature should be degraded based on current load level.
 %% Returns true if the feature should be skipped (degraded).
@@ -396,7 +399,16 @@ handle_packet({get_offline_page, Cursor}, User, _Pid, _Mod) when User =/= undefi
                 done ->
                     {ok, User, MsgActions};
                 _ ->
-                    Remaining = 0, %% Unknown at this point
+                    %% AUDIT MITIGATION P2-2: Estimate remaining messages from queue depth.
+                    %% NextCursor is the bucket offset; depth - cursor gives a rough count.
+                    Remaining = try
+                        Depth = rpc:call(CoreNode, iris_core, get_offline_queue_depth, [User], 3000),
+                        case is_integer(Depth) andalso is_integer(NextCursor) of
+                            true -> max(0, Depth - NextCursor);
+                            false -> -1  %% Unknown
+                        end
+                    catch _:_ -> -1  %% Unknown -- client should treat -1 as "more exist"
+                    end,
                     MoreIndicator = encode_offline_more(NextCursor, Remaining),
                     {ok, User, MsgActions ++ [{send, MoreIndicator}]}
             end;
@@ -816,7 +828,14 @@ handle_packet({cbor_msg, _Target, _Map}, undefined, _Pid, _Mod) ->
     {ok, undefined, []};
 
 handle_packet({error, _}, User, _Pid, _Mod) ->
-     {ok, User, []}.
+     {ok, User, []};
+
+%% AUDIT MITIGATION P1-3: Catch-all for unrecognized packet types.
+%% Prevents function_clause crash if iris_proto:decode/1 returns an unexpected tuple.
+handle_packet(Unknown, User, _Pid, _Mod) ->
+    Tag = try element(1, Unknown) catch _:_ -> Unknown end,
+    logger:warning("Unrecognized packet type: ~p (user=~p)", [Tag, User]),
+    {ok, User, []}.
 
 %% =============================================================================
 %% Internal: Traced RPC (RFC NFR-30: Every RPC MUST propagate trace_id)

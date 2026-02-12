@@ -40,10 +40,16 @@ start() ->
 %% @doc Stop the session cache (delete ETS tables).
 stop() ->
     try ets:delete(?SESSION_TABLE)
-    catch _:_ -> ok  %% Table may not exist during shutdown
+    catch C1:R1 ->
+        %% Table may not exist during shutdown -- expected, log at debug
+        logger:debug("session_cache stop: SESSION_TABLE delete: ~p:~p", [C1, R1]),
+        ok
     end,
     try ets:delete(?MESSAGE_TABLE)
-    catch _:_ -> ok  %% Table may not exist during shutdown
+    catch C2:R2 ->
+        %% Table may not exist during shutdown -- expected, log at debug
+        logger:debug("session_cache stop: MESSAGE_TABLE delete: ~p:~p", [C2, R2]),
+        ok
     end,
     ok.
 

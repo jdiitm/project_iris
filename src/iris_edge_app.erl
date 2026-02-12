@@ -2,10 +2,14 @@
 -behaviour(application).
 -export([start/2, stop/1]).
 -export([check_mtls_enforcement/0]).
+-export([validate_production_config/0]).
 
 start(_Type, _Args) ->
     logger:info("Starting Iris Edge Application..."),
-    
+
+    %% AUDIT MITIGATION P0-1: Fail-fast in production if critical config is missing
+    validate_production_config(),
+
     %% AUDIT FIX: Warn if zstd NIF is not available
     case filelib:is_file("priv/iris_zstd_nif.so") of
         true -> ok;
@@ -49,6 +53,43 @@ stop(_State) ->
     timer:sleep(DrainMs),
     logger:info("Iris Edge stopped."),
     ok.
+
+%% @doc AUDIT MITIGATION P0-1: Validate critical config in production mode.
+%% Rejects empty core_nodes and missing JWT secret when deployment_mode=production.
+-spec validate_production_config() -> ok.
+validate_production_config() ->
+    case application:get_env(iris_edge, deployment_mode, development) of
+        production ->
+            %% core_nodes MUST be set -- edge cannot route without them
+            case application:get_env(iris_edge, core_nodes, []) of
+                [] ->
+                    logger:error("FATAL: core_nodes is empty in production mode -- "
+                                 "edge node cannot route messages. Set core_nodes in config."),
+                    init:stop(1),
+                    exit(core_nodes_empty);
+                _ -> ok
+            end,
+            %% JWT secret MUST be set when auth is enabled
+            case application:get_env(iris_edge, auth_enabled, true) of
+                true ->
+                    case application:get_env(iris_edge, jwt_secret, undefined) of
+                        undefined ->
+                            case os:getenv("IRIS_JWT_SECRET") of
+                                false ->
+                                    logger:error("FATAL: auth_enabled=true but no jwt_secret configured "
+                                                 "and IRIS_JWT_SECRET env var not set."),
+                                    init:stop(1),
+                                    exit(jwt_secret_missing);
+                                _ -> ok
+                            end;
+                        _ -> ok
+                    end;
+                false -> ok
+            end,
+            ok;
+        _ ->
+            ok
+    end.
 
 %% @doc Check mTLS enforcement config. Exits if enforce_mtls=true but
 %% ssl_dist_optfile is not set. Called from start/2.

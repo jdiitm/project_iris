@@ -362,15 +362,22 @@ pick_latest(A, _B) ->
 %% =============================================================================
 
 get_available_nodes() ->
-    %% Get nodes from pg if available, otherwise use connected nodes
+    %% Get nodes from pg if available, otherwise use Mnesia cluster nodes
     case whereis(iris_shard) of
         undefined ->
-            %% Fallback: use Mnesia running nodes or connected nodes
+            %% Fallback: use Mnesia running nodes (data nodes only)
             %% Mnesia may not be started yet during early startup
             try mnesia:system_info(running_db_nodes) of
-                Nodes when is_list(Nodes) -> Nodes;
-                _ -> [node() | nodes()]
-            catch _:_ -> [node() | nodes()]
+                Nodes when is_list(Nodes), Nodes =/= [] -> Nodes;
+                _ -> [node()]
+            catch
+                %% AUDIT MITIGATION P1-2: Fallback to local node only, not all
+                %% connected nodes. Using [node()|nodes()] is dangerous because
+                %% it includes edge nodes that don't run Mnesia.
+                Class:Reason ->
+                    logger:error("Quorum node discovery failed (~p:~p), writing locally only",
+                                 [Class, Reason]),
+                    [node()]
             end;
         _ ->
             %% Use shard module for node discovery

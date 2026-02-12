@@ -62,8 +62,10 @@ NC='\033[0m'
 # Counters
 TOTAL_PASS=0
 TOTAL_FAIL=0
+TOTAL_SKIP=0
 TOTAL_WARN=0
 FAILED_TESTS=()
+SKIPPED_TESTS=()
 WARNED_TESTS=()
 
 # Options
@@ -231,6 +233,11 @@ run_test() {
     if [ $exit_code -eq 0 ]; then
         echo -e "${GREEN}PASS${NC}"
         TOTAL_PASS=$((TOTAL_PASS + 1))
+    elif [ $exit_code -eq 2 ]; then
+        # AUDIT MITIGATION P1-1: exit code 2 = infrastructure skip
+        echo -e "${YELLOW}SKIP${NC}"
+        TOTAL_SKIP=$((TOTAL_SKIP + 1))
+        SKIPPED_TESTS+=("$test_name")
     elif [ $exit_code -eq 124 ]; then
         echo -e "${RED}TIMEOUT${NC}"
         TOTAL_FAIL=$((TOTAL_FAIL + 1))
@@ -396,6 +403,11 @@ run_docker_test_fresh() {
     if [ $exit_code -eq 0 ]; then
         echo -e "  ${GREEN}✓ PASS${NC} (${duration}s)"
         TOTAL_PASS=$((TOTAL_PASS + 1))
+    elif [ $exit_code -eq 2 ]; then
+        # AUDIT MITIGATION P1-1: exit code 2 = infrastructure skip
+        echo -e "  ${YELLOW}⏭ SKIP${NC} (${duration}s)"
+        TOTAL_SKIP=$((TOTAL_SKIP + 1))
+        SKIPPED_TESTS+=("$test_name")
     elif [ $exit_code -eq 124 ]; then
         echo -e "  ${RED}✗ TIMEOUT${NC} (${duration}s)"
         TOTAL_FAIL=$((TOTAL_FAIL + 1))
@@ -778,8 +790,9 @@ echo "                         FINAL RESULTS"
 echo "============================================================================"
 echo -e "  ${GREEN}PASSED${NC}:  $TOTAL_PASS"
 echo -e "  ${RED}FAILED${NC}:  $TOTAL_FAIL"
+echo -e "  ${YELLOW}SKIPPED${NC}: $TOTAL_SKIP"
 echo ""
-TOTAL=$((TOTAL_PASS + TOTAL_FAIL))
+TOTAL=$((TOTAL_PASS + TOTAL_FAIL + TOTAL_SKIP))
 echo "  TOTAL:   $TOTAL tests"
 echo ""
 
@@ -787,6 +800,14 @@ if [ ${#FAILED_TESTS[@]} -gt 0 ]; then
     echo "  Failed tests:"
     for t in "${FAILED_TESTS[@]}"; do
         echo -e "    ${RED}✗${NC} $t"
+    done
+    echo ""
+fi
+
+if [ ${#SKIPPED_TESTS[@]} -gt 0 ]; then
+    echo "  Skipped tests (infrastructure unavailable):"
+    for t in "${SKIPPED_TESTS[@]}"; do
+        echo -e "    ${YELLOW}⏭${NC} $t"
     done
     echo ""
 fi

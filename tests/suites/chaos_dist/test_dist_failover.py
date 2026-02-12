@@ -41,7 +41,7 @@ OP_MSG = b'\x07'
 @dataclass
 class TestResult:
     name: str
-    passed: bool
+    passed: object  # True, False, or None (skipped)
     details: str
     duration_ms: float
 
@@ -169,7 +169,7 @@ def test_node_kill_recovery() -> TestResult:
     start = time.time()
     
     if not docker_cmd(f"docker inspect {CORE_CONTAINER} 2>/dev/null"):
-        return TestResult("Node Kill/Recovery", True, "SKIPPED: Container not found",
+        return TestResult("Node Kill/Recovery", None, "SKIPPED: Container not found",
                         (time.time() - start) * 1000)
     
     try:
@@ -306,7 +306,7 @@ def test_container_pause_resume() -> TestResult:
     start = time.time()
     
     if not docker_cmd(f"docker inspect {CORE_CONTAINER} 2>/dev/null"):
-        return TestResult("Pause/Resume", True, "SKIPPED: Container not found",
+        return TestResult("Pause/Resume", None, "SKIPPED: Container not found",
                         (time.time() - start) * 1000)
     
     try:
@@ -383,7 +383,12 @@ def main():
         result = test_fn()
         results.append(result)
         
-        status = "✅ PASS" if result.passed else "❌ FAIL"
+        if result.passed is None:
+            status = "⏭ SKIP"
+        elif result.passed:
+            status = "✅ PASS"
+        else:
+            status = "❌ FAIL"
         print(f"  {status}: {result.details} ({result.duration_ms:.0f}ms)")
     
     # Summary
@@ -391,25 +396,36 @@ def main():
     print("SUMMARY")
     print("=" * 60)
     
-    passed = sum(1 for r in results if r.passed)
+    passed = sum(1 for r in results if r.passed is True)
+    skipped = sum(1 for r in results if r.passed is None)
+    failed = sum(1 for r in results if r.passed is False)
     total = len(results)
     
     for r in results:
-        status = "✅" if r.passed else "❌"
+        if r.passed is None:
+            status = "⏭"
+        elif r.passed:
+            status = "✅"
+        else:
+            status = "❌"
         print(f"  {status} {r.name}: {r.details}")
     
     print()
-    print(f"Passed: {passed}/{total}")
+    print(f"Passed: {passed}/{total}, Skipped: {skipped}, Failed: {failed}")
     
     # Restore cluster state for subsequent tests
     restore_cluster_state()
     
-    if passed == total:
+    # AUDIT MITIGATION P1-1: Use exit code 2 for skip, not 0
+    if failed > 0:
+        print(f"\n❌ {failed} TEST(S) FAILED")
+        sys.exit(1)
+    elif passed == 0 and skipped > 0:
+        print("\n⏭ ALL TESTS SKIPPED (infrastructure unavailable)")
+        sys.exit(2)
+    else:
         print("\n✅ ALL TESTS PASSED")
         sys.exit(0)
-    else:
-        print(f"\n❌ {total - passed} TEST(S) FAILED")
-        sys.exit(1)
 
 
 def restore_cluster_state():
