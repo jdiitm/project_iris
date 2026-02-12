@@ -29,6 +29,16 @@ start(_StartType, _StartArgs) ->
     %% Rationale: Production systems use structured logging for grep-ability.
     logger:info("Starting Iris Core on node ~p", [node()]),
 
+    %% AUDIT FIX: Warn loudly if operator selects unimplemented consistency_mode=cp.
+    %% Without this, CP mode is silently ignored and the node runs as AP.
+    case application:get_env(iris_core, consistency_mode, hardened_ap) of
+        cp ->
+            logger:error("consistency_mode=cp is NOT IMPLEMENTED. "
+                         "Falling back to hardened_ap. "
+                         "This node will operate in AP mode.");
+        _ -> ok
+    end,
+
     %% Rationale: DB initialization is moved to a dedicated manager or
     %% handled via a boot script to prevent accidental schema wipes.
     %% Smart DB Init: Only initialize schema if we are the First Node or Standalone.
@@ -53,8 +63,11 @@ start(_StartType, _StartArgs) ->
     %% In tests it might be already started; in prod it needs starting.
     try pg:start_link() 
     catch 
-        error:undef -> ok; %% Old OTP?
-        _:_ -> ok 
+        error:undef -> ok; %% Old OTP without pg module
+        error:{already_started, _} -> ok;
+        Class:Reason ->
+            logger:warning("pg:start_link() failed: ~p:~p (non-fatal)", [Class, Reason]),
+            ok
     end,
 
     supervisor:start_link({local, ?SERVER}, ?MODULE, []).
@@ -76,6 +89,12 @@ init([]) ->
                  period => 60},
 
     Children = [
+        %% Health Check HTTP endpoint (/health, /ready, /metrics)
+        #{id => iris_health_handler,
+          start => {iris_health_handler, start_link, []},
+          type => worker,
+          restart => permanent},
+
         %% Flow Controller: Global backpressure and cascade failure detection
         #{id => iris_flow_controller,
           start => {iris_flow_controller, start_link, []},

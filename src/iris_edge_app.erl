@@ -31,7 +31,15 @@ start(_Type, _Args) ->
     iris_edge_sup:start_link().
 
 stop(_State) ->
-    logger:info("Stopping Iris Edge Application..."),
+    logger:info("Iris Edge shutting down -- draining connections..."),
+    %% Close listen sockets first (stop accepting new connections).
+    %% supervisor:terminate_child handles this via iris_edge_listener:terminate/2
+    %% which already closes the listen socket.
+    %% Give active connections time to complete in-flight operations.
+    %% Each iris_edge_conn:terminate/3 saves pending ACKs and flushes messages.
+    DrainMs = application:get_env(iris_edge, shutdown_drain_ms, 5000),
+    timer:sleep(DrainMs),
+    logger:info("Iris Edge stopped."),
     ok.
 
 %% @doc Check mTLS enforcement config. Exits if enforce_mtls=true but

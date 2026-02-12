@@ -1,11 +1,37 @@
 {application, iris_edge,
  [{description, "Iris Edge Node"},
   {vsn, "0.3.0"},
-  {modules, []},
+  {modules, [
+    iris_edge_app,
+    iris_edge_sup,
+    iris_edge_listener,
+    iris_health_handler,
+    iris_edge_conn,
+    iris_session,
+    iris_ws_lite,
+    iris_compression,
+    iris_auth,
+    iris_auth_json,
+    iris_async_router,
+    iris_backpressure,
+    iris_circuit_breaker,
+    iris_discovery,
+    iris_ingress_guard,
+    iris_rate_limiter,
+    iris_registry_ets,
+    iris_router,
+    iris_router_sup,
+    iris_router_worker,
+    iris_session_cache,
+    iris_trace
+  ]},
   {registered, [iris_edge_app]},
-  {applications, [kernel, stdlib]},
+  {applications, [kernel, stdlib, ssl]},
   {mod, {iris_edge_app, []}},
   {env, [
-      {port, 8080}
+      {port, 8080},
+      {auth_enabled, true},
+      {allow_insecure, false},
+      {tls_enabled, true}
   ]}
  ]}.
