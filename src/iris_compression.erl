@@ -29,9 +29,15 @@ compress(zstd, Data) ->
     %% AUDIT FIX: Graceful degradation if NIF .so is not loaded
     try iris_zstd_nif:compress(Data)
     catch
-        error:undef -> {error, zstd_nif_not_available};
-        error:nif_not_loaded -> {error, zstd_nif_not_available};
-        error:{nif_not_loaded, _} -> {error, zstd_nif_not_available}
+        error:undef ->
+            bump_fallback_metric(),
+            {error, zstd_nif_not_available};
+        error:nif_not_loaded ->
+            bump_fallback_metric(),
+            {error, zstd_nif_not_available};
+        error:{nif_not_loaded, _} ->
+            bump_fallback_metric(),
+            {error, zstd_nif_not_available}
     end.
 
 %% @doc Decompress data with the given algorithm.
@@ -48,9 +54,15 @@ decompress(zstd, Data) ->
     %% AUDIT FIX: Graceful degradation if NIF .so is not loaded
     try iris_zstd_nif:decompress(Data)
     catch
-        error:undef -> {error, zstd_nif_not_available};
-        error:nif_not_loaded -> {error, zstd_nif_not_available};
-        error:{nif_not_loaded, _} -> {error, zstd_nif_not_available}
+        error:undef ->
+            bump_fallback_metric(),
+            {error, zstd_nif_not_available};
+        error:nif_not_loaded ->
+            bump_fallback_metric(),
+            {error, zstd_nif_not_available};
+        error:{nif_not_loaded, _} ->
+            bump_fallback_metric(),
+            {error, zstd_nif_not_available}
     end.
 
 %% @doc Maybe compress based on payload size. Skips payloads <= 128 bytes.
@@ -124,4 +136,13 @@ try_zstd_nif() ->
                         _:_ -> false
                     end
             end
+    end.
+
+%% AUDIT FIX (Finding 3): Emit metric when zstd NIF fallback triggers at runtime.
+%% This makes silent compression degradation observable via dashboards/alerts.
+bump_fallback_metric() ->
+    try
+        iris_metrics:inc(iris_compression_fallback_count)
+    catch
+        _:_ -> ok  %% Metrics module may not be running in all environments
     end.

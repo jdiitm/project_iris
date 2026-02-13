@@ -48,6 +48,7 @@ get_timestamp() ->
     writes_wal = 0 :: integer(),
     writes_mnesia = 0 :: integer(),
     batch_count = 0 :: integer(),
+    wal_checkpoints = 0 :: integer(),   %% AUDIT FIX: WAL truncation counter
     %% Cluster durability stats
     writes_remote = 0 :: integer(),
     remote_failures = 0 :: integer()
@@ -256,6 +257,7 @@ handle_call(get_stats_local, _From, State) ->
         writes_wal => State#state.writes_wal,
         writes_mnesia => State#state.writes_mnesia,
         batch_count => State#state.batch_count,
+        wal_checkpoints => State#state.wal_checkpoints,  %% AUDIT FIX: WAL checkpoint count
         %% Cluster durability stats
         writes_remote => State#state.writes_remote,
         remote_failures => State#state.remote_failures
@@ -529,29 +531,42 @@ do_flush(State = #state{pending = Pending, wal_log = Log}) ->
         end, Pending)
     end,
     
-    case mnesia:activity(sync_transaction, F) of
+    %% AUDIT FIX: mnesia:activity can exit (not just return) on table errors.
+    %% Wrap in try to prevent gen_server crash and preserve pending entries.
+    try mnesia:activity(sync_transaction, F) of
         ok ->
             mark_committed(Log, Pending),
+            checkpoint_wal(Log),  %% AUDIT FIX: Truncate WAL after successful flush
             State#state{
                 pending = [],
                 pending_count = 0,
                 writes_mnesia = State#state.writes_mnesia + length(Pending),
-                batch_count = State#state.batch_count + 1
+                batch_count = State#state.batch_count + 1,
+                wal_checkpoints = State#state.wal_checkpoints + 1
             };
         {atomic, _} ->
             mark_committed(Log, Pending),
+            checkpoint_wal(Log),  %% AUDIT FIX: Truncate WAL after successful flush
             State#state{
                 pending = [],
                 pending_count = 0,
                 writes_mnesia = State#state.writes_mnesia + length(Pending),
-                batch_count = State#state.batch_count + 1
+                batch_count = State#state.batch_count + 1,
+                wal_checkpoints = State#state.wal_checkpoints + 1
             };
         {aborted, Reason} ->
             logger:error("Mnesia batch write aborted: ~p", [Reason]),
-            State;  %% Keep pending for retry
+            State;  %% Keep pending for retry — WAL NOT truncated
         Error ->
             logger:error("Mnesia batch write error: ~p", [Error]),
-            State
+            State   %% Keep pending for retry — WAL NOT truncated
+    catch
+        exit:{aborted, Reason} ->
+            logger:error("Mnesia batch write exit: ~p", [Reason]),
+            State;  %% Keep pending for retry — WAL NOT truncated
+        Class:Reason ->
+            logger:error("Mnesia batch write ~p: ~p", [Class, Reason]),
+            State   %% Keep pending for retry — WAL NOT truncated
     end.
 
 mark_committed(undefined, _Pending) ->
@@ -561,6 +576,20 @@ mark_committed(Log, Pending) ->
     Entries = [{committed, SeqNo} || {_Key, _Ts, _Msg, SeqNo} <- Pending],
     disk_log:log_terms(Log, Entries),
     ok.
+
+%% AUDIT FIX (Finding 1): Truncate WAL after successful Mnesia flush.
+%% Safe because: gen_server is single-threaded (no concurrent writes during flush),
+%% Mnesia sync_transaction guarantees durability before we reach here,
+%% and if crash occurs between Mnesia commit and truncate, replay re-applies
+%% idempotent mnesia:write calls (safe).
+checkpoint_wal(undefined) -> ok;
+checkpoint_wal(Log) ->
+    case disk_log:truncate(Log) of
+        ok -> ok;
+        {error, Reason} ->
+            logger:warning("WAL checkpoint truncate failed: ~p", [Reason]),
+            ok  %% Non-fatal: WAL grows but data is safe in Mnesia
+    end.
 
 %% =============================================================================
 %% Internal: Crash Recovery (AUDIT FIX - Finding #4: Streaming Replay)
@@ -703,12 +732,13 @@ aggregate_stats(StatsList) ->
             writes_mnesia => maps:get(writes_mnesia, S, 0) + maps:get(writes_mnesia, Acc, 0),
             batch_count => maps:get(batch_count, S, 0) + maps:get(batch_count, Acc, 0),
             total_pending => maps:get(pending_count, S, 0) + maps:get(total_pending, Acc, 0),
+            wal_checkpoints => maps:get(wal_checkpoints, S, 0) + maps:get(wal_checkpoints, Acc, 0),
             %% Cluster durability stats
             writes_remote => maps:get(writes_remote, S, 0) + maps:get(writes_remote, Acc, 0),
             remote_failures => maps:get(remote_failures, S, 0) + maps:get(remote_failures, Acc, 0)
         }
     end, #{writes_wal => 0, writes_mnesia => 0, batch_count => 0, total_pending => 0,
-           writes_remote => 0, remote_failures => 0}, StatsList).
+           wal_checkpoints => 0, writes_remote => 0, remote_failures => 0}, StatsList).
 
 %% =============================================================================
 %% Cluster Durability: Parallel Remote WAL Replication
