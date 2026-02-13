@@ -23,6 +23,8 @@
 -export([retrieve_offline_paginated/3, get_offline_queue_depth/1, delete_offline_confirmed/2]).
 -export([get_bucket_count/1, set_bucket_count/2]).
 -export([update_status/2, get_status/1]).
+-export([table_spec/1]).  %% AUDIT: exported for scalability test assertions
+-export([cleanup_expired_entries/0]).  %% AUDIT: TTL cleanup for dedup/revoked/refresh
 
 -define(SERVER, ?MODULE).
 
@@ -616,7 +618,8 @@ delete_offline_confirmed(User, {FromCursor, ToCursor}) ->
 
 get_bucket_count(User) ->
     case mnesia:dirty_read(user_meta, User) of
-        [{user_meta, User, Count}] -> Count;
+        [{user_meta, User, Count, _LastMod}] -> Count;
+        [{user_meta, User, Count}] -> Count;  %% Legacy records
         [] -> 1
     end.
 
@@ -629,7 +632,7 @@ set_bucket_count(User, Count) ->
         true ->
             {error, {bucket_count_decrease, CurrentCount, Count}};
         false ->
-            F = fun() -> mnesia:write({user_meta, User, Count}) end,
+            F = fun() -> mnesia:write({user_meta, User, Count, os:system_time(second)}) end,
             mnesia:transaction(F)
     end.
 
@@ -895,21 +898,74 @@ do_nuke_and_recreate(Table) ->
 table_spec(presence) ->
     {ram_copies, [{attributes, [user, node, pid]}]};
 table_spec(offline_msg) ->
-    {disc_copies, [{attributes, [key, timestamp, msg]}, {type, bag}]};
+    {disc_only_copies, [{attributes, [key, timestamp, msg]}, {type, bag}]};
 table_spec(user_meta) ->
-    {disc_copies, [{attributes, [user, bucket_count]}]};
+    {disc_copies, [{attributes, [user, bucket_count, last_modified]}]};
 table_spec(user_status) ->
     {disc_copies, [{attributes, [user, last_seen]}]};
 table_spec(revoked_tokens) ->
     {disc_copies, [{attributes, [jti, timestamp]}]};
 table_spec(dedup_log) ->
-    {disc_copies, [{attributes, [msg_id, timestamp]}, {type, set}]};
+    {disc_only_copies, [{attributes, [msg_id, timestamp]}, {type, set}]};
 table_spec(refresh_tokens) ->
     {disc_copies, [{attributes, [token_id, user_id, family_id, used, created_at, expires_at]}, {type, set}]};
 table_spec(user_blocks) ->
     {disc_copies, [{attributes, [key, blocker, blocked, created_at]}, {type, set}]};
 table_spec(user_reports) ->
     {disc_copies, [{attributes, [id, reporter, reported, reason, created_at]}, {type, bag}]}.
+
+%% ---------------------------------------------------------------------------
+%% AUDIT: TTL Cleanup — Purge expired entries from dedup_log, revoked_tokens,
+%% and refresh_tokens. Called periodically (1-hour interval) or on demand.
+%% Entries older than 7 days are purged from dedup_log and revoked_tokens.
+%% Expired refresh_tokens are purged based on their expires_at field.
+%% ---------------------------------------------------------------------------
+-define(TTL_SECONDS, 7 * 86400).  %% 7 days
+
+-spec cleanup_expired_entries() -> ok.
+cleanup_expired_entries() ->
+    Cutoff = os:system_time(second) - ?TTL_SECONDS,
+    cleanup_table_by_timestamp(dedup_log, 3, Cutoff),
+    cleanup_table_by_timestamp(revoked_tokens, 3, Cutoff),
+    cleanup_refresh_tokens_expired(),
+    ok.
+
+%% Delete all records from Table where element at Position is < Cutoff.
+cleanup_table_by_timestamp(Table, TimestampPos, Cutoff) ->
+    try
+        mnesia:transaction(fun() ->
+            mnesia:foldl(fun(Record, Acc) ->
+                case element(TimestampPos, Record) of
+                    TS when is_integer(TS), TS < Cutoff ->
+                        mnesia:delete_object(Record);
+                    _ ->
+                        ok
+                end,
+                Acc
+            end, ok, Table)
+        end)
+    catch
+        _:_ -> ok
+    end.
+
+%% Delete refresh_tokens where expires_at is in the past.
+cleanup_refresh_tokens_expired() ->
+    Now = os:system_time(second),
+    try
+        mnesia:transaction(fun() ->
+            mnesia:foldl(fun(Record, Acc) ->
+                %% refresh_tokens: {refresh_tokens, token_id, user_id, family_id, used, created_at, expires_at}
+                ExpiresAt = element(7, Record),
+                case is_integer(ExpiresAt) andalso ExpiresAt < Now of
+                    true -> mnesia:delete_object(Record);
+                    false -> ok
+                end,
+                Acc
+            end, ok, refresh_tokens)
+        end)
+    catch
+        _:_ -> ok
+    end.
 
 %% Recreate a single table with its original definition (recovery path)
 recreate_table(Table) ->
@@ -987,8 +1043,8 @@ init_cross_region_replication() ->
             %% Replicate presence table (ram_copies for speed)
             replicate_table(presence, ram_copies, CoreNodes),
             
-            %% Replicate offline_msg table (disc_copies for durability/RPO=0)
-            replicate_table(offline_msg, disc_copies, CoreNodes),
+            %% Replicate offline_msg table (disc_only_copies for durability/RPO=0)
+            replicate_table(offline_msg, disc_only_copies, CoreNodes),
             
             %% Replicate user_status table (ram_copies)
             replicate_table(user_status, ram_copies, CoreNodes),
@@ -996,8 +1052,8 @@ init_cross_region_replication() ->
             %% Replicate user_meta table (disc_copies)
             replicate_table(user_meta, disc_copies, CoreNodes),
             
-            %% Replicate dedup_log table (disc_copies for RFC NFR-11 dedup persistence)
-            replicate_table(dedup_log, disc_copies, CoreNodes),
+            %% Replicate dedup_log table (disc_only_copies for RFC NFR-11 dedup persistence)
+            replicate_table(dedup_log, disc_only_copies, CoreNodes),
             
             %% Replicate revoked_tokens table (disc_copies for auth revocation)
             replicate_table(revoked_tokens, disc_copies, CoreNodes),
@@ -1274,6 +1330,8 @@ merge_set_records(Table, RemoteRecords, LocalRecords) ->
 %% F1 FIX: Determine if a remote record should overwrite a local record.
 %% Implements per-table conflict resolution strategy (RFC 7.1.1):
 %%   - group_member: Compare last_seen timestamps (LWW)
+%%   - user_status: Compare last_seen timestamps (LWW)
+%%   - user_meta: Compare last_modified timestamps (LWW)
 %%   - presence: Keep local (ephemeral, local is authoritative)
 %%   - Default: Keep local (conservative)
 should_overwrite(group_member, RemoteRec, LocalRec) ->
@@ -1281,6 +1339,17 @@ should_overwrite(group_member, RemoteRec, LocalRec) ->
     RemoteTS = element(6, RemoteRec),
     LocalTS = element(6, LocalRec),
     RemoteTS > LocalTS;
+should_overwrite(user_status, RemoteRec, LocalRec) ->
+    %% AUDIT LWW: last_seen is element 3: {user_status, User, LastSeen}
+    element(3, RemoteRec) > element(3, LocalRec);
+should_overwrite(user_meta, RemoteRec, LocalRec) ->
+    %% AUDIT LWW: last_modified is element 4: {user_meta, User, BucketCount, LastModified}
+    %% Guard against legacy records without last_modified (tuple_size == 3)
+    case {tuple_size(RemoteRec), tuple_size(LocalRec)} of
+        {4, 4} -> element(4, RemoteRec) > element(4, LocalRec);
+        {4, 3} -> true;   %% New-format remote beats legacy local
+        _ -> false         %% Legacy or equal — keep local
+    end;
 should_overwrite(presence, _RemoteRec, _LocalRec) ->
     %% Presence is ram_copies, ephemeral. Local is authoritative.
     false;

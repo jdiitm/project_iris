@@ -29,7 +29,7 @@ setup() ->
         {ram_copies, [node()]}, {attributes, [key, timestamp, msg]}, {type, bag}
     ]),
     mnesia:create_table(user_meta, [
-        {ram_copies, [node()]}, {attributes, [user, bucket_count]}
+        {ram_copies, [node()]}, {attributes, [user, bucket_count, last_modified]}
     ]),
     mnesia:create_table(dedup_log, [
         {ram_copies, [node()]}, {attributes, [msg_id, timestamp]}, {type, set}

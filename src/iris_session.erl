@@ -28,10 +28,11 @@
 
 %% RFC Section 11.1: Version/Capability Negotiation
 -define(SERVER_VERSIONS, [1]).
-%% AUDIT MITIGATION P2-3: Removed <<"zstd">> -- NIF .so is not built (priv/ empty).
-%% Advertising a capability we can't fulfill is a protocol violation.
-%% Re-add <<"zstd">> once priv/iris_zstd_nif.so is reliably built by CI.
--define(SERVER_CAPABILITIES, [<<"zlib">>, <<"e2ee">>, <<"groups">>]).
+%% AUDIT: Compression capabilities are now dynamically detected via
+%% iris_compression:available_algorithms/0 — no hardcoded zstd/zlib list.
+-define(SERVER_CAPABILITIES_STATIC, [<<"e2ee">>, <<"groups">>]).
+-define(SERVER_CAPABILITIES,
+        iris_compression:available_algorithms() ++ ?SERVER_CAPABILITIES_STATIC).
 
 %% @doc Check if a feature should be degraded based on current load level.
 %% Returns true if the feature should be skipped (degraded).

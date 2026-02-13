@@ -38,7 +38,11 @@ encode_value(V) when is_atom(V) ->
 %% Decode
 %% =============================================================================
 
--spec decode(binary()) -> {ok, map()} | {error, invalid_json}.
+-define(MAX_INPUT_SIZE, 8192).
+
+-spec decode(binary()) -> {ok, map()} | {error, invalid_json | input_too_large}.
+decode(Bin) when byte_size(Bin) > ?MAX_INPUT_SIZE ->
+    {error, input_too_large};
 decode(Bin) ->
     try
         {ok, parse_object(Bin)}

@@ -421,7 +421,7 @@ verify_replication() {
     log_info "Verifying Mnesia replication status..."
     
     # Use RPC to query the existing core node (not start a new node)
-    # Check ram_copies + disc_copies for total replicas
+    # Check ram_copies + disc_copies + disc_only_copies for total replicas
     # Returns exit code 0 if all REQUIRED tables have >= 2 copies
     # Bridge tables (cross_region_*) are OPTIONAL - created lazily by iris_region_bridge
     docker exec core-east-1 sh -c 'erl -noshell -sname verify_helper_$RANDOM -setcookie iris_secret -eval "
@@ -433,22 +433,14 @@ verify_replication() {
         CheckTable = fun(T) ->
             Ram = rpc:call('"'"'core_east_1@coreeast1'"'"', mnesia, table_info, [T, ram_copies]),
             Disc = rpc:call('"'"'core_east_1@coreeast1'"'"', mnesia, table_info, [T, disc_copies]),
-            case {Ram, Disc} of
-                {{badrpc, _}, _} -> 
-                    io:format(\"  ~p: RPC FAILED~n\", [T]),
-                    false;
-                {_, {badrpc, _}} -> 
-                    io:format(\"  ~p: RPC FAILED~n\", [T]),
-                    false;
-                {RamNodes, DiscNodes} when is_list(RamNodes), is_list(DiscNodes) ->
-                    Total = length(RamNodes) + length(DiscNodes),
-                    io:format(\"  ~p: ~p copies (~p ram, ~p disc)~n\", 
-                              [T, Total, length(RamNodes), length(DiscNodes)]),
-                    Total >= 2;
-                _ ->
-                    io:format(\"  ~p: NOT FOUND~n\", [T]),
-                    false
-            end
+            DiscOnly = rpc:call('"'"'core_east_1@coreeast1'"'"', mnesia, table_info, [T, disc_only_copies]),
+            RamN = case Ram of {badrpc, _} -> []; L1 when is_list(L1) -> L1; _ -> [] end,
+            DiscN = case Disc of {badrpc, _} -> []; L2 when is_list(L2) -> L2; _ -> [] end,
+            DiscOnlyN = case DiscOnly of {badrpc, _} -> []; L3 when is_list(L3) -> L3; _ -> [] end,
+            Total = length(RamN) + length(DiscN) + length(DiscOnlyN),
+            io:format(\"  ~p: ~p copies (~p ram, ~p disc)~n\", 
+                      [T, Total, length(RamN), length(DiscN) + length(DiscOnlyN)]),
+            Total >= 2
         end,
         
         Results = lists:map(CheckTable, RequiredTables),

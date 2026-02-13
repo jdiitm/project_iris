@@ -432,6 +432,14 @@ do_validate(Token, Opts, State = #state{secret = Secret, issuer = ExpectedIssuer
         {ok, Header, Payload, Signature} ->
             %% Determine algorithm from header
             Alg = get_header_alg(Header),
+            
+            %% AUDIT: Algorithm whitelist — reject before signature verification
+            AllowedAlgs = [<<"HS256">>, <<"EdDSA">>],
+            case lists:member(Alg, AllowedAlgs) of
+                false ->
+                    {error, unsupported_algorithm};
+                true ->
+            
             SigningInput = <<Header/binary, ".", Payload/binary>>,
             
             %% IA-1: Check HMAC deprecation flag before validation
@@ -465,7 +473,8 @@ do_validate(Token, Opts, State = #state{secret = Secret, issuer = ExpectedIssuer
                     {error, hmac_deprecated};
                 false ->
                     {error, invalid_signature}
-            end;
+            end
+            end;  %% end of AllowedAlgs check
         Error -> Error
     end.
 

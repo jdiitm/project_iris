@@ -11,6 +11,7 @@
 -export([maybe_compress/2]).
 -export([flag_compressed/1, is_compressed/1, original_opcode/1]).
 -export([negotiate/2]).
+-export([available_algorithms/0]).  %% AUDIT: dynamic capability detection
 
 -define(MIN_COMPRESS_SIZE, 128).  %% RFC v4.0: Skip compression below this
 
@@ -81,3 +82,22 @@ original_opcode(Opcode) ->
 -spec negotiate([binary()], [binary()]) -> [binary()].
 negotiate(ClientCaps, ServerCaps) ->
     [C || C <- ClientCaps, lists:member(C, ServerCaps)].
+
+%% @doc Return the list of compression algorithms available at runtime.
+%% zlib is always present (OTP built-in). zstd is included only if the
+%% NIF .so exists on disk (priv/iris_zstd_nif.so).
+-spec available_algorithms() -> [binary()].
+available_algorithms() ->
+    Base = [<<"zlib">>],
+    case zstd_nif_available() of
+        true -> Base ++ [<<"zstd">>];
+        false -> Base
+    end.
+
+zstd_nif_available() ->
+    case code:priv_dir(iris_edge) of
+        {error, _} -> false;
+        PrivDir ->
+            NifPath = filename:join(PrivDir, "iris_zstd_nif.so"),
+            filelib:is_file(NifPath)
+    end.

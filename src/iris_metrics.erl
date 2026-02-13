@@ -12,6 +12,7 @@
 -export([start_link/0]).
 -export([inc/1, inc/2, observe/2, set/2]).
 -export([get_metrics/0, export_prometheus/0]).
+-export([emit_mnesia_table_memory/0]).  %% AUDIT: per-table memory gauge
 %% PRINCIPAL_AUDIT_REPORT: Route-specific latency tracking
 -export([observe_latency/3, observe_latency/4]).
 -export([get_latency_percentile/2, get_latency_stats/1]).
@@ -262,6 +263,28 @@ format_value(V) when is_float(V) ->
     list_to_binary(io_lib:format("~.2f", [V]));
 format_value(V) ->
     iolist_to_binary(io_lib:format("~p", [V])).
+
+%% =============================================================================
+%% AUDIT: Mnesia Table Memory Gauges
+%% =============================================================================
+
+%% @doc Emit per-table memory gauges for all known Mnesia tables.
+%% Each table gets a metric: mnesia_table_memory_<table> (in words).
+-spec emit_mnesia_table_memory() -> ok.
+emit_mnesia_table_memory() ->
+    Tables = try mnesia:system_info(tables)
+             catch _:_ -> [] end,
+    lists:foreach(fun(schema) -> ok;  %% Skip schema table
+                     (Table) ->
+        try
+            Memory = mnesia:table_info(Table, memory),
+            MetricName = list_to_atom("mnesia_table_memory_" ++ atom_to_list(Table)),
+            set(MetricName, Memory)
+        catch
+            _:_ -> ok
+        end
+    end, Tables),
+    ok.
 
 %% =============================================================================
 %% Route-Specific Latency Tracking (Per PRINCIPAL_AUDIT_REPORT Section 5)

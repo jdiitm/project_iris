@@ -564,7 +564,8 @@ def test_data_directory_inspection():
         ".LOG",             # Other Mnesia log files
         "DECISION_TAB",     # Mnesia decision table
         ".DCL",             # Mnesia dump to core log
-        ".DCD",             # Mnesia dump to core data
+        ".DCD",             # Mnesia dump to core data (disc_copies)
+        ".DAT",             # Mnesia DETS data (disc_only_copies)
     ]
     
     violations = []

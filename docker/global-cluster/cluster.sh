@@ -131,12 +131,30 @@ case "${1:-help}" in
     
     down)
         echo "=== Stopping Global Cluster ==="
-        docker compose -f "$COMPOSE_FILE" --profile chaos down -v
+        docker compose -f "$COMPOSE_FILE" --profile chaos down -v --remove-orphans 2>/dev/null || true
+        # Force-remove any dead/stale containers left by SIGKILL during chaos tests
+        for c in core-east-1 core-east-2 core-west-1 core-west-2 core-eu-1 core-eu-2 \
+                 edge-east-1 edge-east-2 edge-west-1 edge-west-2 edge-eu-1 edge-eu-2 \
+                 edge-sydney-1 edge-sydney-2 edge-saopaulo loadgen-east loadgen-west \
+                 pumba-sydney pumba-saopaulo pumba-partition-west pumba-partition-eu pumba-backbone-flap; do
+            docker rm -f "$c" 2>/dev/null || true
+        done
+        # Clean up any leftover networks
+        docker network ls --filter name=global-cluster -q | xargs -r docker network rm 2>/dev/null || true
         ;;
     
     down-mtls)
         echo "=== Stopping mTLS Cluster ==="
-        docker compose -f "$COMPOSE_FILE" -f "$COMPOSE_MTLS" --profile chaos down -v
+        docker compose -f "$COMPOSE_FILE" -f "$COMPOSE_MTLS" --profile chaos down -v --remove-orphans 2>/dev/null || true
+        # Force-remove any dead/stale containers left by SIGKILL during chaos tests
+        for c in core-east-1 core-east-2 core-west-1 core-west-2 core-eu-1 core-eu-2 \
+                 edge-east-1 edge-east-2 edge-west-1 edge-west-2 edge-eu-1 edge-eu-2 \
+                 edge-sydney-1 edge-sydney-2 edge-saopaulo loadgen-east loadgen-west \
+                 pumba-sydney pumba-saopaulo pumba-partition-west pumba-partition-eu pumba-backbone-flap; do
+            docker rm -f "$c" 2>/dev/null || true
+        done
+        # Clean up any leftover networks
+        docker network ls --filter name=global-cluster -q | xargs -r docker network rm 2>/dev/null || true
         ;;
     
     verify-mtls)
@@ -294,7 +312,8 @@ case "${1:-help}" in
             lists:foreach(fun(T) ->
                 Ram = rpc:call(MainNode, mnesia, table_info, [T, ram_copies]),
                 Disc = rpc:call(MainNode, mnesia, table_info, [T, disc_copies]),
-                io:format("  ~p: ram=~p disc=~p~n", [T, Ram, Disc])
+                DiscOnly = rpc:call(MainNode, mnesia, table_info, [T, disc_only_copies]),
+                io:format("  ~p: ram=~p disc=~p disc_only=~p~n", [T, Ram, Disc, DiscOnly])
             end, Tables),
             init:stop().
         ' 2>&1

@@ -336,7 +336,7 @@ cluster_down() {
     cd "$CLUSTER_DIR"
     bash "$CLUSTER_SCRIPT" down > "$LOG_DIR/cluster_down.log" 2>&1 || true
     cd "$PROJECT_ROOT"
-    sleep 3
+    sleep 5
 }
 
 cluster_up() {
