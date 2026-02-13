@@ -60,7 +60,7 @@ start_link() ->
 
 %% @doc Register a user's presence (lockfree ETS insert)
 %% This is the hot path - must be as fast as possible
--spec register(binary(), node(), pid()) -> ok.
+-spec register(binary(), node(), pid()) -> ok | {error, table_unavailable}.
 register(User, Node, Pid) ->
     Now = erlang:system_time(millisecond),
     Entry = #presence_entry{
@@ -71,15 +71,22 @@ register(User, Node, Pid) ->
         last_heartbeat = Now
     },
     %% Lockfree ETS insert - O(1), ~1μs
-    true = ets:insert(?ETS_TABLE, {User, Entry}),
-    %% Async broadcast to other nodes (fire-and-forget)
-    spawn(fun() -> broadcast_update(User, Node, Pid) end),
-    ok.
+    %% Defensive: if the table is temporarily unavailable (supervisor restart
+    %% window under rest_for_one), return error instead of crashing the caller.
+    try
+        true = ets:insert(?ETS_TABLE, {User, Entry}),
+        spawn(fun() -> broadcast_update(User, Node, Pid) end),
+        ok
+    catch
+        error:badarg ->
+            logger:warning("presence_local table unavailable, registration deferred for ~p", [User]),
+            {error, table_unavailable}
+    end.
 
 %% @doc Unregister a user's presence
 -spec unregister(binary()) -> ok.
 unregister(User) ->
-    ets:delete(?ETS_TABLE, User),
+    try ets:delete(?ETS_TABLE, User) catch error:badarg -> ok end,
     spawn(fun() -> broadcast_removal(User) end),
     ok.
 
@@ -141,21 +148,25 @@ lookup_any_node([Node | Rest], User) ->
 %% @doc Lookup a user's presence (Local ETS only)
 -spec lookup_local(binary()) -> {ok, node(), pid()} | {error, not_found | expired}.
 lookup_local(User) ->
-    case ets:lookup(?ETS_TABLE, User) of
-        [{User, Entry}] ->
-            %% Check if entry is expired
-            Now = erlang:system_time(millisecond),
-            Age = Now - Entry#presence_entry.last_heartbeat,
-            if
-                Age > ?EXPIRY_THRESHOLD_MS ->
-                    %% Entry expired - remove it
-                    ets:delete(?ETS_TABLE, User),
-                    {error, expired};
-                true ->
-                    {ok, Entry#presence_entry.node, Entry#presence_entry.pid}
-            end;
-        [] ->
-            {error, not_found}
+    try
+        case ets:lookup(?ETS_TABLE, User) of
+            [{User, Entry}] ->
+                %% Check if entry is expired
+                Now = erlang:system_time(millisecond),
+                Age = Now - Entry#presence_entry.last_heartbeat,
+                if
+                    Age > ?EXPIRY_THRESHOLD_MS ->
+                        %% Entry expired - remove it
+                        ets:delete(?ETS_TABLE, User),
+                        {error, expired};
+                    true ->
+                        {ok, Entry#presence_entry.node, Entry#presence_entry.pid}
+                end;
+            [] ->
+                {error, not_found}
+        end
+    catch
+        error:badarg -> {error, not_found}
     end.
 
 %% @doc Update heartbeat timestamp for a user
@@ -257,14 +268,22 @@ init([]) ->
     %% - set: key-value with unique keys
     %% - {write_concurrency, true}: optimized for concurrent writes
     %% - {read_concurrency, true}: optimized for concurrent reads
-    ?ETS_TABLE = ets:new(?ETS_TABLE, [
-        named_table,
-        public,
-        set,
-        {keypos, 1},
-        {write_concurrency, true},
-        {read_concurrency, true}
-    ]),
+    %% Defensive: reuse table if it survived a restart (e.g. via rest_for_one cascade).
+    %% Without this, ets:new crashes with badarg if the table already exists from
+    %% a previous instance that was stopped but whose table was reclaimed.
+    case ets:info(?ETS_TABLE) of
+        undefined ->
+            ets:new(?ETS_TABLE, [
+                named_table,
+                public,
+                set,
+                {keypos, 1},
+                {write_concurrency, true},
+                {read_concurrency, true}
+            ]);
+        _ ->
+            ok
+    end,
 
     %% PS-2: Privacy level table {UserId, Level :: everyone|contacts|nobody}
     case ets:info(?PRIVACY_TABLE) of

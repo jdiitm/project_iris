@@ -34,7 +34,16 @@ start_link() ->
     start_link(Port).
 
 start_link(Port) ->
-    gen_server:start_link({local, ?MODULE}, ?MODULE, Port, []).
+    %% Handle the case where iris_core supervisor already started us.
+    %% When iris_edge depends on iris_core (P2-2), both supervisors run on
+    %% the same node and both try to start this singleton. Return 'ignore'
+    %% so the second supervisor skips the child cleanly.
+    case whereis(?MODULE) of
+        undefined ->
+            gen_server:start_link({local, ?MODULE}, ?MODULE, Port, []);
+        _Pid ->
+            ignore
+    end.
 
 %% =============================================================================
 %% gen_server callbacks

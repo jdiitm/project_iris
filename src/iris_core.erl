@@ -147,9 +147,13 @@ validate_consistency_mode() ->
                                  "Cannot guarantee CP semantics in production."),
                     {error, cp_not_implemented};
                 _ ->
-                    logger:warning("consistency_mode=cp is NOT IMPLEMENTED. "
-                                   "Falling back to hardened_ap. "
-                                   "This node will operate in AP mode."),
+                    %% AUDIT V2 P0-2: Promote to error level so operators cannot
+                    %% miss CP mode silently falling back to AP during testing.
+                    logger:error("consistency_mode=cp is NOT IMPLEMENTED. "
+                                 "Falling back to hardened_ap. "
+                                 "This node will operate in AP mode."),
+                    iris_metrics:set(consistency_mode_mismatch, 1),
+                    application:set_env(iris_core, consistency_mode_actual, hardened_ap),
                     ok
             end;
         _ -> ok
@@ -165,6 +169,23 @@ init([]) ->
     %% We use secondary supervisors for batchers to isolate their crashes.
     
     %% AUDIT 5.3: rest_for_one ensures foundation services restart dependents
+    %%
+    %% AUDIT V2 P1-5: Restart Intensity Risk Documentation
+    %% ---------------------------------------------------
+    %% The current rest_for_one strategy means that if an early child (e.g.
+    %% iris_metrics) crashes, ALL subsequent children are restarted in order.
+    %% With intensity=10/period=60, up to 10 cascading restarts per minute
+    %% are tolerated before the supervisor itself terminates.
+    %%
+    %% Known risks:
+    %%  1. A flapping foundation service triggers cascading restarts of ALL
+    %%     higher-tier children (batchers, cluster join worker, etc.)
+    %%  2. 10 restarts/60s may be too aggressive for production — consider
+    %%     reducing to 5/60 after burn-in monitoring.
+    %%
+    %% Future work: Split into tiered supervisors (foundation_sup, messaging_sup,
+    %% cluster_sup) so that a crash in messaging does not cascade into cluster
+    %% infrastructure. See: OTP Design Principles — Supervisor Behaviour.
     SupFlags = #{strategy => rest_for_one,
                  intensity => 10,
                  period => 60},
@@ -408,11 +429,24 @@ store_offline(User, Msg) ->
 -spec store_offline_durable(binary(), binary()) -> ok | {error, term()}.
 store_offline_durable(User, Msg) ->
     %% RFC Section 8: Inbox Size limit enforcement (GAP-6 fix)
-    case get_offline_queue_depth(User) >= iris_limits:max_inbox_size() of
+    Depth = get_offline_queue_depth(User),
+    MaxInbox = iris_limits:max_inbox_size(),
+    case Depth >= MaxInbox of
         true ->
             iris_metrics:inc(iris_inbox_full_rejected),
             {error, inbox_full};
         false ->
+            %% AUDIT V2 P1-6: Soft warning at 95% capacity — alert operators
+            %% before hard rejection so they can intervene (e.g. nudge user
+            %% to come online, or raise the limit).
+            case Depth >= trunc(MaxInbox * 0.95) of
+                true ->
+                    logger:warning("inbox_near_capacity: user=~s depth=~B limit=~B (~B%)",
+                                   [User, Depth, MaxInbox, trunc(Depth * 100 / MaxInbox)]),
+                    iris_metrics:inc(inbox_near_capacity);
+                false ->
+                    ok
+            end,
             store_offline_durable_inner(User, Msg)
     end.
 
@@ -599,7 +633,15 @@ set_bucket_count(User, Count) ->
             mnesia:transaction(F)
     end.
 
-update_status(User, online) -> ok;
+%% @doc Update a user's presence status.
+%%
+%% AUDIT V2 P2-4: update_status(_User, online) is intentionally a no-op.
+%% Online status is established exclusively via register_user/3, which
+%% atomically writes the presence record with the user's node and pid.
+%% Calling update_status(User, online) without a pid/node would create
+%% an incomplete presence record, so we deliberately skip it here.
+%% Callers wanting to mark a user as online MUST use register_user/3.
+update_status(_User, online) -> ok;
 update_status(User, offline) ->
     %% FORENSIC_AUDIT_FIX: Unregister from correct backend
     %% Rationale: Atomic delete prevents "ghost" online status if batcher is slow.
@@ -632,10 +674,13 @@ get_status(User) ->
     end.
 
 %% Helper: Get status from disk (user_status table)
+%% AUDIT V2 P1-2: Return {error, not_found} for users that never existed
+%% instead of an ambiguous zero-timestamp tuple.
+-spec get_status_from_disk(binary()) -> {online, false, non_neg_integer()} | {error, not_found}.
 get_status_from_disk(User) ->
     case mnesia:dirty_read(user_status, User) of
         [{user_status, User, LastSeen}] -> {online, false, LastSeen};
-        [] -> {online, false, 0}
+        [] -> {error, not_found}
     end.
 
 %%%===================================================================
@@ -747,25 +792,53 @@ safe_to_delete_schema(LivePeer) ->
     end.
 
 %% Repair tables that failed to load after crash recovery
+%% AUDIT V2 P1-3: Check for live peers before force_load_table to prevent
+%% data divergence when peers hold newer data.
 repair_failed_tables([]) -> ok;
 repair_failed_tables([Table | Rest]) ->
     logger:info("Repairing table: ~p", [Table]),
-    %% Try to force load from local disc
+    %% AUDIT V2 P1-3: Check if peers have a copy we can sync from
+    ActiveReplicas = mnesia:table_info(Table, active_replicas) -- [node()],
+    case ActiveReplicas of
+        [Peer | _] ->
+            %% Peer has data — try to add a copy from the peer instead of force-loading
+            logger:info("Table ~p: peer ~p has active replica, syncing from peer", [Table, Peer]),
+            case mnesia:add_table_copy(Table, node(), disc_copies) of
+                {atomic, ok} ->
+                    logger:info("Table ~p synced from peer ~p", [Table, Peer]);
+                {aborted, {already_exists, _, _}} ->
+                    %% Already have a copy, just wait for sync
+                    mnesia:wait_for_tables([Table], 10000);
+                {aborted, Reason} ->
+                    logger:warning("Table ~p sync from peer failed: ~p, falling back to force_load",
+                                   [Table, Reason]),
+                    force_load_isolated(Table)
+            end;
+        [] ->
+            %% No peers available — we are isolated, force_load is our only option
+            iris_metrics:inc(force_load_table_events),
+            force_load_isolated(Table)
+    end,
+    repair_failed_tables(Rest).
+
+%% Force-load a table when no peers are available (isolated node).
+%% AUDIT V2 P1-3: Emit metric + divergence warning since data may be stale.
+force_load_isolated(Table) ->
+    logger:warning("DATA DIVERGENCE RISK: force_load_table(~p) with no active peers. "
+                   "Local data may be stale or divergent.", [Table]),
     case mnesia:force_load_table(Table) of
         yes ->
-            logger:info("Table ~p force loaded", [Table]),
-            %% Verify table is usable
+            logger:info("Table ~p force loaded (isolated)", [Table]),
             case mnesia:wait_for_tables([Table], 5000) of
                 ok -> ok;
-                _ -> 
+                _ ->
                     logger:warning("Table ~p force loaded but not usable. Recreating...", [Table]),
                     nuke_and_recreate_table(Table)
             end;
         ErrorOrNo ->
             logger:warning("Force load failed for ~p: ~p. Recreating table...", [Table, ErrorOrNo]),
             nuke_and_recreate_table(Table)
-    end,
-    repair_failed_tables(Rest).
+    end.
 
 %% Completely destroy and recreate a corrupted table
 %% AUDIT FIX: Added safety gate to prevent accidental data loss

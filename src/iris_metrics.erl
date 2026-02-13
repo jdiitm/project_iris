@@ -106,8 +106,13 @@ export_prometheus() ->
 %% =============================================================================
 
 init([]) ->
-    %% Create metrics table
-    ets:new(?METRICS_TABLE, [named_table, public, set, {write_concurrency, true}]),
+    %% Create metrics table (or reuse if already exists, e.g. from tests or hot reload)
+    case ets:info(?METRICS_TABLE) of
+        undefined ->
+            ets:new(?METRICS_TABLE, [named_table, public, set, {write_concurrency, true}]);
+        _ ->
+            ok
+    end,
     
     %% Initialize default metrics
     init_default_metrics(),

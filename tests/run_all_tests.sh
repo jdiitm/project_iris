@@ -193,6 +193,8 @@ HEAVY_TESTS=(
     "test_churn"                 # Connect/disconnect storms crash edge under load
     "test_reconnect_storm"       # Reconnection floods can crash edge
     "test_dedup_bloom_accuracy"  # High-volume dedup, needs fresh server state
+    "test_hotkey_bucketing"      # 50+ rapid messages to single user, destabilizes server
+    "test_idempotency"           # 100+ rapid messages (retry storm), destabilizes server
     "stress_hotspot"             # Heavy single-key load
     "stress_geo_scale"           # Large scale test
     "stress_global_fan_in"       # Fan-in stress
@@ -251,6 +253,10 @@ run_test() {
     # Restart server after heavy tests to ensure clean state for next test
     if is_heavy_test "$test_name"; then
         echo -e "    ${YELLOW}(heavy test - restarting server)${NC}"
+        restart_server_quick
+    elif [ $exit_code -ne 0 ] && ! nc -z localhost 8085 2>/dev/null; then
+        # Server died during a non-heavy test — auto-recover
+        echo -e "    ${YELLOW}(server died - auto-recovering)${NC}"
         restart_server_quick
     fi
 }
@@ -485,7 +491,7 @@ else
     echo ""
     echo "--- Property-Based Tests ---"
     printf "  %-50s" "Protocol Properties (iris_proto_props)"
-    ERL_CMD="erl -pa ebin -noshell -eval \"case iris_proto_props:test_all() of ok -> init:stop(0); error -> init:stop(1) end.\""
+    ERL_CMD="erl -pa ebin -noshell -eval \"case iris_proto_props:test_all() of ok -> halt(0); error -> halt(1) end.\""
     eval $ERL_CMD > "$LOG_DIR/proto_props.log" 2>&1
     if [ $? -eq 0 ]; then
         echo -e "${GREEN}PASS${NC}"
@@ -549,6 +555,7 @@ else
 
     echo ""
     echo "--- Contract Tests ---"
+    ensure_server_ready "Contract Tests"
     for test in tests/suites/contract/test_*.py; do
         [ -f "$test" ] && run_test "$test" 180
     done
