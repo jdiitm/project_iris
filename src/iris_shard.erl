@@ -20,7 +20,7 @@
 -export([calculate_shards_for_node/3]).  %% Pure function for TDD
 
 -behaviour(gen_server).
--export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
+-export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
 -define(SERVER, ?MODULE).
 -define(DEFAULT_SHARD_COUNT, 4096).       %% Default number of shards
@@ -245,6 +245,9 @@ terminate(_Reason, #state{local_shards = Local}) ->
         leave_shard_internal(ShardId)
     end, Local),
     ok.
+
+code_change(_OldVsn, State, _Extra) ->
+    {ok, State}.
 
 %% =============================================================================
 %% Internal Functions

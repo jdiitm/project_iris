@@ -2,7 +2,7 @@
 -behaviour(gen_server).
 
 -export([start_link/1, submit/2]).
--export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
+-export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
 -record(state, {
     id,
@@ -73,6 +73,9 @@ terminate(_Reason, #state{buffer = Buff, count = Count}) ->
         flush(Buff);
     true -> ok
     end.
+
+code_change(_OldVsn, State, _Extra) ->
+    {ok, State}.
 
 %% Internal
 

@@ -20,7 +20,7 @@
 -export([check_health/0]).
 
 %% gen_server callbacks
--export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
+-export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
 -define(SERVER, ?MODULE).
 -define(CHECK_INTERVAL_MS, 1000).       %% Check every 1 second
@@ -187,6 +187,9 @@ terminate(_Reason, State) ->
         Ref -> erlang:cancel_timer(Ref)
     end,
     ok.
+
+code_change(_OldVsn, State, _Extra) ->
+    {ok, State}.
 
 %% =============================================================================
 %% Internal Functions

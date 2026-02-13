@@ -31,7 +31,7 @@
 -export([get_node_id/0, set_node_id/1]).
 
 %% gen_server callbacks
--export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
+-export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
 -define(SERVER, ?MODULE).
 -define(MAX_DRIFT_MS, 30000).  % Maximum tolerated clock drift (30 seconds)
@@ -261,6 +261,9 @@ handle_info(_Info, State) ->
 
 terminate(_Reason, _State) ->
     ok.
+
+code_change(_OldVsn, State, _Extra) ->
+    {ok, State}.
 
 %%====================================================================
 %% Internal functions

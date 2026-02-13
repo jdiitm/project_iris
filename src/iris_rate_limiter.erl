@@ -13,11 +13,13 @@
 
 -export([start_link/0, start_link/1]).
 -export([check/1, check/2, allow/1, allow/2]).
+%% AUDIT MITIGATION P1-1: Per-message-type rate limiting
+-export([check_typed/2]).
 -export([get_stats/0, get_user_tokens/1]).
 %% HOT-002 FIX: Destination rate limiting to protect hot recipients
 -export([check_destination/1, check_destination/2, get_destination_stats/1]).
 -export([promote_destination/2, is_destination_hot/1]).
--export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
+-export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 %% RFC NFR-17: Distributed rate limit gossip
 -export([merge_remote_counters/1]).
 
@@ -87,6 +89,26 @@ check(User, Tokens) ->
             RetryAfter = round(TokensNeeded / max(0.001, RefillRate)),
             gen_server:cast(?SERVER, rejected),
             {deny, max(10, min(RetryAfter, 60000))}
+    end.
+
+%% @doc AUDIT MITIGATION P1-1: Per-message-type rate limiting.
+%% Each Type gets its own bucket so typing floods can't starve messages.
+%% Type :: message | typing | handshake | media | presence
+-spec check_typed(binary(), atom()) -> allow | {deny, integer()}.
+check_typed(User, message) ->
+    %% Messages use the default bucket (backwards compatible)
+    check(User);
+check_typed(User, Type) ->
+    Now = os:system_time(millisecond),
+    Key = {User, Type},
+    Bucket = get_or_create_typed_bucket(Key, Type, Now),
+    RefilledBucket = refill_bucket(Bucket, Now),
+    case consume_tokens(RefilledBucket, 1) of
+        {ok, NewBucket} ->
+            save_bucket(NewBucket),
+            allow;
+        {not_enough, _CurrentTokens} ->
+            {deny, 100}
     end.
 
 %% @doc Simpler API that just returns boolean
@@ -206,6 +228,9 @@ handle_info(_Info, State) ->
 terminate(_Reason, _State) ->
     ok.
 
+code_change(_OldVsn, State, _Extra) ->
+    {ok, State}.
+
 %% =============================================================================
 %% Internal Functions
 %% =============================================================================
@@ -284,6 +309,57 @@ get_app_env(Key) ->
         {ok, _} = Ok -> Ok;
         undefined -> application:get_env(iris_core, Key)
     end.
+
+%% AUDIT MITIGATION P1-1: Typed bucket creation with per-type limits
+get_or_create_typed_bucket(Key, Type, Now) ->
+    case ets:lookup(?TABLE, Key) of
+        [Bucket] -> Bucket;
+        [] ->
+            {Rate, Burst} = typed_limits(Type),
+            #bucket{
+                user = Key,
+                tokens = float(Burst),
+                rate = Rate,
+                burst = Burst,
+                last_refill = Now
+            }
+    end.
+
+%% Per-type rate limits (configurable via app env, with sensible defaults)
+typed_limits(typing) ->
+    Rate = case get_app_env(rate_typing_default) of
+        {ok, V} -> V; undefined -> 20  %% 20/sec for typing indicators
+    end,
+    Burst = case get_app_env(rate_typing_burst) of
+        {ok, B} -> B; undefined -> 50
+    end,
+    {Rate, Burst};
+typed_limits(handshake) ->
+    Rate = case get_app_env(rate_handshake_default) of
+        {ok, V} -> V; undefined -> 10  %% 10/sec for handshakes
+    end,
+    Burst = case get_app_env(rate_handshake_burst) of
+        {ok, B} -> B; undefined -> 20
+    end,
+    {Rate, Burst};
+typed_limits(presence) ->
+    Rate = case get_app_env(rate_presence_default) of
+        {ok, V} -> V; undefined -> 10
+    end,
+    Burst = case get_app_env(rate_presence_burst) of
+        {ok, B} -> B; undefined -> 30
+    end,
+    {Rate, Burst};
+typed_limits(media) ->
+    Rate = case get_app_env(rate_media_default) of
+        {ok, V} -> V; undefined -> 2   %% 2/sec for media (expensive)
+    end,
+    Burst = case get_app_env(rate_media_burst) of
+        {ok, B} -> B; undefined -> 5
+    end,
+    {Rate, Burst};
+typed_limits(_Other) ->
+    {get_default_rate(), get_default_burst()}.
 
 cleanup_idle_buckets(Cutoff) ->
     cleanup_idle_fold(ets:first(?TABLE), Cutoff).

@@ -34,7 +34,7 @@
 -export([start_link/0]).
 -export([is_safe_for_writes/0, get_status/0, force_unsafe_mode/1]).
 -export([resolve_authority/4]).  %% FM-2: Split-brain resolution
--export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
+-export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
 -define(SERVER, ?MODULE).
 -define(CHECK_INTERVAL_MS, 5000).  %% Check every 5 seconds
@@ -214,6 +214,9 @@ handle_info(_Info, State) ->
 
 terminate(_Reason, _State) ->
     ok.
+
+code_change(_OldVsn, State, _Extra) ->
+    {ok, State}.
 
 %% =============================================================================
 %% Internal Functions

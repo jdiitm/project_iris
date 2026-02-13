@@ -24,7 +24,7 @@
 %% IA-3: Refresh token API (RFC-001 v4.0 FR-11a)
 -export([create_refresh_token/1, create_refresh_token/2, exchange_refresh_token/1]).
 -export([validate_and_rotate_refresh/1]).  %% Mnesia-only validation (for cross-node RPC)
--export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
+-export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
 -define(SERVER, ?MODULE).
 -define(REVOCATION_TABLE, iris_auth_revoked).
@@ -323,6 +323,9 @@ handle_info(_Info, State) ->
 
 terminate(_Reason, _State) ->
     ok.
+
+code_change(_OldVsn, State, _Extra) ->
+    {ok, State}.
 
 %% =============================================================================
 %% RFC Section 10.1: Failed Login Rate Limiting

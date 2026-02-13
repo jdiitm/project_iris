@@ -5,7 +5,7 @@
 -export([start_link/0, check/0, close/0, get_active_count/0]).
 
 %% GenServer callbacks
--export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
+-export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
 -define(SERVER, ?MODULE).
 -define(MAX_CONNECTIONS, 100000). %% Hard limit per node (approx 4GB RAM usage at 40KB/conn)
@@ -88,6 +88,9 @@ handle_info(_Info, State) ->
 terminate(_Reason, _State) ->
     persistent_term:erase(?MODULE),
     ok.
+
+code_change(_OldVsn, State, _Extra) ->
+    {ok, State}.
 
 get_atomics_ref() ->
     try persistent_term:get(?MODULE)

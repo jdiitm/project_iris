@@ -76,6 +76,15 @@ start(_StartType, _StartArgs) ->
             ok
     end,
 
+    %% AUDIT MITIGATION P1-3: Validate replication_factor
+    case application:get_env(iris_core, replication_factor, 3) of
+        RF when is_integer(RF), RF > 0 -> ok;
+        BadRF ->
+            logger:error("FATAL: replication_factor=~p is invalid (must be > 0)", [BadRF]),
+            init:stop(1),
+            exit(invalid_replication_factor)
+    end,
+
     %% AUDIT MITIGATION P0-1: Validate critical config. Fatal in production mode.
     case application:get_env(iris_core, deployment_mode, development) of
         production ->
@@ -1102,6 +1111,16 @@ init_cross_region_replication() ->
 
 -spec reconcile_after_partition() -> ok | {error, term()}.
 reconcile_after_partition() ->
+    %% AUDIT MITIGATION P0-2: Refuse reconciliation while still diverged
+    case iris_partition_guard:get_status() of
+        #{mode := diverged} ->
+            logger:warning("Reconciliation aborted: partition guard still in diverged mode"),
+            {error, no_quorum};
+        _ ->
+            do_reconcile_after_partition()
+    end.
+
+do_reconcile_after_partition() ->
     logger:info("=== POST-PARTITION RECONCILIATION START ==="),
     
     %% Get remote nodes that have offline_msg table

@@ -328,8 +328,14 @@ handle_packet({typing_start, Target}, User, _Pid, _Mod) when User =/= undefined 
             %% Silently drop - typing is non-critical
             {ok, User, []};
         false ->
-            relay_typing_indicator(Target, User, true),
-            {ok, User, []}
+            %% AUDIT MITIGATION P1-1: Per-type rate limit for typing
+            case check_message_rate(User, typing) of
+                allow ->
+                    relay_typing_indicator(Target, User, true),
+                    {ok, User, []};
+                {deny, _} ->
+                    {ok, User, []}
+            end
     end;
 
 handle_packet({typing_stop, Target}, User, _Pid, _Mod) when User =/= undefined ->
@@ -338,8 +344,14 @@ handle_packet({typing_stop, Target}, User, _Pid, _Mod) when User =/= undefined -
         true ->
             {ok, User, []};
         false ->
-            relay_typing_indicator(Target, User, false),
-            {ok, User, []}
+            %% AUDIT MITIGATION P1-1: Per-type rate limit for typing
+            case check_message_rate(User, typing) of
+                allow ->
+                    relay_typing_indicator(Target, User, false),
+                    {ok, User, []};
+                {deny, _} ->
+                    {ok, User, []}
+            end
     end;
 
 handle_packet({typing_start, _Target}, undefined, _Pid, _Mod) ->
@@ -1258,11 +1270,15 @@ fetch_and_cache(TargetUser, Now) ->
 %% RFC 7.4 FIX: Also track request for flow controller rate-based degradation
 
 check_message_rate(User) ->
+    check_message_rate(User, message).
+
+%% AUDIT MITIGATION P1-1: Per-message-type rate limiting
+check_message_rate(User, Type) ->
     %% Track request for flow controller (rate-based degradation)
     iris_flow_controller:track_request(User),
     case whereis(iris_rate_limiter) of
         undefined -> allow;
-        _ -> iris_rate_limiter:check(User)
+        _ -> iris_rate_limiter:check_typed(User, Type)
     end.
 
 encode_rate_limited(RetryAfter) ->

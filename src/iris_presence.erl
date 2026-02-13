@@ -27,7 +27,7 @@
 -export([set_privacy/2, lookup_with_privacy/2, add_contact/2]).
 
 %% gen_server callbacks
--export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
+-export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
 -define(SERVER, ?MODULE).
 -define(ETS_TABLE, presence_local).
@@ -402,6 +402,9 @@ terminate(_Reason, State) ->
         Ref -> erlang:cancel_timer(Ref)
     end,
     ok.
+
+code_change(_OldVsn, State, _Extra) ->
+    {ok, State}.
 
 %% =============================================================================
 %% Internal Functions

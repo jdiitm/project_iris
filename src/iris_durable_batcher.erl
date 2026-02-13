@@ -18,7 +18,7 @@
 -export([get_durability_mode/0, get_secondary_node/0]).
 -export([accept_remote_wal/1]).  %% Called via RPC on secondary node
 -export([validate_wal_storage/2]).  %% F3 FIX: Exported for test validation
--export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
+-export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
 -define(POOL_SIZE, 8).
 -define(BATCH_SIZE, 1000).
@@ -293,6 +293,9 @@ terminate(_Reason, State) ->
         Log -> disk_log:close(Log)
     end,
     ok.
+
+code_change(_OldVsn, State, _Extra) ->
+    {ok, State}.
 
 %% =============================================================================
 %% Internal: Write-Ahead Log

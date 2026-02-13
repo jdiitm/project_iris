@@ -9,7 +9,8 @@
     {load_module, iris_session},     %% Session changed (ack action)
     {load_module, iris_edge_app},    %% App changed (sup start)
     {load_module, iris_core},        %% Core changed (clustering)
-    {load_module, iris_offline_storage}
+    {load_module, iris_offline_storage},
+    {update, iris_async_router, {advanced, []}}
  ]}],
  [{"0.1.0", [
     {update, iris_edge_conn, {advanced, []}},

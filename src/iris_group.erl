@@ -56,7 +56,7 @@
 ]).
 
 %% gen_server callbacks
--export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
+-export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
 -define(SERVER, ?MODULE).
 -define(MAX_GROUP_NAME_LEN, 256).
@@ -427,6 +427,9 @@ handle_info(_Info, State) ->
 terminate(_Reason, _State) ->
     ok.
 
+code_change(_OldVsn, State, _Extra) ->
+    {ok, State}.
+
 %% =============================================================================
 %% Internal Functions
 %% =============================================================================
@@ -499,17 +502,36 @@ init_tables() ->
         ok -> ok;
         {timeout, BadTables} ->
             logger:warning("Timeout waiting for tables: ~p", [BadTables]),
-            %% Try to force load
+            %% AUDIT MITIGATION P0-2: Check for active replicas before force_load
             lists:foreach(fun(T) ->
-                try mnesia:force_load_table(T)
-                catch FLClass:FLReason ->
-                    logger:warning("force_load_table(~p) failed: ~p:~p", [T, FLClass, FLReason])
+                ActiveReplicas = try mnesia:table_info(T, active_replicas) -- [node()]
+                                catch _:_ -> [] end,
+                case ActiveReplicas of
+                    [Peer | _] ->
+                        logger:info("Table ~p: peer ~p has active replica, syncing", [T, Peer]),
+                        case mnesia:add_table_copy(T, node(), disc_copies) of
+                            {atomic, ok} -> ok;
+                            {aborted, {already_exists, _, _}} ->
+                                mnesia:wait_for_tables([T], 10000);
+                            {aborted, _Reason} ->
+                                force_load_isolated(T)
+                        end;
+                    [] ->
+                        force_load_isolated(T)
                 end
             end, BadTables),
             ok;
         {error, WaitReason} ->
             logger:error("Failed to wait for tables: ~p", [WaitReason]),
             ok
+    end.
+
+%% AUDIT MITIGATION P0-2: Isolated force_load with safety logging
+force_load_isolated(Table) ->
+    logger:warning("DATA DIVERGENCE RISK: force_load_table(~p) with no active peers", [Table]),
+    try mnesia:force_load_table(Table)
+    catch FLClass:FLReason ->
+        logger:warning("force_load_table(~p) failed: ~p:~p", [Table, FLClass, FLReason])
     end.
 
 do_create_group(GroupName, CreatorId) ->

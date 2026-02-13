@@ -2,7 +2,7 @@
 -behaviour(gen_statem).
 
 -export([start_link/1, set_socket/2]).
--export([init/1, callback_mode/0, terminate/3]).
+-export([init/1, callback_mode/0, terminate/3, code_change/4]).
 -export([wait_for_socket/3, handshake/3, connected/3]).
 
 -record(data, {
@@ -270,3 +270,6 @@ find_header(TargetKey, [Line|T]) ->
 terminate(_, _, #data{user = User}) ->
     iris_session:terminate(User),
     ok.
+
+code_change(_OldVsn, StateName, Data, _Extra) ->
+    {ok, StateName, Data}.
