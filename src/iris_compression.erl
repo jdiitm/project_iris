@@ -94,10 +94,34 @@ available_algorithms() ->
         false -> Base
     end.
 
+%% AUDIT M8: Verify NIF actually loads (not just file existence) and cache result.
 zstd_nif_available() ->
+    case persistent_term:get(iris_zstd_nif_available, undefined) of
+        undefined ->
+            Result = try_zstd_nif(),
+            persistent_term:put(iris_zstd_nif_available, Result),
+            Result;
+        Cached ->
+            Cached
+    end.
+
+try_zstd_nif() ->
     case code:priv_dir(iris_edge) of
         {error, _} -> false;
         PrivDir ->
             NifPath = filename:join(PrivDir, "iris_zstd_nif.so"),
-            filelib:is_file(NifPath)
+            case filelib:is_file(NifPath) of
+                false -> false;
+                true ->
+                    %% File exists — verify it actually loads and works
+                    try
+                        _ = iris_zstd_nif:compress(<<0>>),
+                        true
+                    catch
+                        error:undef -> false;
+                        error:nif_not_loaded -> false;
+                        error:{nif_not_loaded, _} -> false;
+                        _:_ -> false
+                    end
+            end
     end.

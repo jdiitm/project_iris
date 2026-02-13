@@ -5,6 +5,7 @@
 -export([store_with_seq/3]).  %% AUDIT FIX: Store with client-provided sequence for FIFO
 %% PRINCIPAL_AUDIT_REPORT: Lockfree cursor-based retrieval (Hard Stop #2)
 -export([retrieve_cursor/3, delete_confirmed/4, retrieve_lockfree/2, delete_all_async/2]).
+-export([notify_push/2]).  %% AUDIT M12: Push notification hook
 
 %% Mnesia table definition (created in iris_core:init_db/0):
 %% {offline_msg, User, Timestamp, Msg}
@@ -78,6 +79,8 @@ store_durable(User, Msg, Count) ->
         ok ->
             %% Log at debug level for durability auditing
             logger:debug("Durable store confirmed for user ~p", [User]),
+            %% AUDIT M12: Invoke push notification hook for offline users
+            notify_push(User, Msg),
             ok;
         {error, Reason} ->
             %% CRITICAL: Do not ACK to client if this fails
@@ -262,3 +265,32 @@ sort_and_extract(Records) ->
     Sorted = lists:sort(fun({_, _, Ts1, _}, {_, _, Ts2, _}) -> Ts1 =< Ts2 end, Records),
     RawMsgs = [Msg || {_, _, _, Msg} <- Sorted],
     lists:flatten(RawMsgs).
+
+%% =============================================================================
+%% AUDIT M12: Push Notification Hook
+%% =============================================================================
+%% Configurable hook for push notifications (APNS/FCM).
+%% Default is no-op. Configure via:
+%%   application:set_env(iris_core, push_hook, fun(User, Msg) -> ... end)
+%% or implement a module with push_notify/2 and set:
+%%   application:set_env(iris_core, push_hook, {Module, Function})
+%% =============================================================================
+
+-spec notify_push(binary(), binary()) -> ok.
+notify_push(User, Msg) ->
+    case application:get_env(iris_core, push_hook, undefined) of
+        undefined ->
+            ok;  %% No push hook configured — no-op
+        {Module, Function} ->
+            try Module:Function(User, Msg)
+            catch Class:Error ->
+                logger:warning("Push notification hook failed: ~p:~p", [Class, Error])
+            end,
+            ok;
+        Fun when is_function(Fun, 2) ->
+            try Fun(User, Msg)
+            catch Class:Error ->
+                logger:warning("Push notification hook failed: ~p:~p", [Class, Error])
+            end,
+            ok
+    end.

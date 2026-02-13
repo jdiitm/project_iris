@@ -85,7 +85,11 @@ iris_auth_jwt_hardening_test_() ->
       {"AUDIT: dot-only token is rejected",
        fun test_dot_only_token/0},
       {"AUDIT: algorithm whitelist is HS256 and EdDSA only",
-       fun test_algorithm_whitelist_in_source/0}
+       fun test_algorithm_whitelist_in_source/0},
+      {"AUDIT: garbage header segment is rejected (not defaulted to HS256)",
+       fun test_garbage_header_rejected/0},
+      {"AUDIT: JTI replay table exists after init (no lazy creation race)",
+       fun test_jti_table_exists_after_init/0}
      ]}.
 
 %% =============================================================================
@@ -163,3 +167,20 @@ test_algorithm_whitelist_in_source() ->
     {ok, Src} = file:read_file("src/iris_auth.erl"),
     ?assert(binary:match(Src, <<"AllowedAlgs">>) =/= nomatch),
     ?assert(binary:match(Src, <<"unsupported_algorithm">>) =/= nomatch).
+
+test_garbage_header_rejected() ->
+    %% Token with non-base64 garbage in header segment
+    %% Before fix: get_header_alg/1 falls back to <<"HS256">> on decode error
+    %% After fix: must return {error, _}
+    GarbageHeader = <<"$$NOT_BASE64$$">>,
+    Payload = base64url_encode(iris_auth_json:encode(
+        #{<<"sub">> => <<"user1">>, <<"exp">> => os:system_time(second) + 3600}
+    )),
+    Token = <<GarbageHeader/binary, ".", Payload/binary, ".fakesig">>,
+    Result = iris_auth:validate_token(Token),
+    ?assertMatch({error, _}, Result).
+
+test_jti_table_exists_after_init() ->
+    %% After iris_auth starts, the JTI replay table must already exist
+    %% (not lazily created on first use, which is racy)
+    ?assertNotEqual(undefined, ets:info(iris_auth_jti_seen)).

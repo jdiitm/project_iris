@@ -41,6 +41,7 @@
 -export([get/2, get/3]).
 -export([delete/2, delete/3]).
 -export([batch_put/2, batch_put/3]).
+-export([backend_type/0]).  %% AUDIT M11: Storage backend identification
 
 %% Inbox Log APIs (RFC-001 v3.0 compliant)
 -export([append_inbox/2, append_inbox/3]).
@@ -72,16 +73,25 @@ put(Table, Key, Value, Opts) ->
     %% AUDIT 7.4: Validate key type and size at API boundary
     case validate_key(Key) of
         ok ->
-            case check_write_safety() of
+            %% AUDIT M4: Validate value size
+            case validate_value(Value) of
                 ok ->
-                    Durability = maps:get(durability, Opts, quorum),
-                    do_put(Durability, Table, Key, Value, Opts);
-                {error, Reason} ->
-                    {error, Reason}
+                    case check_write_safety() of
+                        ok ->
+                            Durability = maps:get(durability, Opts, quorum),
+                            do_put(Durability, Table, Key, Value, Opts);
+                        {error, Reason} ->
+                            {error, Reason}
+                    end;
+                {error, _} = Err ->
+                    Err
             end;
         {error, _} = Err ->
             Err
     end.
+
+-define(MAX_VALUE_SIZE, 1048576).  %% AUDIT M4: 1MB max value size
+-define(WRITE_TIMEOUT_MS, 5000).  %% AUDIT M6: Timeout for sync_transaction to prevent netsplit stalls
 
 %% AUDIT 7.4: Validate Mnesia key type and size at API boundary
 validate_key(K) when is_atom(K) -> ok;
@@ -90,16 +100,39 @@ validate_key(K) when is_binary(K), byte_size(K) =< 1024 -> ok;
 validate_key(K) when is_binary(K) -> {error, {key_too_large, byte_size(K)}};
 validate_key(K) -> {error, {invalid_key_type, K}}.
 
-do_put(guaranteed, Table, Key, Value, _Opts) ->
+%% AUDIT M4: Validate value size to prevent Mnesia memory pressure
+validate_value(V) when is_binary(V), byte_size(V) > ?MAX_VALUE_SIZE ->
+    {error, {value_too_large, byte_size(V)}};
+validate_value(_V) -> ok.
+
+do_put(guaranteed, Table, Key, Value, Opts) ->
     %% sync_transaction: Waits for replication to ALL disc_copies nodes
-    %% This is the SAFE default - survives any single node failure
+    %% AUDIT M6: Wrapped with timeout to prevent indefinite stall during netsplits
+    Timeout = maps:get(timeout, Opts, ?WRITE_TIMEOUT_MS),
     F = fun() -> mnesia:write({Table, Key, Value}) end,
-    case mnesia:activity(sync_transaction, F) of
-        ok -> ok;
-        {atomic, _} -> ok;
-        {aborted, Reason} -> 
+    Parent = self(),
+    Ref = make_ref(),
+    Pid = spawn(fun() ->
+        Result = try
+            case mnesia:activity(sync_transaction, F) of
+                ok -> ok;
+                {atomic, _} -> ok;
+                {aborted, Reason} -> {error, Reason}
+            end
+        catch
+            Class:Error -> {error, {Class, Error}}
+        end,
+        Parent ! {Ref, Result}
+    end),
+    receive
+        {Ref, ok} -> ok;
+        {Ref, {error, Reason}} ->
             logger:error("Store put failed: ~p", [Reason]),
             {error, Reason}
+    after Timeout ->
+        exit(Pid, kill),
+        logger:error("Store put timed out after ~pms for table=~p", [Timeout, Table]),
+        {error, write_timeout}
     end;
 
 do_put(best_effort, Table, Key, Value, _Opts) ->
@@ -233,7 +266,8 @@ batch_put(Table, KeyValuePairs) ->
 batch_put(Table, KeyValuePairs, Opts) ->
     case check_write_safety() of
         ok ->
-            Durability = maps:get(durability, Opts, guaranteed),
+            %% AUDIT M10: Align default to quorum (same as put/4)
+            Durability = maps:get(durability, Opts, quorum),
             do_batch_put(Durability, Table, KeyValuePairs);
         {error, Reason} ->
             {error, Reason}
@@ -266,7 +300,26 @@ do_batch_put(best_effort, Table, KeyValuePairs) ->
             iris_metrics:inc(best_effort_write_error)
         end
     end),
-    ok.
+    ok;
+
+%% AUDIT M10: Quorum path for batch_put (aligned with put/4 default)
+do_batch_put(quorum, Table, KeyValuePairs) ->
+    case whereis(iris_quorum_write) of
+        undefined ->
+            logger:warning("quorum_write not registered -- downgrading batch_put to guaranteed "
+                           "for table=~p", [Table]),
+            iris_metrics:inc(quorum_fallback_count),
+            do_batch_put(guaranteed, Table, KeyValuePairs);
+        _ ->
+            %% Write each pair through quorum
+            Results = lists:map(fun({Key, Value}) ->
+                iris_quorum_write:write_durable(Table, Key, Value, #{timeout => 3000})
+            end, KeyValuePairs),
+            case lists:all(fun(R) -> R =:= ok end, Results) of
+                true -> ok;
+                false -> {error, partial_quorum_failure}
+            end
+    end.
 
 %% =============================================================================
 %% API: Inbox Log (RFC-001 v3.0 Compliant)
@@ -491,6 +544,16 @@ find_last_inbox_offset(SearchKey, UserID) ->
         {FoundUserID, Offset} when FoundUserID =:= UserID -> Offset;
         {_OtherUser, _} -> undefined  %% Found different user's key, this user has no entries
     end.
+
+%% =============================================================================
+%% AUDIT M11: Storage Backend Identification
+%% =============================================================================
+%% Returns the current storage backend type. Future backends (Cassandra, S3)
+%% can be selected via application configuration.
+
+-spec backend_type() -> mnesia | atom().
+backend_type() ->
+    application:get_env(iris_core, store_backend, mnesia).
 
 %% =============================================================================
 %% Internal: Safety Checks

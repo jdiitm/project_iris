@@ -10,7 +10,7 @@
 
 ## What This Is
 
-Distributed messaging system in **Erlang/OTP 26**, targeting WhatsApp-class reliability. Two node types: stateless **Edge** (TLS, auth, connection hold) and stateful **Core** (Mnesia, user sharding, offline storage). E2EE via Signal Protocol. Multi-region via async bridge.
+Distributed messaging system in **Erlang/OTP 26**, targeting WhatsApp-class reliability. Two node types: session-recoverable **Edge** (TLS, auth, connection hold, per-connection state saved on disconnect) and stateful **Core** (Mnesia, user sharding, offline storage). E2EE via Signal Protocol. Multi-region via async bridge.
 
 See [DEPLOYMENT.md](docs/DEPLOYMENT.md) for architecture diagrams and setup.
 

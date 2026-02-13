@@ -205,6 +205,10 @@ init([]) ->
                                    {read_concurrency, true},
                                    {write_concurrency, true}]),
     
+    %% AUDIT M7: Create JTI replay table eagerly to prevent race on first use
+    ets:new(?JTI_SEEN_TABLE, [named_table, public, set,
+                              {read_concurrency, true}]),
+    
     %% Schedule cleanup of expired revocations
     erlang:send_after(3600000, self(), cleanup_revocations),
     
@@ -431,7 +435,10 @@ do_validate(Token, Opts, State = #state{secret = Secret, issuer = ExpectedIssuer
     case split_token(Token) of
         {ok, Header, Payload, Signature} ->
             %% Determine algorithm from header
-            Alg = get_header_alg(Header),
+            case get_header_alg(Header) of
+                {error, invalid_header} ->
+                    {error, invalid_header};
+                Alg ->
             
             %% AUDIT: Algorithm whitelist — reject before signature verification
             AllowedAlgs = [<<"HS256">>, <<"EdDSA">>],
@@ -474,7 +481,8 @@ do_validate(Token, Opts, State = #state{secret = Secret, issuer = ExpectedIssuer
                 false ->
                     {error, invalid_signature}
             end
-            end;  %% end of AllowedAlgs check
+            end  %% end of AllowedAlgs check
+            end;  %% end of get_header_alg case
         Error -> Error
     end.
 
@@ -514,28 +522,16 @@ validate_claims(Claims, ExpectedIssuer, Opts) ->
 %% @doc Check if a jti has been seen before (replay attack detection) (GAP-15)
 %% RFC Section 9.1: "Replay attacks: Nonce + timestamp validation"
 %% Tracks seen jti values in ETS with TTL = token expiry time.
+%% AUDIT M7: Table is now created eagerly in init/1, no lazy creation needed.
 check_jti_replay(Jti, Exp) ->
-    try
-        case ets:lookup(?JTI_SEEN_TABLE, Jti) of
-            [{Jti, _}] ->
-                %% Already seen -- this is a replay
-                true;
-            [] ->
-                %% First use -- mark as seen with expiry for cleanup
-                ets:insert(?JTI_SEEN_TABLE, {Jti, Exp}),
-                false
-        end
-    catch
-        error:badarg ->
-            %% Table doesn't exist -- create it and allow
-            try
-                ets:new(?JTI_SEEN_TABLE, [named_table, public, set,
-                                          {read_concurrency, true}]),
-                ets:insert(?JTI_SEEN_TABLE, {Jti, Exp}),
-                false
-            catch
-                error:badarg -> false  %% Race condition, another process created it
-            end
+    case ets:lookup(?JTI_SEEN_TABLE, Jti) of
+        [{Jti, _}] ->
+            %% Already seen -- this is a replay
+            true;
+        [] ->
+            %% First use -- mark as seen with expiry for cleanup
+            ets:insert(?JTI_SEEN_TABLE, {Jti, Exp}),
+            false
     end.
 
 is_revoked(TokenId) ->
@@ -664,14 +660,16 @@ compute_signature(Input, Secret) ->
     encode_base64url(Mac).
 
 %% P1-4: Extract algorithm from JWT header
+%% AUDIT M2: Reject on decode failure instead of defaulting to HS256.
+%% A garbage header must not silently bypass algorithm selection.
 get_header_alg(HeaderB64) ->
     case decode_base64url(HeaderB64) of
         {ok, Json} ->
             case decode_json(Json) of
                 {ok, Map} -> maps:get(<<"alg">>, Map, <<"HS256">>);
-                _ -> <<"HS256">>
+                _ -> {error, invalid_header}
             end;
-        _ -> <<"HS256">>
+        _ -> {error, invalid_header}
     end.
 
 %% P1-4: Verify EdDSA signature

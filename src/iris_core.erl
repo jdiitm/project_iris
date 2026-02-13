@@ -922,49 +922,67 @@ table_spec(user_reports) ->
 %% ---------------------------------------------------------------------------
 -define(TTL_SECONDS, 7 * 86400).  %% 7 days
 
--spec cleanup_expired_entries() -> ok.
+%% AUDIT M5: Return {ok, TotalDeleted} instead of ok, so callers see cleanup activity.
+-spec cleanup_expired_entries() -> {ok, non_neg_integer()}.
 cleanup_expired_entries() ->
     Cutoff = os:system_time(second) - ?TTL_SECONDS,
-    cleanup_table_by_timestamp(dedup_log, 3, Cutoff),
-    cleanup_table_by_timestamp(revoked_tokens, 3, Cutoff),
-    cleanup_refresh_tokens_expired(),
-    ok.
+    N1 = cleanup_table_by_timestamp(dedup_log, 3, Cutoff),
+    N2 = cleanup_table_by_timestamp(revoked_tokens, 3, Cutoff),
+    N3 = cleanup_refresh_tokens_expired(),
+    {ok, N1 + N2 + N3}.
 
 %% Delete all records from Table where element at Position is < Cutoff.
+%% AUDIT M5: Returns count of deleted records; logs on error instead of swallowing.
 cleanup_table_by_timestamp(Table, TimestampPos, Cutoff) ->
     try
-        mnesia:transaction(fun() ->
+        case mnesia:transaction(fun() ->
             mnesia:foldl(fun(Record, Acc) ->
                 case element(TimestampPos, Record) of
                     TS when is_integer(TS), TS < Cutoff ->
-                        mnesia:delete_object(Record);
+                        mnesia:delete_object(Record),
+                        Acc + 1;
                     _ ->
-                        ok
-                end,
-                Acc
-            end, ok, Table)
-        end)
+                        Acc
+                end
+            end, 0, Table)
+        end) of
+            {atomic, Count} -> Count;
+            {aborted, Reason} ->
+                logger:warning("AUDIT M5: cleanup_table_by_timestamp(~p) aborted: ~p", [Table, Reason]),
+                0
+        end
     catch
-        _:_ -> ok
+        Class:Error ->
+            logger:warning("AUDIT M5: cleanup_table_by_timestamp(~p) error: ~p:~p", [Table, Class, Error]),
+            0
     end.
 
 %% Delete refresh_tokens where expires_at is in the past.
+%% AUDIT M5: Returns count of deleted records.
 cleanup_refresh_tokens_expired() ->
     Now = os:system_time(second),
     try
-        mnesia:transaction(fun() ->
+        case mnesia:transaction(fun() ->
             mnesia:foldl(fun(Record, Acc) ->
                 %% refresh_tokens: {refresh_tokens, token_id, user_id, family_id, used, created_at, expires_at}
                 ExpiresAt = element(7, Record),
                 case is_integer(ExpiresAt) andalso ExpiresAt < Now of
-                    true -> mnesia:delete_object(Record);
-                    false -> ok
-                end,
-                Acc
-            end, ok, refresh_tokens)
-        end)
+                    true ->
+                        mnesia:delete_object(Record),
+                        Acc + 1;
+                    false -> Acc
+                end
+            end, 0, refresh_tokens)
+        end) of
+            {atomic, Count} -> Count;
+            {aborted, Reason} ->
+                logger:warning("AUDIT M5: cleanup_refresh_tokens_expired aborted: ~p", [Reason]),
+                0
+        end
     catch
-        _:_ -> ok
+        Class:Error ->
+            logger:warning("AUDIT M5: cleanup_refresh_tokens_expired error: ~p:~p", [Class, Error]),
+            0
     end.
 
 %% Recreate a single table with its original definition (recovery path)

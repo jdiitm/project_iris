@@ -54,7 +54,9 @@ iris_mnesia_scalability_test_() ->
       {"AUDIT: TTL cleanup deletes expired revoked_tokens",
        fun test_ttl_cleanup_revoked_tokens/0},
       {"AUDIT: memory metric emission function exists",
-       fun test_memory_metric_function_exists/0}
+       fun test_memory_metric_function_exists/0},
+      {"AUDIT M5: cleanup_expired_entries returns {ok, Count}",
+       fun test_cleanup_returns_count/0}
      ]}.
 
 %% =============================================================================
@@ -148,3 +150,47 @@ test_memory_metric_function_exists() ->
     %% Verify the function is exported
     Exports = iris_metrics:module_info(exports),
     ?assert(lists:member({emit_mnesia_table_memory, 0}, Exports)).
+
+test_cleanup_returns_count() ->
+    %% Create tables and insert expired + fresh entries
+    case mnesia:create_table(dedup_log, [
+        {ram_copies, [node()]},
+        {attributes, [msg_id, timestamp]},
+        {type, set}
+    ]) of
+        {atomic, ok} -> ok;
+        {aborted, {already_exists, dedup_log}} ->
+            mnesia:clear_table(dedup_log)
+    end,
+    case mnesia:create_table(revoked_tokens, [
+        {ram_copies, [node()]},
+        {attributes, [jti, timestamp]}
+    ]) of
+        {atomic, ok} -> ok;
+        {aborted, {already_exists, revoked_tokens}} ->
+            mnesia:clear_table(revoked_tokens)
+    end,
+    case mnesia:create_table(refresh_tokens, [
+        {ram_copies, [node()]},
+        {attributes, [token_id, user_id, family_id, used, created_at, expires_at]}
+    ]) of
+        {atomic, ok} -> ok;
+        {aborted, {already_exists, refresh_tokens}} ->
+            mnesia:clear_table(refresh_tokens)
+    end,
+    mnesia:wait_for_tables([dedup_log, revoked_tokens, refresh_tokens], 5000),
+
+    %% Insert 3 expired entries in dedup_log
+    EightDaysAgo = os:system_time(second) - (8 * 86400),
+    mnesia:dirty_write({dedup_log, <<"exp1">>, EightDaysAgo}),
+    mnesia:dirty_write({dedup_log, <<"exp2">>, EightDaysAgo}),
+    mnesia:dirty_write({dedup_log, <<"exp3">>, EightDaysAgo}),
+    %% Insert 1 fresh entry
+    Now = os:system_time(second),
+    mnesia:dirty_write({dedup_log, <<"fresh">>, Now}),
+
+    %% cleanup_expired_entries should return {ok, Count} where Count > 0
+    Result = iris_core:cleanup_expired_entries(),
+    ?assertMatch({ok, _}, Result),
+    {ok, Count} = Result,
+    ?assert(Count >= 3).

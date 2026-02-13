@@ -23,7 +23,11 @@ iris_compression_detect_test_() ->
      {"AUDIT: zstd inclusion depends on NIF .so presence",
       fun test_zstd_detection/0},
      {"AUDIT: iris_session uses dynamic capabilities (not hardcoded list)",
-      fun test_session_dynamic_capabilities/0}
+      fun test_session_dynamic_capabilities/0},
+     {"AUDIT M8: if zstd reported available, compress must not crash",
+      fun test_zstd_load_verification/0},
+     {"AUDIT M8: source checks NIF loadability, not just file existence",
+      fun test_source_checks_nif_load/0}
     ].
 
 test_function_exported() ->
@@ -63,3 +67,32 @@ test_session_dynamic_capabilities() ->
     ?assert(binary:match(Src, <<"iris_compression:available_algorithms()">>) =/= nomatch),
     %% The old hardcoded line should NOT exist
     ?assertEqual(nomatch, binary:match(Src, <<"[<<\"zlib\">>, <<\"zstd\">>, <<\"e2ee\">>">>)).
+
+test_zstd_load_verification() ->
+    %% If zstd is reported as available, it must actually work (not crash with undef)
+    Algos = iris_compression:available_algorithms(),
+    case lists:member(<<"zstd">>, Algos) of
+        true ->
+            %% Must not crash — should return {ok, _} or {error, _}
+            Result = iris_compression:compress(zstd, <<"test data for compression">>),
+            case Result of
+                {ok, _} -> ok;
+                {error, Reason} ->
+                    %% If available but fails, detection is broken
+                    ?assertEqual(should_not_fail_if_available, Reason)
+            end;
+        false ->
+            %% zstd not available — fine, nothing to verify
+            ok
+    end.
+
+test_source_checks_nif_load() ->
+    %% Source should try loading the NIF, not just check file existence
+    {ok, Src} = file:read_file("src/iris_compression.erl"),
+    %% Must have actual NIF invocation in the detection path
+    ?assert(binary:match(Src, <<"zstd_nif_available">>) =/= nomatch),
+    %% Should have persistent_term or try-catch based detection
+    HasTryDetect = (binary:match(Src, <<"try_zstd_nif">>) =/= nomatch) orelse
+                   (binary:match(Src, <<"persistent_term">>) =/= nomatch) orelse
+                   (binary:match(Src, <<"iris_zstd_nif:compress">>) =/= nomatch),
+    ?assert(HasTryDetect).

@@ -16,6 +16,7 @@
 
 -export([start_link/0, start_link/1]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
+-export([dispatch/2]).  %% AUDIT M3: exported for testability
 
 -record(state, {
     listen_socket :: gen_tcp:socket(),
@@ -127,15 +128,35 @@ collect_headers(Sock, Acc) ->
         _ -> Acc
     end.
 
-dispatch(<<"/health">>, _Headers) -> health();
-dispatch(<<"/ready">>, _Headers)  -> ready();
-dispatch(<<"/metrics">>, Headers) ->
+dispatch(Path, Headers) ->
+    dispatch_normalized(normalize_path(Path), Headers).
+
+dispatch_normalized(<<"/health">>, _Headers) -> health();
+dispatch_normalized(<<"/ready">>, _Headers)  -> ready();
+dispatch_normalized(<<"/metrics">>, Headers) ->
     %% AUDIT P1-2: Bearer-token auth for /metrics endpoint
     case check_metrics_auth(Headers) of
         ok -> metrics();
         unauthorized -> {401, <<"text/plain">>, <<"Unauthorized">>}
     end;
-dispatch(_, _Headers) -> {404, <<"text/plain">>, <<"Not Found">>}.
+dispatch_normalized(_, _Headers) -> {404, <<"text/plain">>, <<"Not Found">>}.
+
+%% AUDIT M3: Normalize path by stripping query string and trailing slash
+normalize_path(Path) ->
+    %% Strip query string
+    P1 = case binary:split(Path, <<"?">>) of
+        [Base | _] -> Base;
+        _ -> Path
+    end,
+    %% Strip trailing slash (but not the root "/")
+    case P1 of
+        <<"/">> -> P1;
+        _ ->
+            case binary:last(P1) of
+                $/ -> binary:part(P1, 0, byte_size(P1) - 1);
+                _ -> P1
+            end
+    end.
 
 %% @doc Check bearer token auth for metrics endpoint.
 %% If no token is configured, metrics remain open (backward compatible for dev).
