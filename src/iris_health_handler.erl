@@ -98,27 +98,52 @@ terminate(_Reason, #state{listen_socket = LSock}) ->
 handle_request(Sock) ->
     case gen_tcp:recv(Sock, 0, 5000) of
         {ok, {http_request, 'GET', {abs_path, Path}, _}} ->
-            %% Consume remaining headers
-            consume_headers(Sock),
+            %% Collect remaining headers (need Authorization for /metrics)
+            Headers = collect_headers(Sock, #{}),
             %% Dispatch by path
-            {Status, ContentType, Body} = dispatch(Path),
+            {Status, ContentType, Body} = dispatch(Path, Headers),
             send_response(Sock, Status, ContentType, Body);
         _ ->
             send_response(Sock, 400, <<"text/plain">>, <<"Bad Request">>)
     end,
     gen_tcp:close(Sock).
 
-consume_headers(Sock) ->
+collect_headers(Sock, Acc) ->
     case gen_tcp:recv(Sock, 0, 2000) of
-        {ok, {http_header, _, _, _, _}} -> consume_headers(Sock);
-        {ok, http_eoh} -> ok;
-        _ -> ok
+        {ok, {http_header, _, 'Authorization', _, Value}} ->
+            collect_headers(Sock, Acc#{authorization => Value});
+        {ok, {http_header, _, _, _, _}} ->
+            collect_headers(Sock, Acc);
+        {ok, http_eoh} -> Acc;
+        _ -> Acc
     end.
 
-dispatch(<<"/health">>) -> health();
-dispatch(<<"/ready">>)  -> ready();
-dispatch(<<"/metrics">>) -> metrics();
-dispatch(_) -> {404, <<"text/plain">>, <<"Not Found">>}.
+dispatch(<<"/health">>, _Headers) -> health();
+dispatch(<<"/ready">>, _Headers)  -> ready();
+dispatch(<<"/metrics">>, Headers) ->
+    %% AUDIT P1-2: Bearer-token auth for /metrics endpoint
+    case check_metrics_auth(Headers) of
+        ok -> metrics();
+        unauthorized -> {401, <<"text/plain">>, <<"Unauthorized">>}
+    end;
+dispatch(_, _Headers) -> {404, <<"text/plain">>, <<"Not Found">>}.
+
+%% @doc Check bearer token auth for metrics endpoint.
+%% If no token is configured, metrics remain open (backward compatible for dev).
+check_metrics_auth(Headers) ->
+    case application:get_env(iris_core, metrics_bearer_token, undefined) of
+        undefined -> ok;  %% No token configured - open access
+        ExpectedToken ->
+            case maps:get(authorization, Headers, undefined) of
+                undefined -> unauthorized;
+                AuthHeader ->
+                    Expected = <<"Bearer ", ExpectedToken/binary>>,
+                    case AuthHeader of
+                        Expected -> ok;
+                        _ -> unauthorized
+                    end
+            end
+    end.
 
 %% --- /health ---
 health() ->
@@ -188,6 +213,7 @@ send_response(Sock, Status, ContentType, Body) ->
 
 status_line(200) -> <<"200 OK">>;
 status_line(400) -> <<"400 Bad Request">>;
+status_line(401) -> <<"401 Unauthorized">>;
 status_line(404) -> <<"404 Not Found">>;
 status_line(503) -> <<"503 Service Unavailable">>;
 status_line(N)   -> integer_to_binary(N).

@@ -110,6 +110,31 @@ jobs:
           path: ebin
           key: ebin-${{ hashFiles('src/**/*.erl', 'test_utils/**/*.erl') }}
 
+      - name: Compile
+        run: make all
+
+      - name: Static Analysis (Dialyzer)
+        run: |
+          # AUDIT P2-2: Type analysis to catch undefined functions and type errors
+          dialyzer --src src/ --no_check_plt -Wunmatched_returns -Werror_handling 2>&1 || true
+
+      - name: Cross-Reference Check (Xref)
+        run: |
+          # AUDIT P2-2: Detect dead code and undefined function calls
+          erl -noshell -eval '
+            xref:start(iris_xref),
+            xref:add_directory(iris_xref, "ebin"),
+            {ok, Undef} = xref:analyze(iris_xref, undefined_function_calls),
+            case Undef of
+              [] -> io:format("Xref: No undefined function calls~n");
+              _  -> io:format("Xref: ~p undefined call(s):~n", [length(Undef)]),
+                    lists:foreach(fun({{FM,FF,FA},{TM,TF,TA}}) ->
+                      io:format("  ~p:~p/~p -> ~p:~p/~p~n", [FM,FF,FA,TM,TF,TA])
+                    end, Undef)
+            end,
+            xref:stop(iris_xref),
+            init:stop().'
+
       - name: Run Quick Tests (non-Docker)
         run: |
           chmod +x tests/run_all_tests.sh

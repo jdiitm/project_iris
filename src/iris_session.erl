@@ -2,6 +2,8 @@
 -export([handle_packet/4, terminate/1]).
 -export([validate_e2ee_header/1]).  %% Exported for TDD (audit finding 1)
 -export([group_fanout_recipients/3]).  %% Exported for TDD (audit finding 3)
+-export([estimate_remaining_messages/3, calculate_remaining/2]).  %% AUDIT 4.4: testable queue depth
+-export([check_block_status/2]).  %% AUDIT 3.1/6.3: user block enforcement
 
 -include_lib("kernel/include/inet.hrl").
 
@@ -124,7 +126,7 @@ is_group_service_available() ->
         undefined ->
             %% Try core node via RPC
             CoreNode = get_core_node(),
-            case rpc:call(CoreNode, erlang, whereis, [iris_group], 2000) of
+            case iris_rpc:call(CoreNode, erlang, whereis, [iris_group], 2000) of
                 Pid when is_pid(Pid) -> true;
                 _ -> false
             end
@@ -139,8 +141,8 @@ call_iris_group(Function, Args) ->
         undefined ->
             %% Route to core node
             CoreNode = get_core_node(),
-            case rpc:call(CoreNode, iris_group, Function, Args, 5000) of
-                {badrpc, Reason} ->
+            case iris_rpc:call(CoreNode, iris_group, Function, Args, 5000) of
+                {error, {rpc_failed, _Node, Reason}} ->
                     logger:warning("Group RPC failed: ~p", [Reason]),
                     {error, group_service_unavailable};
                 Result ->
@@ -278,7 +280,7 @@ handle_packet({batch_send, Target, Blob}, User, _Pid, _Mod) ->
     Msgs = iris_proto:unpack_batch(Blob),
     %% P2-1 FIX: Use rpc:cast for fire-and-forget batch storage
     %% No need to block on batch send - offline storage is best-effort
-    rpc:cast(get_core_node(), iris_core, store_batch, [Target, Msgs]),
+    iris_rpc:cast(get_core_node(), iris_core, store_batch, [Target, Msgs]),
     {ok, User, []};
 
 handle_packet({get_status, TargetUser}, User, _Pid, _Mod) ->
@@ -378,7 +380,7 @@ handle_packet({read_receipt, _MsgId, _OriginalSender}, undefined, _Pid, _Mod) ->
 handle_packet({get_offline_page, Cursor}, User, _Pid, _Mod) when User =/= undefined ->
     %% Client requesting next page of offline messages
     CoreNode = get_core_node(),
-    case rpc:call(CoreNode, iris_core, retrieve_offline_paginated, 
+    case iris_rpc:call(CoreNode, iris_core, retrieve_offline_paginated, 
                   [User, ?OFFLINE_PAGE_SIZE, Cursor], 5000) of
         {Msgs, NextCursor} when is_list(Msgs), length(Msgs) > 0 ->
             %% Encode messages
@@ -390,7 +392,7 @@ handle_packet({get_offline_page, Cursor}, User, _Pid, _Mod) when User =/= undefi
             %% Confirm delivery of previous page (delete from storage)
             PrevCursor = max(0, Cursor - ?OFFLINE_PAGE_SIZE),
             spawn(fun() ->
-                rpc:call(CoreNode, iris_core, delete_offline_confirmed, 
+                iris_rpc:call(CoreNode, iris_core, delete_offline_confirmed, 
                          [User, {PrevCursor, Cursor}], 5000)
             end),
             
@@ -401,17 +403,13 @@ handle_packet({get_offline_page, Cursor}, User, _Pid, _Mod) when User =/= undefi
                 _ ->
                     %% AUDIT MITIGATION P2-2: Estimate remaining messages from queue depth.
                     %% NextCursor is the bucket offset; depth - cursor gives a rough count.
-                    Remaining = try
-                        Depth = rpc:call(CoreNode, iris_core, get_offline_queue_depth, [User], 3000),
-                        case is_integer(Depth) andalso is_integer(NextCursor) of
-                            true -> max(0, Depth - NextCursor);
-                            false -> -1  %% Unknown
-                        end
-                    catch _:_ -> -1  %% Unknown -- client should treat -1 as "more exist"
-                    end,
+                    Remaining = estimate_remaining_messages(CoreNode, User, NextCursor),
                     MoreIndicator = encode_offline_more(NextCursor, Remaining),
                     {ok, User, MsgActions ++ [{send, MoreIndicator}]}
             end;
+        {error, {rpc_failed, _Node, Reason}} ->
+            logger:warning("Offline page retrieval failed: ~p (user=~p)", [Reason, User]),
+            {ok, User, []};
         _ ->
             {ok, User, []}
     end;
@@ -479,31 +477,37 @@ handle_packet({e2ee_msg, Recipient, Ciphertext, Header}, User, _Pid, _Mod) when 
     iris_trace:new_span(<<"session.e2ee_msg">>),
     %% RFC NFR-32: Count incoming message
     iris_metrics:msg_in(),
-    %% Route E2EE message to recipient (server never decrypts)
-    %% RFC Section 8 / NFR-18: Validate payload size before routing (GAP-7 fix)
-    E2eeResult = case iris_limits:validate_payload(Ciphertext) of
-        {error, payload_too_large} ->
-            {ok, User, [{send, encode_error(payload_too_large)}]};
+    %% AUDIT 3.1/6.3: Check if sender is blocked by recipient
+    E2eeResult = case check_block_status(User, Recipient) of
+        {error, blocked} ->
+            {ok, User, [{send, encode_error(blocked)}]};
         ok ->
-            %% NFR-18: Validate E2EE header fields before routing
-            case validate_e2ee_header(Header) of
+            %% Route E2EE message to recipient (server never decrypts)
+            %% RFC Section 8 / NFR-18: Validate payload size before routing (GAP-7 fix)
+            case iris_limits:validate_payload(Ciphertext) of
+                {error, payload_too_large} ->
+                    {ok, User, [{send, encode_error(payload_too_large)}]};
                 ok ->
-                    %% VIOLATION-4 FIX: Rate limit check on message send
-                    case check_message_rate(User) of
-                        allow ->
-                            %% Encode delivery packet with sender info
-                            DeliveryPacket = iris_proto:encode_e2ee_delivery(User, {Header, Ciphertext}),
-                            %% Route to recipient using async router
-                            iris_router:route(Recipient, DeliveryPacket),
-                            iris_metrics:msg_out(),
-                            {ok, User, []};
-                        {deny, RetryAfter} ->
-                            logger:warning("E2EE message rate limited for ~p", [User]),
-                            {ok, User, [{send, encode_rate_limited(RetryAfter)}]}
-                    end;
-                {error, Reason} ->
-                    logger:warning("E2EE header validation failed for ~p: ~p", [User, Reason]),
-                    {ok, User, [{send, encode_error(invalid_e2ee_header)}]}
+                    %% NFR-18: Validate E2EE header fields before routing
+                    case validate_e2ee_header(Header) of
+                        ok ->
+                            %% VIOLATION-4 FIX: Rate limit check on message send
+                            case check_message_rate(User) of
+                                allow ->
+                                    %% Encode delivery packet with sender info
+                                    DeliveryPacket = iris_proto:encode_e2ee_delivery(User, {Header, Ciphertext}),
+                                    %% Route to recipient using async router
+                                    iris_router:route(Recipient, DeliveryPacket),
+                                    iris_metrics:msg_out(),
+                                    {ok, User, []};
+                                {deny, RetryAfter} ->
+                                    logger:warning("E2EE message rate limited for ~p", [User]),
+                                    {ok, User, [{send, encode_rate_limited(RetryAfter)}]}
+                            end;
+                        {error, Reason} ->
+                            logger:warning("E2EE header validation failed for ~p: ~p", [User, Reason]),
+                            {ok, User, [{send, encode_error(invalid_e2ee_header)}]}
+                    end
             end
     end,
     iris_trace:end_span(<<"session.e2ee_msg">>),
@@ -775,12 +779,12 @@ handle_packet({token_refresh, RefreshToken}, User, _Pid, _Mod) ->
         {error, token_reused} ->
             logger:warning("TOKEN_REFRESH: Reuse detected for ~p, revoking family", [User]),
             {ok, User, [{send, encode_error(token_reused)}]};
+        {error, {rpc_failed, _Node, Reason}} ->
+            logger:warning("TOKEN_REFRESH: RPC failed for ~p: ~p", [User, Reason]),
+            {ok, User, [{send, encode_error(service_unavailable)}]};
         {error, Reason} ->
             logger:warning("TOKEN_REFRESH: Failed for ~p: ~p", [User, Reason]),
-            {ok, User, [{send, encode_error(Reason)}]};
-        {badrpc, Reason} ->
-            logger:warning("TOKEN_REFRESH: RPC failed for ~p: ~p", [User, Reason]),
-            {ok, User, [{send, encode_error(service_unavailable)}]}
+            {ok, User, [{send, encode_error(Reason)}]}
     end,
     iris_trace:end_span(<<"session.token_refresh">>),
     TrResponse;
@@ -855,11 +859,11 @@ traced_rpc(Node, Mod, Fun, Args, Timeout) ->
     case TraceCtx of
         #{<<"trace_id">> := _} ->
             %% Pass trace context alongside args via a wrapper call
-            rpc:call(Node, iris_trace, execute_with_context,
+            iris_rpc:call(Node, iris_trace, execute_with_context,
                      [TraceCtx, Mod, Fun, Args], Timeout);
         _ ->
             %% No active trace - plain RPC
-            rpc:call(Node, Mod, Fun, Args, Timeout)
+            iris_rpc:call(Node, Mod, Fun, Args, Timeout)
     end.
 
 %% =============================================================================
@@ -965,7 +969,7 @@ complete_login(User, TransportPid) ->
     spawn(fun() ->
         case traced_rpc(CoreNode, iris_core, register_user, [User, node(), TransportPid]) of
             ok -> ok;
-            {badrpc, Reason} -> 
+            {error, {rpc_failed, _Node, Reason}} -> 
                 logger:warning("Async Core registration failed for ~p on ~p: ~p", [User, CoreNode, Reason]);
             {error, Reason} ->
                 logger:warning("Async Core registration error for ~p: ~p", [User, Reason])
@@ -1028,10 +1032,10 @@ deliver_offline_messages(User) ->
 
 %% Get offline queue depth with failover to other cores
 get_offline_queue_depth_with_failover(User, PrimaryCore) ->
-    case rpc:call(PrimaryCore, iris_core, get_offline_queue_depth, [User], 2000) of
+    case iris_rpc:call(PrimaryCore, iris_core, get_offline_queue_depth, [User], 2000) of
         N when is_integer(N) -> 
             N;
-        {badrpc, _Reason} ->
+        {error, {rpc_failed, _, _}} ->
             %% Primary failed - try other cores
             AllCores = application:get_env(iris_edge, core_nodes, []),
             OtherCores = [C || C <- AllCores, C =/= PrimaryCore],
@@ -1046,7 +1050,7 @@ get_queue_depth_from_any(_User, []) ->
 get_queue_depth_from_any(User, [Core | Rest]) ->
     case net_adm:ping(Core) of
         pong ->
-            case rpc:call(Core, iris_core, get_offline_queue_depth, [User], 2000) of
+            case iris_rpc:call(Core, iris_core, get_offline_queue_depth, [User], 2000) of
                 N when is_integer(N) -> N;
                 _ -> get_queue_depth_from_any(User, Rest)
             end;
@@ -1056,13 +1060,13 @@ get_queue_depth_from_any(User, [Core | Rest]) ->
 
 deliver_all_offline(User, CoreNode) ->
     %% Try primary core node first
-    case rpc:call(CoreNode, iris_core, retrieve_offline, [User], 5000) of
+    case iris_rpc:call(CoreNode, iris_core, retrieve_offline, [User], 5000) of
         Msgs when is_list(Msgs), length(Msgs) > 0 ->
             lists:map(fun(Msg) ->
                 MsgId = iris_proto:generate_msg_id(),
                 {send, iris_proto:encode_reliable_msg(MsgId, Msg)}
             end, Msgs);
-        {badrpc, Reason} ->
+        {error, {rpc_failed, _, Reason}} ->
             %% Primary core failed - try other cores (multimaster failover)
             logger:warning("Offline retrieval from ~p failed: ~p, trying other cores", [CoreNode, Reason]),
             deliver_offline_failover(User, CoreNode);
@@ -1089,14 +1093,14 @@ deliver_offline_from_any(_User, []) ->
 deliver_offline_from_any(User, [Core | Rest]) ->
     case net_adm:ping(Core) of
         pong ->
-            case rpc:call(Core, iris_core, retrieve_offline, [User], 5000) of
+            case iris_rpc:call(Core, iris_core, retrieve_offline, [User], 5000) of
                 Msgs when is_list(Msgs), length(Msgs) > 0 ->
                     logger:info("Retrieved ~p offline messages from failover core ~p", [length(Msgs), Core]),
                     lists:map(fun(Msg) ->
                         MsgId = iris_proto:generate_msg_id(),
                         {send, iris_proto:encode_reliable_msg(MsgId, Msg)}
                     end, Msgs);
-                {badrpc, Reason} ->
+                {error, {rpc_failed, _, Reason}} ->
                     logger:warning("Failover core ~p also failed: ~p", [Core, Reason]),
                     deliver_offline_from_any(User, Rest);
                 _ ->
@@ -1109,7 +1113,7 @@ deliver_offline_from_any(User, [Core | Rest]) ->
     end.
 
 deliver_offline_page(User, CoreNode, Cursor, TotalCount) ->
-    case rpc:call(CoreNode, iris_core, retrieve_offline_paginated, 
+    case iris_rpc:call(CoreNode, iris_core, retrieve_offline_paginated, 
                   [User, ?OFFLINE_PAGE_SIZE, Cursor], 5000) of
         {Msgs, NextCursor} when is_list(Msgs), length(Msgs) > 0 ->
             %% Encode messages
@@ -1130,7 +1134,7 @@ deliver_offline_page(User, CoreNode, Cursor, TotalCount) ->
                     MoreIndicator = encode_offline_more(NextCursor, Remaining),
                     MsgActions ++ [{send, MoreIndicator}]
             end;
-        {badrpc, Reason} ->
+        {error, {rpc_failed, _, Reason}} ->
             %% Primary core failed - try other cores (multimaster failover)
             logger:warning("Paginated offline retrieval from ~p failed: ~p, trying other cores", [CoreNode, Reason]),
             deliver_offline_page_failover(User, CoreNode, Cursor, TotalCount);
@@ -1153,7 +1157,7 @@ deliver_page_from_any(_User, [], _Cursor, _TotalCount) ->
 deliver_page_from_any(User, [Core | Rest], Cursor, TotalCount) ->
     case net_adm:ping(Core) of
         pong ->
-            case rpc:call(Core, iris_core, retrieve_offline_paginated,
+            case iris_rpc:call(Core, iris_core, retrieve_offline_paginated,
                           [User, ?OFFLINE_PAGE_SIZE, Cursor], 5000) of
                 {Msgs, NextCursor} when is_list(Msgs), length(Msgs) > 0 ->
                     logger:info("Retrieved ~p offline messages from failover core ~p", [length(Msgs), Core]),
@@ -1168,7 +1172,7 @@ deliver_page_from_any(User, [Core | Rest], Cursor, TotalCount) ->
                             MoreIndicator = encode_offline_more(NextCursor, Remaining),
                             MsgActions ++ [{send, MoreIndicator}]
                     end;
-                {badrpc, _Reason} ->
+                {error, {rpc_failed, _, _}} ->
                     deliver_page_from_any(User, Rest, Cursor, TotalCount);
                 _ ->
                     deliver_page_from_any(User, Rest, Cursor, TotalCount)
@@ -1231,10 +1235,10 @@ fetch_and_cache(TargetUser, Now) ->
     %% P2-1 FIX: Use async fetch with fallback for status
     %% Status queries are non-critical - return cached/default on timeout
     Result = try
-        case rpc:call(get_core_node(), iris_core, get_status, [TargetUser], 1000) of
+        case iris_rpc:call(get_core_node(), iris_core, get_status, [TargetUser], 1000) of
             {online, true, _} -> {online, 0};
             {online, false, LS} -> {offline, LS};
-            {badrpc, _Reason} -> {offline, 0};
+            {error, {rpc_failed, _, _}} -> {offline, 0};
             _ -> {offline, 0}
         end
     catch
@@ -1299,11 +1303,11 @@ relay_typing_indicator(Target, Sender, IsTyping) ->
             %% Target not on this node - check Core for remote routing
             %% Fire-and-forget: don't wait for result
             spawn(fun() ->
-                case rpc:call(get_core_node(), iris_core, lookup_user, [Target], 1000) of
+                case iris_rpc:call(get_core_node(), iris_core, lookup_user, [Target], 1000) of
                     {online, TargetNode, TargetPid} when is_pid(TargetPid) ->
                         %% Send to remote node
                         TypingPacket = iris_proto:encode_typing_relay(Sender, IsTyping),
-                        try rpc:cast(TargetNode, erlang, send, [TargetPid, {deliver_typing, TypingPacket}])
+                        try iris_rpc:cast(TargetNode, erlang, send, [TargetPid, {deliver_typing, TypingPacket}])
                         catch Class:Reason ->
                             logger:warning("typing relay to ~p failed: ~p:~p", [TargetNode, Class, Reason])
                         end;
@@ -1332,7 +1336,7 @@ terminate(User) ->
                 [{User, Self}] ->
                     %% We own it - safe to delete
                     ets:delete(local_presence_v2, User),
-                    rpc:cast(get_core_node(), iris_core, update_status, [User, offline]),
+                    iris_rpc:cast(get_core_node(), iris_core, update_status, [User, offline]),
                     ok;  %% FIX: Explicit ok return (rpc:cast returns true)
                 [{User, _OtherPid}] ->
                     %% Different process owns it (new login happened) - don't delete
@@ -1341,4 +1345,49 @@ terminate(User) ->
                     %% Already deleted - nothing to do
                     ok
             end
+    end.
+
+%% =============================================================================
+%% AUDIT 4.4: Queue depth estimation with error observability
+%% =============================================================================
+
+-spec estimate_remaining_messages(node(), binary(), integer()) -> integer().
+estimate_remaining_messages(CoreNode, User, NextCursor) ->
+    try
+        case iris_rpc:call(CoreNode, iris_core, get_offline_queue_depth, [User], 3000) of
+            {error, {rpc_failed, _Node, Reason}} ->
+                logger:warning("Queue depth estimate failed: ~p (user=~p)", [Reason, User]),
+                iris_metrics:inc(queue_depth_estimate_error),
+                -1;
+            Depth when is_integer(Depth), is_integer(NextCursor) ->
+                calculate_remaining(Depth, NextCursor);
+            _ ->
+                -1
+        end
+    catch _:CatchReason ->
+        logger:warning("Queue depth estimate failed: ~p (user=~p)", [CatchReason, User]),
+        iris_metrics:inc(queue_depth_estimate_error),
+        -1
+    end.
+
+-spec calculate_remaining(integer(), integer()) -> non_neg_integer().
+calculate_remaining(Depth, NextCursor) ->
+    max(0, Depth - NextCursor).
+
+%% =============================================================================
+%% AUDIT 3.1/6.3: User block enforcement
+%% =============================================================================
+
+-spec check_block_status(binary(), binary()) -> ok | {error, blocked}.
+check_block_status(Sender, Recipient) ->
+    try iris_user_safety:check_can_message(Sender, Recipient) of
+        ok -> ok;
+        {error, blocked} ->
+            logger:info("Blocked message from ~p to ~p", [Sender, Recipient]),
+            iris_metrics:inc(blocked_message_count),
+            {error, blocked}
+    catch _:Reason ->
+        %% Fail-open: if Mnesia/user_safety unavailable, allow message through
+        logger:warning("Block check failed (fail-open): ~p sender=~p", [Reason, Sender]),
+        ok
     end.

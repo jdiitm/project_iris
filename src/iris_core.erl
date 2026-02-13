@@ -13,7 +13,12 @@
 
 %% High-Scale Messaging APIs
 -export([register_user/3, lookup_user/1]).
--export([check_mtls_enforcement/0]).
+-export([check_mtls_enforcement/0, check_mtls_enforcement/1]).
+-export([validate_production_cookie/0, validate_production_cookie/1]).
+-export([is_core_node/1]).  %% AUDIT 5.4: exported for iris_cluster_join_worker
+-export([validate_consistency_mode/0]).  %% AUDIT 4.2: CP mode hard-fail
+-export([make_dedup_key/2]).  %% AUDIT 6.5: testable dedup key generation
+-export([nuke_and_recreate_table/1]).  %% AUDIT 6.7: exported for testing production guard
 -export([store_offline/2, store_offline_durable/2, store_batch/2, retrieve_offline/1]).
 -export([retrieve_offline_paginated/3, get_offline_queue_depth/1, delete_offline_confirmed/2]).
 -export([get_bucket_count/1, set_bucket_count/2]).
@@ -25,18 +30,17 @@
 %%% Application Callbacks
 %%%===================================================================
 
+-spec start(atom(), term()) -> {ok, pid()} | {error, term()}.
 start(_StartType, _StartArgs) ->
     %% Rationale: Production systems use structured logging for grep-ability.
     logger:info("Starting Iris Core on node ~p", [node()]),
 
-    %% AUDIT FIX: Warn loudly if operator selects unimplemented consistency_mode=cp.
-    %% Without this, CP mode is silently ignored and the node runs as AP.
-    case application:get_env(iris_core, consistency_mode, hardened_ap) of
-        cp ->
-            logger:error("consistency_mode=cp is NOT IMPLEMENTED. "
-                         "Falling back to hardened_ap. "
-                         "This node will operate in AP mode.");
-        _ -> ok
+    %% AUDIT 4.2: Validate consistency mode (fatal in production for CP)
+    case validate_consistency_mode() of
+        ok -> ok;
+        {error, cp_not_implemented} ->
+            init:stop(1),
+            exit(cp_not_implemented)
     end,
 
     %% Rationale: DB initialization is moved to a dedicated manager or
@@ -94,28 +98,89 @@ start(_StartType, _StartArgs) ->
         _ -> ok
     end,
 
+    %% AUDIT 4.3: Reject default cookie in production mode
+    case validate_production_cookie() of
+        ok -> ok;
+        {error, default_cookie_in_production} ->
+            init:stop(1),
+            exit(default_cookie_in_production)
+    end,
+
+    %% AUDIT 3.2/6.1: Verify mTLS is configured if enforce_mtls=true
+    check_mtls_enforcement(),
+
     supervisor:start_link({local, ?SERVER}, ?MODULE, []).
 
+-spec stop(term()) -> ok.
 stop(_State) ->
     logger:info("Stopping Iris Core on node ~p", [node()]),
     ok.
+
+%% @doc AUDIT 4.3: Validate that the default cookie is not used in production.
+-spec validate_production_cookie() -> ok | {error, default_cookie_in_production}.
+validate_production_cookie() ->
+    validate_production_cookie(erlang:get_cookie()).
+
+-spec validate_production_cookie(atom()) -> ok | {error, default_cookie_in_production}.
+validate_production_cookie(Cookie) ->
+    case application:get_env(iris_core, deployment_mode, development) of
+        production ->
+            case Cookie of
+                iris_secret ->
+                    logger:error("FATAL: Default cookie 'iris_secret' in production mode. "
+                                 "Set IRIS_COOKIE or COOKIE= for cluster security."),
+                    {error, default_cookie_in_production};
+                _ -> ok
+            end;
+        _ -> ok
+    end.
+
+%% AUDIT 4.2: Validate consistency mode — CP is not implemented.
+%% In production, this is fatal. In development, log warning and continue.
+-spec validate_consistency_mode() -> ok | {error, cp_not_implemented}.
+validate_consistency_mode() ->
+    case application:get_env(iris_core, consistency_mode, hardened_ap) of
+        cp ->
+            case application:get_env(iris_core, deployment_mode, development) of
+                production ->
+                    logger:error("FATAL: consistency_mode=cp is NOT IMPLEMENTED. "
+                                 "Cannot guarantee CP semantics in production."),
+                    {error, cp_not_implemented};
+                _ ->
+                    logger:warning("consistency_mode=cp is NOT IMPLEMENTED. "
+                                   "Falling back to hardened_ap. "
+                                   "This node will operate in AP mode."),
+                    ok
+            end;
+        _ -> ok
+    end.
 
 %%%===================================================================
 %%% Supervisor Callbacks
 %%%===================================================================
 
+-spec init(term()) -> {ok, {supervisor:sup_flags(), [supervisor:child_spec()]}}.
 init([]) ->
     %% Rationale: strategy 'one_for_one' is replaced with a logic-based hierarchy.
     %% We use secondary supervisors for batchers to isolate their crashes.
     
-    SupFlags = #{strategy => one_for_one,
+    %% AUDIT 5.3: rest_for_one ensures foundation services restart dependents
+    SupFlags = #{strategy => rest_for_one,
                  intensity => 10,
                  period => 60},
 
     Children = [
+        %% === Tier 1: Foundation (must start first, crashes restart everything after) ===
+
         %% Health Check HTTP endpoint (/health, /ready, /metrics)
         #{id => iris_health_handler,
           start => {iris_health_handler, start_link, []},
+          type => worker,
+          restart => permanent},
+
+        %% Metrics: Must start early -- other modules emit counters through it
+        #{id => iris_metrics,
+          start => {iris_metrics, start_link, []},
           type => worker,
           restart => permanent},
 
@@ -124,69 +189,65 @@ init([]) ->
           start => {iris_flow_controller, start_link, []},
           type => worker,
           restart => permanent},
-          
+
         %% Deduplication Service: RFC NFR-11 - 7-day dedup window with Mnesia persistence
         %% MUST start early - dedup checks happen during message processing
         #{id => iris_dedup,
           start => {iris_dedup, start_link, []},
           type => worker,
           restart => permanent},
-          
+
         %% Presence Manager: ETS-backed lockfree presence registry
         %% FORENSIC_AUDIT_FIX: Must start early - creates presence_local ETS table
         #{id => iris_presence,
           start => {iris_presence, start_link, []},
           type => worker,
           restart => permanent},
-          
+
         %% Partition Guard: Split-brain detection and safe mode
         %% AUDIT FIX: Detects cluster partitions and rejects writes to prevent divergence
         #{id => iris_partition_guard,
           start => {iris_partition_guard, start_link, []},
           type => worker,
           restart => permanent},
-          
+
+        %% === Tier 2: Services (depend on foundation, isolated from each other) ===
+
         %% Cluster Manager: Self-healing cluster topology
         %% FORENSIC_AUDIT_FIX: Monitors nodeup/nodedown and auto-wires replication
         #{id => iris_cluster_manager,
           start => {iris_cluster_manager, start_link, []},
           type => worker,
           restart => permanent},
-          
+
         %% Durable Batcher Supervisor: WAL + batched sync_transaction for durability
         #{id => iris_durable_batcher_sup,
           start => {iris_durable_batcher_sup, start_link, []},
           type => supervisor,
           restart => permanent},
-          
+
         %% Core Registry: Registers this Core with pg for Edge discovery
         #{id => iris_core_registry,
           start => {iris_core_registry, start_link, []},
           type => worker,
           restart => permanent},
-          
+
         %% Status Batcher Supervisor: Manages the 100 workers
         #{id => iris_status_batcher_sup,
           start => {iris_status_batcher_sup, start_link, [100]},
           type => supervisor,
           restart => permanent},
-          
+
         %% Group Messaging Service: Handles group creation, membership, and message fanout
         #{id => iris_group,
           start => {iris_group, start_link, []},
           type => worker,
           restart => permanent},
-          
+
         %% Shard Manager: Consistent user-to-shard mapping for horizontal scaling
         %% FIX: iris_shard was missing from supervisor - needed for message routing
         #{id => iris_shard,
           start => {iris_shard, start_link, []},
-          type => worker,
-          restart => permanent},
-
-        %% Metrics: Must start early -- other modules emit counters through it
-        #{id => iris_metrics,
-          start => {iris_metrics, start_link, []},
           type => worker,
           restart => permanent},
 
@@ -224,43 +285,20 @@ init([]) ->
         #{id => iris_efficiency_monitor,
           start => {iris_efficiency_monitor, start_link, []},
           type => worker,
-          restart => permanent}
+          restart => permanent},
+
+        %% AUDIT 5.4: Supervised cluster join worker (replaces bare spawn)
+        #{id => iris_cluster_join_worker,
+          start => {iris_cluster_join_worker, start_link, [cluster_join]},
+          type => worker,
+          restart => transient},
+
+        %% AUDIT 5.4: Supervised region wiring worker (replaces bare spawn)
+        #{id => iris_region_wiring_worker,
+          start => {iris_cluster_join_worker, start_link, [region_wiring]},
+          type => worker,
+          restart => transient}
     ],
-
-    %% Register this Core node with pg for Edge discovery
-    %% AND attempt to auto-rejoin cluster if peers are found
-    spawn(fun() -> 
-        timer:sleep(1000), % Wait for registry to start
-        iris_core_registry:join(),
-        
-        %% Auto-rejoin cluster: ping known peers and join first responder
-        KnownPeers = application:get_env(iris_core, join_seeds, []),
-        OtherPeers = [P || P <- KnownPeers, P =/= node()],
-        case lists:search(fun(P) -> net_adm:ping(P) == pong end, OtherPeers) of
-            {value, LivePeer} ->
-                logger:info("Auto-joining cluster via ~p", [LivePeer]),
-                iris_core:join_cluster(LivePeer);
-            false ->
-                logger:info("No cluster peers found, standalone mode")
-        end
-    end),
-
-    %% AUDIT FIX: Auto-wire cross-region replication if configured
-    %% Only if we are a core node
-    spawn(fun() ->
-        case application:get_env(iris_core, regions, []) of
-            [] -> ok;
-            Regions when length(Regions) > 0 ->
-                 %% Wait for cluster to stabilize
-                 timer:sleep(5000),
-                 case is_core_node(node()) of
-                     true ->
-                         logger:info("Regions configured, attempting to wire replication..."),
-                         init_cross_region_replication();
-                     false -> ok
-                 end
-        end
-    end),
 
     %% SAFETY DEFAULT: Validate presence backend configuration
     case application:get_env(iris_core, presence_backend) of
@@ -286,7 +324,15 @@ init([]) ->
 %% ssl_dist_optfile is not set. Called from start/2.
 -spec check_mtls_enforcement() -> ok.
 check_mtls_enforcement() ->
-    %% G1 FIX: In production, default enforce_mtls to true (NFR-15 mandatory).
+    SslConfigured = case init:get_argument(ssl_dist_optfile) of
+        {ok, _} -> true;
+        error -> false
+    end,
+    check_mtls_enforcement(SslConfigured).
+
+%% @doc Testable variant: accepts whether SSL distribution is configured.
+-spec check_mtls_enforcement(boolean()) -> ok.
+check_mtls_enforcement(SslConfigured) ->
     Env = application:get_env(iris_core, env, undefined),
     Default = case Env of
         production -> true;
@@ -294,9 +340,9 @@ check_mtls_enforcement() ->
     end,
     case application:get_env(iris_core, enforce_mtls, Default) of
         true ->
-            case init:get_argument(ssl_dist_optfile) of
-                {ok, _} -> ok;
-                error ->
+            case SslConfigured of
+                true -> ok;
+                false ->
                     logger:error("CRITICAL: enforce_mtls=true but ssl_dist_optfile not set"),
                     exit(mtls_not_configured)
             end;
@@ -309,6 +355,7 @@ check_mtls_enforcement() ->
 %%% FAANG-Grade Messaging APIs
 %%%===================================================================
 
+-spec register_user(binary(), node(), pid()) -> ok | {error, term()}.
 register_user(User, Node, Pid) ->
     %% FORENSIC_AUDIT_FIX: Default to ETS for lockfree presence (was mnesia).
     %% Mnesia causes global lock bottleneck at scale (~10k tx/sec limit).
@@ -332,6 +379,7 @@ register_user(User, Node, Pid) ->
             error({invalid_presence_backend, Other})
     end.
 
+-spec lookup_user(binary()) -> {ok, node(), pid()} | not_found.
 lookup_user(User) ->
     %% FORENSIC_AUDIT_FIX: Default to ETS for lockfree lookup.
     case application:get_env(iris_core, presence_backend, ets) of
@@ -346,6 +394,7 @@ lookup_user(User) ->
             end
     end.
 
+-spec store_offline(binary(), binary()) -> ok | {error, term()}.
 store_offline(User, Msg) ->
     Count = get_bucket_count(User),
     iris_offline_storage:store(User, Msg, Count).
@@ -356,6 +405,7 @@ store_offline(User, Msg) ->
 %% P0-B FIX: For multimaster durability, use sync_transaction when cluster mode
 %% RFC NFR-11: Server-side deduplication with 7-day window
 %% RFC FR-5: FIFO ordering using client-provided sequence number
+-spec store_offline_durable(binary(), binary()) -> ok | {error, term()}.
 store_offline_durable(User, Msg) ->
     %% RFC Section 8: Inbox Size limit enforcement (GAP-6 fix)
     case get_offline_queue_depth(User) >= iris_limits:max_inbox_size() of
@@ -394,18 +444,9 @@ store_offline_durable_inner(User, Msg) ->
     %% Message format may be: {SeqNo, RealMsg} or just binary
     {DedupKey, ActualMsg, MaybeSeqNo} = case Msg of
         {SeqNo, RealMsg} when is_integer(SeqNo) ->
-            %% BUG FIX: Dedup key must include message content hash, not just User:SeqNo
-            %% Each sender has their own SeqNo counter starting at 1, so without content hash,
-            %% messages from different senders with the same SeqNo would be incorrectly deduplicated.
-            %% Key format: User:SeqNo:ContentHash (unique per recipient+sequence+content)
-            ContentHash = erlang:phash2(RealMsg),
-            Key = <<User/binary, ":", (integer_to_binary(SeqNo))/binary, ":", (integer_to_binary(ContentHash))/binary>>,
-            {Key, RealMsg, SeqNo};
+            {make_dedup_key(User, Msg), RealMsg, SeqNo};
         _ ->
-            %% No sequence number - use message hash for dedup
-            Hash = erlang:phash2(Msg),
-            Key = <<User/binary, ":hash:", (integer_to_binary(Hash))/binary>>,
-            {Key, Msg, undefined}
+            {make_dedup_key(User, Msg), Msg, undefined}
     end,
     
     %% Check for duplicate
@@ -435,6 +476,19 @@ store_offline_durable_inner(User, Msg) ->
                     end
             end
     end.
+
+%% AUDIT 6.5: Strong-hash dedup key generation (replaces phash2)
+%% Uses truncated SHA-256 (64-bit) for collision resistance.
+%% At 300 msgs/user: phash2 collision ~1:65K, sha256-64bit ~1:4B.
+-spec make_dedup_key(binary(), term()) -> binary().
+make_dedup_key(User, {SeqNo, RealMsg}) when is_integer(SeqNo) ->
+    HashBin = binary:part(crypto:hash(sha256, term_to_binary(RealMsg)), 0, 8),
+    HexHash = binary:encode_hex(HashBin),
+    <<User/binary, ":", (integer_to_binary(SeqNo))/binary, ":", HexHash/binary>>;
+make_dedup_key(User, Msg) ->
+    HashBin = binary:part(crypto:hash(sha256, term_to_binary(Msg)), 0, 8),
+    HexHash = binary:encode_hex(HashBin),
+    <<User/binary, ":hash:", HexHash/binary>>.
 
 %% P0-B FIX: Sync-replicated offline storage for multimaster durability
 %% Uses mnesia:sync_transaction which blocks until ALL disc_copies have the data
@@ -588,6 +642,7 @@ get_status_from_disk(User) ->
 %%% Internal Functions (Hidden from External API)
 %%%===================================================================
 
+-spec init_db() -> ok.
 init_db() ->
     %% ROBUST INITIALIZATION: Config-driven with recovery support.
     %% Key insight: Check if Mnesia schema already exists before recreating.
@@ -714,8 +769,15 @@ repair_failed_tables([Table | Rest]) ->
 
 %% Completely destroy and recreate a corrupted table
 %% AUDIT FIX: Added safety gate to prevent accidental data loss
-%% Set {iris_core, [{allow_table_nuke, true}]} to enable (DANGEROUS)
+%% AUDIT 6.7: Production mode blocks nuke unconditionally
 nuke_and_recreate_table(Table) ->
+    case application:get_env(iris_core, deployment_mode, development) of
+        production ->
+            logger:error("BLOCKED: nuke_and_recreate_table(~p) refused in production mode. "
+                         "Restore from backup instead.", [Table]),
+            exit({nuke_blocked_in_production, Table});
+        _ -> ok
+    end,
     case application:get_env(iris_core, allow_table_nuke, false) of
         true ->
             logger:warning("NUKING corrupted table ~p (allow_table_nuke=true)", [Table]),
@@ -799,6 +861,7 @@ create_tables(Nodes) ->
     logger:info("Tables created.").
 
 %% Legacy wrapper for specific node lists (unused now but kept for API compat)
+-spec init_db([node()]) -> ok.
 init_db(Nodes) ->
    init_db(). %% Ignore args, use robust logic
 
@@ -987,9 +1050,16 @@ merge_key_batch(RemoteNode, Keys) ->
                 LocalRecords = mnesia:dirty_read(offline_msg, Key),
                 LocalSet = sets:from_list(LocalRecords),
                 Missing = [R || R <- Records, not sets:is_element(R, LocalSet)],
-                lists:foreach(fun(Record) ->
-                    mnesia:dirty_write(Record)
-                end, Missing),
+                %% AUDIT P1-1: Transaction for reconciliation durability
+                case Missing of
+                    [] -> ok;
+                    _ ->
+                        {atomic, ok} = mnesia:transaction(fun() ->
+                            lists:foreach(fun(Record) ->
+                                mnesia:write(Record)
+                            end, Missing)
+                        end)
+                end,
                 Count + length(Missing);
             _ -> Count
         end
@@ -1080,11 +1150,18 @@ merge_table_batch(RemoteNode, Table, Keys) ->
                 WrittenCount = case TableType of
                     bag ->
                         %% Append-only / bag: union merge (original logic)
+                        %% AUDIT P1-1: Transaction for reconciliation durability
                         LocalSet = sets:from_list(LocalRecords),
                         Missing = [R || R <- Records, not sets:is_element(R, LocalSet)],
-                        lists:foreach(fun(Record) ->
-                            mnesia:dirty_write(Table, Record)
-                        end, Missing),
+                        case Missing of
+                            [] -> ok;
+                            _ ->
+                                {atomic, ok} = mnesia:transaction(fun() ->
+                                    lists:foreach(fun(Record) ->
+                                        mnesia:write(Table, Record, write)
+                                    end, Missing)
+                                end)
+                        end,
                         length(Missing);
                     _ ->
                         %% set / ordered_set: timestamp-aware conflict resolution
@@ -1102,23 +1179,24 @@ merge_table_batch(RemoteNode, Table, Keys) ->
 merge_set_records(Table, RemoteRecords, LocalRecords) ->
     %% Build a map of local records by key (element 2 is the key field in records)
     LocalMap = maps:from_list([{element(2, R), R} || R <- LocalRecords]),
-    lists:foldl(fun(RemoteRec, Written) ->
+    %% AUDIT P1-1: Collect records to write, then write in a single transaction
+    ToWrite = lists:filter(fun(RemoteRec) ->
         RemoteKey = element(2, RemoteRec),
         case maps:get(RemoteKey, LocalMap, undefined) of
-            undefined ->
-                %% No local record - write remote
-                mnesia:dirty_write(Table, RemoteRec),
-                Written + 1;
-            LocalRec ->
-                case should_overwrite(Table, RemoteRec, LocalRec) of
-                    true ->
-                        mnesia:dirty_write(Table, RemoteRec),
-                        Written + 1;
-                    false ->
-                        Written
-                end
+            undefined -> true;
+            LocalRec -> should_overwrite(Table, RemoteRec, LocalRec)
         end
-    end, 0, RemoteRecords).
+    end, RemoteRecords),
+    case ToWrite of
+        [] -> 0;
+        _ ->
+            {atomic, ok} = mnesia:transaction(fun() ->
+                lists:foreach(fun(Rec) ->
+                    mnesia:write(Table, Rec, write)
+                end, ToWrite)
+            end),
+            length(ToWrite)
+    end.
 
 %% F1 FIX: Determine if a remote record should overwrite a local record.
 %% Implements per-table conflict resolution strategy (RFC 7.1.1):

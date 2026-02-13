@@ -323,12 +323,12 @@ def test_ordering_during_edge_pause():
         return
     
     if not docker_available():
-        log_test("Ordering during edge pause", True, "SKIP: Docker not available")
+        log_test("Ordering during edge pause", None, "SKIP: Docker not available")
         return
     
     edge_container = get_container_by_name("edge-east-1")
     if not edge_container:
-        log_test("Ordering during edge pause", True, "SKIP: edge-east-1 container not found")
+        log_test("Ordering during edge pause", None, "SKIP: edge-east-1 container not found")
         return
     
     try:

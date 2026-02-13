@@ -32,6 +32,9 @@
     iris_status_batcher_sup,
     iris_store,
     iris_user_safety,
+    iris_rpc,
+    iris_cluster_join_worker,
+    iris_discovery,
     %% Shared modules (used by both core and edge)
     iris_proto,
     iris_ratchet,

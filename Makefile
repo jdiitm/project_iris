@@ -28,13 +28,22 @@ NIF_ZSTD_LDFLAGS = $(if $(ZSTD_LIBDIR),-L$(ZSTD_LIBDIR),) -lzstd
 all: check_deps nif $(BEAM_FILES) $(APP_FILES) $(APPUP_FILES)
 
 # Build zstd NIF shared object (optional: requires libzstd-dev)
+# AUDIT P2-1: zstd is currently UNUSED (removed from SERVER_CAPABILITIES).
+# Build warns loudly if libzstd-dev is missing. Install to enable zstd compression.
 nif: $(NIF_SO)
 
 $(NIF_SO): $(NIF_SRC)
 	@mkdir -p priv
-	@$(CC) $(NIF_CFLAGS) $(NIF_ZSTD_CFLAGS) -o $@ $< $(NIF_ZSTD_LDFLAGS) \
-		&& echo "NIF: zstd compiled successfully" \
-		|| echo "NIF: zstd skipped (libzstd-dev not installed — zstd compression unavailable)"
+	@if pkg-config --exists libzstd 2>/dev/null; then \
+		$(CC) $(NIF_CFLAGS) $(NIF_ZSTD_CFLAGS) -o $@ $< $(NIF_ZSTD_LDFLAGS) \
+		&& echo "NIF: zstd compiled successfully"; \
+	else \
+		echo ""; \
+		echo "WARNING: libzstd-dev not installed — zstd NIF will NOT be built."; \
+		echo "         zstd compression is currently disabled in SERVER_CAPABILITIES."; \
+		echo "         Install with: apt-get install libzstd-dev (Debian/Ubuntu)"; \
+		echo ""; \
+	fi
 
 ebin/%.app: src/%.app.src
 	@mkdir -p ebin
@@ -99,6 +108,21 @@ test-cover: $(BEAM_FILES)
 		io:format(\"~nCoverage: ~p/~p lines (~p%)~n\", [TotalCov, Total, Pct]), \
 		io:format(\"HTML reports in coverage/~n\"), \
 		init:stop()."
+
+# =============================================================================
+# Static Analysis (Dialyzer)
+# =============================================================================
+PLT_FILE = .iris_dialyzer.plt
+
+dialyzer-plt: $(PLT_FILE)
+
+$(PLT_FILE):
+	@echo "Building Dialyzer PLT (first run takes ~2 min)..."
+	dialyzer --build_plt --apps erts kernel stdlib mnesia crypto ssl public_key --output_plt $(PLT_FILE)
+
+dialyzer: all $(PLT_FILE)
+	@echo "Running Dialyzer static analysis..."
+	dialyzer --plt $(PLT_FILE) -r ebin/ --no_check_plt
 
 # Run all tests via unified test runner
 test-all: $(BEAM_FILES)

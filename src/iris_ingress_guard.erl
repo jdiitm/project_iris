@@ -27,7 +27,13 @@ start_link() ->
 -spec check() -> allow | {deny, limit_reached}.
 check() ->
     case get_atomics_ref() of
-        undefined -> allow; %% Fail open if not started (safe for dev)
+        undefined ->
+            %% AUDIT P0-3: Fail-closed in production to prevent bypass via
+            %% startup race or guard crash. Only fail-open in dev/test.
+            case application:get_env(iris_edge, deployment_mode, development) of
+                production -> {deny, guard_not_ready};
+                _          -> allow
+            end;
         Ref ->
             %% Optimistic Increment
             atomics:add(Ref, ?ATOMIC_INDEX, 1),

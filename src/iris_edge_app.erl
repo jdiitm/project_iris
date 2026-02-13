@@ -1,7 +1,6 @@
 -module(iris_edge_app).
 -behaviour(application).
 -export([start/2, stop/1]).
--export([check_mtls_enforcement/0]).
 -export([validate_production_config/0]).
 
 start(_Type, _Args) ->
@@ -39,6 +38,9 @@ start(_Type, _Args) ->
                 end
             end, CoreNodes)
     end,
+
+    %% AUDIT 3.2/6.1: Verify mTLS is configured (DRY -- delegates to iris_core)
+    iris_core:check_mtls_enforcement(),
 
     iris_edge_sup:start_link().
 
@@ -91,25 +93,4 @@ validate_production_config() ->
             ok
     end.
 
-%% @doc Check mTLS enforcement config. Exits if enforce_mtls=true but
-%% ssl_dist_optfile is not set. Called from start/2.
--spec check_mtls_enforcement() -> ok.
-check_mtls_enforcement() ->
-    %% G1 FIX: In production, default enforce_mtls to true (NFR-15 mandatory).
-    Env = application:get_env(iris_core, env, undefined),
-    Default = case Env of
-        production -> true;
-        _          -> false
-    end,
-    case application:get_env(iris_core, enforce_mtls, Default) of
-        true ->
-            case init:get_argument(ssl_dist_optfile) of
-                {ok, _} -> ok;
-                error ->
-                    logger:error("CRITICAL: enforce_mtls=true but ssl_dist_optfile not set"),
-                    exit(mtls_not_configured)
-            end;
-        false ->
-            logger:warning("mTLS NOT enforced (NFR-15). Set enforce_mtls=true for production."),
-            ok
-    end.
+%% AUDIT 5.2 DRY: check_mtls_enforcement/0 consolidated into iris_core.erl

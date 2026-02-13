@@ -40,10 +40,12 @@ python3 ../../tests/suites/chaos_dist/test_cross_region_latency.py
 
 ## Notes
 
-These tests will gracefully SKIP (exit code 0) if:
+These tests will gracefully SKIP (exit code 2) if:
 - Docker is not available
 - Docker cluster cannot be started
 - Cross-region connectivity fails
+
+Exit code 2 is distinguished from PASS (0) and FAIL (1) in the test runner.
 
 They will FAIL (exit code 1) only if:
 - The test runs but RFC requirements are not met
