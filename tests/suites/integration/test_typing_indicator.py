@@ -33,6 +33,7 @@ sys.path.insert(0, PROJECT_ROOT)
 
 from tests.framework import TestLogger, ClusterManager
 from tests.utilities import IrisClient
+from tests.utilities.helpers import wait_until
 
 # RFC FR-8 SLA Threshold
 TYPING_PROPAGATION_SLA_SECONDS = 2.0
@@ -57,15 +58,18 @@ def log_test(name: str, passed: bool, message: str = ""):
 
 def create_client_with_retry(max_retries: int = 3, retry_delay: float = 1.0) -> IrisClient:
     """Create an IrisClient with retry logic."""
-    last_error = None
-    for attempt in range(max_retries):
+    client_ref = [None]
+    
+    def _try_create():
         try:
-            return IrisClient()
-        except ConnectionRefusedError as e:
-            last_error = e
-            if attempt < max_retries - 1:
-                time.sleep(retry_delay)
-    raise last_error
+            client_ref[0] = IrisClient()
+            return True
+        except ConnectionRefusedError:
+            return False
+    
+    if wait_until(_try_create, timeout=max_retries * retry_delay, interval=retry_delay, description="client connection"):
+        return client_ref[0]
+    raise ConnectionRefusedError("Failed to create client after retries")
 
 
 def create_typing_packet(target_user: str) -> bytes:
@@ -267,6 +271,7 @@ def test_typing_sla_latency():
             else:
                 log(f"    Sample {i+1}: Not received (timeout)")
             
+            # P2-3: Cannot replace — no condition to poll (brief pause between samples)
             time.sleep(0.5)  # Brief pause between samples
         
         sender.close()

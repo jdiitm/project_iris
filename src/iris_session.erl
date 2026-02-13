@@ -837,7 +837,9 @@ handle_packet({error, _}, User, _Pid, _Mod) ->
 %% AUDIT MITIGATION P1-3: Catch-all for unrecognized packet types.
 %% Prevents function_clause crash if iris_proto:decode/1 returns an unexpected tuple.
 handle_packet(Unknown, User, _Pid, _Mod) ->
-    Tag = try element(1, Unknown) catch _:_ -> Unknown end,
+    %% AUDIT V2 P1-4: Narrow catch to only badarg (what element/2 throws).
+    %% Other exception classes (exit, throw, system_limit) must propagate.
+    Tag = try element(1, Unknown) catch error:badarg -> Unknown end,
     logger:warning("Unrecognized packet type: ~p (user=~p)", [Tag, User]),
     {ok, User, []}.
 

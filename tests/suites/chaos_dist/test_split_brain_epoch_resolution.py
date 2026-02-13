@@ -26,6 +26,7 @@ from suites.chaos_dist.utils import (
     get_cluster_nodes, run_on_node, partition_nodes,
     heal_partition, wait_for_cluster_ready
 )
+from tests.utilities.helpers import wait_until
 
 
 def log(msg):
@@ -69,7 +70,16 @@ def test_epoch_increments_during_partition():
     # node_a still sees 5/6 nodes (83% > 50%) → stays normal
     partition_nodes(node_a, node_b)
     # Wait for Erlang distribution timeout (net_ticktime=10s) + partition guard check (5s)
-    time.sleep(18)
+    # Poll until epoch increments on minority node
+    def _epoch_incremented():
+        try:
+            result = run_on_node(node_b, "maps:get(epoch, iris_partition_guard:get_status())")
+            current_epoch = int(result)
+            return current_epoch > initial_epoch
+        except:
+            return False
+    
+    wait_until(_epoch_incremented, timeout=20, interval=1, description="epoch increment on partition")
 
     # Check epoch on the MINORITY side where quorum was lost
     result = run_on_node(node_b, "maps:get(epoch, iris_partition_guard:get_status())")
@@ -81,7 +91,8 @@ def test_epoch_increments_during_partition():
 
     # Heal
     heal_partition(node_a, node_b)
-    time.sleep(5)
+    # Wait for cluster to converge after healing
+    wait_for_cluster_ready(max_wait=10)
 
     log("  PASS")
     return True

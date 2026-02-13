@@ -15,7 +15,7 @@
     iris_async_router,
     iris_backpressure,
     iris_circuit_breaker,
-    iris_discovery,
+    %% AUDIT V2 P2-2: iris_discovery removed — provided by iris_core app
     iris_ingress_guard,
     iris_rate_limiter,
     iris_registry_ets,
@@ -26,7 +26,7 @@
     iris_trace
   ]},
   {registered, [iris_edge_app]},
-  {applications, [kernel, stdlib, ssl]},
+  {applications, [kernel, stdlib, ssl, iris_core]},
   {mod, {iris_edge_app, []}},
   {env, [
       {port, 8080},

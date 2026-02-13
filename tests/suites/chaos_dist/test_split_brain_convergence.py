@@ -37,7 +37,9 @@ from tests.suites.chaos_dist.utils import (
     tls_connect_and_login_with_retry,
     close_socket,
     create_tls_socket,
+    wait_for_cluster_ready,
 )
+from tests.utilities.helpers import wait_until
 
 # Configuration
 SERVER_HOST = os.environ.get("IRIS_HOST", "localhost")
@@ -165,9 +167,20 @@ def test_convergence_after_partition():
         if not docker_network_disconnect(WEST_CORE, BACKBONE_NETWORK):
             log("WARN: Failed to disconnect West core")
 
-        # AUDIT P4 FIX: Reduced from 10s
+        # Wait for partition to be detected (nodes see reduced connectivity)
         log("Partition created. Waiting for detection...")
-        time.sleep(6)
+        # Get baseline connectivity before partition
+        baseline_east = get_connected_nodes(EAST_CORE)
+        baseline_west = get_connected_nodes(WEST_CORE)
+        
+        def _partition_detected():
+            east_nodes_str = get_connected_nodes(EAST_CORE)
+            west_nodes_str = get_connected_nodes(WEST_CORE)
+            # Partition detected when connectivity changes (nodes see fewer connections)
+            # Check that the node lists have changed from baseline
+            return east_nodes_str != baseline_east or west_nodes_str != baseline_west
+        
+        wait_until(_partition_detected, timeout=10, interval=0.5, description="partition detection")
 
         log(f"East connected: {get_connected_nodes(EAST_CORE)}")
         log(f"West connected: {get_connected_nodes(WEST_CORE)}")
@@ -218,9 +231,9 @@ def test_convergence_after_partition():
         else:
             log("WARN: Failed to reconnect West core")
 
-        # AUDIT P4 FIX: Reduced from 15s
+        # Wait for cluster convergence after healing
         log("Waiting for convergence...")
-        time.sleep(10)
+        wait_for_cluster_ready(max_wait=15)
 
         log(f"East connected: {get_connected_nodes(EAST_CORE)}")
         log(f"West connected: {get_connected_nodes(WEST_CORE)}")
