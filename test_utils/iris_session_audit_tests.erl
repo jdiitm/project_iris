@@ -2,11 +2,12 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% Audit Mitigation Tests for iris_session.erl (TDD RED phase)
+%% Audit Mitigation Tests for iris_session.erl
 %% =============================================================================
 %%
 %% Tests cover:
 %% - 4.4: Queue depth estimation error must be observable (metric + log)
+%% - 3.1/6.3: User block enforcement in send path
 %% =============================================================================
 
 %% =============================================================================
@@ -40,5 +41,23 @@ queue_depth_error_metric_test_() ->
           ?assertEqual(5, iris_session:calculate_remaining(10, 5)),
           ?assertEqual(0, iris_session:calculate_remaining(3, 10)),
           ?assertEqual(0, iris_session:calculate_remaining(5, 5))
+      end}
+    ].
+
+%% =============================================================================
+%% 3.1/6.3: User Block Enforcement
+%% =============================================================================
+
+block_enforcement_test_() ->
+    [
+     {"check_block_status returns ok when Mnesia not running (fail-open)", fun() ->
+          %% Without Mnesia, the check should fail-open (allow) and log warning
+          Result = iris_session:check_block_status(<<"sender">>, <<"recipient">>),
+          ?assertEqual(ok, Result)
+      end},
+
+     {"check_block_status function is exported", fun() ->
+          Exports = iris_session:module_info(exports),
+          ?assert(lists:member({check_block_status, 2}, Exports))
       end}
     ].

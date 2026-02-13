@@ -268,7 +268,10 @@ store_sender_key(GroupId, UserId, KeyId, EncryptedKeyBlob) ->
                 created_at = erlang:system_time(second),
                 chain_index = 0
             },
-            mnesia:dirty_write(group_sender_key, Record),
+            %% AUDIT P1-1: Transaction for sender key durability
+            {atomic, ok} = mnesia:transaction(fun() ->
+                mnesia:write(group_sender_key, Record, write)
+            end),
             ok
     end.
 
@@ -362,7 +365,10 @@ update_member_last_seen(GroupId, UserId) ->
     case mnesia:dirty_read(group_member, {GroupId, UserId}) of
         [Member] ->
             UpdatedMember = Member#group_member{last_seen = Now},
-            mnesia:dirty_write(group_member, UpdatedMember),
+            %% AUDIT P1-1: Transaction for member state durability
+            {atomic, ok} = mnesia:transaction(fun() ->
+                mnesia:write(group_member, UpdatedMember, write)
+            end),
             ok;
         [] ->
             ok  %% Member not found, ignore
@@ -731,7 +737,10 @@ do_promote_admin(GroupId, UserId, PromotedBy) ->
                 [#group_member{role = admin}] -> {error, already_admin};
                 [Member] ->
                     UpdatedMember = Member#group_member{role = admin},
-                    mnesia:dirty_write(group_member, UpdatedMember),
+                    %% AUDIT P1-1: Transaction for role change durability
+                    {atomic, ok} = mnesia:transaction(fun() ->
+                        mnesia:write(group_member, UpdatedMember, write)
+                    end),
                     ok
             end
     end.
@@ -749,7 +758,10 @@ do_demote_admin(GroupId, UserId, DemotedBy) ->
                         1 -> {error, last_admin};
                         _ ->
                             UpdatedMember = Member#group_member{role = member},
-                            mnesia:dirty_write(group_member, UpdatedMember),
+                            %% AUDIT P1-1: Transaction for role change durability
+                            {atomic, ok} = mnesia:transaction(fun() ->
+                                mnesia:write(group_member, UpdatedMember, write)
+                            end),
                             ok
                     end
             end

@@ -19,11 +19,12 @@ mtls_nonenforced_does_not_crash_test() ->
     application:set_env(iris_core, enforce_mtls, false),
     ?assertEqual(ok, iris_core:check_mtls_enforcement()).
 
-%% Edge app should also have the check.
+%% Edge app delegates to iris_core:check_mtls_enforcement/0 (DRY consolidation).
+%% These tests verify the core function works for both apps.
 edge_mtls_enforcement_crashes_without_ssl_dist_test() ->
     application:set_env(iris_core, enforce_mtls, true),
-    ?assertExit(mtls_not_configured, iris_edge_app:check_mtls_enforcement()).
+    ?assertExit(mtls_not_configured, iris_core:check_mtls_enforcement()).
 
 edge_mtls_nonenforced_does_not_crash_test() ->
     application:set_env(iris_core, enforce_mtls, false),
-    ?assertEqual(ok, iris_edge_app:check_mtls_enforcement()).
+    ?assertEqual(ok, iris_core:check_mtls_enforcement()).

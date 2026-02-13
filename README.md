@@ -40,7 +40,7 @@ See [DEPLOYMENT.md](docs/DEPLOYMENT.md) for architecture diagrams and setup.
 
 ---
 
-## Modules (55 total)
+## Modules (59 total)
 
 ### Edge Layer
 
@@ -53,7 +53,12 @@ See [DEPLOYMENT.md](docs/DEPLOYMENT.md) for architecture diagrams and setup.
 | `iris_ws_lite` | Lightweight WebSocket framing |
 | `iris_compression` | Zstd/zlib payload compression |
 | `iris_auth` | JWT validation (EdDSA primary, HMAC legacy), refresh tokens, revocation |
+| `iris_auth_json` | JSON-based auth token parsing |
 | `iris_rate_limiter` | Per-user token bucket + distributed gossip via `pg` |
+| `iris_edge_app` | Edge OTP application callback |
+| `iris_edge_sup` | Edge supervisor tree |
+| `iris_ingress_guard` | Ingress traffic guard |
+| `iris_health_handler` | HTTP health/ready/metrics endpoints |
 
 ### Core Layer
 
@@ -68,6 +73,11 @@ See [DEPLOYMENT.md](docs/DEPLOYMENT.md) for architecture diagrams and setup.
 | `iris_presence` | Versioned presence with privacy controls |
 | `iris_group` | Group CRUD, membership (≤256 E2EE, ≤10K broadcast) |
 | `iris_group_fanout` | Parallel group message delivery |
+| `iris_core_registry` | Core node pg-based discovery |
+| `iris_user_safety` | User block/report (FR-8b) |
+| `iris_rpc` | Observable RPC wrapper with metrics |
+| `iris_cluster_join_worker` | Supervised cluster join/region wiring |
+| `iris_discovery` | Node discovery |
 
 ### Storage & Durability
 
@@ -79,6 +89,12 @@ See [DEPLOYMENT.md](docs/DEPLOYMENT.md) for architecture diagrams and setup.
 | `iris_dedup` | 3-tier dedup: ETS hot (5 min) → Bloom warm → Mnesia cold (7 day) |
 | `iris_session_cache` | Session resume cache (100K cap, LRU eviction, 5-min TTL) |
 | `iris_hlc` | 80-bit Hybrid Logical Clocks for cross-region ordering |
+| `iris_offline_storage` | Offline message storage helpers |
+| `iris_registry_ets` | ETS-backed user registry |
+| `iris_durable_batcher_sup` | Durable batcher supervisor |
+| `iris_status_batcher` | Batched status updates |
+| `iris_status_batcher_sup` | Status batcher supervisor |
+| `iris_uuid` | UUIDv7 generation |
 
 ### Security & E2EE (Signal Protocol)
 
@@ -101,6 +117,14 @@ See [DEPLOYMENT.md](docs/DEPLOYMENT.md) for architecture diagrams and setup.
 | `iris_limits` | Hard operational limits (RFC Section 8) |
 | `iris_cluster_manager` | Auto-wire replication on node join/leave, mTLS pre-check |
 | `iris_mailbox_guard` | Bounded mailbox protection + CoDel AQM (Active Queue Management) |
+| `iris_mailbox_monitor` | Mailbox size monitoring for backpressure |
+| `iris_efficiency_monitor` | Scheduler utilization and memory tracking |
+| `iris_backpressure` | Backpressure signaling |
+| `iris_json_formatter` | Structured JSON log formatter |
+| `iris_read_receipts` | Read receipt tracking |
+| `iris_router_sup` | Router pool supervisor |
+| `iris_router_worker` | Router worker process |
+| `iris_zstd_nif` | Optional zstd NIF compression stub |
 
 ---
 
@@ -179,8 +203,8 @@ See [DEPLOYMENT.md](docs/DEPLOYMENT.md) for TLS and certificate setup.
 
 ```
 project_iris/
-├── src/                    # 55 Erlang source modules (20K+ lines)
-├── test_utils/             # 100 Erlang EUnit test modules + 6 support modules
+├── src/                    # 59 Erlang source modules (20K+ lines)
+├── test_utils/             # 100 Erlang EUnit test modules (non-standard location; see note below)
 ├── tests/
 │   ├── run_all_tests.sh    # Authoritative test runner
 │   ├── suites/             # 12 test categories
@@ -206,6 +230,11 @@ project_iris/
 ├── docs/                   # All documentation
 └── Makefile                # Build, test, cluster targets
 ```
+
+> **Note on `test_utils/`**: Erlang EUnit tests live in `test_utils/` instead of the
+> standard `test/` directory. This is a project convention — the Makefile and CI
+> pipeline are configured to find tests there. The `tests/` directory (with an 's')
+> contains the Python integration/e2e test suites.
 
 ---
 

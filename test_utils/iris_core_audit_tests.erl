@@ -6,12 +6,17 @@
 %% =============================================================================
 %%
 %% Tests cover:
+%% - 3.2/6.1: mTLS enforcement must be checked at startup
 %% - 4.3: Production mode must reject default cookie 'iris_secret'
 %% - 5.4: Bare spawns in init/1 must be replaced with supervised workers
 %% - 4.2: CP consistency mode must be fatal in production
+%% - 6.5: Dedup keys must use strong hash (not phash2)
+%% - 6.7: nuke_and_recreate must be blocked in production mode
 %%
 %% Note: erlang:set_cookie/2 fails on non-distributed nodes (nonode@nohost),
 %% so we test via validate_production_cookie/1 which accepts the cookie atom.
+%% Note: init:get_argument cannot be changed at runtime, so we test
+%% check_mtls_enforcement/1 which accepts ssl_configured boolean.
 %% =============================================================================
 
 %% =============================================================================
@@ -148,6 +153,140 @@ cp_mode_test_() ->
               case OldCons of
                   undefined -> application:unset_env(iris_core, consistency_mode);
                   _ -> application:set_env(iris_core, consistency_mode, OldCons)
+              end
+          end
+      end}
+    ].
+
+%% =============================================================================
+%% 3.2/6.1: mTLS Startup Enforcement
+%% =============================================================================
+
+mtls_enforcement_test_() ->
+    [
+     {"enforce_mtls=true without ssl_dist rejects startup", fun() ->
+          OldEnforce = application:get_env(iris_core, enforce_mtls, undefined),
+          application:set_env(iris_core, enforce_mtls, true),
+          try
+              ?assertExit(mtls_not_configured,
+                          iris_core:check_mtls_enforcement(false))
+          after
+              case OldEnforce of
+                  undefined -> application:unset_env(iris_core, enforce_mtls);
+                  _ -> application:set_env(iris_core, enforce_mtls, OldEnforce)
+              end
+          end
+      end},
+
+     {"enforce_mtls=true with ssl_dist allows startup", fun() ->
+          OldEnforce = application:get_env(iris_core, enforce_mtls, undefined),
+          application:set_env(iris_core, enforce_mtls, true),
+          try
+              ?assertEqual(ok, iris_core:check_mtls_enforcement(true))
+          after
+              case OldEnforce of
+                  undefined -> application:unset_env(iris_core, enforce_mtls);
+                  _ -> application:set_env(iris_core, enforce_mtls, OldEnforce)
+              end
+          end
+      end},
+
+     {"enforce_mtls=false logs warning but succeeds", fun() ->
+          OldEnforce = application:get_env(iris_core, enforce_mtls, undefined),
+          application:set_env(iris_core, enforce_mtls, false),
+          try
+              ?assertEqual(ok, iris_core:check_mtls_enforcement(false))
+          after
+              case OldEnforce of
+                  undefined -> application:unset_env(iris_core, enforce_mtls);
+                  _ -> application:set_env(iris_core, enforce_mtls, OldEnforce)
+              end
+          end
+      end}
+    ].
+
+%% =============================================================================
+%% 6.5: Dedup Key Uses Strong Hash (not phash2)
+%% =============================================================================
+
+dedup_key_test_() ->
+    [
+     {"dedup key with SeqNo uses 16-char hex suffix (64-bit hash)", fun() ->
+          Key = iris_core:make_dedup_key(<<"alice">>, {1, <<"hello world">>}),
+          %% Key format: alice:1:<16-char-hex>
+          ?assert(is_binary(Key)),
+          Parts = binary:split(Key, <<":">>, [global]),
+          ?assertEqual(3, length(Parts)),
+          [_User, _SeqStr, HashPart] = Parts,
+          %% 8 bytes of SHA-256 encoded as hex = 16 chars
+          ?assertEqual(16, byte_size(HashPart))
+      end},
+
+     {"dedup key without SeqNo uses 16-char hex suffix", fun() ->
+          Key = iris_core:make_dedup_key(<<"bob">>, <<"raw message">>),
+          %% Key format: bob:hash:<16-char-hex>
+          Parts = binary:split(Key, <<":">>, [global]),
+          ?assertEqual(3, length(Parts)),
+          [_User, <<"hash">>, HashPart] = Parts,
+          ?assertEqual(16, byte_size(HashPart))
+      end},
+
+     {"dedup key is deterministic", fun() ->
+          K1 = iris_core:make_dedup_key(<<"alice">>, {1, <<"hello">>}),
+          K2 = iris_core:make_dedup_key(<<"alice">>, {1, <<"hello">>}),
+          ?assertEqual(K1, K2)
+      end},
+
+     {"different messages produce different dedup keys", fun() ->
+          K1 = iris_core:make_dedup_key(<<"alice">>, {1, <<"hello">>}),
+          K2 = iris_core:make_dedup_key(<<"alice">>, {1, <<"world">>}),
+          ?assertNotEqual(K1, K2)
+      end}
+    ].
+
+%% =============================================================================
+%% 6.7: nuke_and_recreate Blocked in Production
+%% =============================================================================
+
+nuke_guard_test_() ->
+    [
+     {"production mode blocks nuke even with allow_table_nuke=true", fun() ->
+          OldMode = application:get_env(iris_core, deployment_mode, undefined),
+          OldNuke = application:get_env(iris_core, allow_table_nuke, undefined),
+          application:set_env(iris_core, deployment_mode, production),
+          application:set_env(iris_core, allow_table_nuke, true),
+          try
+              ?assertExit({nuke_blocked_in_production, test_table},
+                          iris_core:nuke_and_recreate_table(test_table))
+          after
+              case OldMode of
+                  undefined -> application:unset_env(iris_core, deployment_mode);
+                  _ -> application:set_env(iris_core, deployment_mode, OldMode)
+              end,
+              case OldNuke of
+                  undefined -> application:unset_env(iris_core, allow_table_nuke);
+                  _ -> application:set_env(iris_core, allow_table_nuke, OldNuke)
+              end
+          end
+      end},
+
+     {"development mode allows nuke with allow_table_nuke=true", fun() ->
+          OldMode = application:get_env(iris_core, deployment_mode, undefined),
+          application:set_env(iris_core, deployment_mode, development),
+          %% We don't actually nuke -- just verify the function doesn't exit
+          %% with nuke_blocked_in_production. It will fail for other reasons
+          %% (no Mnesia) but that's acceptable.
+          try
+              iris_core:nuke_and_recreate_table(test_table)
+          catch
+              exit:{nuke_blocked_in_production, _} ->
+                  ?assert(false);  %% Should NOT happen in development mode
+              _:_ ->
+                  ok  %% Any other error is fine (no Mnesia, etc.)
+          after
+              case OldMode of
+                  undefined -> application:unset_env(iris_core, deployment_mode);
+                  _ -> application:set_env(iris_core, deployment_mode, OldMode)
               end
           end
       end}

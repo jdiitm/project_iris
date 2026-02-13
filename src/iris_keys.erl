@@ -150,9 +150,13 @@ list_users() ->
 -spec record_key_contact(binary(), binary()) -> ok.
 record_key_contact(OwnerUserId, FetcherUserId) ->
     %% Avoid duplicates: check before insert (bag table allows dupes otherwise)
+    %% AUDIT P1-1: Transaction for key contact durability
     Existing = mnesia:dirty_match_object({key_contact, OwnerUserId, FetcherUserId}),
     case Existing of
-        [] -> mnesia:dirty_write({key_contact, OwnerUserId, FetcherUserId});
+        [] ->
+            {atomic, ok} = mnesia:transaction(fun() ->
+                mnesia:write({key_contact, OwnerUserId, FetcherUserId})
+            end);
         _  -> ok
     end,
     ok.

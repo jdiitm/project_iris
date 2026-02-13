@@ -13,10 +13,12 @@
 
 %% High-Scale Messaging APIs
 -export([register_user/3, lookup_user/1]).
--export([check_mtls_enforcement/0]).
+-export([check_mtls_enforcement/0, check_mtls_enforcement/1]).
 -export([validate_production_cookie/0, validate_production_cookie/1]).
 -export([is_core_node/1]).  %% AUDIT 5.4: exported for iris_cluster_join_worker
 -export([validate_consistency_mode/0]).  %% AUDIT 4.2: CP mode hard-fail
+-export([make_dedup_key/2]).  %% AUDIT 6.5: testable dedup key generation
+-export([nuke_and_recreate_table/1]).  %% AUDIT 6.7: exported for testing production guard
 -export([store_offline/2, store_offline_durable/2, store_batch/2, retrieve_offline/1]).
 -export([retrieve_offline_paginated/3, get_offline_queue_depth/1, delete_offline_confirmed/2]).
 -export([get_bucket_count/1, set_bucket_count/2]).
@@ -103,6 +105,9 @@ start(_StartType, _StartArgs) ->
             init:stop(1),
             exit(default_cookie_in_production)
     end,
+
+    %% AUDIT 3.2/6.1: Verify mTLS is configured if enforce_mtls=true
+    check_mtls_enforcement(),
 
     supervisor:start_link({local, ?SERVER}, ?MODULE, []).
 
@@ -319,7 +324,15 @@ init([]) ->
 %% ssl_dist_optfile is not set. Called from start/2.
 -spec check_mtls_enforcement() -> ok.
 check_mtls_enforcement() ->
-    %% G1 FIX: In production, default enforce_mtls to true (NFR-15 mandatory).
+    SslConfigured = case init:get_argument(ssl_dist_optfile) of
+        {ok, _} -> true;
+        error -> false
+    end,
+    check_mtls_enforcement(SslConfigured).
+
+%% @doc Testable variant: accepts whether SSL distribution is configured.
+-spec check_mtls_enforcement(boolean()) -> ok.
+check_mtls_enforcement(SslConfigured) ->
     Env = application:get_env(iris_core, env, undefined),
     Default = case Env of
         production -> true;
@@ -327,9 +340,9 @@ check_mtls_enforcement() ->
     end,
     case application:get_env(iris_core, enforce_mtls, Default) of
         true ->
-            case init:get_argument(ssl_dist_optfile) of
-                {ok, _} -> ok;
-                error ->
+            case SslConfigured of
+                true -> ok;
+                false ->
                     logger:error("CRITICAL: enforce_mtls=true but ssl_dist_optfile not set"),
                     exit(mtls_not_configured)
             end;
@@ -431,18 +444,9 @@ store_offline_durable_inner(User, Msg) ->
     %% Message format may be: {SeqNo, RealMsg} or just binary
     {DedupKey, ActualMsg, MaybeSeqNo} = case Msg of
         {SeqNo, RealMsg} when is_integer(SeqNo) ->
-            %% BUG FIX: Dedup key must include message content hash, not just User:SeqNo
-            %% Each sender has their own SeqNo counter starting at 1, so without content hash,
-            %% messages from different senders with the same SeqNo would be incorrectly deduplicated.
-            %% Key format: User:SeqNo:ContentHash (unique per recipient+sequence+content)
-            ContentHash = erlang:phash2(RealMsg),
-            Key = <<User/binary, ":", (integer_to_binary(SeqNo))/binary, ":", (integer_to_binary(ContentHash))/binary>>,
-            {Key, RealMsg, SeqNo};
+            {make_dedup_key(User, Msg), RealMsg, SeqNo};
         _ ->
-            %% No sequence number - use message hash for dedup
-            Hash = erlang:phash2(Msg),
-            Key = <<User/binary, ":hash:", (integer_to_binary(Hash))/binary>>,
-            {Key, Msg, undefined}
+            {make_dedup_key(User, Msg), Msg, undefined}
     end,
     
     %% Check for duplicate
@@ -472,6 +476,19 @@ store_offline_durable_inner(User, Msg) ->
                     end
             end
     end.
+
+%% AUDIT 6.5: Strong-hash dedup key generation (replaces phash2)
+%% Uses truncated SHA-256 (64-bit) for collision resistance.
+%% At 300 msgs/user: phash2 collision ~1:65K, sha256-64bit ~1:4B.
+-spec make_dedup_key(binary(), term()) -> binary().
+make_dedup_key(User, {SeqNo, RealMsg}) when is_integer(SeqNo) ->
+    HashBin = binary:part(crypto:hash(sha256, term_to_binary(RealMsg)), 0, 8),
+    HexHash = binary:encode_hex(HashBin),
+    <<User/binary, ":", (integer_to_binary(SeqNo))/binary, ":", HexHash/binary>>;
+make_dedup_key(User, Msg) ->
+    HashBin = binary:part(crypto:hash(sha256, term_to_binary(Msg)), 0, 8),
+    HexHash = binary:encode_hex(HashBin),
+    <<User/binary, ":hash:", HexHash/binary>>.
 
 %% P0-B FIX: Sync-replicated offline storage for multimaster durability
 %% Uses mnesia:sync_transaction which blocks until ALL disc_copies have the data
@@ -752,8 +769,15 @@ repair_failed_tables([Table | Rest]) ->
 
 %% Completely destroy and recreate a corrupted table
 %% AUDIT FIX: Added safety gate to prevent accidental data loss
-%% Set {iris_core, [{allow_table_nuke, true}]} to enable (DANGEROUS)
+%% AUDIT 6.7: Production mode blocks nuke unconditionally
 nuke_and_recreate_table(Table) ->
+    case application:get_env(iris_core, deployment_mode, development) of
+        production ->
+            logger:error("BLOCKED: nuke_and_recreate_table(~p) refused in production mode. "
+                         "Restore from backup instead.", [Table]),
+            exit({nuke_blocked_in_production, Table});
+        _ -> ok
+    end,
     case application:get_env(iris_core, allow_table_nuke, false) of
         true ->
             logger:warning("NUKING corrupted table ~p (allow_table_nuke=true)", [Table]),
@@ -1026,9 +1050,16 @@ merge_key_batch(RemoteNode, Keys) ->
                 LocalRecords = mnesia:dirty_read(offline_msg, Key),
                 LocalSet = sets:from_list(LocalRecords),
                 Missing = [R || R <- Records, not sets:is_element(R, LocalSet)],
-                lists:foreach(fun(Record) ->
-                    mnesia:dirty_write(Record)
-                end, Missing),
+                %% AUDIT P1-1: Transaction for reconciliation durability
+                case Missing of
+                    [] -> ok;
+                    _ ->
+                        {atomic, ok} = mnesia:transaction(fun() ->
+                            lists:foreach(fun(Record) ->
+                                mnesia:write(Record)
+                            end, Missing)
+                        end)
+                end,
                 Count + length(Missing);
             _ -> Count
         end
@@ -1119,11 +1150,18 @@ merge_table_batch(RemoteNode, Table, Keys) ->
                 WrittenCount = case TableType of
                     bag ->
                         %% Append-only / bag: union merge (original logic)
+                        %% AUDIT P1-1: Transaction for reconciliation durability
                         LocalSet = sets:from_list(LocalRecords),
                         Missing = [R || R <- Records, not sets:is_element(R, LocalSet)],
-                        lists:foreach(fun(Record) ->
-                            mnesia:dirty_write(Table, Record)
-                        end, Missing),
+                        case Missing of
+                            [] -> ok;
+                            _ ->
+                                {atomic, ok} = mnesia:transaction(fun() ->
+                                    lists:foreach(fun(Record) ->
+                                        mnesia:write(Table, Record, write)
+                                    end, Missing)
+                                end)
+                        end,
                         length(Missing);
                     _ ->
                         %% set / ordered_set: timestamp-aware conflict resolution
@@ -1141,23 +1179,24 @@ merge_table_batch(RemoteNode, Table, Keys) ->
 merge_set_records(Table, RemoteRecords, LocalRecords) ->
     %% Build a map of local records by key (element 2 is the key field in records)
     LocalMap = maps:from_list([{element(2, R), R} || R <- LocalRecords]),
-    lists:foldl(fun(RemoteRec, Written) ->
+    %% AUDIT P1-1: Collect records to write, then write in a single transaction
+    ToWrite = lists:filter(fun(RemoteRec) ->
         RemoteKey = element(2, RemoteRec),
         case maps:get(RemoteKey, LocalMap, undefined) of
-            undefined ->
-                %% No local record - write remote
-                mnesia:dirty_write(Table, RemoteRec),
-                Written + 1;
-            LocalRec ->
-                case should_overwrite(Table, RemoteRec, LocalRec) of
-                    true ->
-                        mnesia:dirty_write(Table, RemoteRec),
-                        Written + 1;
-                    false ->
-                        Written
-                end
+            undefined -> true;
+            LocalRec -> should_overwrite(Table, RemoteRec, LocalRec)
         end
-    end, 0, RemoteRecords).
+    end, RemoteRecords),
+    case ToWrite of
+        [] -> 0;
+        _ ->
+            {atomic, ok} = mnesia:transaction(fun() ->
+                lists:foreach(fun(Rec) ->
+                    mnesia:write(Table, Rec, write)
+                end, ToWrite)
+            end),
+            length(ToWrite)
+    end.
 
 %% F1 FIX: Determine if a remote record should overwrite a local record.
 %% Implements per-table conflict resolution strategy (RFC 7.1.1):

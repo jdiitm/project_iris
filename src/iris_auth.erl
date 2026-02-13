@@ -781,8 +781,11 @@ create_refresh_token(UserId, TTL) ->
     Now = os:system_time(second),
     ExpiresAt = Now + TTL,
     Record = {?REFRESH_TABLE, TokenId, UserId, FamilyId, false, Now, ExpiresAt},
+    %% AUDIT P0-4: sync_transaction for refresh token durability
     try
-        mnesia:dirty_write(?REFRESH_TABLE, Record),
+        {atomic, ok} = mnesia:sync_transaction(fun() ->
+            mnesia:write(Record)
+        end),
         {ok, TokenId}
     catch
         _:Reason -> {error, Reason}
@@ -805,9 +808,10 @@ exchange_refresh_token(TokenId) ->
                             revoke_refresh_family(FamilyId),
                             {error, token_reused};
                         false ->
-                            %% Mark as used
-                            mnesia:dirty_write(?REFRESH_TABLE,
-                                {?REFRESH_TABLE, TokenId, UserId, FamilyId, true, Now, ExpiresAt}),
+                            %% AUDIT P0-4: Mark as used with transaction
+                            {atomic, ok} = mnesia:sync_transaction(fun() ->
+                                mnesia:write({?REFRESH_TABLE, TokenId, UserId, FamilyId, true, Now, ExpiresAt})
+                            end),
                             %% Create new tokens
                             {ok, NewAccess} = create_token(UserId),
                             {ok, NewRefresh} = create_refresh_token_in_family(UserId, FamilyId),
@@ -834,8 +838,10 @@ validate_and_rotate_refresh(TokenId) ->
                             revoke_refresh_family(FamilyId),
                             {error, token_reused};
                         false ->
-                            mnesia:dirty_write(?REFRESH_TABLE,
-                                {?REFRESH_TABLE, TokenId, UserId, FamilyId, true, Now, ExpiresAt}),
+                            %% AUDIT P0-4: Mark as used with transaction
+                            {atomic, ok} = mnesia:sync_transaction(fun() ->
+                                mnesia:write({?REFRESH_TABLE, TokenId, UserId, FamilyId, true, Now, ExpiresAt})
+                            end),
                             {ok, NewRefresh} = create_refresh_token_in_family(UserId, FamilyId),
                             {ok, UserId, NewRefresh}
                     end
@@ -847,18 +853,22 @@ create_refresh_token_in_family(UserId, FamilyId) ->
     Now = os:system_time(second),
     ExpiresAt = Now + ?REFRESH_TTL,
     Record = {?REFRESH_TABLE, TokenId, UserId, FamilyId, false, Now, ExpiresAt},
-    mnesia:dirty_write(?REFRESH_TABLE, Record),
+    %% AUDIT P0-4: sync_transaction for refresh token durability
+    {atomic, ok} = mnesia:sync_transaction(fun() ->
+        mnesia:write(Record)
+    end),
     {ok, TokenId}.
 
 revoke_refresh_family(FamilyId) ->
-    %% Mark all tokens in this family as used
+    %% AUDIT P0-4: Transaction for family revocation durability
     try
-        AllTokens = mnesia:dirty_match_object(?REFRESH_TABLE,
-            {?REFRESH_TABLE, '_', '_', FamilyId, '_', '_', '_'}),
-        lists:foreach(fun({?REFRESH_TABLE, TId, UId, FId, _Used, CAt, EAt}) ->
-            mnesia:dirty_write(?REFRESH_TABLE,
-                {?REFRESH_TABLE, TId, UId, FId, true, CAt, EAt})
-        end, AllTokens)
+        {atomic, ok} = mnesia:sync_transaction(fun() ->
+            AllTokens = mnesia:match_object(?REFRESH_TABLE,
+                {?REFRESH_TABLE, '_', '_', FamilyId, '_', '_', '_'}, write),
+            lists:foreach(fun({?REFRESH_TABLE, TId, UId, FId, _Used, CAt, EAt}) ->
+                mnesia:write({?REFRESH_TABLE, TId, UId, FId, true, CAt, EAt})
+            end, AllTokens)
+        end)
     catch
         _:_ -> ok
     end.

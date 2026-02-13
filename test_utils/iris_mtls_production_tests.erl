@@ -42,9 +42,10 @@ test_production_core_crashes_without_config() ->
     ?assertExit(mtls_not_configured, iris_core:check_mtls_enforcement()).
 
 test_production_edge_crashes_without_config() ->
+    %% Edge now delegates to iris_core:check_mtls_enforcement/0 (DRY consolidation)
     application:set_env(iris_core, env, production),
     application:unset_env(iris_core, enforce_mtls),
-    ?assertExit(mtls_not_configured, iris_edge_app:check_mtls_enforcement()).
+    ?assertExit(mtls_not_configured, iris_core:check_mtls_enforcement()).
 
 test_dev_core_ok_without_config() ->
     %% In development, mTLS is optional (warning only)

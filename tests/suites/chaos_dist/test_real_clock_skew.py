@@ -269,7 +269,7 @@ def main():
 
     if skipped == len(results):
         print(f"\nReal Clock Skew: SKIPPED (Docker not available)")
-        return 0  # Not a failure
+        return 2  # AUDIT P1-3: Exit 2 = infrastructure skip (not 0)
     elif failed > 0:
         print(f"\nReal Clock Skew: FAILED ({passed} passed, {failed} failed)")
         return 1
