@@ -2,49 +2,64 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% Dynamic Compression Capability Detection Tests (Audit Mitigation)
+%% AUDIT: Zstd Runtime Detection Tests
+%% =============================================================================
 %%
-%% Validates:
-%%   - available_algorithms/0 always includes <<"zlib">>
-%%   - available_algorithms/0 only includes <<"zstd">> when NIF is present
-%%   - iris_session uses dynamic detection (not hardcoded macro)
+%% Tests verify:
+%% - available_algorithms/0 always includes zlib
+%% - available_algorithms/0 dynamically detects zstd NIF presence
+%% - iris_session uses dynamic detection (not hardcoded compression list)
+%% - available_algorithms/0 is exported
 %% =============================================================================
 
-compression_detect_test_() ->
+iris_compression_detect_test_() ->
     [
-     {"available_algorithms includes zlib", fun check_zlib_always_present/0},
-     {"available_algorithms detects zstd presence", fun check_zstd_detection/0},
-     {"server capabilities use dynamic detection", fun check_dynamic_capabilities/0}
+     {"AUDIT: available_algorithms/0 is exported",
+      fun test_function_exported/0},
+     {"AUDIT: zlib is always available",
+      fun test_zlib_always_available/0},
+     {"AUDIT: available_algorithms returns only binaries",
+      fun test_returns_binaries/0},
+     {"AUDIT: zstd inclusion depends on NIF .so presence",
+      fun test_zstd_detection/0},
+     {"AUDIT: iris_session uses dynamic capabilities (not hardcoded list)",
+      fun test_session_dynamic_capabilities/0}
     ].
 
-%% zlib is a core OTP module — always available.
-check_zlib_always_present() ->
+test_function_exported() ->
+    Exports = iris_compression:module_info(exports),
+    ?assert(lists:member({available_algorithms, 0}, Exports)).
+
+test_zlib_always_available() ->
     Algos = iris_compression:available_algorithms(),
     ?assert(lists:member(<<"zlib">>, Algos)).
 
-%% zstd should be in the list if and only if the NIF .so is loadable.
-%% In the test environment, the NIF is likely NOT built, so zstd should
-%% be absent. Either way, verify the function returns a proper list.
-check_zstd_detection() ->
+test_returns_binaries() ->
     Algos = iris_compression:available_algorithms(),
     ?assert(is_list(Algos)),
-    %% If zstd NIF is not available (typical in tests), verify it's excluded
-    case code:priv_dir(iris_edge) of
-        {error, _} ->
-            ?assertNot(lists:member(<<"zstd">>, Algos));
+    lists:foreach(fun(A) ->
+        ?assert(is_binary(A))
+    end, Algos).
+
+test_zstd_detection() ->
+    Algos = iris_compression:available_algorithms(),
+    %% Check if the NIF .so actually exists on disk
+    NifExists = case code:priv_dir(iris_edge) of
+        {error, _} -> false;
         PrivDir ->
-            NifPath = filename:join(PrivDir, "iris_zstd_nif.so"),
-            case filelib:is_file(NifPath) of
-                true ->
-                    ?assert(lists:member(<<"zstd">>, Algos));
-                false ->
-                    ?assertNot(lists:member(<<"zstd">>, Algos))
-            end
+            filelib:is_file(filename:join(PrivDir, "iris_zstd_nif.so"))
+    end,
+    case NifExists of
+        true ->
+            ?assert(lists:member(<<"zstd">>, Algos));
+        false ->
+            ?assertNot(lists:member(<<"zstd">>, Algos))
     end.
 
-%% Verify iris_session uses iris_compression:available_algorithms()
-%% instead of a hardcoded macro by checking the source code.
-check_dynamic_capabilities() ->
-    %% Read iris_session.erl source and verify it calls available_algorithms
-    {ok, Source} = file:read_file("src/iris_session.erl"),
-    ?assert(binary:match(Source, <<"iris_compression:available_algorithms">>) =/= nomatch).
+test_session_dynamic_capabilities() ->
+    %% Verify the source code calls iris_compression:available_algorithms()
+    %% and does NOT have a hardcoded zstd in SERVER_CAPABILITIES
+    {ok, Src} = file:read_file("src/iris_session.erl"),
+    ?assert(binary:match(Src, <<"iris_compression:available_algorithms()">>) =/= nomatch),
+    %% The old hardcoded line should NOT exist
+    ?assertEqual(nomatch, binary:match(Src, <<"[<<\"zlib\">>, <<\"zstd\">>, <<\"e2ee\">>">>)).

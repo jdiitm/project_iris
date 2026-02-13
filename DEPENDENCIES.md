@@ -1,50 +1,51 @@
 # Dependencies
 
-Project Iris has **zero external Erlang dependencies**. The entire system is built on pure OTP 26.
+## Erlang Dependencies
 
-## Runtime Dependencies
+This project uses **zero external Erlang dependencies**. All functionality is implemented against OTP 26 standard applications:
 
-| Dependency | Type | Required | Notes |
-|---|---|---|---|
-| Erlang/OTP 26 | Runtime | Yes | Core platform. No third-party rebar/hex packages. |
-| Mnesia | OTP built-in | Yes | Distributed database for durable storage. |
-| crypto | OTP built-in | Yes | HMAC-SHA256 and EdDSA signature verification. |
-| ssl | OTP built-in | Yes | TLS for client connections and mTLS for inter-node. |
-| zlib | OTP built-in | Yes | Default compression algorithm. |
+| OTP Application | Purpose |
+|-----------------|---------|
+| `kernel`        | Core runtime, distribution, networking |
+| `stdlib`        | Standard library, gen_server, supervisor |
+| `crypto`        | HMAC-SHA256, EdDSA signing/verification, secure random |
+| `ssl`           | TLS termination, mTLS enforcement |
+| `public_key`    | Certificate parsing, key management |
+| `mnesia`        | Distributed database for offline messages, dedup, tokens |
 
-## Optional Dependencies
+## Native Dependencies
 
-| Dependency | Type | Required | Notes |
-|---|---|---|---|
-| libzstd-dev | C library | No | Enables zstd compression NIF. See below. |
+| Library | Required | Purpose |
+|---------|----------|---------|
+| `libzstd-dev` | Optional | Zstd compression NIF (RFC Section 11.1) |
 
-### Zstd NIF (Optional)
+When `libzstd-dev` is not installed, the system falls back to zlib compression. The `iris_compression:available_algorithms/0` function dynamically detects NIF availability at runtime.
 
-The `iris_zstd_nif` module provides zstd compression via a C NIF. It is **optional** — the system falls back to zlib when the NIF is not available.
-
-To enable:
-
-```bash
-sudo apt-get install libzstd-dev   # Debian/Ubuntu
-make nif                           # Compiles priv/iris_zstd_nif.so
+Install on Debian/Ubuntu:
+```
+apt-get install libzstd-dev
 ```
 
-Runtime detection is automatic: `iris_compression:available_algorithms/0` checks for the NIF `.so` at startup and only advertises `zstd` in `SERVER_CAPABILITIES` when present.
+## Build Tools
 
-## Test Dependencies
+| Tool | Version | Purpose |
+|------|---------|---------|
+| Erlang/OTP | 26+ | Runtime and compiler |
+| GNU Make | Any | Build orchestration |
+| Python 3.11+ | Test-only | Integration test framework |
 
-| Dependency | Type | Notes |
-|---|---|---|
-| Python 3.11+ | Test runner | Integration/E2E/chaos tests. |
-| pytest | Python package | Test framework (see `requirements-test.txt`). |
-| Docker | Infrastructure | Required only for Tier 1 chaos tests. |
+## Why No rebar3?
 
-## Design Philosophy
+This project deliberately avoids rebar3 and external Hex packages to:
+1. Eliminate supply-chain attack surface (no transitive dependencies)
+2. Ensure reproducible builds with zero network fetches
+3. Simplify deployment (single `ebin/` directory, no `_build/` tree)
 
-No external Erlang dependencies reduces:
-- Supply chain attack surface
-- Version conflict risk
-- Build complexity
-- Audit scope
+Since there are no external dependencies, there is no `rebar.lock` or dependency manifest to scan. Automated security scanning (Dependabot, `mix audit`) is not applicable.
 
-All protocol parsing, JWT validation, JSON handling, and compression are implemented in-tree using OTP primitives.
+## Security Scanning
+
+In lieu of dependency scanning, the CI pipeline runs:
+- **Dialyzer** static analysis for type safety and undefined function detection
+- **Xref** cross-reference analysis for dead code and missing function calls
+- **Property-based tests** for protocol and crypto edge cases
