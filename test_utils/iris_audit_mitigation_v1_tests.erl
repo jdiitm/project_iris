@@ -80,15 +80,19 @@ mnesia_guard_exports_check_memory_test() ->
 mnesia_guard_returns_memory_map_test() ->
     %% Ensure Mnesia is running with at least the schema table
     mnesia:start(),
-    {ok, MemMap} = iris_mnesia_guard:check_memory(),
-    ?assert(is_map(MemMap)),
-    %% schema table always exists when Mnesia is running
-    ?assert(maps:is_key(schema, MemMap)),
-    %% All values must be non-negative integers (bytes)
-    maps:foreach(fun(_Table, Bytes) ->
-        ?assert(is_integer(Bytes)),
-        ?assert(Bytes >= 0)
-    end, MemMap).
+    try
+        {ok, MemMap} = iris_mnesia_guard:check_memory(),
+        ?assert(is_map(MemMap)),
+        %% schema table always exists when Mnesia is running
+        ?assert(maps:is_key(schema, MemMap)),
+        %% All values must be non-negative integers (bytes)
+        maps:foreach(fun(_Table, Bytes) ->
+            ?assert(is_integer(Bytes)),
+            ?assert(Bytes >= 0)
+        end, MemMap)
+    after
+        mnesia:stop()
+    end.
 
 %% Default alarm threshold must be 1GB (1073741824 bytes).
 mnesia_guard_default_threshold_test() ->
@@ -114,7 +118,8 @@ mnesia_guard_detects_threshold_breach_test() ->
         ?assert(AlarmBytes > 0)
     after
         application:unset_env(iris_core, mnesia_memory_alarm_bytes),
-        persistent_term:put(iris_mnesia_guard_alarms, [])
+        persistent_term:put(iris_mnesia_guard_alarms, []),
+        mnesia:stop()
     end.
 
 %% iris_mnesia_guard must be declared in the core supervisor tree.
