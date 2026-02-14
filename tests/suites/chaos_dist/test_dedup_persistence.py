@@ -41,6 +41,8 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
+from tests.framework.wait import wait_for, poll_until, WaitTimeout
+
 # Test configuration
 SERVER_HOST = os.environ.get("IRIS_HOST", "localhost")
 SERVER_PORT = int(os.environ.get("IRIS_PORT", "8085"))
@@ -285,7 +287,7 @@ def reconnect_edge_to_core(edge_container="edge-east-1", core_node="core_east_1@
            f"-sname reconn_{random_id} -setcookie iris_secret "
            f"-eval \"net_adm:ping('{core_node}'), halt(0).\"")
     result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
-    time.sleep(2)
+    time.sleep(0.5)  # Brief pause for Erlang distribution handshake
     return result.returncode == 0
 
 
@@ -410,7 +412,17 @@ def test_dedup_survives_sigkill():
     log("  Container killed")
     
     log("\n5. Waiting for node to be fully dead...")
-    time.sleep(3)
+    def container_is_stopped():
+        result = subprocess.run(
+            ["docker", "inspect", "-f", "{{.State.Running}}", CONTAINER_NAME],
+            capture_output=True, text=True
+        )
+        return result.returncode == 0 and "false" in result.stdout.strip().lower()
+    try:
+        wait_for(container_is_stopped, timeout=15, interval=0.5,
+                 description=f"{CONTAINER_NAME} to stop")
+    except WaitTimeout:
+        log("  WARNING: Container may not be fully stopped, continuing...")
     
     log(f"\n6. Starting container: {CONTAINER_NAME}")
     if not start_container(CONTAINER_NAME):
@@ -421,26 +433,25 @@ def test_dedup_survives_sigkill():
     if not wait_for_container_healthy(CONTAINER_NAME, RECOVERY_TIMEOUT):
         log("  Container not healthy, but continuing...")
     
-    # Wait for Mnesia recovery
-    # AUDIT P4 FIX: Reduced from 20s
+    # Wait for Mnesia recovery by polling core health + edge connectivity
     log("  Waiting for Mnesia recovery...")
-    time.sleep(10)
-    
-    # Reconnect edge to core
     reconnect_edge_to_core()
     
-    # Wait for edge TLS listener to be ready (not just TCP-level)
+    # Poll for edge TLS listener to be ready (replaces fixed sleep + retry loop)
     log("  Waiting for edge TLS to accept connections...")
-    edge_ready = False
-    for _ in range(15):
+    def edge_tls_ready():
         try:
             probe = connect_tls()
             probe.close()
-            edge_ready = True
-            break
+            return True
         except Exception:
-            time.sleep(2)
-    if not edge_ready:
+            # Retry edge-to-core reconnection periodically
+            reconnect_edge_to_core()
+            return False
+    try:
+        wait_for(edge_tls_ready, timeout=60, interval=2.0,
+                 description="edge TLS listener ready after core recovery")
+    except WaitTimeout:
         log("FAIL: Edge TLS listener not ready after core recovery")
         return False
     
@@ -468,8 +479,8 @@ def test_dedup_survives_sigkill():
     
     log(f"   Retry sent, ACK received: {retry_ack}")
     
-    # Wait for any async processing
-    time.sleep(2)
+    # Brief pause for server-side processing
+    time.sleep(0.5)
     
     log(f"\n9. Logging in as receiver: {receiver}")
     log("   Checking how many copies of the message were delivered")

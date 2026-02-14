@@ -465,19 +465,24 @@ cleanup_old_bloom_partitions(_CurrentPartition) ->
 %% P0-FIX: Dedup Log (Mnesia-backed verification for bloom false positives)
 %% =============================================================================
 
-%% Write message ID to dedup_log for later verification.
-%% GAP-3 FIX: Synchronous dirty_write (was async spawn, creating a crash window).
-%% RFC 6.2 requires "Atomically deduplicate" -- the dedup_log entry MUST exist
-%% before check_and_mark returns, so a node crash cannot cause re-processing.
-%% dirty_write latency is ~0.1-0.5ms on disc_copies -- acceptable on hot path.
+%% Write message ID to dedup_log with crash-safe durability.
+%% AUDIT FIX: dirty_write -> sync_transaction (RFC 6.2 "Atomically deduplicate").
+%% sync_transaction ensures the transaction log is fsynced before returning,
+%% so the dedup_log entry survives power loss / SIGKILL. Matches the durable
+%% write pattern used by iris_offline_storage, iris_durable_batcher, iris_keys.
+%% Latency: ~1-5ms (vs ~0.1-0.5ms dirty_write). Only hits new messages;
+%% duplicates short-circuit at ETS/dedup_log read. Acceptable on hot path.
+%% On failure: crashes the caller so the message is NOT ACKed -- client retries.
 write_dedup_log(MsgId, Timestamp) ->
-    try
-        mnesia:dirty_write({dedup_log, MsgId, Timestamp})
-    catch
-        _:Reason ->
-            logger:warning("Dedup log write failed for ~p: ~p", [MsgId, Reason])
-    end,
-    ok.
+    case mnesia:sync_transaction(fun() ->
+        mnesia:write({dedup_log, MsgId, Timestamp})
+    end) of
+        {atomic, ok} ->
+            ok;
+        {aborted, Reason} ->
+            logger:error("CRITICAL: Dedup log sync write FAILED for ~p: ~p", [MsgId, Reason]),
+            error({dedup_write_failed, MsgId, Reason})
+    end.
 
 %% Cleanup dedup_log entries older than 7 days
 %% Called periodically from handle_info(cleanup, ...)
