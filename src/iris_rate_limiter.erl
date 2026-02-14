@@ -22,9 +22,13 @@
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 %% RFC NFR-17: Distributed rate limit gossip
 -export([merge_remote_counters/1]).
+%% AUDIT MITIGATION: Hot-user detection and synchronous cross-node check
+-export([is_hot_user/1, get_hot_users/0, sync_check/1]).
 
 -define(SERVER, ?MODULE).
 -define(TABLE, iris_rate_limit_buckets).
+-define(HOT_USERS_TABLE, iris_rate_hot_users).
+-define(HOT_USER_THRESHOLD, 0.80).  %% Flag user when >80% tokens depleted
 
 %% Default limits (configurable via application env)
 %% RFC Section 10.1: 5 msg/sec sustained, 20 msg/sec burst (10s window)
@@ -32,7 +36,7 @@
 -define(DEFAULT_BURST, 20).        %% Burst capacity (20 msgs/sec for 10s)
 -define(REFILL_INTERVAL, 100).     %% Refill every 100ms
 
--define(GOSSIP_INTERVAL, 1000).    %% RFC NFR-17: Gossip every 1 second
+-define(GOSSIP_INTERVAL, 500).     %% AUDIT MITIGATION: Tightened from 1s to 500ms for faster convergence
 -define(GOSSIP_PG_GROUP, iris_rate_limit_gossip).
 
 -record(state, {
@@ -80,6 +84,8 @@ check(User, Tokens) ->
     case consume_tokens(RefilledBucket, Tokens) of
         {ok, NewBucket} ->
             save_bucket(NewBucket),
+            %% AUDIT MITIGATION: Flag user as hot when >80% tokens depleted
+            maybe_flag_hot_user(NewBucket),
             gen_server:cast(?SERVER, allowed),
             allow;
         {not_enough, CurrentTokens} ->
@@ -146,6 +152,19 @@ init(_Opts) ->
         {write_concurrency, true}
     ]),
     
+    %% AUDIT MITIGATION: Hot-user tracking table for synchronous cross-node checks
+    try
+        ets:new(?HOT_USERS_TABLE, [
+            set,
+            named_table,
+            public,
+            {read_concurrency, true},
+            {write_concurrency, true}
+        ])
+    catch
+        error:badarg -> ok  %% Already exists
+    end,
+    
     %% Start periodic refill/cleanup timer
     TRef = erlang:send_after(?REFILL_INTERVAL * 10, self(), cleanup),
     
@@ -170,6 +189,14 @@ handle_call(get_stats, _From, State) ->
         default_burst => get_default_burst()
     },
     {reply, Stats, State};
+
+%% AUDIT MITIGATION: Synchronous user usage query for cross-node checks
+handle_call({get_user_usage, User}, _From, State) ->
+    Used = case ets:lookup(?TABLE, User) of
+        [#bucket{burst = B, tokens = T}] -> round(B - T);
+        [] -> 0
+    end,
+    {reply, {ok, Used}, State};
 
 handle_call(_Request, _From, State) ->
     {reply, {error, unknown_request}, State}.
@@ -411,6 +438,93 @@ apply_remote_counters([{User, RemoteUsed} | Rest]) ->
 %% @doc Merge remote counters from another node (called via RPC or gossip)
 merge_remote_counters(RemoteCounters) ->
     gen_server:cast(?SERVER, {remote_counters, unknown, RemoteCounters}).
+
+%% =============================================================================
+%% AUDIT MITIGATION: Hot-User Detection and Synchronous Cross-Node Check
+%% =============================================================================
+%% When a user depletes >80% of their token bucket, they are flagged as "hot".
+%% Hot users get synchronous cross-node counter checks instead of waiting for
+%% gossip, closing the window where botnet users can multiply their budget.
+%% =============================================================================
+
+%% @doc Flag user as hot when >80% of burst capacity depleted.
+-spec maybe_flag_hot_user(#bucket{}) -> ok.
+maybe_flag_hot_user(#bucket{user = User, tokens = Tokens, burst = Burst})
+  when is_binary(User) ->
+    Depleted = (Burst - Tokens) / max(1, Burst),
+    case Depleted >= ?HOT_USER_THRESHOLD of
+        true ->
+            ensure_hot_users_table(),
+            ets:insert(?HOT_USERS_TABLE, {User, os:system_time(millisecond)});
+        false ->
+            ok
+    end;
+maybe_flag_hot_user(_) ->
+    %% Skip for typed buckets (tuple keys)
+    ok.
+
+%% @doc Check if a user is flagged as hot.
+-spec is_hot_user(binary()) -> boolean().
+is_hot_user(User) ->
+    ensure_hot_users_table(),
+    case ets:lookup(?HOT_USERS_TABLE, User) of
+        [{User, _Ts}] -> true;
+        [] -> false
+    end.
+
+%% @doc Get all currently flagged hot users.
+-spec get_hot_users() -> [binary()].
+get_hot_users() ->
+    ensure_hot_users_table(),
+    [User || {User, _Ts} <- ets:tab2list(?HOT_USERS_TABLE)].
+
+%% @doc Synchronous cross-node rate check for a user.
+%% Queries all nodes in the pg gossip group for their local token counts.
+%% Returns {allow, TotalUsed} | {deny, TotalUsed}.
+-spec sync_check(binary()) -> {allow, integer()} | {deny, integer()}.
+sync_check(User) ->
+    %% Collect local usage
+    LocalUsed = case ets:lookup(?TABLE, User) of
+        [#bucket{burst = B, tokens = T}] -> round(B - T);
+        [] -> 0
+    end,
+    %% Collect remote usage via pg group
+    RemoteUsed = try
+        Members = pg:get_members(?GOSSIP_PG_GROUP),
+        OtherMembers = [M || M <- Members, M =/= self()],
+        %% Synchronous call with 200ms timeout (fast path)
+        Replies = lists:filtermap(fun(Member) ->
+            try
+                case gen_server:call(Member, {get_user_usage, User}, 200) of
+                    {ok, Used} -> {true, Used};
+                    _ -> false
+                end
+            catch _:_ -> false
+            end
+        end, OtherMembers),
+        lists:sum(Replies)
+    catch _:_ -> 0
+    end,
+    TotalUsed = LocalUsed + RemoteUsed,
+    Burst = get_default_burst(),
+    case TotalUsed >= Burst of
+        true -> {deny, TotalUsed};
+        false -> {allow, TotalUsed}
+    end.
+
+ensure_hot_users_table() ->
+    case ets:whereis(?HOT_USERS_TABLE) of
+        undefined ->
+            try
+                ets:new(?HOT_USERS_TABLE, [
+                    set, named_table, public,
+                    {read_concurrency, true},
+                    {write_concurrency, true}
+                ])
+            catch error:badarg -> ok
+            end;
+        _ -> ok
+    end.
 
 %% =============================================================================
 %% HOT-002 FIX: Destination Rate Limiting

@@ -240,69 +240,79 @@ test_dedup_log_verification() ->
 %% the system to rebuild state correctly.
 %% =============================================================================
 
+crash_setup() ->
+    %% Crash tests need disc_only_copies (matching production table_spec)
+    %% so dedup_log survives full Mnesia stop/restart.
+    catch gen_server:stop(iris_dedup),
+    catch ets:delete(iris_dedup_seen),
+    catch ets:delete(iris_dedup_bloom),
+    catch mnesia:stop(),
+    mnesia:delete_schema([node()]),
+    mnesia:create_schema([node()]),
+    mnesia:start(),
+    case mnesia:create_table(dedup_log, [
+        {attributes, [msg_id, timestamp]},
+        {disc_only_copies, [node()]},
+        {type, set}
+    ]) of
+        {atomic, ok} -> ok;
+        {aborted, {already_exists, dedup_log}} -> ok
+    end,
+    mnesia:wait_for_tables([dedup_log], 5000),
+    {ok, Pid} = iris_dedup:start_link(),
+    {started, Pid}.
+
+crash_cleanup({started, _Pid}) ->
+    catch gen_server:stop(iris_dedup),
+    catch ets:delete(iris_dedup_seen),
+    catch ets:delete(iris_dedup_bloom),
+    catch mnesia:delete_table(dedup_log),
+    catch mnesia:stop();
+crash_cleanup({existing, _}) ->
+    ok.
+
 crash_restart_test_() ->
     {"Crash/restart behavior (AUDIT FIX)",
      {setup,
-      fun setup/0,
-      fun cleanup/1,
+      fun crash_setup/0,
+      fun crash_cleanup/1,
       [
-       {"Dedup survives restart", fun test_dedup_survives_restart/0},
+       {"Dedup survives full Mnesia restart", fun test_dedup_survives_restart/0},
        {"Bloom rebuilds from dedup_log", fun test_bloom_rebuilds_from_log/0}
       ]}}.
 
 test_dedup_survives_restart() ->
-    %% AUDIT FIX: Test that dedup state survives process restart
-    %% The bloom filter is in-memory, but dedup_log persists to Mnesia
+    %% AUDIT FIX: Test that dedup state survives full Mnesia restart
+    %% (not just gen_server restart). This validates disc_only_copies persistence.
     MsgId = <<"restart_test_", (integer_to_binary(erlang:unique_integer()))/binary>>,
     
-    %% Mark as seen (writes to ETS, bloom, and dedup_log)
+    %% Mark as seen (writes to ETS, bloom, and dedup_log synchronously)
     ?assertEqual(new, iris_dedup:check_and_mark(MsgId)),
     
-    %% Give async dedup_log write time to complete
-    timer:sleep(200),
+    %% Verify dedup_log entry exists before restart
+    ?assertMatch([{dedup_log, MsgId, _}], mnesia:dirty_read(dedup_log, MsgId)),
     
-    %% Restart the dedup process
-    case whereis(iris_dedup) of
-        undefined -> ok;
-        Pid ->
-            gen_server:stop(Pid),
-            timer:sleep(100)
-    end,
+    %% Full shutdown: stop gen_server, ETS tables, AND Mnesia
+    catch gen_server:stop(iris_dedup),
+    catch ets:delete(iris_dedup_seen),
+    catch ets:delete(iris_dedup_bloom),
+    mnesia:stop(),
     
-    %% Start fresh instance
+    %% Cold restart: Mnesia reloads from disc_only_copies (DETS)
+    mnesia:start(),
+    mnesia:wait_for_tables([dedup_log], 5000),
     {ok, _NewPid} = iris_dedup:start_link(),
-    timer:sleep(100),  %% Allow init to complete
     
-    %% The message should still be detected as duplicate
-    %% because dedup_log persists to Mnesia and bloom is verified against it
-    Result = iris_dedup:check_and_mark(MsgId),
-    
-    %% After restart, the bloom filter is empty but dedup_log check
-    %% should still catch this as a duplicate
-    ?assert(Result =:= duplicate orelse Result =:= new),
-    
-    %% If new, it means bloom was empty but dedup_log verification
-    %% should kick in on subsequent check
-    case Result of
-        new ->
-            %% Wait for dedup_log write and check again
-            timer:sleep(100),
-            ?assertEqual(duplicate, iris_dedup:check_and_mark(MsgId));
-        duplicate ->
-            ?assert(true)
-    end.
+    %% Strict assertion: message MUST be detected as duplicate after restart
+    ?assertEqual(duplicate, iris_dedup:check_and_mark(MsgId)).
 
 test_bloom_rebuilds_from_log() ->
     %% AUDIT FIX: Test that bloom filter can be verified against dedup_log
     %% This prevents false positives from causing message loss
-    
-    %% The bloom filter rebuilding behavior depends on implementation
-    %% This test verifies the verification path exists
     MsgId = <<"rebuild_test_", (integer_to_binary(erlang:unique_integer()))/binary>>,
     
-    %% Mark message
+    %% Mark message (synchronous write to dedup_log)
     ?assertEqual(new, iris_dedup:check_and_mark(MsgId)),
-    timer:sleep(200),
     
     %% Verify it's in the system
     ?assert(iris_dedup:is_duplicate(MsgId)),

@@ -677,10 +677,29 @@ delete_offline_confirmed(User, {FromCursor, ToCursor}) ->
     iris_offline_storage:delete_confirmed(User, Count, FromCursor, ToCursor).
 
 get_bucket_count(User) ->
-    case mnesia:dirty_read(user_meta, User) of
-        [{user_meta, User, Count, _LastMod}] -> Count;
-        [{user_meta, User, Count}] -> Count;  %% Legacy records
-        [] -> 1
+    HotResult = try mnesia:dirty_read(user_meta, User)
+                catch _:_ -> []
+                end,
+    case HotResult of
+        [{user_meta, User, Count, _LastMod}] ->
+            iris_storage_tier:touch(User),
+            Count;
+        [{user_meta, User, Count}] ->
+            iris_storage_tier:touch(User),
+            Count;  %% Legacy records
+        _ ->
+            %% AUDIT MITIGATION (Blocker 1): Fall back to cold tier
+            case iris_storage_tier:read_through(user_meta, user_meta_cold, User) of
+                {ok, {_, User, Count, _LastMod}} ->
+                    %% Promote back to hot tier for future fast access
+                    iris_storage_tier:promote(user_meta, user_meta_cold, User),
+                    Count;
+                {ok, {_, User, Count}} ->
+                    iris_storage_tier:promote(user_meta, user_meta_cold, User),
+                    Count;
+                not_found ->
+                    1
+            end
     end.
 
 set_bucket_count(User, Count) ->
@@ -972,7 +991,13 @@ table_spec(refresh_tokens) ->
 table_spec(user_blocks) ->
     {disc_copies, [{attributes, [key, blocker, blocked, created_at]}, {type, set}]};
 table_spec(user_reports) ->
-    {disc_copies, [{attributes, [id, reporter, reported, reason, created_at]}, {type, bag}]}.
+    {disc_copies, [{attributes, [id, reporter, reported, reason, created_at]}, {type, bag}]};
+
+%% AUDIT MITIGATION (Blocker 1): Cold-tier overflow for user_meta.
+%% disc_only_copies keeps data on disc only (no keys in RAM).
+%% Same schema as user_meta so records can be moved transparently.
+table_spec(user_meta_cold) ->
+    {disc_only_copies, [{attributes, [user, bucket_count, last_modified]}]}.
 
 %% ---------------------------------------------------------------------------
 %% AUDIT: TTL Cleanup — Purge expired entries from dedup_log, revoked_tokens,
@@ -1057,7 +1082,7 @@ recreate_table(Table) ->
 
 %% Internal: Create tables (only called when seeding)
 create_tables(Nodes) ->
-    AllTables = [presence, offline_msg, user_meta, user_status,
+    AllTables = [presence, offline_msg, user_meta, user_meta_cold, user_status,
                  revoked_tokens, dedup_log, refresh_tokens,
                  user_blocks, user_reports],
     lists:foreach(fun(Table) ->

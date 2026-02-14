@@ -1,13 +1,21 @@
 #!/usr/bin/env python3
 """
-AUDIT5 P0-1: Durability Test Suite (STRICT)
+AUDIT5 P0-1: Offline Message Durability Test Suite (STRICT)
 
 This test validates that offline messages are stored and delivered.
-Per Audit5 findings, this test now has STRICT assertions:
+Per Audit5 findings, this test has STRICT assertions:
 - FAIL if any messages are lost
 - No "probe test" behavior that hides failures
 
 This is a production-readiness gate - a failure here means data loss risk.
+
+NOTE (AUDIT MITIGATION): This test validates "normal" offline durability
+(send → persist → reconnect → deliver). For "hard kill" durability
+(send → ACK → SIGKILL → recover → verify), see:
+  tests/suites/chaos_dist/test_ack_durability.py
+
+The filename "test_hard_kill" is historical. This test complements (not
+replaces) the true hard-kill chaos test in chaos_dist.
 """
 
 import sys

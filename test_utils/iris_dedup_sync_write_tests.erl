@@ -30,7 +30,7 @@ setup() ->
     mnesia:start(),
     case mnesia:create_table(dedup_log, [
         {attributes, [msg_id, timestamp]},
-        {disc_copies, [node()]},
+        {disc_only_copies, [node()]},
         {type, set}
     ]) of
         {atomic, ok} -> ok;
@@ -57,7 +57,9 @@ iris_dedup_sync_write_test_() ->
      fun cleanup/1,
      [
       {"dedup_log entry exists immediately after check_and_mark returns new",
-       fun test_dedup_log_written_synchronously/0}
+       fun test_dedup_log_written_synchronously/0},
+      {"dedup_log survives full Mnesia stop/restart cycle",
+       fun test_dedup_log_survives_full_mnesia_restart/0}
      ]}.
 
 test_dedup_log_written_synchronously() ->
@@ -73,3 +75,30 @@ test_dedup_log_written_synchronously() ->
     %% spawned process hasn't run yet.
     DedupEntry = mnesia:dirty_read(dedup_log, MsgId),
     ?assertMatch([{dedup_log, MsgId, _Timestamp}], DedupEntry).
+
+test_dedup_log_survives_full_mnesia_restart() ->
+    MsgId = <<"mnesia_restart_", (integer_to_binary(erlang:unique_integer([positive])))/binary>>,
+
+    %% Write via check_and_mark -- must return "new"
+    ?assertEqual(new, iris_dedup:check_and_mark(MsgId)),
+
+    %% Verify the entry exists BEFORE restart
+    ?assertMatch([{dedup_log, MsgId, _}], mnesia:dirty_read(dedup_log, MsgId)),
+
+    %% Stop iris_dedup gen_server, then stop Mnesia entirely
+    catch gen_server:stop(iris_dedup),
+    catch ets:delete(?TABLE),
+    catch ets:delete(?BLOOM_TABLE),
+    mnesia:stop(),
+
+    %% Restart Mnesia from cold state (simulates node restart)
+    mnesia:start(),
+    mnesia:wait_for_tables([dedup_log], 5000),
+
+    %% Persistence check: the raw Mnesia record must survive
+    DedupEntry = mnesia:dirty_read(dedup_log, MsgId),
+    ?assertMatch([{dedup_log, MsgId, _}], DedupEntry),
+
+    %% Functional check: restart iris_dedup and verify dedup works
+    {ok, _Pid} = iris_dedup:start_link([]),
+    ?assertEqual(duplicate, iris_dedup:check_and_mark(MsgId)).
