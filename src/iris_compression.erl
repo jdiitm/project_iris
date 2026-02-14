@@ -26,18 +26,19 @@ compress(zlib, Data) ->
     end;
 compress(zstd, Data) ->
     %% Real zstd via NIF (RFC Section 11.1: "zstd (recommended)")
-    %% AUDIT FIX: Graceful degradation if NIF .so is not loaded
+    %% AUDIT V2 P0-3: Transparent fallback to zlib when NIF unavailable.
+    %% Callers always get {ok, CompressedData} — no error handling needed.
     try iris_zstd_nif:compress(Data)
     catch
         error:undef ->
             bump_fallback_metric(),
-            {error, zstd_nif_not_available};
+            compress(zlib, Data);
         error:nif_not_loaded ->
             bump_fallback_metric(),
-            {error, zstd_nif_not_available};
+            compress(zlib, Data);
         error:{nif_not_loaded, _} ->
             bump_fallback_metric(),
-            {error, zstd_nif_not_available}
+            compress(zlib, Data)
     end.
 
 %% @doc Decompress data with the given algorithm.
@@ -51,18 +52,18 @@ decompress(zlib, Compressed) ->
     end;
 decompress(zstd, Data) ->
     %% Real zstd via NIF (RFC Section 11.1)
-    %% AUDIT FIX: Graceful degradation if NIF .so is not loaded
+    %% AUDIT V2 P0-3: Transparent fallback to zlib when NIF unavailable.
     try iris_zstd_nif:decompress(Data)
     catch
         error:undef ->
             bump_fallback_metric(),
-            {error, zstd_nif_not_available};
+            decompress(zlib, Data);
         error:nif_not_loaded ->
             bump_fallback_metric(),
-            {error, zstd_nif_not_available};
+            decompress(zlib, Data);
         error:{nif_not_loaded, _} ->
             bump_fallback_metric(),
-            {error, zstd_nif_not_available}
+            decompress(zlib, Data)
     end.
 
 %% @doc Maybe compress based on payload size. Skips payloads <= 128 bytes.

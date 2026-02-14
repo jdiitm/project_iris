@@ -52,16 +52,10 @@ iris_compression_test_() ->
 
 test_compress_zstd_roundtrip() ->
     Data = crypto:strong_rand_bytes(256),
-    case iris_compression:compress(zstd, Data) of
-        {ok, Compressed} ->
-            %% NIF available: verify roundtrip
-            {ok, Decompressed} = iris_compression:decompress(zstd, Compressed),
-            ?assertEqual(Data, Decompressed);
-        {error, zstd_nif_not_available} ->
-            %% NIF not loaded: verify graceful degradation (no crash)
-            ?assertEqual({error, zstd_nif_not_available},
-                         iris_compression:decompress(zstd, Data))
-    end.
+    %% AUDIT V2: compress(zstd, ...) always returns {ok, _} via NIF or zlib fallback
+    {ok, Compressed} = iris_compression:compress(zstd, Data),
+    {ok, Decompressed} = iris_compression:decompress(zstd, Compressed),
+    ?assertEqual(Data, Decompressed).
 
 test_compress_zlib_roundtrip() ->
     Data = crypto:strong_rand_bytes(256),
@@ -74,17 +68,10 @@ test_compress_noop_small_payload() ->
     SmallData = crypto:strong_rand_bytes(64),
     Result = iris_compression:maybe_compress(zstd, SmallData),
     ?assertEqual({uncompressed, SmallData}, Result),
-    %% Large payload: compressed if NIF available, uncompressed fallback otherwise
+    %% AUDIT V2: Large payload always compressed (NIF or zlib fallback)
     LargeData = crypto:strong_rand_bytes(256),
-    case iris_compression:compress(zstd, LargeData) of
-        {ok, _} ->
-            Result2 = iris_compression:maybe_compress(zstd, LargeData),
-            ?assertMatch({compressed, _}, Result2);
-        {error, zstd_nif_not_available} ->
-            %% NIF not loaded: maybe_compress falls back to uncompressed
-            Result2 = iris_compression:maybe_compress(zstd, LargeData),
-            ?assertEqual({uncompressed, LargeData}, Result2)
-    end.
+    Result2 = iris_compression:maybe_compress(zstd, LargeData),
+    ?assertMatch({compressed, _}, Result2).
 
 test_compressed_frame_has_flag() ->
     %% Compressed frame opcode = original_opcode | 0x80
@@ -114,35 +101,29 @@ test_negotiate_capabilities() ->
 
 test_zstd_produces_real_format() ->
     Data = crypto:strong_rand_bytes(256),
-    case iris_compression:compress(zstd, Data) of
-        {ok, Compressed} ->
-            %% Must NOT start with the fake "zstd:" tag
-            ?assertNot(binary:match(Compressed, <<"zstd:">>) =:= {0, 5}),
-            %% Must start with real zstd magic bytes (0xFD2FB528 little-endian)
+    %% AUDIT V2: compress always returns {ok, _} — either via NIF or zlib fallback
+    {ok, Compressed} = iris_compression:compress(zstd, Data),
+    %% Must NOT start with the fake "zstd:" tag
+    ?assertNot(binary:match(Compressed, <<"zstd:">>) =:= {0, 5}),
+    %% When NIF is available: starts with zstd magic bytes
+    %% When NIF absent: starts with zlib bytes (transparent fallback)
+    <<FirstByte, _/binary>> = Compressed,
+    NifAvailable = try iris_zstd_nif:compress(<<0>>), true
+                   catch _:_ -> false end,
+    case NifAvailable of
+        true ->
             <<Magic:4/binary, _/binary>> = Compressed,
             ?assertEqual(<<16#28, 16#B5, 16#2F, 16#FD>>, Magic);
-        {error, zstd_nif_not_available} ->
-            %% NIF not loaded: verify error is returned (no crash)
-            ?assertEqual({error, zstd_nif_not_available},
-                         iris_compression:compress(zstd, Data))
+        false ->
+            %% zlib deflate starts with 0x78 (CMF byte)
+            ?assertEqual(16#78, FirstByte)
     end.
 
 test_zstd_real_roundtrip() ->
-    %% Multiple data sizes to verify robustness
-    ProbeData = crypto:strong_rand_bytes(256),
-    case iris_compression:compress(zstd, ProbeData) of
-        {ok, _} ->
-            lists:foreach(fun(Size) ->
-                Data = crypto:strong_rand_bytes(Size),
-                {ok, Compressed} = iris_compression:compress(zstd, Data),
-                {ok, Decompressed} = iris_compression:decompress(zstd, Compressed),
-                ?assertEqual(Data, Decompressed)
-            end, [256, 1024, 4096, 10000]);
-        {error, zstd_nif_not_available} ->
-            %% NIF not loaded: verify all sizes return error (no crash)
-            lists:foreach(fun(Size) ->
-                Data = crypto:strong_rand_bytes(Size),
-                ?assertEqual({error, zstd_nif_not_available},
-                             iris_compression:compress(zstd, Data))
-            end, [256, 1024, 4096, 10000])
-    end.
+    %% AUDIT V2: Multiple data sizes — roundtrip always works via NIF or zlib fallback
+    lists:foreach(fun(Size) ->
+        Data = crypto:strong_rand_bytes(Size),
+        {ok, Compressed} = iris_compression:compress(zstd, Data),
+        {ok, Decompressed} = iris_compression:decompress(zstd, Compressed),
+        ?assertEqual(Data, Decompressed)
+    end, [256, 1024, 4096, 10000]).

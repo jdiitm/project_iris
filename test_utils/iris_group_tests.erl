@@ -470,8 +470,10 @@ test_keys_since() ->
     %% Record time BEFORE adding keys (subtract 2 seconds to handle clock granularity)
     Before = erlang:system_time(second) - 2,
     
-    %% Wait to ensure time advances
-    timer:sleep(1000),
+    %% AUDIT V2 P1-1: Event-driven wait for clock to advance past Before
+    ok = iris_test_utils:wait_until(fun() ->
+        erlang:system_time(second) > Before + 1
+    end, 2000),
     
     %% Add keys
     ok = iris_group:store_sender_key(GroupId, Creator, <<"key1">>, test_encrypted_key(<<"data1">>)),

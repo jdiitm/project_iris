@@ -147,12 +147,21 @@ list_groups(UserId) ->
 %% @doc Add a member to a group. Only admins can add members.
 -spec add_member(binary(), binary(), binary()) -> ok | {error, term()}.
 add_member(GroupId, UserId, AddedBy) ->
-    gen_server:call(?SERVER, {add_member, GroupId, UserId, AddedBy}).
+    %% AUDIT V2 P1-2: Call directly instead of serializing through gen_server.
+    %% Mnesia transactions already provide isolation — the gen_server was
+    %% a global bottleneck serializing ALL group mutations.
+    Result = do_add_member(GroupId, UserId, AddedBy),
+    %% Invalidate roster cache (may fail if ETS table not yet created)
+    try ets:delete(iris_group_roster_cache, GroupId) catch error:badarg -> ok end,
+    Result.
 
 %% @doc Remove a member from a group. Admins can remove anyone; members can remove themselves.
 -spec remove_member(binary(), binary(), binary()) -> ok | {error, term()}.
 remove_member(GroupId, UserId, RemovedBy) ->
-    gen_server:call(?SERVER, {remove_member, GroupId, UserId, RemovedBy}).
+    %% AUDIT V2 P1-2: Direct call — same rationale as add_member.
+    Result = do_remove_member(GroupId, UserId, RemovedBy),
+    try ets:delete(iris_group_roster_cache, GroupId) catch error:badarg -> ok end,
+    Result.
 
 %% @doc Get all members of a group.
 -spec get_members(binary()) -> {ok, [map()]} | {error, term()}.

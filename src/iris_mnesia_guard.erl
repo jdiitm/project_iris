@@ -19,6 +19,7 @@
 
 %% API
 -export([start_link/0, check_memory/0, get_alarms/0, get_alarm_threshold/0]).
+-export([is_memory_ok/0]).  %% AUDIT V2 P0-2: Backpressure check
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
@@ -85,6 +86,25 @@ get_alarms() ->
 -spec get_alarm_threshold() -> non_neg_integer().
 get_alarm_threshold() ->
     application:get_env(iris_core, mnesia_memory_alarm_bytes, ?DEFAULT_ALARM_BYTES).
+
+%% @doc AUDIT V2 P0-2: Check if Mnesia memory is within acceptable bounds.
+%% Returns ok when total memory is under threshold, {error, memory_pressure}
+%% when any table exceeds the configured alarm threshold.
+%% Used as a backpressure gate before accepting new offline messages.
+-spec is_memory_ok() -> ok | {error, memory_pressure}.
+is_memory_ok() ->
+    %% Fast path: check cached alarms from last periodic check
+    case persistent_term:get(iris_mnesia_guard_alarms, []) of
+        [] ->
+            %% No cached alarms — do a fresh check to be sure
+            {ok, _MemMap} = check_memory(),
+            case persistent_term:get(iris_mnesia_guard_alarms, []) of
+                [] -> ok;
+                _Alarms -> {error, memory_pressure}
+            end;
+        _Alarms ->
+            {error, memory_pressure}
+    end.
 
 %%%===================================================================
 %%% gen_server callbacks

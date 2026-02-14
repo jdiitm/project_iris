@@ -20,14 +20,20 @@
 %% =============================================================================
 
 store(User, Msg, Count) ->
-    %% Use durable batcher if available, fallback to direct sync
-    case whereis(iris_durable_batcher_1) of
-        undefined ->
-            %% Batcher not started - use direct sync_transaction
-            store_sync(User, Msg, Count);
-        _Pid ->
-            %% Use WAL-backed batcher for optimal latency
-            iris_durable_batcher:store(User, Msg, Count)
+    %% AUDIT V2 P0-2: Backpressure — reject writes when Mnesia memory exceeds threshold
+    case check_memory_backpressure() of
+        ok ->
+            %% Use durable batcher if available, fallback to direct sync
+            case whereis(iris_durable_batcher_1) of
+                undefined ->
+                    %% Batcher not started - use direct sync_transaction
+                    store_sync(User, Msg, Count);
+                _Pid ->
+                    %% Use WAL-backed batcher for optimal latency
+                    iris_durable_batcher:store(User, Msg, Count)
+            end;
+        {error, memory_pressure} ->
+            {error, memory_pressure}
     end.
 
 %% Direct sync_transaction mode - guaranteed durable but slower
@@ -72,6 +78,15 @@ store_sync(User, Msg, Count) ->
 %% - Any path where RPO=0 is required
 %% =============================================================================
 store_durable(User, Msg, Count) ->
+    %% AUDIT V2 P0-2: Backpressure check before durable write
+    case check_memory_backpressure() of
+        {error, memory_pressure} ->
+            {error, memory_pressure};
+        ok ->
+            do_store_durable(User, Msg, Count)
+    end.
+
+do_store_durable(User, Msg, Count) ->
     %% ALWAYS use sync_transaction path (bypass batcher)
     %% The batcher provides better latency but may ACK before Mnesia commit
     Result = store_sync(User, Msg, Count),
@@ -275,6 +290,27 @@ sort_and_extract(Records) ->
 %% or implement a module with push_notify/2 and set:
 %%   application:set_env(iris_core, push_hook, {Module, Function})
 %% =============================================================================
+
+%% =============================================================================
+%% AUDIT V2 P0-2: Memory Backpressure Check
+%% =============================================================================
+%% Rejects offline message writes when Mnesia memory exceeds the configured
+%% alarm threshold. This prevents OOM crashes from unbounded message growth.
+
+check_memory_backpressure() ->
+    try iris_mnesia_guard:is_memory_ok() of
+        ok -> ok;
+        {error, memory_pressure} ->
+            try iris_metrics:inc(offline_store_backpressure_rejects)
+            catch _:_ -> ok
+            end,
+            logger:warning("Offline store rejected: Mnesia memory pressure"),
+            {error, memory_pressure}
+    catch
+        _:_ ->
+            %% Guard module not available — permissive
+            ok
+    end.
 
 -spec notify_push(binary(), binary()) -> ok.
 notify_push(User, Msg) ->

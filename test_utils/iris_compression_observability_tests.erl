@@ -45,42 +45,37 @@ zstd_nif_loadable() ->
 %% ---------------------------------------------------------------------------
 
 %% Test: zstd compress fallback increments metric when NIF is absent.
-%% When the NIF IS loaded (CI with libzstd-dev), compress succeeds
-%% natively, so the fallback path is not triggered.
+%% AUDIT V2: compress(zstd, ...) now always returns {ok, _} via transparent
+%% zlib fallback. Metric distinguishes NIF-native vs fallback path.
 zstd_fallback_emits_metric_test() ->
     ensure_metrics_table(),
     catch ets:insert(?METRICS_TABLE, {iris_compression_fallback_count, 0}),
     Before = get_metric(iris_compression_fallback_count),
-    Result = iris_compression:compress(zstd, <<"test data for compression">>),
+    {ok, _} = iris_compression:compress(zstd, <<"test data for compression">>),
     After = get_metric(iris_compression_fallback_count),
-    case Result of
-        {ok, _} ->
+    case zstd_nif_loadable() of
+        true ->
             %% NIF available: compress succeeded natively, no fallback
             ?assertEqual(Before, After);
-        {error, zstd_nif_not_available} ->
-            %% NIF absent: fallback path should have bumped metric
+        false ->
+            %% NIF absent: transparent zlib fallback bumped metric
             ?assert(After > Before)
     end.
 
 %% Test: zstd decompress fallback also increments metric when NIF is absent.
+%% AUDIT V2: decompress(zstd, ...) transparently falls back to zlib.
+%% Invalid data will still return {error, _} from zlib:uncompress.
 zstd_decompress_fallback_emits_metric_test() ->
     ensure_metrics_table(),
     catch ets:insert(?METRICS_TABLE, {iris_compression_fallback_count, 0}),
     Before = get_metric(iris_compression_fallback_count),
-    Result = iris_compression:decompress(zstd, <<"not real compressed data">>),
+    %% Use invalid data — will fail in both NIF and zlib, but metric
+    %% should still be bumped when NIF is absent (fallback path taken).
+    _Result = iris_compression:decompress(zstd, <<"not real compressed data">>),
     After = get_metric(iris_compression_fallback_count),
-    case Result of
-        {ok, _} ->
-            %% NIF available: decompress succeeded natively, no fallback
-            ?assertEqual(Before, After);
-        {error, _} ->
-            %% NIF absent OR invalid data: check if fallback bumped metric.
-            %% If NIF is absent, After > Before. If NIF is present but data
-            %% is invalid, the NIF returns {error, _} without fallback.
-            case zstd_nif_loadable() of
-                true  -> ?assertEqual(Before, After);
-                false -> ?assert(After > Before)
-            end
+    case zstd_nif_loadable() of
+        true  -> ?assertEqual(Before, After);
+        false -> ?assert(After > Before)
     end.
 
 %% Test: zlib compress does NOT emit fallback metric (zlib always works)
