@@ -543,14 +543,21 @@ is_revoked(TokenId) ->
     case ets:member(?REVOCATION_TABLE, TokenId) of
         true -> true;
         false ->
-            %% Check Mnesia for revocations from other nodes
-            case mnesia:dirty_read(revoked_tokens, TokenId) of
-                [] -> false;
-                [_|_] -> 
+            %% B-4 AUDIT MITIGATION: Transactional read for revocation check
+            %% (was dirty_read -- could miss concurrent revocations)
+            case mnesia:sync_transaction(fun() ->
+                mnesia:read(revoked_tokens, TokenId)
+            end) of
+                {atomic, []} -> false;
+                {atomic, [_|_]} -> 
                     %% Cache locally for fast subsequent checks
                     Now = os:system_time(second),
                     ets:insert(?REVOCATION_TABLE, {TokenId, Now}),
-                    true
+                    true;
+                {aborted, _} ->
+                    %% On transaction failure, assume not revoked (fail open)
+                    %% ETS cache still provides primary protection
+                    false
             end
     end.
 

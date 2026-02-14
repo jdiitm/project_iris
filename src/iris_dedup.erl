@@ -493,12 +493,15 @@ cleanup_dedup_log() ->
     spawn(fun() ->
         try
             %% Use dirty_select for efficiency (no transaction overhead)
+            %% B-4 AUDIT MITIGATION: dirty_select for read, transaction for delete
             OldEntries = mnesia:dirty_select(dedup_log, [
                 {{'dedup_log', '$1', '$2'}, [{'<', '$2', CutoffMs}], ['$1']}
             ]),
-            lists:foreach(fun(MsgId) ->
-                mnesia:dirty_delete(dedup_log, MsgId)
-            end, OldEntries),
+            mnesia:sync_transaction(fun() ->
+                lists:foreach(fun(MsgId) ->
+                    mnesia:delete({dedup_log, MsgId})
+                end, OldEntries)
+            end),
             case length(OldEntries) of
                 0 -> ok;
                 N -> logger:info("Dedup log cleanup: removed ~p old entries", [N])

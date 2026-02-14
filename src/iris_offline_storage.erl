@@ -243,11 +243,14 @@ retrieve_cursor(User, Count, Cursor) ->
 -spec delete_confirmed(binary(), integer(), integer(), integer()) -> ok.
 delete_confirmed(User, _Count, FromCursor, ToCursor) ->
     %% B-3 AUDIT MITIGATION: Monitored spawn for async delete
+    %% B-4 AUDIT MITIGATION: Transactional delete (was dirty_delete)
     iris_async:spawn_monitored(offline_msg_delete, fun() ->
-        lists:foreach(fun(ID) ->
-            Key = {User, ID},
-            mnesia:dirty_delete(offline_msg, Key)
-        end, lists:seq(FromCursor, ToCursor - 1))
+        mnesia:sync_transaction(fun() ->
+            lists:foreach(fun(ID) ->
+                Key = {User, ID},
+                mnesia:delete({offline_msg, Key})
+            end, lists:seq(FromCursor, ToCursor - 1))
+        end)
     end),
     ok.
 
@@ -271,10 +274,13 @@ retrieve_lockfree(User, Count) ->
 -spec delete_all_async(binary(), integer()) -> ok.
 delete_all_async(User, Count) ->
     %% B-3 AUDIT MITIGATION: Monitored spawn for async cleanup
+    %% B-4 AUDIT MITIGATION: Transactional delete (was dirty_delete)
     iris_async:spawn_monitored(offline_msg_cleanup, fun() ->
-        lists:foreach(fun(ID) ->
-            mnesia:dirty_delete(offline_msg, {User, ID})
-        end, lists:seq(0, Count - 1))
+        mnesia:sync_transaction(fun() ->
+            lists:foreach(fun(ID) ->
+                mnesia:delete({offline_msg, {User, ID}})
+            end, lists:seq(0, Count - 1))
+        end)
     end),
     ok.
 
