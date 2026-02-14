@@ -24,7 +24,7 @@
 -export([is_enabled/0]).
 
 %% gen_server callbacks
--export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
+-export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
 -define(SERVER, ?MODULE).
 -define(RECEIPTS_TABLE, iris_read_receipts_ets).
@@ -143,6 +143,9 @@ handle_info(_Info, State) ->
 terminate(_Reason, #state{cleanup_timer = Timer}) ->
     erlang:cancel_timer(Timer),
     ok.
+
+code_change(_OldVsn, State, _Extra) ->
+    {ok, State}.
 
 %% =============================================================================
 %% Internal

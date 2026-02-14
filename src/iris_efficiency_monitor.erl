@@ -15,7 +15,7 @@
 -export([get_metrics/0, get_efficiency_score/0]).
 -export([get_scheduler_stats/0, get_memory_stats/0]).
 -export([get_process_limit_usage/0]).
--export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
+-export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
 -define(SERVER, ?MODULE).
 -define(SAMPLE_INTERVAL_MS, 5000).
@@ -121,6 +121,9 @@ handle_info(_Info, State) ->
 terminate(_Reason, _State) ->
     erlang:system_flag(scheduler_wall_time, false),
     ok.
+
+code_change(_OldVsn, State, _Extra) ->
+    {ok, State}.
 
 %% =============================================================================
 %% Internal: Sampling

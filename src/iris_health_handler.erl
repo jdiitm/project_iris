@@ -15,7 +15,8 @@
 %% =============================================================================
 
 -export([start_link/0, start_link/1]).
--export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
+-export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
+-export([dispatch/2]).  %% AUDIT M3: exported for testability
 
 -record(state, {
     listen_socket :: gen_tcp:socket(),
@@ -34,7 +35,16 @@ start_link() ->
     start_link(Port).
 
 start_link(Port) ->
-    gen_server:start_link({local, ?MODULE}, ?MODULE, Port, []).
+    %% Handle the case where iris_core supervisor already started us.
+    %% When iris_edge depends on iris_core (P2-2), both supervisors run on
+    %% the same node and both try to start this singleton. Return 'ignore'
+    %% so the second supervisor skips the child cleanly.
+    case whereis(?MODULE) of
+        undefined ->
+            gen_server:start_link({local, ?MODULE}, ?MODULE, Port, []);
+        _Pid ->
+            ignore
+    end.
 
 %% =============================================================================
 %% gen_server callbacks
@@ -91,6 +101,9 @@ terminate(_Reason, #state{listen_socket = LSock}) ->
     gen_tcp:close(LSock),
     ok.
 
+code_change(_OldVsn, State, _Extra) ->
+    {ok, State}.
+
 %% =============================================================================
 %% HTTP Request Handler
 %% =============================================================================
@@ -118,15 +131,35 @@ collect_headers(Sock, Acc) ->
         _ -> Acc
     end.
 
-dispatch(<<"/health">>, _Headers) -> health();
-dispatch(<<"/ready">>, _Headers)  -> ready();
-dispatch(<<"/metrics">>, Headers) ->
+dispatch(Path, Headers) ->
+    dispatch_normalized(normalize_path(Path), Headers).
+
+dispatch_normalized(<<"/health">>, _Headers) -> health();
+dispatch_normalized(<<"/ready">>, _Headers)  -> ready();
+dispatch_normalized(<<"/metrics">>, Headers) ->
     %% AUDIT P1-2: Bearer-token auth for /metrics endpoint
     case check_metrics_auth(Headers) of
         ok -> metrics();
         unauthorized -> {401, <<"text/plain">>, <<"Unauthorized">>}
     end;
-dispatch(_, _Headers) -> {404, <<"text/plain">>, <<"Not Found">>}.
+dispatch_normalized(_, _Headers) -> {404, <<"text/plain">>, <<"Not Found">>}.
+
+%% AUDIT M3: Normalize path by stripping query string and trailing slash
+normalize_path(Path) ->
+    %% Strip query string
+    P1 = case binary:split(Path, <<"?">>) of
+        [Base | _] -> Base;
+        _ -> Path
+    end,
+    %% Strip trailing slash (but not the root "/")
+    case P1 of
+        <<"/">> -> P1;
+        _ ->
+            case binary:last(P1) of
+                $/ -> binary:part(P1, 0, byte_size(P1) - 1);
+                _ -> P1
+            end
+    end.
 
 %% @doc Check bearer token auth for metrics endpoint.
 %% If no token is configured, metrics remain open (backward compatible for dev).

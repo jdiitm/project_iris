@@ -26,7 +26,7 @@
 -export([check_replication_mtls/0]).  %% NFR-15: mTLS pre-check for replication
 
 %% gen_server callbacks
--export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
+-export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
 -define(SERVER, ?MODULE).
 -define(DEFAULT_STABILITY_DELAY_MS, 5000).
@@ -201,14 +201,23 @@ terminate(_Reason, _State) ->
     net_kernel:monitor_nodes(false),
     ok.
 
+code_change(_OldVsn, State, _Extra) ->
+    {ok, State}.
+
 %% =============================================================================
 %% Internal Functions
 %% =============================================================================
 
-%% Check if a node is a core node (by naming convention)
+%% Check if a node is a core node.
+%% AUDIT FIX 2.3: Config-based role assignment with naming convention fallback.
 is_core_node(Node) ->
-    NodeStr = atom_to_list(Node),
-    lists:prefix("core", NodeStr) orelse lists:prefix("iris_core", NodeStr).
+    case application:get_env(iris_core, node_role) of
+        {ok, core} -> true;
+        {ok, _Other} -> false;
+        undefined ->
+            NodeStr = atom_to_list(Node),
+            lists:prefix("core", NodeStr) orelse lists:prefix("iris_core", NodeStr)
+    end.
 
 %% Cancel any pending timer for a node
 cancel_pending_timer(Node, State) ->

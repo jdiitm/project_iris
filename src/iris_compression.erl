@@ -11,6 +11,7 @@
 -export([maybe_compress/2]).
 -export([flag_compressed/1, is_compressed/1, original_opcode/1]).
 -export([negotiate/2]).
+-export([available_algorithms/0]).  %% AUDIT: dynamic capability detection
 
 -define(MIN_COMPRESS_SIZE, 128).  %% RFC v4.0: Skip compression below this
 
@@ -25,12 +26,19 @@ compress(zlib, Data) ->
     end;
 compress(zstd, Data) ->
     %% Real zstd via NIF (RFC Section 11.1: "zstd (recommended)")
-    %% AUDIT FIX: Graceful degradation if NIF .so is not loaded
+    %% AUDIT V2 P0-3: Transparent fallback to zlib when NIF unavailable.
+    %% Callers always get {ok, CompressedData} — no error handling needed.
     try iris_zstd_nif:compress(Data)
     catch
-        error:undef -> {error, zstd_nif_not_available};
-        error:nif_not_loaded -> {error, zstd_nif_not_available};
-        error:{nif_not_loaded, _} -> {error, zstd_nif_not_available}
+        error:undef ->
+            bump_fallback_metric(),
+            compress(zlib, Data);
+        error:nif_not_loaded ->
+            bump_fallback_metric(),
+            compress(zlib, Data);
+        error:{nif_not_loaded, _} ->
+            bump_fallback_metric(),
+            compress(zlib, Data)
     end.
 
 %% @doc Decompress data with the given algorithm.
@@ -44,12 +52,18 @@ decompress(zlib, Compressed) ->
     end;
 decompress(zstd, Data) ->
     %% Real zstd via NIF (RFC Section 11.1)
-    %% AUDIT FIX: Graceful degradation if NIF .so is not loaded
+    %% AUDIT V2 P0-3: Transparent fallback to zlib when NIF unavailable.
     try iris_zstd_nif:decompress(Data)
     catch
-        error:undef -> {error, zstd_nif_not_available};
-        error:nif_not_loaded -> {error, zstd_nif_not_available};
-        error:{nif_not_loaded, _} -> {error, zstd_nif_not_available}
+        error:undef ->
+            bump_fallback_metric(),
+            decompress(zlib, Data);
+        error:nif_not_loaded ->
+            bump_fallback_metric(),
+            decompress(zlib, Data);
+        error:{nif_not_loaded, _} ->
+            bump_fallback_metric(),
+            decompress(zlib, Data)
     end.
 
 %% @doc Maybe compress based on payload size. Skips payloads <= 128 bytes.
@@ -81,3 +95,55 @@ original_opcode(Opcode) ->
 -spec negotiate([binary()], [binary()]) -> [binary()].
 negotiate(ClientCaps, ServerCaps) ->
     [C || C <- ClientCaps, lists:member(C, ServerCaps)].
+
+%% @doc Return the list of compression algorithms available at runtime.
+%% zlib is always present (OTP built-in). zstd is included only if the
+%% NIF .so exists on disk (priv/iris_zstd_nif.so).
+-spec available_algorithms() -> [binary()].
+available_algorithms() ->
+    Base = [<<"zlib">>],
+    case zstd_nif_available() of
+        true -> Base ++ [<<"zstd">>];
+        false -> Base
+    end.
+
+%% AUDIT M8: Verify NIF actually loads (not just file existence) and cache result.
+zstd_nif_available() ->
+    case persistent_term:get(iris_zstd_nif_available, undefined) of
+        undefined ->
+            Result = try_zstd_nif(),
+            persistent_term:put(iris_zstd_nif_available, Result),
+            Result;
+        Cached ->
+            Cached
+    end.
+
+try_zstd_nif() ->
+    case code:priv_dir(iris_edge) of
+        {error, _} -> false;
+        PrivDir ->
+            NifPath = filename:join(PrivDir, "iris_zstd_nif.so"),
+            case filelib:is_file(NifPath) of
+                false -> false;
+                true ->
+                    %% File exists — verify it actually loads and works
+                    try
+                        _ = iris_zstd_nif:compress(<<0>>),
+                        true
+                    catch
+                        error:undef -> false;
+                        error:nif_not_loaded -> false;
+                        error:{nif_not_loaded, _} -> false;
+                        _:_ -> false
+                    end
+            end
+    end.
+
+%% AUDIT FIX (Finding 3): Emit metric when zstd NIF fallback triggers at runtime.
+%% This makes silent compression degradation observable via dashboards/alerts.
+bump_fallback_metric() ->
+    try
+        iris_metrics:inc(iris_compression_fallback_count)
+    catch
+        _:_ -> ok  %% Metrics module may not be running in all environments
+    end.

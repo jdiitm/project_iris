@@ -28,7 +28,7 @@
 -export([start_link/0, start_link/1]).
 -export([check_and_mark/1, is_duplicate/1, mark_seen/1]).
 -export([get_stats/0]).
--export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
+-export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 %% Exported for testing (bloom filter race verification)
 -export([add_to_bloom/1, check_bloom/1, init_bloom_partition/1]).
 
@@ -313,6 +313,9 @@ handle_info(_Info, State) ->
 
 terminate(_Reason, _State) ->
     ok.
+
+code_change(_OldVsn, State, _Extra) ->
+    {ok, State}.
 
 %% =============================================================================
 %% Internal Functions

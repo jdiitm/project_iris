@@ -15,6 +15,11 @@ import sys
 import time
 import os
 
+# Add project root to path for helpers
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+sys.path.insert(0, PROJECT_ROOT)
+from tests.utilities.helpers import wait_until
+
 SERVER_HOST = os.environ.get("IRIS_HOST", "localhost")
 SERVER_PORT = int(os.environ.get("IRIS_PORT", "8085"))
 TIMEOUT = 5
@@ -154,7 +159,7 @@ def test_tls_connection_works():
 
 def check_server_available():
     """Check if server is reachable."""
-    for attempt in range(3):
+    def _try_connect():
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.settimeout(2)
@@ -162,9 +167,9 @@ def check_server_available():
             sock.close()
             return True
         except:
-            if attempt < 2:
-                time.sleep(1)
-    return False
+            return False
+    
+    return wait_until(_try_connect, timeout=3, interval=1, description="server available")
 
 
 def check_ssl_available():
@@ -204,8 +209,8 @@ def main():
     print("=" * 60)
     print(f"Target: {SERVER_HOST}:{SERVER_PORT}")
     
-    # Wait a moment for TLS config to be fully loaded
-    time.sleep(1)
+    # Wait for TLS config to be fully loaded
+    wait_until(check_ssl_available, timeout=5, interval=0.5, description="TLS config loaded")
     
     print("\nChecking server availability...")
     if not check_server_available():

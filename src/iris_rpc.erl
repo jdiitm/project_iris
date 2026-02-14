@@ -22,7 +22,12 @@ call(Node, Mod, Fun, Args, Timeout) ->
             Result
     end.
 
+%% AUDIT V2 P1-1: rpc:cast is fire-and-forget — it always returns 'true'
+%% regardless of whether the remote node received or processed the call.
+%% There is no way to detect per-cast failure. We emit rpc_casts_unmonitored
+%% so dashboards can alert on cast volume as a proxy for potential issues.
 -spec cast(node(), module(), atom(), [term()]) -> true.
 cast(Node, Mod, Fun, Args) ->
     iris_metrics:inc(rpc_casts_total),
+    iris_metrics:inc(rpc_casts_unmonitored),
     rpc:cast(Node, Mod, Fun, Args).

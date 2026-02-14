@@ -19,6 +19,8 @@
 -export([format/2]).
 -export([check_config/1]).
 
+-define(MAX_MSG_SIZE, 32768).  %% AUDIT M9: 32KB max message size
+
 %% @doc Format a log event as a single-line JSON string.
 -spec format(logger:log_event(), logger:formatter_config()) -> unicode:chardata().
 format(#{level := Level, msg := Msg, meta := Meta}, _Config) ->
@@ -55,13 +57,24 @@ format_timestamp(_) ->
         erlang:system_time(microsecond), [{unit, microsecond}]).
 
 format_msg({string, Msg}) ->
-    unicode:characters_to_list(Msg);
+    truncate_msg(unicode:characters_to_list(Msg));
 format_msg({report, Report}) when is_map(Report) ->
-    io_lib:format("~0p", [Report]);
+    truncate_msg(io_lib:format("~0p", [Report]));
 format_msg({report, Report}) ->
-    io_lib:format("~0p", [Report]);
+    truncate_msg(io_lib:format("~0p", [Report]));
 format_msg({Format, Args}) ->
-    io_lib:format(Format, Args).
+    truncate_msg(io_lib:format(Format, Args)).
+
+%% AUDIT M9: Truncate oversized messages to prevent memory bloat
+truncate_msg(Msg) ->
+    Bin = iolist_to_binary([Msg]),
+    case byte_size(Bin) > ?MAX_MSG_SIZE of
+        true ->
+            Truncated = binary:part(Bin, 0, ?MAX_MSG_SIZE),
+            binary_to_list(<<Truncated/binary, "...[truncated]">>);
+        false ->
+            binary_to_list(Bin)
+    end.
 
 format_pid(undefined) -> "unknown";
 format_pid(Pid) -> pid_to_list(Pid).

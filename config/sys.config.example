@@ -78,6 +78,15 @@
     %% Connection rate limit (RFC Section 10.1: 5/min/IP)
     {conn_rate_max, 5},
 
+    %% AUDIT MITIGATION P1-1: Per-message-type rate limits
+    %% Separate buckets prevent cheap packet floods from starving messages.
+    {rate_typing_default, 20},     %% typing indicators: 20/sec
+    {rate_typing_burst, 50},
+    {rate_handshake_default, 10},  %% handshake requests: 10/sec
+    {rate_handshake_burst, 20},
+    {rate_media_default, 2},       %% media messages: 2/sec
+    {rate_media_burst, 5},
+
     %% Multi-region routing
     {regions, [<<"us-east">>, <<"us-west">>, <<"eu">>]},
     {region_id, <<"us-east">>},

@@ -5,7 +5,7 @@
 -export([start_link/1]).
 
 %% gen_server callbacks
--export([init/1, handle_info/2, handle_call/3, handle_cast/2]).
+-export([init/1, handle_info/2, handle_call/3, handle_cast/2, terminate/2, code_change/3]).
 
 -spec start_link(cluster_join | region_wiring) -> {ok, pid()} | {error, term()}.
 start_link(Task) ->
@@ -60,3 +60,9 @@ handle_call(_Msg, _From, State) ->
 
 handle_cast(_Msg, State) ->
     {noreply, State}.
+
+terminate(_Reason, _State) ->
+    ok.
+
+code_change(_OldVsn, State, _Extra) ->
+    {ok, State}.

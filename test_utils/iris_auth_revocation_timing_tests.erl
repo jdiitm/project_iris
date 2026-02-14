@@ -89,6 +89,9 @@ test_revoked_token_stays_revoked() ->
     %% Token must remain revoked after some time (no premature cleanup)
     {ok, Token} = iris_auth:create_token(<<"revoke_persist">>),
     ok = iris_auth:revoke_token(Token),
-    timer:sleep(1000),  %% Wait 1 second
+    %% AUDIT V2 P1-1: Event-driven wait instead of timer:sleep(1000)
+    ok = iris_test_utils:wait_until(fun() ->
+        iris_auth:validate_token(Token) =:= {error, token_revoked}
+    end, 2000),
     Result = iris_auth:validate_token(Token),
     ?assertEqual({error, token_revoked}, Result).

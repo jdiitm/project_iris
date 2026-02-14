@@ -20,6 +20,7 @@
     iris_mailbox_guard,
     iris_mailbox_monitor,
     iris_metrics,
+    iris_mnesia_guard,
     iris_offline_storage,
     iris_partition_guard,
     iris_presence,

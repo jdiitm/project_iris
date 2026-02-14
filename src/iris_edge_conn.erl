@@ -6,18 +6,22 @@
 -export([wait_for_socket/3, connected/3]).
 -export([maybe_compress_outbound/2, maybe_decompress_inbound/2]).  %% Pure, exported for TDD
 
+%% AUDIT M13: Edge nodes hold significant per-connection state (not stateless).
+%% This record documents all state held per connection. On disconnect,
+%% critical fields (session_id, pending_acks) are saved via
+%% queue_pending_to_session_cache and save_pending_acks for session resume.
 -record(data, {
-    socket :: gen_tcp:socket() | ssl:sslsocket(),
-    transport = tcp :: tcp | ssl,  %% Track transport type for setopts/messages
-    user :: binary(),
-    buffer = <<>> :: binary(),
-    timeouts = 0 :: integer(),
-    pending_acks = #{} :: map(), %% MsgId => {Msg, Timestamp, RetryCount}
-    retry_timer :: reference() | undefined,
-    last_activity :: integer(),   %% For hibernation
-    hibernated = false :: boolean(),
-    session_id :: binary() | undefined,  %% RFC Section 3.4: Connection resume
-    capabilities = [] :: list()  %% RFC Section 11.1: Negotiated capabilities
+    socket :: gen_tcp:socket() | ssl:sslsocket(),         %% TCP/TLS socket handle
+    transport = tcp :: tcp | ssl,                          %% Transport type for setopts/messages
+    user :: binary(),                                      %% Authenticated user ID
+    buffer = <<>> :: binary(),                             %% Partial frame assembly buffer
+    timeouts = 0 :: integer(),                             %% Consecutive timeout count
+    pending_acks = #{} :: map(),                           %% MsgId => {Msg, Timestamp, RetryCount} — saved on disconnect
+    retry_timer :: reference() | undefined,                %% ACK retry timer reference
+    last_activity :: integer(),                             %% Timestamp for idle hibernation
+    hibernated = false :: boolean(),                        %% Whether process is hibernated
+    session_id :: binary() | undefined,                    %% RFC 3.4: Session ID for resume — saved on disconnect
+    capabilities = [] :: list()                             %% RFC 11.1: Negotiated compression/features
 }).
 
 %% Transport-agnostic setopts

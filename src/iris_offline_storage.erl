@@ -5,6 +5,7 @@
 -export([store_with_seq/3]).  %% AUDIT FIX: Store with client-provided sequence for FIFO
 %% PRINCIPAL_AUDIT_REPORT: Lockfree cursor-based retrieval (Hard Stop #2)
 -export([retrieve_cursor/3, delete_confirmed/4, retrieve_lockfree/2, delete_all_async/2]).
+-export([notify_push/2]).  %% AUDIT M12: Push notification hook
 
 %% Mnesia table definition (created in iris_core:init_db/0):
 %% {offline_msg, User, Timestamp, Msg}
@@ -19,14 +20,20 @@
 %% =============================================================================
 
 store(User, Msg, Count) ->
-    %% Use durable batcher if available, fallback to direct sync
-    case whereis(iris_durable_batcher_1) of
-        undefined ->
-            %% Batcher not started - use direct sync_transaction
-            store_sync(User, Msg, Count);
-        _Pid ->
-            %% Use WAL-backed batcher for optimal latency
-            iris_durable_batcher:store(User, Msg, Count)
+    %% AUDIT V2 P0-2: Backpressure — reject writes when Mnesia memory exceeds threshold
+    case check_memory_backpressure() of
+        ok ->
+            %% Use durable batcher if available, fallback to direct sync
+            case whereis(iris_durable_batcher_1) of
+                undefined ->
+                    %% Batcher not started - use direct sync_transaction
+                    store_sync(User, Msg, Count);
+                _Pid ->
+                    %% Use WAL-backed batcher for optimal latency
+                    iris_durable_batcher:store(User, Msg, Count)
+            end;
+        {error, memory_pressure} ->
+            {error, memory_pressure}
     end.
 
 %% Direct sync_transaction mode - guaranteed durable but slower
@@ -71,6 +78,15 @@ store_sync(User, Msg, Count) ->
 %% - Any path where RPO=0 is required
 %% =============================================================================
 store_durable(User, Msg, Count) ->
+    %% AUDIT V2 P0-2: Backpressure check before durable write
+    case check_memory_backpressure() of
+        {error, memory_pressure} ->
+            {error, memory_pressure};
+        ok ->
+            do_store_durable(User, Msg, Count)
+    end.
+
+do_store_durable(User, Msg, Count) ->
     %% ALWAYS use sync_transaction path (bypass batcher)
     %% The batcher provides better latency but may ACK before Mnesia commit
     Result = store_sync(User, Msg, Count),
@@ -78,6 +94,8 @@ store_durable(User, Msg, Count) ->
         ok ->
             %% Log at debug level for durability auditing
             logger:debug("Durable store confirmed for user ~p", [User]),
+            %% AUDIT M12: Invoke push notification hook for offline users
+            notify_push(User, Msg),
             ok;
         {error, Reason} ->
             %% CRITICAL: Do not ACK to client if this fails
@@ -152,6 +170,8 @@ store_batch_sync(User, Msgs, Count) ->
     end.
 
 retrieve(User, Count) ->
+    %% AUDIT FIX 2.4: Deprecation metric — use retrieve_cursor/3 instead.
+    iris_metrics:inc(offline_retrieve_deprecated_calls),
     %% Read messages from all buckets
     F = fun() ->
         %% Iterate all buckets 0..Count-1
@@ -262,3 +282,53 @@ sort_and_extract(Records) ->
     Sorted = lists:sort(fun({_, _, Ts1, _}, {_, _, Ts2, _}) -> Ts1 =< Ts2 end, Records),
     RawMsgs = [Msg || {_, _, _, Msg} <- Sorted],
     lists:flatten(RawMsgs).
+
+%% =============================================================================
+%% AUDIT M12: Push Notification Hook
+%% =============================================================================
+%% Configurable hook for push notifications (APNS/FCM).
+%% Default is no-op. Configure via:
+%%   application:set_env(iris_core, push_hook, fun(User, Msg) -> ... end)
+%% or implement a module with push_notify/2 and set:
+%%   application:set_env(iris_core, push_hook, {Module, Function})
+%% =============================================================================
+
+%% =============================================================================
+%% AUDIT V2 P0-2: Memory Backpressure Check
+%% =============================================================================
+%% Rejects offline message writes when Mnesia memory exceeds the configured
+%% alarm threshold. This prevents OOM crashes from unbounded message growth.
+
+check_memory_backpressure() ->
+    try iris_mnesia_guard:is_memory_ok() of
+        ok -> ok;
+        {error, memory_pressure} ->
+            try iris_metrics:inc(offline_store_backpressure_rejects)
+            catch _:_ -> ok
+            end,
+            logger:warning("Offline store rejected: Mnesia memory pressure"),
+            {error, memory_pressure}
+    catch
+        _:_ ->
+            %% Guard module not available — permissive
+            ok
+    end.
+
+-spec notify_push(binary(), binary()) -> ok.
+notify_push(User, Msg) ->
+    case application:get_env(iris_core, push_hook, undefined) of
+        undefined ->
+            ok;  %% No push hook configured — no-op
+        {Module, Function} ->
+            try Module:Function(User, Msg)
+            catch Class:Error ->
+                logger:warning("Push notification hook failed: ~p:~p", [Class, Error])
+            end,
+            ok;
+        Fun when is_function(Fun, 2) ->
+            try Fun(User, Msg)
+            catch Class:Error ->
+                logger:warning("Push notification hook failed: ~p:~p", [Class, Error])
+            end,
+            ok
+    end.

@@ -48,8 +48,8 @@ iris_partition_guard_test_() ->
       {"Status includes membership_mode field", fun test_status_has_membership_mode/0},
       {"Dynamic mode uses pg for discovery", fun test_dynamic_mode_design/0},
 
-      %% RFC Section 7.1.1: AP mode — writes allowed during partition
-      {"Writes allowed during partition (AP mode)", fun test_writes_allowed_during_partition/0},
+      %% AUDIT V2 P0-1: Safe-AP — writes rejected in minority partition
+      {"Writes rejected during minority partition (safe-AP)", fun test_writes_rejected_during_minority_partition/0},
       {"Partition mode is 'diverged' not 'safe_mode'", fun test_partition_mode_is_diverged/0}
      ]}.
 
@@ -144,7 +144,7 @@ test_dynamic_mode_design() ->
 %% "Each partition continues reads/writes during split (AP mode)"
 %% =============================================================================
 
-test_writes_allowed_during_partition() ->
+test_writes_rejected_during_minority_partition() ->
     %% Configure expected nodes with an unreachable node so quorum is lost
     FakeNode = 'iris_core_fake@unreachable_host',
     application:set_env(iris_core, expected_cluster_nodes, [node(), FakeNode]),
@@ -154,14 +154,14 @@ test_writes_allowed_during_partition() ->
             %% so quorum (>50%) is lost (1 of 2 visible = 50%, not >50%).
             Pid ! check_partition,
             timer:sleep(100),  %% Let the check complete
-            %% RFC 7.1.1 AP requirement: writes MUST still be allowed
+            %% AUDIT V2 P0-1: Safe-AP — writes REJECTED in minority partition
             Result = iris_partition_guard:is_safe_for_writes(),
             gen_server:stop(Pid, normal, 1000),
-            ?assertEqual(ok, Result);
+            ?assertEqual({error, minority_partition}, Result);
         {error, {already_started, ExistingPid}} ->
             gen_server:stop(ExistingPid, normal, 1000),
             timer:sleep(50),
-            test_writes_allowed_during_partition()
+            test_writes_rejected_during_minority_partition()
     end,
     application:unset_env(iris_core, expected_cluster_nodes).
 
@@ -180,8 +180,8 @@ test_partition_mode_is_diverged() ->
             ?assertEqual(diverged, maps:get(mode, Status)),
             %% Epoch should have incremented from 0 to 1
             ?assert(maps:get(epoch, Status) >= 1),
-            %% Writes should still be allowed in diverged mode
-            ?assertEqual(true, maps:get(safe_for_writes, Status));
+            %% AUDIT V2: Writes rejected in diverged mode (safe-AP)
+            ?assertEqual(false, maps:get(safe_for_writes, Status));
         {error, {already_started, ExistingPid}} ->
             gen_server:stop(ExistingPid, normal, 1000),
             timer:sleep(50),
@@ -216,3 +216,61 @@ test_permissive_when_no_config_() ->
           end}
          ]
      end}.
+
+%% =============================================================================
+%% AUDIT FIX 2.2: resolve_authority/4 — Split-Brain Resolution (FM-2)
+%% RFC-001 v4.0 Section 7.1.1: Higher epoch wins; tie-break by lowest node ID.
+%% =============================================================================
+
+resolve_authority_higher_epoch_wins_test() ->
+    NodeA = 'core_a@host1',
+    NodeB = 'core_b@host2',
+    ?assertEqual({authoritative, NodeA}, iris_partition_guard:resolve_authority(5, NodeA, 3, NodeB)),
+    ?assertEqual({authoritative, NodeB}, iris_partition_guard:resolve_authority(2, NodeA, 7, NodeB)).
+
+resolve_authority_tiebreak_by_lowest_node_test() ->
+    NodeA = 'aaa@host1',
+    NodeB = 'zzz@host2',
+    %% Same epoch: lowest node ID wins
+    ?assertEqual({authoritative, NodeA}, iris_partition_guard:resolve_authority(1, NodeA, 1, NodeB)),
+    ?assertEqual({authoritative, NodeA}, iris_partition_guard:resolve_authority(1, NodeA, 1, NodeB)).
+
+resolve_authority_symmetric_test() ->
+    %% Calling with swapped args should give same winner
+    NodeA = 'alpha@host',
+    NodeB = 'beta@host',
+    {authoritative, WinnerAB} = iris_partition_guard:resolve_authority(3, NodeA, 3, NodeB),
+    {authoritative, WinnerBA} = iris_partition_guard:resolve_authority(3, NodeB, 3, NodeA),
+    ?assertEqual(WinnerAB, WinnerBA).
+
+%% =============================================================================
+%% AUDIT FIX 2.2: force_unsafe_mode overrides minority partition rejection
+%% =============================================================================
+
+force_unsafe_mode_overrides_minority_test() ->
+    FakeNode = 'fake@nowhere',
+    application:set_env(iris_core, expected_cluster_nodes, [node(), FakeNode, 'fake2@nowhere']),
+    application:set_env(iris_core, partition_guard_mode, static),
+    case iris_partition_guard:start_link() of
+        {ok, Pid} ->
+            %% Trigger minority detection
+            Pid ! check_partition,
+            timer:sleep(100),
+            ?assertEqual({error, minority_partition}, iris_partition_guard:is_safe_for_writes()),
+            %% Force unsafe mode should override
+            iris_partition_guard:force_unsafe_mode(true),
+            ?assertEqual(ok, iris_partition_guard:is_safe_for_writes()),
+            %% Disable force mode — triggers re-check on next partition scan
+            iris_partition_guard:force_unsafe_mode(false),
+            %% Force a partition re-check to re-enter diverged mode
+            Pid ! check_partition,
+            timer:sleep(100),
+            ?assertEqual({error, minority_partition}, iris_partition_guard:is_safe_for_writes()),
+            gen_server:stop(Pid, normal, 1000);
+        {error, {already_started, ExistingPid}} ->
+            gen_server:stop(ExistingPid, normal, 1000),
+            timer:sleep(50),
+            force_unsafe_mode_overrides_minority_test()
+    end,
+    application:unset_env(iris_core, expected_cluster_nodes),
+    application:unset_env(iris_core, partition_guard_mode).

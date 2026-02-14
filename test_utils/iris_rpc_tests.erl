@@ -180,6 +180,14 @@ rpc_cast_test_() ->
           ?assertEqual(true, Result)
       end},
 
+     {"AUDIT V2 P1-1: cast/4 increments rpc_casts_unmonitored metric", fun() ->
+          setup_metrics_table(),
+          ets:insert(iris_metrics_table, {rpc_casts_unmonitored, 0}),
+          iris_rpc:cast(node(), erlang, node, []),
+          [{_, Count}] = ets:lookup(iris_metrics_table, rpc_casts_unmonitored),
+          ?assertEqual(1, Count)
+      end},
+
      {"cast/4 does not wrap errors (fire-and-forget)", fun() ->
           setup_metrics_table(),
           %% Cast to nonexistent node still returns true (fire-and-forget)

@@ -19,7 +19,7 @@ setup() ->
     mnesia:start(),
     mnesia:create_table(user_meta, [
         {ram_copies, [node()]},
-        {attributes, [user, bucket_count]}
+        {attributes, [user, bucket_count, last_modified]}
     ]),
     mnesia:wait_for_tables([user_meta], 5000),
     ok.
@@ -34,7 +34,7 @@ reject_decrease_test_() ->
         User = <<"alice">>,
         %% Set initial count to 4
         {atomic, ok} = mnesia:transaction(fun() ->
-            mnesia:write({user_meta, User, 4})
+            mnesia:write({user_meta, User, 4, os:system_time(second)})
         end),
         %% Attempting to decrease to 2 must fail
         Result = iris_core:set_bucket_count(User, 2),
@@ -47,7 +47,7 @@ allow_increase_test_() ->
         User = <<"bob">>,
         %% Set initial count to 2
         {atomic, ok} = mnesia:transaction(fun() ->
-            mnesia:write({user_meta, User, 2})
+            mnesia:write({user_meta, User, 2, os:system_time(second)})
         end),
         %% Increase to 4 must succeed
         Result = iris_core:set_bucket_count(User, 4),
@@ -62,7 +62,7 @@ allow_same_value_test_() ->
         User = <<"carol">>,
         %% Set initial count to 3
         {atomic, ok} = mnesia:transaction(fun() ->
-            mnesia:write({user_meta, User, 3})
+            mnesia:write({user_meta, User, 3, os:system_time(second)})
         end),
         %% Same value must succeed
         Result = iris_core:set_bucket_count(User, 3),

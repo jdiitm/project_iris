@@ -20,7 +20,7 @@
 -export([get_stats/0]).
 
 -behaviour(gen_server).
--export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
+-export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
 -define(SERVER, ?MODULE).
 -define(PG_SCOPE, iris_discovery).
@@ -177,6 +177,9 @@ terminate(_Reason, #state{backend = Backend, registrations = Regs}) ->
         do_unregister(Backend, ServiceName, node())
     end, Regs),
     ok.
+
+code_change(_OldVsn, State, _Extra) ->
+    {ok, State}.
 
 %% =============================================================================
 %% Backend: pg (Erlang Process Groups)

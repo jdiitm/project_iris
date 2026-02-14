@@ -35,7 +35,7 @@
 -export([register_local/2, unregister_local/1]).
 -export([get_local_count/0, get_stats/0, get_pool_size/0]).
 -export([route_via_outbox_or_offline/3]).  %% RFC Section 7.2: Outbox-aware fallback
--export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
+-export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
 -define(LOCAL_PRESENCE, local_presence_v2).
 
@@ -282,6 +282,9 @@ handle_info(_Info, State) ->
 
 terminate(_Reason, _State) ->
     ok.
+
+code_change(_OldVsn, State, _Extra) ->
+    {ok, State}.
 
 %% =============================================================================
 %% Internal

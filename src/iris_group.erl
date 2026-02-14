@@ -56,7 +56,7 @@
 ]).
 
 %% gen_server callbacks
--export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
+-export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
 -define(SERVER, ?MODULE).
 -define(MAX_GROUP_NAME_LEN, 256).
@@ -147,12 +147,21 @@ list_groups(UserId) ->
 %% @doc Add a member to a group. Only admins can add members.
 -spec add_member(binary(), binary(), binary()) -> ok | {error, term()}.
 add_member(GroupId, UserId, AddedBy) ->
-    gen_server:call(?SERVER, {add_member, GroupId, UserId, AddedBy}).
+    %% AUDIT V2 P1-2: Call directly instead of serializing through gen_server.
+    %% Mnesia transactions already provide isolation — the gen_server was
+    %% a global bottleneck serializing ALL group mutations.
+    Result = do_add_member(GroupId, UserId, AddedBy),
+    %% Invalidate roster cache (may fail if ETS table not yet created)
+    try ets:delete(iris_group_roster_cache, GroupId) catch error:badarg -> ok end,
+    Result.
 
 %% @doc Remove a member from a group. Admins can remove anyone; members can remove themselves.
 -spec remove_member(binary(), binary(), binary()) -> ok | {error, term()}.
 remove_member(GroupId, UserId, RemovedBy) ->
-    gen_server:call(?SERVER, {remove_member, GroupId, UserId, RemovedBy}).
+    %% AUDIT V2 P1-2: Direct call — same rationale as add_member.
+    Result = do_remove_member(GroupId, UserId, RemovedBy),
+    try ets:delete(iris_group_roster_cache, GroupId) catch error:badarg -> ok end,
+    Result.
 
 %% @doc Get all members of a group.
 -spec get_members(binary()) -> {ok, [map()]} | {error, term()}.
@@ -427,6 +436,9 @@ handle_info(_Info, State) ->
 terminate(_Reason, _State) ->
     ok.
 
+code_change(_OldVsn, State, _Extra) ->
+    {ok, State}.
+
 %% =============================================================================
 %% Internal Functions
 %% =============================================================================
@@ -499,17 +511,36 @@ init_tables() ->
         ok -> ok;
         {timeout, BadTables} ->
             logger:warning("Timeout waiting for tables: ~p", [BadTables]),
-            %% Try to force load
+            %% AUDIT MITIGATION P0-2: Check for active replicas before force_load
             lists:foreach(fun(T) ->
-                try mnesia:force_load_table(T)
-                catch FLClass:FLReason ->
-                    logger:warning("force_load_table(~p) failed: ~p:~p", [T, FLClass, FLReason])
+                ActiveReplicas = try mnesia:table_info(T, active_replicas) -- [node()]
+                                catch _:_ -> [] end,
+                case ActiveReplicas of
+                    [Peer | _] ->
+                        logger:info("Table ~p: peer ~p has active replica, syncing", [T, Peer]),
+                        case mnesia:add_table_copy(T, node(), disc_copies) of
+                            {atomic, ok} -> ok;
+                            {aborted, {already_exists, _, _}} ->
+                                mnesia:wait_for_tables([T], 10000);
+                            {aborted, _Reason} ->
+                                force_load_isolated(T)
+                        end;
+                    [] ->
+                        force_load_isolated(T)
                 end
             end, BadTables),
             ok;
         {error, WaitReason} ->
             logger:error("Failed to wait for tables: ~p", [WaitReason]),
             ok
+    end.
+
+%% AUDIT MITIGATION P0-2: Isolated force_load with safety logging
+force_load_isolated(Table) ->
+    logger:warning("DATA DIVERGENCE RISK: force_load_table(~p) with no active peers", [Table]),
+    try mnesia:force_load_table(Table)
+    catch FLClass:FLReason ->
+        logger:warning("force_load_table(~p) failed: ~p:~p", [Table, FLClass, FLReason])
     end.
 
 do_create_group(GroupName, CreatorId) ->

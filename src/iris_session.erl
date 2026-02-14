@@ -28,10 +28,11 @@
 
 %% RFC Section 11.1: Version/Capability Negotiation
 -define(SERVER_VERSIONS, [1]).
-%% AUDIT MITIGATION P2-3: Removed <<"zstd">> -- NIF .so is not built (priv/ empty).
-%% Advertising a capability we can't fulfill is a protocol violation.
-%% Re-add <<"zstd">> once priv/iris_zstd_nif.so is reliably built by CI.
--define(SERVER_CAPABILITIES, [<<"zlib">>, <<"e2ee">>, <<"groups">>]).
+%% AUDIT: Compression capabilities are now dynamically detected via
+%% iris_compression:available_algorithms/0 — no hardcoded zstd/zlib list.
+-define(SERVER_CAPABILITIES_STATIC, [<<"e2ee">>, <<"groups">>]).
+-define(SERVER_CAPABILITIES,
+        iris_compression:available_algorithms() ++ ?SERVER_CAPABILITIES_STATIC).
 
 %% @doc Check if a feature should be degraded based on current load level.
 %% Returns true if the feature should be skipped (degraded).
@@ -98,11 +99,16 @@ get_core_node() ->
 legacy_core_node() ->
     %% FIXED: Scan connected nodes for actual Core IP
     Connected = nodes(connected),
-    %% Match both "iris_core" (Makefile) and "core_" (Docker) patterns
+    %% AUDIT FIX 2.3: Config-based role with naming convention fallback
     IsCoreNode = fun(N) ->
-        Name = atom_to_list(N),
-        string:str(Name, "iris_core") > 0 orelse 
-        string:prefix(Name, "core_") =/= nomatch
+        case application:get_env(iris_core, node_role) of
+            {ok, core} -> true;
+            {ok, _} -> false;
+            undefined ->
+                Name = atom_to_list(N),
+                string:str(Name, "iris_core") > 0 orelse
+                string:prefix(Name, "core_") =/= nomatch
+        end
     end,
     case [N || N <- Connected, IsCoreNode(N)] of
          [Core|_] -> Core;
@@ -327,8 +333,14 @@ handle_packet({typing_start, Target}, User, _Pid, _Mod) when User =/= undefined 
             %% Silently drop - typing is non-critical
             {ok, User, []};
         false ->
-            relay_typing_indicator(Target, User, true),
-            {ok, User, []}
+            %% AUDIT MITIGATION P1-1: Per-type rate limit for typing
+            case check_message_rate(User, typing) of
+                allow ->
+                    relay_typing_indicator(Target, User, true),
+                    {ok, User, []};
+                {deny, _} ->
+                    {ok, User, []}
+            end
     end;
 
 handle_packet({typing_stop, Target}, User, _Pid, _Mod) when User =/= undefined ->
@@ -337,8 +349,14 @@ handle_packet({typing_stop, Target}, User, _Pid, _Mod) when User =/= undefined -
         true ->
             {ok, User, []};
         false ->
-            relay_typing_indicator(Target, User, false),
-            {ok, User, []}
+            %% AUDIT MITIGATION P1-1: Per-type rate limit for typing
+            case check_message_rate(User, typing) of
+                allow ->
+                    relay_typing_indicator(Target, User, false),
+                    {ok, User, []};
+                {deny, _} ->
+                    {ok, User, []}
+            end
     end;
 
 handle_packet({typing_start, _Target}, undefined, _Pid, _Mod) ->
@@ -837,7 +855,9 @@ handle_packet({error, _}, User, _Pid, _Mod) ->
 %% AUDIT MITIGATION P1-3: Catch-all for unrecognized packet types.
 %% Prevents function_clause crash if iris_proto:decode/1 returns an unexpected tuple.
 handle_packet(Unknown, User, _Pid, _Mod) ->
-    Tag = try element(1, Unknown) catch _:_ -> Unknown end,
+    %% AUDIT V2 P1-4: Narrow catch to only badarg (what element/2 throws).
+    %% Other exception classes (exit, throw, system_limit) must propagate.
+    Tag = try element(1, Unknown) catch error:badarg -> Unknown end,
     logger:warning("Unrecognized packet type: ~p (user=~p)", [Tag, User]),
     {ok, User, []}.
 
@@ -1255,11 +1275,15 @@ fetch_and_cache(TargetUser, Now) ->
 %% RFC 7.4 FIX: Also track request for flow controller rate-based degradation
 
 check_message_rate(User) ->
+    check_message_rate(User, message).
+
+%% AUDIT MITIGATION P1-1: Per-message-type rate limiting
+check_message_rate(User, Type) ->
     %% Track request for flow controller (rate-based degradation)
     iris_flow_controller:track_request(User),
     case whereis(iris_rate_limiter) of
         undefined -> allow;
-        _ -> iris_rate_limiter:check(User)
+        _ -> iris_rate_limiter:check_typed(User, Type)
     end.
 
 encode_rate_limited(RetryAfter) ->

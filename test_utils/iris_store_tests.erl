@@ -398,10 +398,10 @@ error_handling_test_() ->
     {"Error handling",
      {setup, fun setup/0, fun cleanup/1,
       [
-       {"put to nonexistent table throws exception", fun() ->
-            %% Mnesia throws exception for nonexistent tables
-            ?assertException(exit, {aborted, {no_exists, nonexistent_table}},
-                            iris_store:put(nonexistent_table, key, value))
+       {"put to nonexistent table returns error", fun() ->
+            %% AUDIT M6: With timeout wrapper, Mnesia errors are returned, not thrown
+            Result = iris_store:put(nonexistent_table, key, value),
+            ?assertMatch({error, _}, Result)
         end},
        
        {"get from nonexistent table handles gracefully", fun() ->

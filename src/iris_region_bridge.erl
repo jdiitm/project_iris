@@ -30,7 +30,7 @@
 -export([get_mesh_health/0, get_disconnected_nodes/0, force_reconnect/1]).
 
 %% gen_server callbacks
--export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
+-export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
 -define(SERVER, ?MODULE).
 -define(OUTBOUND_TABLE, cross_region_outbound).
@@ -543,6 +543,9 @@ terminate(_Reason, State) ->
     end, State#state.reconnect_timers),
     pg:leave(iris_region_bridges, self()),
     ok.
+
+code_change(_OldVsn, State, _Extra) ->
+    {ok, State}.
 
 %% =============================================================================
 %% Internal: Drain Logic

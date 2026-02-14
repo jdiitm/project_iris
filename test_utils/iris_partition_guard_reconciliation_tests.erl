@@ -67,7 +67,11 @@ test_healing_triggers_reconciliation() ->
     %% Trigger a partition check which should call maybe_exit_diverged_mode
     %% and find quorum restored (no expected nodes = always quorum).
     Pid ! check_partition,
-    timer:sleep(500),
+    %% AUDIT V2 P1-1: Event-driven wait for mode to change to normal
+    ok = iris_test_utils:wait_until(fun() ->
+        S = iris_partition_guard:get_status(),
+        maps:get(mode, S) =:= normal
+    end, 2000),
     
     %% After healing, mode should be normal
     Status2 = iris_partition_guard:get_status(),

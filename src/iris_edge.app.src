@@ -15,7 +15,7 @@
     iris_async_router,
     iris_backpressure,
     iris_circuit_breaker,
-    iris_discovery,
+    %% AUDIT V2 P2-2: iris_discovery removed — provided by iris_core app
     iris_ingress_guard,
     iris_rate_limiter,
     iris_registry_ets,
@@ -26,6 +26,8 @@
     iris_trace
   ]},
   {registered, [iris_edge_app]},
+  %% NOTE: iris_core runs on separate node(s) — NOT listed as dependency.
+  %% Edge communicates with Core via RPC (iris_rpc module).
   {applications, [kernel, stdlib, ssl]},
   {mod, {iris_edge_app, []}},
   {env, [

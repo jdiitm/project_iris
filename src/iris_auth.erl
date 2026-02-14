@@ -24,7 +24,7 @@
 %% IA-3: Refresh token API (RFC-001 v4.0 FR-11a)
 -export([create_refresh_token/1, create_refresh_token/2, exchange_refresh_token/1]).
 -export([validate_and_rotate_refresh/1]).  %% Mnesia-only validation (for cross-node RPC)
--export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
+-export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
 -define(SERVER, ?MODULE).
 -define(REVOCATION_TABLE, iris_auth_revoked).
@@ -205,6 +205,10 @@ init([]) ->
                                    {read_concurrency, true},
                                    {write_concurrency, true}]),
     
+    %% AUDIT M7: Create JTI replay table eagerly to prevent race on first use
+    ets:new(?JTI_SEEN_TABLE, [named_table, public, set,
+                              {read_concurrency, true}]),
+    
     %% Schedule cleanup of expired revocations
     erlang:send_after(3600000, self(), cleanup_revocations),
     
@@ -320,6 +324,9 @@ handle_info(_Info, State) ->
 terminate(_Reason, _State) ->
     ok.
 
+code_change(_OldVsn, State, _Extra) ->
+    {ok, State}.
+
 %% =============================================================================
 %% RFC Section 10.1: Failed Login Rate Limiting
 %% =============================================================================
@@ -431,7 +438,18 @@ do_validate(Token, Opts, State = #state{secret = Secret, issuer = ExpectedIssuer
     case split_token(Token) of
         {ok, Header, Payload, Signature} ->
             %% Determine algorithm from header
-            Alg = get_header_alg(Header),
+            case get_header_alg(Header) of
+                {error, invalid_header} ->
+                    {error, invalid_header};
+                Alg ->
+            
+            %% AUDIT: Algorithm whitelist — reject before signature verification
+            AllowedAlgs = [<<"HS256">>, <<"EdDSA">>],
+            case lists:member(Alg, AllowedAlgs) of
+                false ->
+                    {error, unsupported_algorithm};
+                true ->
+            
             SigningInput = <<Header/binary, ".", Payload/binary>>,
             
             %% IA-1: Check HMAC deprecation flag before validation
@@ -465,7 +483,9 @@ do_validate(Token, Opts, State = #state{secret = Secret, issuer = ExpectedIssuer
                     {error, hmac_deprecated};
                 false ->
                     {error, invalid_signature}
-            end;
+            end
+            end  %% end of AllowedAlgs check
+            end;  %% end of get_header_alg case
         Error -> Error
     end.
 
@@ -505,28 +525,16 @@ validate_claims(Claims, ExpectedIssuer, Opts) ->
 %% @doc Check if a jti has been seen before (replay attack detection) (GAP-15)
 %% RFC Section 9.1: "Replay attacks: Nonce + timestamp validation"
 %% Tracks seen jti values in ETS with TTL = token expiry time.
+%% AUDIT M7: Table is now created eagerly in init/1, no lazy creation needed.
 check_jti_replay(Jti, Exp) ->
-    try
-        case ets:lookup(?JTI_SEEN_TABLE, Jti) of
-            [{Jti, _}] ->
-                %% Already seen -- this is a replay
-                true;
-            [] ->
-                %% First use -- mark as seen with expiry for cleanup
-                ets:insert(?JTI_SEEN_TABLE, {Jti, Exp}),
-                false
-        end
-    catch
-        error:badarg ->
-            %% Table doesn't exist -- create it and allow
-            try
-                ets:new(?JTI_SEEN_TABLE, [named_table, public, set,
-                                          {read_concurrency, true}]),
-                ets:insert(?JTI_SEEN_TABLE, {Jti, Exp}),
-                false
-            catch
-                error:badarg -> false  %% Race condition, another process created it
-            end
+    case ets:lookup(?JTI_SEEN_TABLE, Jti) of
+        [{Jti, _}] ->
+            %% Already seen -- this is a replay
+            true;
+        [] ->
+            %% First use -- mark as seen with expiry for cleanup
+            ets:insert(?JTI_SEEN_TABLE, {Jti, Exp}),
+            false
     end.
 
 is_revoked(TokenId) ->
@@ -655,14 +663,16 @@ compute_signature(Input, Secret) ->
     encode_base64url(Mac).
 
 %% P1-4: Extract algorithm from JWT header
+%% AUDIT M2: Reject on decode failure instead of defaulting to HS256.
+%% A garbage header must not silently bypass algorithm selection.
 get_header_alg(HeaderB64) ->
     case decode_base64url(HeaderB64) of
         {ok, Json} ->
             case decode_json(Json) of
                 {ok, Map} -> maps:get(<<"alg">>, Map, <<"HS256">>);
-                _ -> <<"HS256">>
+                _ -> {error, invalid_header}
             end;
-        _ -> <<"HS256">>
+        _ -> {error, invalid_header}
     end.
 
 %% P1-4: Verify EdDSA signature

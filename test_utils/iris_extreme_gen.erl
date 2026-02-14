@@ -137,11 +137,11 @@ worker_init(Id, StatsPid, Duration, _IpOffset, Mode, Host, Port, MaxID, UseTls) 
                                 extreme_load ->
                                     erlang:send_after(rand:uniform(1000), self(), trigger_burst),
                                     sock_setopts(Sock, [{active, once}]),
-                                    duplex_loop(Sock, Id, StatsPid, EndTime, MaxID);
+                                    duplex_loop(Sock, Id, StatsPid, EndTime, MaxID, Host, Port, UseTls);
                                 fan_in ->
                                     erlang:send_after(rand:uniform(1000), self(), trigger_burst),
                                     sock_setopts(Sock, [{active, once}]),
-                                    fan_in_loop(Sock, Id, StatsPid, EndTime)
+                                    fan_in_loop(Sock, Id, StatsPid, EndTime, Host, Port, UseTls)
                             end
                     end;
                 {ok, Data} ->
@@ -153,6 +153,33 @@ worker_init(Id, StatsPid, Duration, _IpOffset, Mode, Host, Port, MaxID, UseTls) 
             end;
         {error, _Reason} -> 
             exit(connect_failed)
+    end.
+
+%% Reconnect after server-side connection is killed (e.g., by chaos monkey).
+%% Retries with jittered backoff. Returns {ok, NewSock} or {error, max_retries}.
+reconnect(Id, Host, Port, UseTls) ->
+    reconnect(Id, Host, Port, UseTls, 3).
+
+reconnect(_Id, _Host, _Port, _UseTls, 0) ->
+    {error, max_retries};
+reconnect(Id, Host, Port, UseTls, Retries) ->
+    timer:sleep(100 + rand:uniform(400)),
+    Opts = [binary, {packet, 0}, {active, false}, {reuseaddr, true}],
+    case sock_connect(Host, Port, Opts, 5000, UseTls) of
+        {ok, Sock} ->
+            User = list_to_binary("user_" ++ integer_to_list(Id)),
+            sock_send(Sock, <<1, User/binary>>),
+            case sock_recv(Sock, 0, 5000) of
+                {ok, Data} ->
+                    case binary:match(Data, <<"LOGIN_OK">>) of
+                        nomatch -> reconnect(Id, Host, Port, UseTls, Retries - 1);
+                        _ -> {ok, Sock}
+                    end;
+                {error, _} ->
+                    reconnect(Id, Host, Port, UseTls, Retries - 1)
+            end;
+        {error, _} ->
+            reconnect(Id, Host, Port, UseTls, Retries - 1)
     end.
 
 worker_loop(Sock, Id, StatsPid, EndTime) ->
@@ -176,15 +203,29 @@ worker_loop(Sock, Id, StatsPid, EndTime) ->
 %% Duplex Loop with Latency Tracking
 %% =============================================================================
 
-duplex_loop(Sock, Id, StatsPid, EndTime, MaxID) ->
+duplex_loop(Sock, Id, StatsPid, EndTime, MaxID, Host, Port, UseTls) ->
     receive
         {Proto, Sock, Data} when Proto =:= tcp; Proto =:= ssl ->
             handle_incoming(Sock, Data, StatsPid),
             sock_setopts(Sock, [{active, once}]),
-            duplex_loop(Sock, Id, StatsPid, EndTime, MaxID);
+            duplex_loop(Sock, Id, StatsPid, EndTime, MaxID, Host, Port, UseTls);
             
         {Closed, Sock} when Closed =:= tcp_closed; Closed =:= ssl_closed ->
-            exit(normal);
+            %% Server-side connection killed (e.g., chaos monkey). Reconnect
+            %% instead of dying — otherwise delivery rate measurement is invalid
+            %% because there are no active receivers during chaos.
+            Now = os:system_time(second),
+            if Now >= EndTime -> ok;
+            true ->
+                case reconnect(Id, Host, Port, UseTls) of
+                    {ok, NewSock} ->
+                        sock_setopts(NewSock, [{active, once}]),
+                        erlang:send_after(rand:uniform(1000), self(), trigger_burst),
+                        duplex_loop(NewSock, Id, StatsPid, EndTime, MaxID, Host, Port, UseTls);
+                    {error, _} ->
+                        ok
+                end
+            end;
             
         trigger_burst ->
              Now = os:system_time(second),
@@ -195,7 +236,7 @@ duplex_loop(Sock, Id, StatsPid, EndTime, MaxID) ->
                  %% This avoids "Cold Start Misses" where User 1 messages User 2500 (who is offline)
                  [send_msg_with_timestamp(Sock, rand:uniform(Id), StatsPid) || _ <- lists:seq(1, 5)],
                  erlang:send_after(10000 + rand:uniform(50000), self(), trigger_burst),
-                 duplex_loop(Sock, Id, StatsPid, EndTime, MaxID)
+                 duplex_loop(Sock, Id, StatsPid, EndTime, MaxID, Host, Port, UseTls)
              end
     end.
 
@@ -203,15 +244,26 @@ duplex_loop(Sock, Id, StatsPid, EndTime, MaxID) ->
 %% Fan-In Loop (Messi Problem)
 %% =============================================================================
 
-fan_in_loop(Sock, Id, StatsPid, EndTime) ->
+fan_in_loop(Sock, Id, StatsPid, EndTime, Host, Port, UseTls) ->
     receive
         {Proto, Sock, Data} when Proto =:= tcp; Proto =:= ssl ->
             handle_incoming(Sock, Data, StatsPid),
             sock_setopts(Sock, [{active, once}]),
-            fan_in_loop(Sock, Id, StatsPid, EndTime);
+            fan_in_loop(Sock, Id, StatsPid, EndTime, Host, Port, UseTls);
             
         {Closed, Sock} when Closed =:= tcp_closed; Closed =:= ssl_closed ->
-            exit(normal);
+            Now = os:system_time(second),
+            if Now >= EndTime -> ok;
+            true ->
+                case reconnect(Id, Host, Port, UseTls) of
+                    {ok, NewSock} ->
+                        sock_setopts(NewSock, [{active, once}]),
+                        erlang:send_after(rand:uniform(1000), self(), trigger_burst),
+                        fan_in_loop(NewSock, Id, StatsPid, EndTime, Host, Port, UseTls);
+                    {error, _} ->
+                        ok
+                end
+            end;
             
         trigger_burst ->
              Now = os:system_time(second),
@@ -229,7 +281,7 @@ fan_in_loop(Sock, Id, StatsPid, EndTime) ->
                  %% Reduced frequency: 1 msg every 30-60s per user
                  %% 100k users = ~2000 msgs/sec
                  erlang:send_after(30000 + rand:uniform(30000), self(), trigger_burst),
-                 fan_in_loop(Sock, Id, StatsPid, EndTime)
+                 fan_in_loop(Sock, Id, StatsPid, EndTime, Host, Port, UseTls)
              end
     end.
 

@@ -38,28 +38,37 @@ encode_value(V) when is_atom(V) ->
 %% Decode
 %% =============================================================================
 
--spec decode(binary()) -> {ok, map()} | {error, invalid_json}.
+-define(MAX_INPUT_SIZE, 8192).
+-define(MAX_DEPTH, 32).  %% AUDIT: Prevent stack exhaustion from nested JSON
+
+-spec decode(binary()) -> {ok, map()} | {error, invalid_json | input_too_large | max_depth_exceeded}.
+decode(Bin) when byte_size(Bin) > ?MAX_INPUT_SIZE ->
+    {error, input_too_large};
 decode(Bin) ->
     try
-        {ok, parse_object(Bin)}
+        {Result, _Rest} = parse_object(Bin, 0),
+        {ok, Result}
     catch
+        throw:max_depth_exceeded -> {error, max_depth_exceeded};
         _:_ -> {error, invalid_json}
     end.
 
-parse_object(<<"{", Rest/binary>>) ->
-    parse_pairs(Rest, #{}).
+parse_object(<<"{", _Rest/binary>>, Depth) when Depth > ?MAX_DEPTH ->
+    throw(max_depth_exceeded);
+parse_object(<<"{", Rest/binary>>, Depth) ->
+    parse_pairs(Rest, #{}, Depth).
 
-parse_pairs(<<"}", _/binary>>, Acc) ->
-    Acc;
-parse_pairs(<<",", Rest/binary>>, Acc) ->
-    parse_pairs(Rest, Acc);
-parse_pairs(<<" ", Rest/binary>>, Acc) ->
-    parse_pairs(Rest, Acc);
-parse_pairs(<<"\"", Rest/binary>>, Acc) ->
+parse_pairs(<<"}", Rest/binary>>, Acc, _Depth) ->
+    {Acc, Rest};
+parse_pairs(<<",", Rest/binary>>, Acc, Depth) ->
+    parse_pairs(Rest, Acc, Depth);
+parse_pairs(<<" ", Rest/binary>>, Acc, Depth) ->
+    parse_pairs(Rest, Acc, Depth);
+parse_pairs(<<"\"", Rest/binary>>, Acc, Depth) ->
     {Key, Rest2} = parse_string(Rest, []),
     Rest3 = skip_colon(Rest2),
-    {Value, Rest4} = parse_value(Rest3),
-    parse_pairs(Rest4, maps:put(Key, Value, Acc)).
+    {Value, Rest4} = parse_value(Rest3, Depth),
+    parse_pairs(Rest4, maps:put(Key, Value, Acc), Depth).
 
 skip_colon(<<":", Rest/binary>>) -> Rest;
 skip_colon(<<" ", Rest/binary>>) -> skip_colon(Rest);
@@ -73,12 +82,14 @@ parse_string(<<"\\\"", Rest/binary>>, Acc) ->
 parse_string(<<C, Rest/binary>>, Acc) ->
     parse_string(Rest, [C | Acc]).
 
-parse_value(<<" ", Rest/binary>>) ->
-    parse_value(Rest);
-parse_value(<<"\"", Rest/binary>>) ->
+parse_value(<<" ", Rest/binary>>, Depth) ->
+    parse_value(Rest, Depth);
+parse_value(<<"{", _/binary>> = Bin, Depth) ->
+    parse_object(Bin, Depth + 1);
+parse_value(<<"\"", Rest/binary>>, _Depth) ->
     {Str, Rest2} = parse_string(Rest, []),
     {Str, Rest2};
-parse_value(Bin) ->
+parse_value(Bin, _Depth) ->
     parse_number(Bin, <<>>).
 
 parse_number(<<C, Rest/binary>>, Acc) when C >= $0, C =< $9 ->

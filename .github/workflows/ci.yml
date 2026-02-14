@@ -113,6 +113,13 @@ jobs:
       - name: Compile
         run: make all
 
+      - name: Validate Production Config
+        run: |
+          # AUDIT V2 P0-1: Fail CI if production.config has unsafe defaults
+          escript scripts/validate_production_config.escript config/production.config && \
+            echo "::error::production.config passed validation — it should fail until properly configured" && exit 1 || \
+            echo "OK: production.config correctly rejected (ships with development defaults)"
+
       - name: Static Analysis (Dialyzer)
         run: |
           # AUDIT P2-2: Type analysis to catch undefined functions and type errors

@@ -34,7 +34,7 @@
 -export([start_link/0]).
 -export([is_safe_for_writes/0, get_status/0, force_unsafe_mode/1]).
 -export([resolve_authority/4]).  %% FM-2: Split-brain resolution
--export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
+-export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
 -define(SERVER, ?MODULE).
 -define(CHECK_INTERVAL_MS, 5000).  %% Check every 5 seconds
@@ -59,10 +59,11 @@
 start_link() ->
     gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
 
-%% @doc Check if cluster is safe for write operations
-%% RFC Section 7.1.1: Always returns 'ok' (AP mode — writes always allowed).
-%% In diverged mode, writes proceed but may need reconciliation after healing.
--spec is_safe_for_writes() -> ok.
+%% @doc Check if cluster is safe for write operations.
+%% AUDIT V2 P0-1: In diverged mode with static membership, writes are REJECTED
+%% to prevent split-brain data corruption (safe-AP semantics).
+%% Returns ok when in majority or when guard is not running (permissive).
+-spec is_safe_for_writes() -> ok | {error, minority_partition}.
 is_safe_for_writes() ->
     case whereis(?SERVER) of
         undefined -> ok;  %% Guard not running = permissive
@@ -159,15 +160,16 @@ handle_call(is_safe_for_writes, _From, State = #state{mode = normal}) ->
 handle_call(is_safe_for_writes, _From, State = #state{mode = forced_unsafe}) ->
     {reply, ok, State};
 handle_call(is_safe_for_writes, _From, State = #state{mode = diverged}) ->
-    %% RFC Section 7.1.1: AP mode — writes allowed during partition.
-    %% Data divergence will be reconciled after partition heals.
-    {reply, ok, State};
+    %% AUDIT V2 P0-1: Safe-AP — reject writes in minority partition
+    %% to prevent split-brain data corruption. Operators must resolve
+    %% the partition or use force_unsafe_mode/1 for emergency writes.
+    {reply, {error, minority_partition}, State};
 
 handle_call(get_status, _From, State) ->
     Status = #{
         mode => State#state.mode,
         membership_mode => State#state.membership_mode,  %% AUDIT FIX (Finding #3)
-        safe_for_writes => true,  %% RFC 7.1.1: AP mode — always safe for writes
+        safe_for_writes => State#state.mode =/= diverged,  %% AUDIT V2: false in diverged mode
         expected_nodes => State#state.expected_nodes,
         visible_nodes => State#state.visible_nodes,
         partition_count => State#state.partition_count,
@@ -214,6 +216,9 @@ handle_info(_Info, State) ->
 
 terminate(_Reason, _State) ->
     ok.
+
+code_change(_OldVsn, State, _Extra) ->
+    {ok, State}.
 
 %% =============================================================================
 %% Internal Functions
@@ -277,6 +282,10 @@ enter_diverged_mode(State) ->
     catch Class:Reason ->
         logger:warning("iris_partition_guard: metrics increment failed: ~p:~p", [Class, Reason])
     end,
+    %% AUDIT V2 P0-1: Emit read-only mode metric for observability
+    try iris_metrics:set(partition_guard_read_only_mode, 1)
+    catch _:_ -> ok
+    end,
     
     State#state{
         mode = diverged,
@@ -301,6 +310,10 @@ maybe_exit_diverged_mode(State = #state{last_quorum_loss = LastLoss}) ->
             spawn_reconciliation(State),
             
             logger:info("Reconciliation spawned - entering normal mode"),
+            %% AUDIT V2 P0-1: Clear read-only mode metric
+            try iris_metrics:set(partition_guard_read_only_mode, 0)
+            catch _:_ -> ok
+            end,
             State#state{mode = normal};
         false ->
             %% Still in recovery delay — reconciliation may be ongoing

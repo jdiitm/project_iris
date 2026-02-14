@@ -10,7 +10,7 @@
 
 ## What This Is
 
-Distributed messaging system in **Erlang/OTP 26**, targeting WhatsApp-class reliability. Two node types: stateless **Edge** (TLS, auth, connection hold) and stateful **Core** (Mnesia, user sharding, offline storage). E2EE via Signal Protocol. Multi-region via async bridge.
+Distributed messaging system in **Erlang/OTP 26**, targeting WhatsApp-class reliability. Two node types: session-recoverable **Edge** (TLS, auth, connection hold, per-connection state saved on disconnect) and stateful **Core** (Mnesia, user sharding, offline storage). E2EE via Signal Protocol. Multi-region via async bridge.
 
 See [DEPLOYMENT.md](docs/DEPLOYMENT.md) for architecture diagrams and setup.
 
@@ -135,6 +135,12 @@ See [DEPLOYMENT.md](docs/DEPLOYMENT.md) for architecture diagrams and setup.
 - **Erlang/OTP 26+**
 - **Python 3.11+** (tests only)
 - **Docker** (optional, for chaos tests)
+- **libzstd-dev** (optional, for zstd NIF compression)
+
+> **Compression Note:** By default, only zlib compression is available. The zstd
+> NIF (`iris_zstd_nif`) requires `libzstd-dev` to be installed. Without it, the
+> build warns loudly and `iris_compression` falls back to zlib. To enable zstd:
+> `sudo apt-get install libzstd-dev && make nif`
 
 ### Build & Run
 
