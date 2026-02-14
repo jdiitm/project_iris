@@ -20,6 +20,7 @@
 %% API
 -export([start_link/0, check_memory/0, get_alarms/0, get_alarm_threshold/0]).
 -export([is_memory_ok/0]).  %% AUDIT V2 P0-2: Backpressure check
+-export([should_evict/0]). %% AUDIT MITIGATION (Blocker 1): Proactive eviction signal
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
@@ -27,6 +28,7 @@
 -define(SERVER, ?MODULE).
 -define(CHECK_INTERVAL_MS, 60000).  %% 60 seconds
 -define(DEFAULT_ALARM_BYTES, 1073741824).  %% 1 GB
+-define(EVICT_WARNING_RATIO, 0.60).        %% AUDIT MITIGATION: Trigger eviction at 60% of alarm threshold
 
 -record(state, {}).
 
@@ -105,6 +107,25 @@ is_memory_ok() ->
         _Alarms ->
             {error, memory_pressure}
     end.
+
+%% @doc AUDIT MITIGATION (Blocker 1): Check if storage tier eviction should run.
+%% Returns true when total Mnesia memory exceeds 60% of the alarm threshold.
+%% This triggers proactive eviction before the hard backpressure limit.
+-spec should_evict() -> boolean().
+should_evict() ->
+    Threshold = get_alarm_threshold(),
+    EvictThreshold = round(Threshold * ?EVICT_WARNING_RATIO),
+    WordSize = erlang:system_info(wordsize),
+    Total = try
+        Tables = mnesia:system_info(tables),
+        lists:foldl(fun(T, Acc) ->
+            try Acc + mnesia:table_info(T, memory) * WordSize
+            catch _:_ -> Acc
+            end
+        end, 0, Tables)
+    catch _:_ -> 0
+    end,
+    Total >= EvictThreshold.
 
 %%%===================================================================
 %%% gen_server callbacks

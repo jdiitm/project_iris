@@ -76,7 +76,7 @@ test_presence_ram_copies() ->
     ?assertEqual(ram_copies, StorageType).
 
 test_table_spec_coverage() ->
-    RequiredTables = [presence, offline_msg, user_meta, user_status,
+    RequiredTables = [presence, offline_msg, user_meta, user_meta_cold, user_status,
                       revoked_tokens, dedup_log, refresh_tokens,
                       user_blocks, user_reports],
     lists:foreach(fun(Table) ->

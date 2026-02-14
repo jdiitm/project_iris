@@ -81,6 +81,8 @@ init(_Args) ->
             %% TLS + cross-region routing requires significant memory
             %% Increased to 500000 (~4MB) to handle complex routing operations
             process_flag(max_heap_size, #{size => 500000, kill => true}),
+            %% AUDIT MITIGATION (Attack Vector 3): Initialize per-socket byte guard
+            iris_ingress_byte_guard:reset(),
             Now = os:system_time(millisecond),
             Timer = erlang:send_after(?RETRY_INTERVAL, self(), check_acks),
             {ok, wait_for_socket, #data{retry_timer = Timer, last_activity = Now}};
@@ -237,15 +239,24 @@ enforce_pending_limit(Pending, User) ->
 %% Helper for handling incoming socket data (shared by tcp/ssl handlers)
 handle_socket_data(Bin, Data = #data{buffer = Buff}) ->
     Now = os:system_time(millisecond),
-    NewBuff = <<Buff/binary, Bin/binary>>,
-    
-    %% DoS Protection: Reject oversized buffers
-    case byte_size(NewBuff) > ?MAX_BUFFER_SIZE of
-        true ->
-            logger:warning("Buffer overflow from client. Dropping connection."),
-            {stop, buffer_overflow, Data};
-        false ->
-            process_buffer(NewBuff, Data#data{last_activity = Now, hibernated = false})
+
+    %% AUDIT MITIGATION (Attack Vector 3): Per-socket byte counting.
+    %% Rejects connections exceeding max_ingress_bytes_per_sec BEFORE
+    %% buffering, so micro-bursts cannot OOM the Edge node.
+    case iris_ingress_byte_guard:check_bytes(byte_size(Bin)) of
+        {error, byte_limit_exceeded} ->
+            logger:warning("Ingress byte limit exceeded. Dropping connection."),
+            {stop, byte_limit, Data};
+        ok ->
+            NewBuff = <<Buff/binary, Bin/binary>>,
+            %% DoS Protection: Reject oversized buffers
+            case byte_size(NewBuff) > ?MAX_BUFFER_SIZE of
+                true ->
+                    logger:warning("Buffer overflow from client. Dropping connection."),
+                    {stop, buffer_overflow, Data};
+                false ->
+                    process_buffer(NewBuff, Data#data{last_activity = Now, hibernated = false})
+            end
     end.
 
 %% =============================================================================

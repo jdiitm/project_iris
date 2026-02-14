@@ -16,11 +16,16 @@
 %% =============================================================================
 
 setup() ->
-    %% Start metrics (needed for metric assertions)
-    case whereis(iris_metrics) of
-        undefined ->
-            {ok, _} = iris_metrics:start_link();
-        _ -> ok
+    %% Restart iris_metrics fresh to guarantee its ETS table exists.
+    %% Prior test fixtures call start_link which links iris_metrics to the
+    %% fixture process. When the fixture dies, iris_metrics dies too, destroying
+    %% the ETS table. A subsequent whereis/1 can race with this cleanup and
+    %% return a stale pid, causing inc/1 to silently no-op.
+    %% gen_server:stop with 'normal' reason does not propagate EXIT signals.
+    catch gen_server:stop(iris_metrics, normal, 1000),
+    case iris_metrics:start_link() of
+        {ok, _} -> ok;
+        {error, {already_started, _}} -> ok
     end,
     %% Start Mnesia with a test table
     application:stop(mnesia),
