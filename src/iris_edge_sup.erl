@@ -60,9 +60,11 @@ init([]) ->
     logger:info("ETS tables created (owned by supervisor)"),
     
     %% Supervisor flags
+    %% AUDIT MITIGATION V1: Reduced from 10 to 5 restarts per 60s.
+    %% Consistent with iris_core supervisor hardening.
     SupFlags = #{
         strategy => one_for_one,
-        intensity => 10,
+        intensity => 5,
         period => 60
     },
     

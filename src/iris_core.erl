@@ -25,6 +25,7 @@
 -export([update_status/2, get_status/1]).
 -export([table_spec/1]).  %% AUDIT: exported for scalability test assertions
 -export([cleanup_expired_entries/0]).  %% AUDIT: TTL cleanup for dedup/revoked/refresh
+-export([validate_compression_startup/0]).  %% AUDIT MITIGATION V1: compression check
 
 -define(SERVER, ?MODULE).
 
@@ -120,6 +121,9 @@ start(_StartType, _StartArgs) ->
     %% AUDIT 3.2/6.1: Verify mTLS is configured if enforce_mtls=true
     check_mtls_enforcement(),
 
+    %% AUDIT MITIGATION V1 (Finding 2B): Check compression algorithm availability
+    validate_compression_startup(),
+
     supervisor:start_link({local, ?SERVER}, ?MODULE, []).
 
 -spec stop(term()) -> ok.
@@ -170,6 +174,23 @@ validate_consistency_mode() ->
         _ -> ok
     end.
 
+%% AUDIT MITIGATION V1 (Finding 2B): Validate compression at startup.
+%% Logs a warning if zstd is unavailable so operators know bandwidth
+%% efficiency is degraded by 30-50%. Always returns ok (non-fatal).
+-spec validate_compression_startup() -> ok.
+validate_compression_startup() ->
+    Algos = iris_compression:available_algorithms(),
+    case lists:member(<<"zstd">>, Algos) of
+        true ->
+            logger:info("Compression: zstd + zlib available"),
+            ok;
+        false ->
+            logger:warning("AUDIT WARNING: zstd compression NOT available. "
+                           "Only zlib is active. Bandwidth efficiency degraded 30-50%. "
+                           "Install libzstd-dev and rebuild NIF to enable zstd."),
+            ok
+    end.
+
 %%%===================================================================
 %%% Supervisor Callbacks
 %%%===================================================================
@@ -197,8 +218,14 @@ init([]) ->
     %% Future work: Split into tiered supervisors (foundation_sup, messaging_sup,
     %% cluster_sup) so that a crash in messaging does not cascade into cluster
     %% infrastructure. See: OTP Design Principles — Supervisor Behaviour.
+    %% AUDIT MITIGATION V1: Reduced from 10 to 7 restarts per 60s.
+    %% rest_for_one means EVERY upstream crash restarts ALL downstream children,
+    %% so we need more headroom than one_for_one supervisors. 7/60 balances:
+    %%   - Cascade prevention (30% fewer restarts before supervisor gives up)
+    %%   - Burst tolerance (survives transient storms under load)
+    %% Edge supervisor uses 5/60 (one_for_one = no cascade risk).
     SupFlags = #{strategy => rest_for_one,
-                 intensity => 10,
+                 intensity => 7,
                  period => 60},
 
     Children = [
@@ -213,6 +240,15 @@ init([]) ->
         %% Metrics: Must start early -- other modules emit counters through it
         #{id => iris_metrics,
           start => {iris_metrics, start_link, []},
+          type => worker,
+          restart => permanent},
+
+        %% AUDIT MITIGATION V1: Mnesia Memory Guard (Finding 3A)
+        %% Periodic monitor for Mnesia table memory usage.
+        %% Must start after metrics (emits metrics) and before services
+        %% that write to Mnesia (durable batcher, group, etc.)
+        #{id => iris_mnesia_guard,
+          start => {iris_mnesia_guard, start_link, []},
           type => worker,
           restart => permanent},
 
