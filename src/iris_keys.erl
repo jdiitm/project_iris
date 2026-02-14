@@ -571,8 +571,8 @@ do_refill_prekeys(UserId, NewPrekeys) ->
             end,
             case mnesia:sync_transaction(F) of
                 {atomic, {ok, Count, UpdatedRecord}} ->
-                    %% AUDIT FIX: Replicate to quorum asynchronously
-                    spawn(fun() -> 
+                    %% B-3 AUDIT MITIGATION: Monitored spawn for key replication
+                    iris_async:spawn_monitored(key_replication, fun() -> 
                         case whereis(iris_quorum_write) of
                             undefined -> ok;
                             _ -> iris_quorum_write:replicate_async(e2ee_key_bundle, UserId, UpdatedRecord)

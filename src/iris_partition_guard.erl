@@ -332,7 +332,8 @@ maybe_exit_diverged_mode(State = #state{last_quorum_loss = LastLoss}) ->
 spawn_reconciliation(State) ->
     VisibleNodes = State#state.visible_nodes,
     Epoch = State#state.epoch,
-    spawn(fun() ->
+    %% B-3 AUDIT MITIGATION: Monitored spawn for reconciliation
+    iris_async:spawn_monitored(partition_reconciliation, fun() ->
         logger:info("Reconciliation process started (epoch=~p, nodes=~p)", 
                     [Epoch, VisibleNodes]),
         try

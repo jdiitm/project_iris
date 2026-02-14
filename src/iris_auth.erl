@@ -581,7 +581,8 @@ propagate_revocation(TokenId, Timestamp) ->
     case Nodes of
         [] -> ok;  %% Single node deployment
         _ ->
-            spawn(fun() ->
+            %% B-3 AUDIT MITIGATION: Monitored spawn for revocation propagation
+            iris_async:spawn_monitored(revocation_propagation, fun() ->
                 lists:foreach(fun(Node) ->
                     case rpc:call(Node, ?MODULE, receive_revocation,
                                   [TokenId, Timestamp], 2000) of

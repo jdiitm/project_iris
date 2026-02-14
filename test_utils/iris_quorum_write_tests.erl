@@ -421,3 +421,28 @@ integration_placeholder_test_() ->
            ?assert(true)
        end}
      ]}.
+
+%% =============================================================================
+%% H-4 Mitigation: Quorum repair retry with backoff
+%% =============================================================================
+
+repair_retries_on_failure_test() ->
+    %% repair_failed_replicas should retry up to 3 times with backoff
+    %% when rpc:call fails.
+    %% Since we can't easily mock rpc:call, we test with a known-bad node.
+    %% The function should retry 3 times and log each attempt.
+    
+    %% Call with a fake node that doesn't exist
+    FakeFailures = [{nonode@nowhere, {badrpc, nodedown}}],
+    
+    %% Before the fix: repair calls rpc:call once and gives up
+    %% After the fix: repair retries MAX_REPAIR_RETRIES times with backoff
+    %%
+    %% We measure timing: if retry is working, this should take at least
+    %% the sum of backoff delays (100ms + 500ms = 600ms minimum for 3 attempts)
+    Start = erlang:monotonic_time(millisecond),
+    iris_quorum_write:repair_failed_replicas(FakeFailures, test_table, <<"key">>, <<"value">>),
+    Elapsed = erlang:monotonic_time(millisecond) - Start,
+    
+    %% After fix: should take >= 600ms due to backoff (100ms + 500ms between 3 attempts)
+    ?assert(Elapsed >= 500).

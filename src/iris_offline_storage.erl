@@ -242,8 +242,8 @@ retrieve_cursor(User, Count, Cursor) ->
 %% Call this AFTER client ACKs receipt of messages from retrieve_cursor.
 -spec delete_confirmed(binary(), integer(), integer(), integer()) -> ok.
 delete_confirmed(User, _Count, FromCursor, ToCursor) ->
-    %% Spawn async delete to not block the caller
-    spawn(fun() ->
+    %% B-3 AUDIT MITIGATION: Monitored spawn for async delete
+    iris_async:spawn_monitored(offline_msg_delete, fun() ->
         lists:foreach(fun(ID) ->
             Key = {User, ID},
             mnesia:dirty_delete(offline_msg, Key)
@@ -270,7 +270,8 @@ retrieve_lockfree(User, Count) ->
 %% @doc Delete all offline messages for a user (async, for cleanup)
 -spec delete_all_async(binary(), integer()) -> ok.
 delete_all_async(User, Count) ->
-    spawn(fun() ->
+    %% B-3 AUDIT MITIGATION: Monitored spawn for async cleanup
+    iris_async:spawn_monitored(offline_msg_cleanup, fun() ->
         lists:foreach(fun(ID) ->
             mnesia:dirty_delete(offline_msg, {User, ID})
         end, lists:seq(0, Count - 1))

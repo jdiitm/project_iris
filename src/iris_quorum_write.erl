@@ -30,6 +30,7 @@
 -export([set_replication_factor/1, get_replication_factor/0]).
 -export([local_sync_write/3]).  %% Called via RPC on remote nodes
 -export([reconcile_reads/1]).   %% Exported for testing (RFC Section 5.3)
+-export([repair_failed_replicas/4]).  %% H-4: Exported for testability
 
 %% Configurable via application env
 -define(DEFAULT_REPLICATION_FACTOR, 3).
@@ -93,7 +94,10 @@ do_write_durable(Table, Key, Value, Opts) ->
             case Failures of
                 [] -> ok;
                 _ -> 
-                    spawn(fun() -> repair_failed_replicas(Failures, Table, Key, Value) end)
+                    %% B-3 AUDIT MITIGATION: Monitored spawn for replica repair
+                    iris_async:spawn_monitored(quorum_repair, fun() ->
+                        repair_failed_replicas(Failures, Table, Key, Value)
+                    end)
             end,
             ok;
         false ->
@@ -194,7 +198,10 @@ get_replicas(Key) ->
 %% @doc Async repair for failed replicas (exported for manual triggering)
 -spec repair_async(atom(), term(), term(), [node()]) -> ok.
 repair_async(Table, Key, Value, FailedNodes) ->
-    spawn(fun() -> repair_failed_replicas(FailedNodes, Table, Key, Value) end),
+    %% B-3 AUDIT MITIGATION: Monitored spawn for async repair
+    iris_async:spawn_monitored(quorum_repair_async, fun() ->
+        repair_failed_replicas(FailedNodes, Table, Key, Value)
+    end),
     ok.
 
 %% =============================================================================
@@ -409,24 +416,40 @@ select_n_from_ring(Nodes, Idx, Count, Acc) ->
 %% Internal: Async Repair
 %% =============================================================================
 
+%% H-4 AUDIT MITIGATION: Retry with exponential backoff.
+-define(MAX_REPAIR_RETRIES, 3).
+-define(REPAIR_BACKOFF_MS, [100, 500, 2000]).
+
 repair_failed_replicas([], _Table, _Key, _Value) ->
     ok;
 repair_failed_replicas([{Node, Reason} | Rest], Table, Key, Value) ->
     logger:info("Repairing failed replica ~p (reason: ~p)", [Node, Reason]),
-    
-    %% Try to write to failed node
     case Node of
         unknown ->
-            %% Can't repair unknown node
             ok;
         _ ->
-            case rpc:call(Node, ?MODULE, local_sync_write, [Table, Key, Value], 5000) of
-                ok -> 
-                    logger:info("Replica ~p repaired successfully", [Node]);
-                {badrpc, _} -> 
-                    logger:warning("Replica ~p still unavailable", [Node]);
-                _ -> 
-                    ok
-            end
+            repair_with_retry(Node, Table, Key, Value, ?REPAIR_BACKOFF_MS)
     end,
     repair_failed_replicas(Rest, Table, Key, Value).
+
+repair_with_retry(Node, _Table, _Key, _Value, []) ->
+    %% All retries exhausted
+    logger:warning("Replica ~p repair failed after ~p attempts", [Node, ?MAX_REPAIR_RETRIES]),
+    try iris_metrics:inc(quorum_repair_failures)
+    catch _:_ -> ok
+    end;
+repair_with_retry(Node, Table, Key, Value, [Delay | Remaining]) ->
+    case rpc:call(Node, ?MODULE, local_sync_write, [Table, Key, Value], 5000) of
+        ok ->
+            logger:info("Replica ~p repaired successfully", [Node]);
+        {badrpc, Reason} ->
+            logger:warning("Replica ~p repair attempt failed: ~p, retrying in ~pms",
+                           [Node, Reason, Delay]),
+            timer:sleep(Delay),
+            repair_with_retry(Node, Table, Key, Value, Remaining);
+        Other ->
+            logger:warning("Replica ~p repair unexpected result: ~p, retrying in ~pms",
+                           [Node, Other, Delay]),
+            timer:sleep(Delay),
+            repair_with_retry(Node, Table, Key, Value, Remaining)
+    end.
