@@ -125,13 +125,14 @@ cp_mode_test_() ->
           end
       end},
 
-     {"development mode allows CP with warning", fun() ->
+     {"development mode also rejects CP (CRIT-01: no silent fallback)", fun() ->
           OldMode = application:get_env(iris_core, deployment_mode, undefined),
           OldCons = application:get_env(iris_core, consistency_mode, undefined),
           application:set_env(iris_core, deployment_mode, development),
           application:set_env(iris_core, consistency_mode, cp),
           try
-              ?assertEqual(ok, iris_core:validate_consistency_mode())
+              ?assertEqual({error, cp_not_implemented},
+                           iris_core:validate_consistency_mode())
           after
               case OldMode of
                   undefined -> application:unset_env(iris_core, deployment_mode);

@@ -101,7 +101,25 @@ All 19 mitigations from the adversarial test audit plan have been implemented.
 
 ---
 
-## Files Modified (17 files)
+### M20: Real Distributed Key Bundle Durability Test
+- **Finding**: `test_key_bundle_durability.py` was a fake distributed test. It claimed to test NFR-23 (key bundle durability = 99.999%) with a SIGKILL scenario but actually ran a single local Erlang VM with no Docker cluster involvement.
+- **Fix**: Rewrote `tests/suites/chaos_dist/test_key_bundle_durability.py` as a real distributed test following the `test_ack_durability.py` pattern: upload bundle to core-east-1, SIGKILL it, verify bundle survives on core-east-2 replica.
+- **Bug Found**: During testing, discovered `e2ee_key_bundle` table was NOT replicated across cluster nodes (missing from `init_cross_region_replication/0`). Added `disc_copies` replication for `e2ee_key_bundle` and `key_contact` tables.
+- **File**: `src/iris_core.erl` (replication fix), `tests/suites/chaos_dist/test_key_bundle_durability.py` (full rewrite)
+
+### M21: Relocate Misplaced Local API Tests
+- **Finding**: Three valid local API tests (upload, OPK consumption, SPK fallback) were in `chaos_dist/` masquerading as distributed chaos tests.
+- **Fix**: Moved to `tests/suites/integration/test_key_bundle_api.py` with corrected docstring.
+- **File**: `tests/suites/integration/test_key_bundle_api.py` (new file)
+
+### M22: Document CP Exception for Key Bundles
+- **Finding**: `consistency-modes.md` says "AP-only for v1.0" but `iris_keys:store_key_bundle_durable/2` intentionally uses CP semantics (quorum write, fail-on-no-quorum).
+- **Fix**: Added "CP Exception: Key Bundles (E2EE)" section to `docs/rfc/consistency-modes.md` documenting the intentional CP exception.
+- **File**: `docs/rfc/consistency-modes.md`
+
+---
+
+## Files Modified (18 files)
 
 1. `tests/suites/security/test_tls_certificate_attacks.py` (M1)
 2. `tests/suites/security/test_connection_rate_limit.py` (M2)
@@ -119,7 +137,12 @@ All 19 mitigations from the adversarial test audit plan have been implemented.
 14. `tests/suites/e2e/test_key_verification.py` (M14)
 15. `tests/suites/stress/test_backpressure_collapse.py` (M19)
 
-## Files Created (2 files)
+16. `src/iris_core.erl` (M20 - e2ee_key_bundle replication)
+17. `tests/suites/chaos_dist/test_key_bundle_durability.py` (M20 - full rewrite)
+18. `docs/rfc/consistency-modes.md` (M22)
 
-16. `tests/suites/integration/test_negative_delivery.py` (M15)
-17. `tests/suites/integration/test_e2ee_data_inspection.py` (M18)
+## Files Created (3 files)
+
+19. `tests/suites/integration/test_negative_delivery.py` (M15)
+20. `tests/suites/integration/test_e2ee_data_inspection.py` (M18)
+21. `tests/suites/integration/test_key_bundle_api.py` (M21)

@@ -18,6 +18,9 @@
 %% =============================================================================
 
 setup() ->
+    %% Clear stale memory alarms from prior test modules (e.g. backpressure tests)
+    persistent_term:put(iris_mnesia_guard_alarms, []),
+    application:unset_env(iris_core, mnesia_memory_alarm_bytes),
     %% Unique Mnesia dir to avoid conflicts
     Dir = "/tmp/iris_test_mnesia_cbor_dedup_" ++ integer_to_list(erlang:system_time(microsecond)),
     application:set_env(mnesia, dir, Dir),

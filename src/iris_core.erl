@@ -151,28 +151,22 @@ validate_production_cookie(Cookie) ->
         _ -> ok
     end.
 
-%% AUDIT 4.2: Validate consistency mode — CP is not implemented.
-%% In production, this is fatal. In development, log warning and continue.
--spec validate_consistency_mode() -> ok | {error, cp_not_implemented}.
+%% AUDIT 4.2 + CRIT-01 FIX: Validate consistency mode.
+%% CP is not implemented — fatal in ALL deployment modes (no silent fallback).
+%% Unknown values are also rejected to prevent typos from degrading to AP.
+-spec validate_consistency_mode() -> ok | {error, cp_not_implemented | {unknown_consistency_mode, term()}}.
 validate_consistency_mode() ->
     case application:get_env(iris_core, consistency_mode, hardened_ap) of
+        hardened_ap ->
+            ok;
         cp ->
-            case application:get_env(iris_core, deployment_mode, development) of
-                production ->
-                    logger:error("FATAL: consistency_mode=cp is NOT IMPLEMENTED. "
-                                 "Cannot guarantee CP semantics in production."),
-                    {error, cp_not_implemented};
-                _ ->
-                    %% AUDIT V2 P0-2: Promote to error level so operators cannot
-                    %% miss CP mode silently falling back to AP during testing.
-                    logger:error("consistency_mode=cp is NOT IMPLEMENTED. "
-                                 "Falling back to hardened_ap. "
-                                 "This node will operate in AP mode."),
-                    iris_metrics:set(consistency_mode_mismatch, 1),
-                    application:set_env(iris_core, consistency_mode_actual, hardened_ap),
-                    ok
-            end;
-        _ -> ok
+            logger:error("FATAL: consistency_mode=cp is NOT IMPLEMENTED. "
+                         "Use hardened_ap. See docs/rfc/consistency-modes.md"),
+            {error, cp_not_implemented};
+        Unknown ->
+            logger:error("FATAL: Unknown consistency_mode=~p. "
+                         "Only hardened_ap is supported.", [Unknown]),
+            {error, {unknown_consistency_mode, Unknown}}
     end.
 
 %% AUDIT MITIGATION V1 (Finding 2B): Validate compression at startup.
@@ -486,26 +480,36 @@ store_offline(User, Msg) ->
 %% RFC FR-5: FIFO ordering using client-provided sequence number
 -spec store_offline_durable(binary(), binary()) -> ok | {error, term()}.
 store_offline_durable(User, Msg) ->
-    %% RFC Section 8: Inbox Size limit enforcement (GAP-6 fix)
-    Depth = get_offline_queue_depth(User),
-    MaxInbox = iris_limits:max_inbox_size(),
-    case Depth >= MaxInbox of
-        true ->
-            iris_metrics:inc(iris_inbox_full_rejected),
-            {error, inbox_full};
-        false ->
-            %% AUDIT V2 P1-6: Soft warning at 95% capacity — alert operators
-            %% before hard rejection so they can intervene (e.g. nudge user
-            %% to come online, or raise the limit).
-            case Depth >= trunc(MaxInbox * 0.95) of
+    %% HIGH-01 FIX: Mnesia memory backpressure gate (prevents OOM).
+    %% This MUST be the first check — before inbox depth or any Mnesia read.
+    case iris_mnesia_guard:is_memory_ok() of
+        {error, memory_pressure} ->
+            iris_metrics:inc(offline_store_backpressure_rejects),
+            logger:warning("store_offline_durable: rejected due to memory pressure "
+                           "(user=~s)", [User]),
+            {error, memory_pressure};
+        ok ->
+            %% RFC Section 8: Inbox Size limit enforcement (GAP-6 fix)
+            Depth = get_offline_queue_depth(User),
+            MaxInbox = iris_limits:max_inbox_size(),
+            case Depth >= MaxInbox of
                 true ->
-                    logger:warning("inbox_near_capacity: user=~s depth=~B limit=~B (~B%)",
-                                   [User, Depth, MaxInbox, trunc(Depth * 100 / MaxInbox)]),
-                    iris_metrics:inc(inbox_near_capacity);
+                    iris_metrics:inc(iris_inbox_full_rejected),
+                    {error, inbox_full};
                 false ->
-                    ok
-            end,
-            store_offline_durable_inner(User, Msg)
+                    %% AUDIT V2 P1-6: Soft warning at 95% capacity — alert operators
+                    %% before hard rejection so they can intervene (e.g. nudge user
+                    %% to come online, or raise the limit).
+                    case Depth >= trunc(MaxInbox * 0.95) of
+                        true ->
+                            logger:warning("inbox_near_capacity: user=~s depth=~B limit=~B (~B%)",
+                                           [User, Depth, MaxInbox, trunc(Depth * 100 / MaxInbox)]),
+                            iris_metrics:inc(inbox_near_capacity);
+                        false ->
+                            ok
+                    end,
+                    store_offline_durable_inner(User, Msg)
+            end
     end.
 
 store_offline_durable_inner(User, {idempotent_msg, IdempotencyKey, RealMsg}) ->
@@ -1136,6 +1140,14 @@ init_cross_region_replication() ->
             %% These tables store messages queued for delivery to partitioned regions
             replicate_table(cross_region_outbound, disc_copies, CoreNodes),
             replicate_table(cross_region_dead_letter, disc_copies, CoreNodes),
+            
+            %% M20 FIX: Replicate e2ee_key_bundle table (disc_copies for NFR-23 durability)
+            %% Key bundles MUST survive node failure (99.999% durability, same as messages).
+            %% Without replication, a SIGKILL of the primary loses all key bundles.
+            replicate_table(e2ee_key_bundle, disc_copies, CoreNodes),
+            
+            %% Replicate key_contact table (disc_copies for key change notifications)
+            replicate_table(key_contact, disc_copies, CoreNodes),
             
             logger:info("Cross-region replication initialized successfully"),
             ok

@@ -14,8 +14,9 @@ The `consistency_mode` configuration parameter was introduced early in developme
 
 **Iris v1.0 operates exclusively in `hardened_ap` mode.**
 
-- `consistency_mode=cp` in **production** causes a fatal startup crash (`cp_not_implemented`).
-- `consistency_mode=cp` in **development** logs an `error`-level warning, sets `consistency_mode_mismatch` metric to 1, and continues in `hardened_ap` mode.
+- `consistency_mode=cp` causes a fatal startup error in **all** deployment modes (CRIT-01 remediation).
+- Unknown `consistency_mode` values cause a fatal startup error.
+- The `cp` option will be re-enabled only when quorum-based consensus is implemented (see CP Roadmap below).
 
 ## hardened_ap Semantics
 
@@ -43,6 +44,16 @@ The `consistency_mode` configuration parameter was introduced early in developme
 | Offline storage | Durable (sync_transaction + disc_only_copies) |
 | Presence | Eventual (best-effort, partition-tolerant) |
 | User metadata | LWW convergent |
+
+## CP Exception: Key Bundles (E2EE)
+
+Key bundle storage (`e2ee_key_bundle` table) is an intentional exception to AP-only:
+
+- **Quorum writes required**: `iris_keys:store_key_bundle_durable/2` uses `iris_quorum_write:write_durable/3` when available.
+- **Failure propagates**: If quorum is not reached, the write is REJECTED (not silently degraded to single-node). Clients must retry.
+- **Rationale**: CP > AP for security-critical data. A lost key bundle permanently breaks E2EE session establishment. Availability degradation (temporary write rejection) is preferable to durability degradation.
+- **Fallback**: When `iris_quorum_write` is not registered (e.g., single-node development), falls back to `mnesia:sync_transaction` (local durability only).
+- **Replication**: The `e2ee_key_bundle` and `key_contact` tables are replicated as `disc_copies` across all core nodes via `init_cross_region_replication/0`.
 
 ## What hardened_ap Does NOT Guarantee
 

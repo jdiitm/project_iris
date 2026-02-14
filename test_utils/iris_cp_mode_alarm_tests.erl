@@ -2,20 +2,15 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% AUDIT V2 P0-2: CP Consistency Mode Alarm Tests
+%% AUDIT V2 P0-2 + CRIT-01: CP Consistency Mode Alarm Tests
 %% =============================================================================
 %%
-%% Tests verify that when consistency_mode=cp in development mode:
-%% 1. validate_consistency_mode/0 logs at error level (not warning)
-%% 2. A consistency_mode_mismatch metric is set to 1
-%% 3. application env consistency_mode_actual is set to hardened_ap
-%%
-%% The existing test in iris_core_audit_tests.erl already covers:
-%% - production mode rejects CP (returns {error, cp_not_implemented})
-%% - development mode allows CP with fallback (returns ok)
-%% - hardened_ap mode always succeeds
-%%
-%% These tests verify the OBSERVABILITY additions (error log + metric + env).
+%% CRIT-01 removed the dev fallback. CP is now fatal in ALL modes.
+%% These tests verify:
+%% 1. CP in dev returns {error, cp_not_implemented} (no fallback)
+%% 2. No metric or env marker is set (fallback path removed)
+%% 3. Error-level logging is used for CP rejection
+%% 4. hardened_ap does not trigger mismatch metric
 %% =============================================================================
 
 setup_metrics() ->
@@ -34,61 +29,60 @@ cleanup_env() ->
     application:unset_env(iris_core, consistency_mode_actual).
 
 %% =============================================================================
-%% Test: CP fallback sets metric
+%% Test: CP in dev returns error (CRIT-01: no fallback, no metric)
 %% =============================================================================
 
-cp_fallback_sets_metric_test() ->
+cp_dev_returns_error_test() ->
     setup_metrics(),
     application:set_env(iris_core, deployment_mode, development),
     application:set_env(iris_core, consistency_mode, cp),
     try
-        ok = iris_core:validate_consistency_mode(),
+        Result = iris_core:validate_consistency_mode(),
+        ?assertEqual({error, cp_not_implemented}, Result),
+        %% Metric must NOT be set (fallback path removed)
         [{_, MetricVal}] = ets:lookup(iris_metrics_table, consistency_mode_mismatch),
-        ?assertEqual(1, MetricVal)
+        ?assertEqual(0, MetricVal)
     after
         cleanup_env()
     end.
 
 %% =============================================================================
-%% Test: CP fallback sets consistency_mode_actual env
+%% Test: CP in dev does NOT set consistency_mode_actual (fallback removed)
 %% =============================================================================
 
-cp_fallback_sets_actual_mode_env_test() ->
+cp_dev_no_actual_mode_env_test() ->
     setup_metrics(),
+    application:unset_env(iris_core, consistency_mode_actual),
     application:set_env(iris_core, deployment_mode, development),
     application:set_env(iris_core, consistency_mode, cp),
     try
-        ok = iris_core:validate_consistency_mode(),
-        ?assertEqual({ok, hardened_ap},
+        {error, cp_not_implemented} = iris_core:validate_consistency_mode(),
+        ?assertEqual(undefined,
                      application:get_env(iris_core, consistency_mode_actual))
     after
         cleanup_env()
     end.
 
 %% =============================================================================
-%% Test: Source code uses logger:error (not logger:warning) for CP fallback
+%% Test: CP rejection uses logger:error in source code
 %% =============================================================================
 
-cp_fallback_uses_error_level_log_test() ->
+cp_rejection_uses_error_level_log_test() ->
     {ok, Src} = file:read_file("src/iris_core.erl"),
-    %% The development-mode CP fallback must use logger:error, not logger:warning.
-    %% We extract the validate_consistency_mode function body and check that
-    %% "Falling back to hardened_ap" is preceded by logger:error (not logger:warning).
-    %%
-    %% Strategy: find the function, then check no logger:warning appears in
-    %% the block that contains "Falling back".
+    %% CRIT-01: The fallback path was removed. Verify that:
+    %% 1. "Falling back to hardened_ap" is NO LONGER in the source
+    %% 2. The CP rejection uses logger:error (not logger:warning)
     FallbackMarker = <<"Falling back to hardened_ap">>,
-    ?assertNotEqual(nomatch, binary:match(Src, FallbackMarker)),
-    %% The fallback log call must NOT use logger:warning.
-    %% In the source, the dev branch should have logger:error("... Falling back ...")
-    %% not logger:warning("... Falling back ...").
-    %% We check: no logger:warning call within 200 bytes before "Falling back"
-    {FallbackPos, _} = binary:match(Src, FallbackMarker),
-    WindowStart = max(0, FallbackPos - 200),
-    WindowLen = FallbackPos - WindowStart,
+    ?assertEqual(nomatch, binary:match(Src, FallbackMarker)),
+    %% The CP branch must use logger:error for the "NOT IMPLEMENTED" message
+    CpMarker = <<"consistency_mode=cp is NOT IMPLEMENTED">>,
+    ?assertNotEqual(nomatch, binary:match(Src, CpMarker)),
+    {CpPos, _} = binary:match(Src, CpMarker),
+    WindowStart = max(0, CpPos - 200),
+    WindowLen = CpPos - WindowStart,
     Window = binary:part(Src, WindowStart, WindowLen),
-    HasWarningNearFallback = binary:match(Window, <<"logger:warning">>) =/= nomatch,
-    ?assertNot(HasWarningNearFallback).
+    HasErrorLog = binary:match(Window, <<"logger:error">>) =/= nomatch,
+    ?assert(HasErrorLog).
 
 %% =============================================================================
 %% Test: Non-CP mode does NOT set mismatch metric

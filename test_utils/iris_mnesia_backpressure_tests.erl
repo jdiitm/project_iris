@@ -63,11 +63,13 @@ is_memory_ok_returns_error_over_threshold_test() ->
     mnesia:start(),
     %% Set absurdly low threshold so schema table triggers it
     application:set_env(iris_core, mnesia_memory_alarm_bytes, 1),
+    persistent_term:put(iris_mnesia_guard_alarms, []),
     try
         Result = iris_mnesia_guard:is_memory_ok(),
         ?assertEqual({error, memory_pressure}, Result)
     after
         application:unset_env(iris_core, mnesia_memory_alarm_bytes),
+        persistent_term:put(iris_mnesia_guard_alarms, []),
         mnesia:stop()
     end.
 
@@ -110,6 +112,7 @@ backpressure_emits_metric_on_rejection_test() ->
     mnesia:start(),
     %% Set absurdly low threshold to trigger backpressure
     application:set_env(iris_core, mnesia_memory_alarm_bytes, 1),
+    persistent_term:put(iris_mnesia_guard_alarms, []),
     try
         Before = get_metric(offline_store_backpressure_rejects),
         %% Call store — should be rejected due to memory pressure
@@ -118,6 +121,7 @@ backpressure_emits_metric_on_rejection_test() ->
         ?assert(After > Before)
     after
         application:unset_env(iris_core, mnesia_memory_alarm_bytes),
+        persistent_term:put(iris_mnesia_guard_alarms, []),
         mnesia:stop()
     end.
 
@@ -129,11 +133,13 @@ store_returns_error_under_backpressure_test() ->
     ensure_metrics_table(),
     mnesia:start(),
     application:set_env(iris_core, mnesia_memory_alarm_bytes, 1),
+    persistent_term:put(iris_mnesia_guard_alarms, []),
     try
         Result = iris_offline_storage:store(<<"user1">>, <<"msg">>, 1),
         ?assertEqual({error, memory_pressure}, Result)
     after
         application:unset_env(iris_core, mnesia_memory_alarm_bytes),
+        persistent_term:put(iris_mnesia_guard_alarms, []),
         mnesia:stop()
     end.
 
