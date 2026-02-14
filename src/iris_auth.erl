@@ -49,6 +49,7 @@
 -export([get_auth_mode/0]).
 %% RFC Section 10.1: Failed login rate limiting
 -export([check_login_rate/1, record_failed_login/1]).
+-export([revoke_refresh_family/1]).  %% B-7/H-6: Exported for testability
 
 %% =============================================================================
 %% API
@@ -871,6 +872,8 @@ create_refresh_token_in_family(UserId, FamilyId) ->
 
 revoke_refresh_family(FamilyId) ->
     %% AUDIT P0-4: Transaction for family revocation durability
+    %% H-6 AUDIT MITIGATION: Do not silently swallow errors.
+    %% A failed revocation means stolen tokens may remain valid.
     try
         {atomic, ok} = mnesia:sync_transaction(fun() ->
             AllTokens = mnesia:match_object(?REFRESH_TABLE,
@@ -878,7 +881,11 @@ revoke_refresh_family(FamilyId) ->
             lists:foreach(fun({?REFRESH_TABLE, TId, UId, FId, _Used, CAt, EAt}) ->
                 mnesia:write({?REFRESH_TABLE, TId, UId, FId, true, CAt, EAt})
             end, AllTokens)
-        end)
+        end),
+        ok
     catch
-        _:_ -> ok
+        Class:Reason ->
+            logger:warning("revoke_refresh_family failed for ~p: ~p:~p",
+                           [FamilyId, Class, Reason]),
+            {error, {revocation_failed, Reason}}
     end.

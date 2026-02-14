@@ -57,6 +57,13 @@ handle_cast({update, User, _Status}, State = #state{buffer = Buff, count = Count
         {noreply, State#state{buffer = NewBuff, count = NewCount}}
     end.
 
+%% B-7 AUDIT MITIGATION: Handle EXIT signals from linked processes.
+%% Without this, EXIT messages cause gen_server termination because trap_exit
+%% converts them to messages but no clause handles them.
+handle_info({'EXIT', Pid, Reason}, State) ->
+    logger:warning("~p received EXIT from ~p: ~p", [?MODULE, Pid, Reason]),
+    {noreply, State};
+
 handle_info(flush, State = #state{buffer = Buff, count = Count}) ->
     if Count > 0 ->
         flush(Buff);
