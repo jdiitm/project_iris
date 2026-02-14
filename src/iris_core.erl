@@ -678,7 +678,9 @@ delete_offline_confirmed(User, {FromCursor, ToCursor}) ->
 
 get_bucket_count(User) ->
     HotResult = try mnesia:dirty_read(user_meta, User)
-                catch _:_ -> []
+                catch C1:R1 ->
+                    logger:warning("~p: dirty_read(user_meta, ~p) failed ~p:~p", [?MODULE, User, C1, R1]),
+                    []
                 end,
     case HotResult of
         [{user_meta, User, Count, _LastMod}] ->

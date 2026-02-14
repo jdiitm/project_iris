@@ -54,9 +54,14 @@ class DeduplicationTestClient(IrisClient):
         msg_bytes = msg.encode('utf-8') if isinstance(msg, str) else msg
         msg_id_bytes = msg_id.encode('utf-8') if isinstance(msg_id, str) else msg_id
         
-        # Use standard send for now - dedup happens at core level
-        # Protocol: 0x02 | TargetLen(16) | Target | MsgLen(16) | Msg
-        payload = b'\x02' + struct.pack('>H', len(target_bytes)) + target_bytes + struct.pack('>H', len(msg_bytes)) + msg_bytes
+        # TG-4 AUDIT MITIGATION: Use SEND_SEQ (0x07) instead of deprecated 0x02
+        # Protocol: 0x07 | TargetLen(16) | Target | SeqNo(64) | MsgLen(16) | Msg
+        seq_no = getattr(self, '_seq_counter', 0)
+        self._seq_counter = seq_no + 1
+        payload = (b'\x07' +
+                   struct.pack('>H', len(target_bytes)) + target_bytes +
+                   struct.pack('>Q', seq_no) +
+                   struct.pack('>H', len(msg_bytes)) + msg_bytes)
         self.sock.sendall(payload)
 
 

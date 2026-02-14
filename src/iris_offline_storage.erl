@@ -304,7 +304,9 @@ check_memory_backpressure() ->
         ok -> ok;
         {error, memory_pressure} ->
             try iris_metrics:inc(offline_store_backpressure_rejects)
-            catch _:_ -> ok
+            catch C1:R1 ->
+                logger:warning("~p: metrics inc(backpressure_rejects) failed ~p:~p", [?MODULE, C1, R1]),
+                ok
             end,
             logger:warning("Offline store rejected: Mnesia memory pressure"),
             {error, memory_pressure}

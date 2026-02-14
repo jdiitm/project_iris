@@ -49,7 +49,9 @@ check_bytes(ByteCount) ->
                 true ->
                     %% Byte limit exceeded — emit metric and reject
                     try iris_metrics:inc(ingress_byte_limit_rejects)
-                    catch _:_ -> ok
+                    catch C1:R1 ->
+                        logger:warning("~p: metrics inc failed ~p:~p", [?MODULE, C1, R1]),
+                        ok
                     end,
                     {error, byte_limit_exceeded};
                 false ->

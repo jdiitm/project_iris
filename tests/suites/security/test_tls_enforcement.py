@@ -108,14 +108,14 @@ def main():
         print("  Server is running with TLS enabled")
         return 0
     elif mode == "plaintext":
-        print("⚠️  TLS ENFORCEMENT: NON-COMPLIANT (but acceptable in test)")
+        print("B-5 AUDIT MITIGATION: TLS disabled -- SKIPPING")
         print("  Server running in plaintext mode")
         print("  RFC-001 NFR-14: TLS MUST be mandatory in production")
+        print("  TLS enforcement test cannot validate when TLS is disabled.")
         print("\n  To enable TLS:")
         print("    - Set tls_enabled=true in config")
         print("    - Provide tls_certfile and tls_keyfile")
-        # Return 0 in test env since allow_insecure is set
-        return 0
+        return 2  # Exit code 2 = SKIPPED (not tested)
     else:
         print("? TLS ENFORCEMENT: UNKNOWN")
         print("  Could not determine server mode")

@@ -499,11 +499,15 @@ sync_check(User) ->
                     {ok, Used} -> {true, Used};
                     _ -> false
                 end
-            catch _:_ -> false
+            catch C1:R1 ->
+                logger:warning("~p: remote usage query failed ~p:~p", [?MODULE, C1, R1]),
+                false
             end
         end, OtherMembers),
         lists:sum(Replies)
-    catch _:_ -> 0
+    catch C2:R2 ->
+        logger:warning("~p: distributed rate check failed ~p:~p", [?MODULE, C2, R2]),
+        0
     end,
     TotalUsed = LocalUsed + RemoteUsed,
     Burst = get_default_burst(),

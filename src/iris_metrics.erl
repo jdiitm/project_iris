@@ -276,7 +276,10 @@ format_value(V) ->
 -spec emit_mnesia_table_memory() -> ok.
 emit_mnesia_table_memory() ->
     Tables = try mnesia:system_info(tables)
-             catch _:_ -> [] end,
+             catch C1:R1 ->
+                 logger:warning("~p: mnesia system_info(tables) failed ~p:~p", [?MODULE, C1, R1]),
+                 []
+             end,
     lists:foreach(fun(schema) -> ok;  %% Skip schema table
                      (Table) ->
         try

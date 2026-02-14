@@ -58,7 +58,9 @@ evict_cold(HotTable, ColdTable, Cutoff) ->
     case Evicted > 0 of
         true ->
             try iris_metrics:inc(storage_tier_evictions_total, Evicted)
-            catch _:_ -> ok
+            catch C1:R1 ->
+                logger:warning("~p: metrics inc(evictions) failed ~p:~p", [?MODULE, C1, R1]),
+                ok
             end;
         false -> ok
     end,
@@ -81,7 +83,9 @@ read_through(HotTable, ColdTable, Key) ->
                 [ColdRecord] ->
                     %% Cold hit — emit metric
                     try iris_metrics:inc(storage_tier_cold_reads_total)
-                    catch _:_ -> ok
+                    catch C2:R2 ->
+                        logger:warning("~p: metrics inc(cold_reads) failed ~p:~p", [?MODULE, C2, R2]),
+                        ok
                     end,
                     {ok, ColdRecord};
                 [] ->
