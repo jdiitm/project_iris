@@ -99,11 +99,16 @@ get_core_node() ->
 legacy_core_node() ->
     %% FIXED: Scan connected nodes for actual Core IP
     Connected = nodes(connected),
-    %% Match both "iris_core" (Makefile) and "core_" (Docker) patterns
+    %% AUDIT FIX 2.3: Config-based role with naming convention fallback
     IsCoreNode = fun(N) ->
-        Name = atom_to_list(N),
-        string:str(Name, "iris_core") > 0 orelse 
-        string:prefix(Name, "core_") =/= nomatch
+        case application:get_env(iris_core, node_role) of
+            {ok, core} -> true;
+            {ok, _} -> false;
+            undefined ->
+                Name = atom_to_list(N),
+                string:str(Name, "iris_core") > 0 orelse
+                string:prefix(Name, "core_") =/= nomatch
+        end
     end,
     case [N || N <- Connected, IsCoreNode(N)] of
          [Core|_] -> Core;

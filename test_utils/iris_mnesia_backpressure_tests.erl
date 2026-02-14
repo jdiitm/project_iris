@@ -120,3 +120,35 @@ backpressure_emits_metric_on_rejection_test() ->
         application:unset_env(iris_core, mnesia_memory_alarm_bytes),
         mnesia:stop()
     end.
+
+%% =============================================================================
+%% Test: store/3 returns {error, memory_pressure} under backpressure (OPS-02)
+%% =============================================================================
+
+store_returns_error_under_backpressure_test() ->
+    ensure_metrics_table(),
+    mnesia:start(),
+    application:set_env(iris_core, mnesia_memory_alarm_bytes, 1),
+    try
+        Result = iris_offline_storage:store(<<"user1">>, <<"msg">>, 1),
+        ?assertEqual({error, memory_pressure}, Result)
+    after
+        application:unset_env(iris_core, mnesia_memory_alarm_bytes),
+        mnesia:stop()
+    end.
+
+%% =============================================================================
+%% Test: Async deletes use spawn (bounded by BEAM scheduler, not unbounded)
+%% Structural verification that delete_confirmed and delete_all_async spawn.
+%% =============================================================================
+
+async_deletes_use_spawn_test() ->
+    {ok, Src} = file:read_file("src/iris_offline_storage.erl"),
+    %% delete_confirmed uses spawn
+    {DelPos, _} = binary:match(Src, <<"delete_confirmed(">>),
+    RestAfterDel = binary:part(Src, DelPos, min(300, byte_size(Src) - DelPos)),
+    ?assertNotEqual(nomatch, binary:match(RestAfterDel, <<"spawn">>)),
+    %% delete_all_async uses spawn
+    {AsyncPos, _} = binary:match(Src, <<"delete_all_async(">>),
+    RestAfterAsync = binary:part(Src, AsyncPos, min(300, byte_size(Src) - AsyncPos)),
+    ?assertNotEqual(nomatch, binary:match(RestAfterAsync, <<"spawn">>)).

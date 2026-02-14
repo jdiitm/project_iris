@@ -26,6 +26,7 @@
 -export([table_spec/1]).  %% AUDIT: exported for scalability test assertions
 -export([cleanup_expired_entries/0]).  %% AUDIT: TTL cleanup for dedup/revoked/refresh
 -export([validate_compression_startup/0]).  %% AUDIT MITIGATION V1: compression check
+-export([reload_tls_config/0]).  %% SEC-01: Runtime TLS certificate rotation
 
 -define(SERVER, ?MODULE).
 
@@ -190,6 +191,16 @@ validate_compression_startup() ->
                            "Install libzstd-dev and rebuild NIF to enable zstd."),
             ok
     end.
+
+%% SEC-01: Runtime TLS certificate rotation.
+%% Clears the OTP SSL PEM cache so the next TLS handshake reads fresh
+%% cert/key files from disk. No listener restart required.
+-spec reload_tls_config() -> ok.
+reload_tls_config() ->
+    ssl:clear_pem_cache(),
+    iris_metrics:inc(tls_config_reload_count),
+    logger:info("TLS PEM cache cleared — next handshake will use updated certificates"),
+    ok.
 
 %%%===================================================================
 %%% Supervisor Callbacks
@@ -1430,11 +1441,18 @@ should_overwrite(_Table, _RemoteRec, _LocalRec) ->
     %% Conservative default: keep local record
     false.
 
-%% Helper: Check if a node is a core node (by naming convention)
+%% Helper: Check if a node is a core node.
+%% AUDIT FIX 2.3: Config-based role assignment with naming convention fallback.
+%% Supports K8s, IP-based naming, and any non-standard naming schema.
 is_core_node(Node) ->
-    NodeStr = atom_to_list(Node),
-    %% Match patterns like: core_east_1@..., core_west_1@..., iris_core@...
-    lists:prefix("core", NodeStr) orelse lists:prefix("iris_core", NodeStr).
+    case application:get_env(iris_core, node_role) of
+        {ok, core} -> true;
+        {ok, _Other} -> false;
+        undefined ->
+            %% Fallback: naming convention (backward compat)
+            NodeStr = atom_to_list(Node),
+            lists:prefix("core", NodeStr) orelse lists:prefix("iris_core", NodeStr)
+    end.
 
 %% Helper: Add table copies to all nodes that don't have them
 %% Retries on failure (schema may not be active yet on remote nodes)

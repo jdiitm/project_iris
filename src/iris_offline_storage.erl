@@ -170,6 +170,8 @@ store_batch_sync(User, Msgs, Count) ->
     end.
 
 retrieve(User, Count) ->
+    %% AUDIT FIX 2.4: Deprecation metric — use retrieve_cursor/3 instead.
+    iris_metrics:inc(offline_retrieve_deprecated_calls),
     %% Read messages from all buckets
     F = fun() ->
         %% Iterate all buckets 0..Count-1

@@ -208,10 +208,16 @@ code_change(_OldVsn, State, _Extra) ->
 %% Internal Functions
 %% =============================================================================
 
-%% Check if a node is a core node (by naming convention)
+%% Check if a node is a core node.
+%% AUDIT FIX 2.3: Config-based role assignment with naming convention fallback.
 is_core_node(Node) ->
-    NodeStr = atom_to_list(Node),
-    lists:prefix("core", NodeStr) orelse lists:prefix("iris_core", NodeStr).
+    case application:get_env(iris_core, node_role) of
+        {ok, core} -> true;
+        {ok, _Other} -> false;
+        undefined ->
+            NodeStr = atom_to_list(Node),
+            lists:prefix("core", NodeStr) orelse lists:prefix("iris_core", NodeStr)
+    end.
 
 %% Cancel any pending timer for a node
 cancel_pending_timer(Node, State) ->
