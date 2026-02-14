@@ -361,7 +361,11 @@ check_login_rate(UserId) ->
         end
     catch
         error:badarg ->
-            %% ETS table doesn't exist (iris_auth not started yet)
+            %% ETS table doesn't exist (iris_auth not started yet).
+            %% This is the FAILED-LOGIN rate limiter (brute-force protection),
+            %% not the token revocation check. Fail-open is correct here:
+            %% if we can't track failed logins, we still allow the login
+            %% attempt -- actual auth validation happens separately.
             ok
     end.
 
@@ -554,10 +558,11 @@ is_revoked(TokenId) ->
                     Now = os:system_time(second),
                     ets:insert(?REVOCATION_TABLE, {TokenId, Now}),
                     true;
-                {aborted, _} ->
-                    %% On transaction failure, assume not revoked (fail open)
-                    %% ETS cache still provides primary protection
-                    false
+                {aborted, Reason} ->
+                    %% B-6 AUDIT MITIGATION: Fail-CLOSED on Mnesia failure.
+                    %% A revoked token must not be accepted because Mnesia is down.
+                    logger:warning("Revocation check failed (fail-closed): ~p", [Reason]),
+                    true
             end
     end.
 

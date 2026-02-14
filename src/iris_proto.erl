@@ -1,6 +1,7 @@
 -module(iris_proto).
 -export([decode/1, unpack_batch/1, encode_status/3, encode_reliable_msg/2, decode_reliable_msg/1]).
 -export([encode_seq_msg/3]).  %% AUDIT FIX: Sequence-numbered message encoder (RFC FR-5)
+-export([is_idempotent_opcode/1]).  %% B-1 AUDIT MITIGATION: Classify idempotent opcodes
 -export([encode_seq_msg_v2/4]).  %% RFC v4.0: send_seq_v2 with UUIDv7 idempotency key
 -export([generate_msg_id/0]). %% Unique message ID generator
 
@@ -608,6 +609,13 @@ decode_reliable_msg(<<16#11, IdLen:16, Rest/binary>>) when byte_size(Rest) >= Id
     end;
 decode_reliable_msg(Bin) ->
     {more, Bin}.
+
+%% B-1 AUDIT MITIGATION: Classify which opcodes carry idempotency keys.
+%% Only idempotent opcodes can guarantee RFC Section 1.2 deduplication.
+-spec is_idempotent_opcode(non_neg_integer()) -> boolean().
+is_idempotent_opcode(16#0D) -> true;   %% SEND_SEQ_V2: mandatory UUIDv7 idempotency key
+is_idempotent_opcode(16#10) -> true;   %% CBOR_MSG: may carry idempotency_key field
+is_idempotent_opcode(_) -> false.      %% All others: no idempotency key in wire format
 
 %% AUDIT FIX: Encode sequence-numbered message (RFC FR-5)
 %% Format: 0x07 | TargetLen(16) | Target | SeqNo(64) | MsgLen(16) | Msg

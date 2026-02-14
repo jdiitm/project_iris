@@ -227,6 +227,9 @@ handle_packet({send_message, _Target, _Msg}, undefined, _Pid, _Mod) ->
 %% NOTE: Dedup (RFC NFR-11) is handled on the CORE side in iris_core:store_offline_durable
 %% because that's where messages are persisted. Edge nodes don't have iris_dedup running.
 handle_packet({send_seq, Target, SeqNo, Msg}, User, _Pid, _Mod) when User =/= undefined ->
+    %% B-1 AUDIT MITIGATION: Log deprecation warning for 0x07 (no idempotency key).
+    %% Clients should migrate to 0x0D (SEND_SEQ_V2) for RFC Section 1.2 compliance.
+    iris_metrics:inc(send_seq_deprecated_usage),
     %% RFC NFR-31: Span instrumentation
     iris_trace:new_span(<<"session.send_seq">>),
     %% RFC NFR-32: Count incoming message
@@ -1411,7 +1414,9 @@ check_block_status(Sender, Recipient) ->
             iris_metrics:inc(blocked_message_count),
             {error, blocked}
     catch _:Reason ->
-        %% Fail-open: if Mnesia/user_safety unavailable, allow message through
-        logger:warning("Block check failed (fail-open): ~p sender=~p", [Reason, Sender]),
-        ok
+        %% B-6 AUDIT MITIGATION: Fail-CLOSED when user_safety is unavailable.
+        %% Blocked users must not be able to bypass by crashing the safety service.
+        logger:warning("Block check failed (fail-closed): ~p sender=~p", [Reason, Sender]),
+        iris_metrics:inc(block_check_service_unavailable),
+        {error, service_unavailable}
     end.

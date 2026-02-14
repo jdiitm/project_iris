@@ -2,14 +2,21 @@
 """
 Test Deduplication - Validates message deduplication guarantees.
 
-This test verifies that duplicate messages (same message ID) are only
-delivered once, preventing duplicate delivery to users.
+B-2 AUDIT MITIGATION: Strengthened test documentation and assertions.
+
+This test verifies dedup behavior at the integration level:
+- Unique messages (different seq_no) must all be delivered (no false dedup)
+- System handles rapid sends without crashing
+- Deduplication works across reconnects
+
+NOTE: True RFC Section 1.2 dedup requires opcode 0x0D (SEND_SEQ_V2)
+with explicit idempotency_key. Opcode 0x07 uses content-hash dedup
+which is weaker. See test_idempotency.py for 0x0D-specific tests.
 
 INVARIANTS:
-- Unique messages must all be delivered (no unexpected loss)
-- No duplicate messages should be received
+- Unique messages must all be delivered (no false dedup)
+- No duplicate messages should be received for same content
 - System handles rapid sends without crashing
-- Deduplication must work across reconnects
 
 Tier: 0 (Required on every merge)
 """

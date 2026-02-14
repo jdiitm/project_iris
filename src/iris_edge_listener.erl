@@ -15,6 +15,7 @@
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 -export([days_until_cert_expiry/1]).
 -export([check_tls_policy/1]).  %% Exported for testability (B-2 audit mitigation)
+-export([check_conn_rate_tcp/1]).  %% Exported for TDD (B-6 audit mitigation)
 
 -record(state, {
     lsock :: gen_tcp:socket() | ssl:sslsocket(),
@@ -412,8 +413,10 @@ check_conn_rate_tcp(Sock) ->
             {error, _} -> allow
         end
     catch Class:Reason ->
-        logger:warning("iris_edge_listener:check_conn_rate_tcp catch-all: ~p:~p", [Class, Reason]),
-        allow
+        %% B-6 AUDIT MITIGATION: Fail-CLOSED on rate check exception.
+        %% Attackers must not bypass rate limiting by triggering errors.
+        logger:warning("iris_edge_listener:check_conn_rate_tcp catch-all (fail-closed): ~p:~p", [Class, Reason]),
+        deny
     end.
 
 check_ip_rate(IP) ->

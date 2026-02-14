@@ -211,18 +211,8 @@ handle_call(now, _From, State = #state{last_hlc = LastHLC, node_id = NodeId}) ->
 
 handle_call(send, _From, State = #state{last_hlc = LastHLC, node_id = NodeId}) ->
     %% HLC send event: advance clock
-    PT = erlang:system_time(millisecond),
-    NewPhysical = max(PT, LastHLC#hlc.physical),
-    NewLogical = if
-        NewPhysical =:= LastHLC#hlc.physical ->
-            %% Same physical time, increment logical
-            min(LastHLC#hlc.logical + 1, ?MAX_LOGICAL);
-        true ->
-            %% New physical time, reset logical
-            0
-    end,
-    NewHLC = #hlc{physical = NewPhysical, logical = NewLogical, node_id = NodeId},
-    {reply, NewHLC, State#state{last_hlc = NewHLC}};
+    {NewHLC, NewState} = do_send(LastHLC, NodeId, State),
+    {reply, NewHLC, NewState};
 
 handle_call({recv, RemoteHLC}, _From, State = #state{last_hlc = LastHLC, node_id = NodeId}) ->
     %% HLC receive event: merge with remote
@@ -269,6 +259,42 @@ code_change(_OldVsn, State, _Extra) ->
 %% Internal functions
 %%====================================================================
 
+%% @private Send event with B-5 AUDIT MITIGATION: counter overflow handling.
+%% When logical counter hits MAX_LOGICAL and wall clock hasn't advanced,
+%% spin-wait up to 5ms for wall clock to advance, ensuring strict monotonicity.
+do_send(LastHLC, NodeId, State) ->
+    do_send(LastHLC, NodeId, State, 0).
+
+do_send(LastHLC, NodeId, State, Attempts) when Attempts > 50 ->
+    %% Safety valve: after 50 attempts (~5ms), force advance physical time
+    %% This should never happen in practice (wall clock advances within 1ms)
+    logger:warning("HLC: Counter overflow forced advance after ~p attempts", [Attempts]),
+    NewPhysical = LastHLC#hlc.physical + 1,
+    NewHLC = #hlc{physical = NewPhysical, logical = 0, node_id = NodeId},
+    {NewHLC, State#state{last_hlc = NewHLC}};
+do_send(LastHLC, NodeId, State, Attempts) ->
+    PT = erlang:system_time(millisecond),
+    NewPhysical = max(PT, LastHLC#hlc.physical),
+    case NewPhysical =:= LastHLC#hlc.physical of
+        true ->
+            NextLogical = LastHLC#hlc.logical + 1,
+            case NextLogical > ?MAX_LOGICAL of
+                true ->
+                    %% B-5 AUDIT MITIGATION: Counter overflow.
+                    %% Spin-wait for wall clock to advance rather than
+                    %% producing duplicate timestamps.
+                    timer:sleep(1),
+                    do_send(LastHLC, NodeId, State, Attempts + 1);
+                false ->
+                    NewHLC = #hlc{physical = NewPhysical, logical = NextLogical, node_id = NodeId},
+                    {NewHLC, State#state{last_hlc = NewHLC}}
+            end;
+        false ->
+            %% Wall clock advanced, reset logical counter
+            NewHLC = #hlc{physical = NewPhysical, logical = 0, node_id = NodeId},
+            {NewHLC, State#state{last_hlc = NewHLC}}
+    end.
+
 %% @private Compute node ID from Erlang node name.
 compute_node_id() ->
     NodeName = atom_to_binary(node(), utf8),
@@ -276,23 +302,19 @@ compute_node_id() ->
     Hash.
 
 %% @private Perform the receive merge operation.
+%% B-5 AUDIT MITIGATION: Uses min() to cap at MAX_LOGICAL; the send path
+%% handles the spin-wait. Recv only merges -- the next send() will detect
+%% the saturated counter and wait for wall clock advance.
 do_recv_merge(PT, LastPT, RemotePT, LastHLC, RemoteHLC, NodeId, State) ->
-    %% HLC receive algorithm:
-    %% NewPT = max(PT, LastPT, RemotePT)
-    %% NewL  = based on which PT was max
     NewPhysical = max(PT, max(LastPT, RemotePT)),
     NewLogical = if
         NewPhysical =:= LastPT, LastPT =:= RemotePT ->
-            %% All three equal: max(LastL, RemoteL) + 1
             min(max(LastHLC#hlc.logical, RemoteHLC#hlc.logical) + 1, ?MAX_LOGICAL);
         NewPhysical =:= LastPT ->
-            %% Local was max: LastL + 1
             min(LastHLC#hlc.logical + 1, ?MAX_LOGICAL);
         NewPhysical =:= RemotePT ->
-            %% Remote was max: RemoteL + 1
             min(RemoteHLC#hlc.logical + 1, ?MAX_LOGICAL);
         true ->
-            %% Current wall time is max: reset to 0
             0
     end,
     NewHLC = #hlc{physical = NewPhysical, logical = NewLogical, node_id = NodeId},

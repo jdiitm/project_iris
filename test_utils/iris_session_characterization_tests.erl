@@ -56,7 +56,9 @@ check_block_status_unblocked_test_() ->
      end,
      fun(_) -> ok end,
      fun(_) ->
-         ?_assertEqual(ok, iris_session:check_block_status(<<"unknown_sender">>, <<"unknown_recipient">>))
+         %% B-6 AUDIT MITIGATION: check_block_status now fails CLOSED when
+        %% user_safety is unavailable. Returns {error, _}, not ok.
+        ?_assertMatch({error, _}, iris_session:check_block_status(<<"unknown_sender">>, <<"unknown_recipient">>))
      end}.
 
 %% Module exports exist (canary tests for future refactoring)

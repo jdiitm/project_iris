@@ -169,18 +169,22 @@ store_batch_sync(User, Msgs, Count) ->
             {error, Reason}
     end.
 
+-define(MAX_RETRIEVE_BUCKETS, 1000).  %% H-3 AUDIT MITIGATION: Cap bucket count
+
 retrieve(User, Count) ->
     %% AUDIT FIX 2.4: Deprecation metric — use retrieve_cursor/3 instead.
     iris_metrics:inc(offline_retrieve_deprecated_calls),
+    %% H-3 AUDIT MITIGATION: Cap bucket count to prevent OOM on large Count values
+    BoundedCount = min(Count, ?MAX_RETRIEVE_BUCKETS),
     %% Read messages from all buckets
     F = fun() ->
-        %% Iterate all buckets 0..Count-1
+        %% Iterate all buckets 0..BoundedCount-1
         Lists = lists:map(fun(ID) ->
             Key = {User, ID},
             Msgs = mnesia:read(offline_msg, Key, write),
             mnesia:delete({offline_msg, Key}),
             Msgs
-        end, lists:seq(0, Count - 1)),
+        end, lists:seq(0, BoundedCount - 1)),
         lists:append(Lists)
     end,
     

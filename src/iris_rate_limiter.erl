@@ -266,12 +266,16 @@ get_or_create_bucket(User, Now) ->
     case ets:lookup(?TABLE, User) of
         [Bucket] -> Bucket;
         [] ->
-            %% Create new bucket with full tokens
+            %% H-1 AUDIT MITIGATION: Initialize with half-burst tokens.
+            %% This prevents burst abuse after process restart where all
+            %% token buckets are empty. A newly-seen user gets half their
+            %% burst capacity; the remaining half refills over time.
             Rate = get_user_rate(User),
             Burst = get_user_burst(User),
+            InitialTokens = float(Burst) / 2.0,
             #bucket{
                 user = User,
-                tokens = float(Burst),
+                tokens = InitialTokens,
                 rate = Rate,
                 burst = Burst,
                 last_refill = Now

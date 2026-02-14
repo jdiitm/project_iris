@@ -115,6 +115,36 @@ class IrisClient:
                    struct.pack('>H', len(msg_bytes)) + msg_bytes)
         self.sock.sendall(payload)
     
+    def send_msg_v2(self, target, msg, idempotency_key=None):
+        """
+        B-1 AUDIT MITIGATION: Send via 0x0D (SEND_SEQ_V2) with idempotency key.
+        
+        RFC Section 1.2: Server deduplicates by (user_id, idempotency_key).
+        This is the ONLY opcode that guarantees RFC-compliant deduplication.
+        
+        Protocol: 0x0D | TargetLen(16) | Target | IdempotencyKey(16) | SeqNo(64) | MsgLen(16) | Msg
+        """
+        import uuid
+        target_bytes = target.encode('utf-8') if isinstance(target, str) else target
+        msg_bytes = msg.encode('utf-8') if isinstance(msg, str) else msg
+        
+        if idempotency_key is None:
+            idempotency_key = uuid.uuid4().bytes  # 16 bytes
+        elif isinstance(idempotency_key, str):
+            # Pad/truncate to 16 bytes
+            idempotency_key = idempotency_key.encode('utf-8')[:16].ljust(16, b'\x00')
+        
+        self._seq_counter += 1
+        seq_no = self._seq_counter
+        
+        payload = (b'\x0D' +
+                   struct.pack('>H', len(target_bytes)) + target_bytes +
+                   idempotency_key +
+                   struct.pack('>Q', seq_no) +
+                   struct.pack('>H', len(msg_bytes)) + msg_bytes)
+        self.sock.sendall(payload)
+        return idempotency_key
+    
     def send_msg_seq(self, target, msg, seq_no):
         """
         Send a message with client-provided sequence number (RFC FR-5).

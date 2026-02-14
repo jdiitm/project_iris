@@ -50,10 +50,11 @@ queue_depth_error_metric_test_() ->
 
 block_enforcement_test_() ->
     [
-     {"check_block_status returns ok when Mnesia not running (fail-open)", fun() ->
-          %% Without Mnesia, the check should fail-open (allow) and log warning
+     {"check_block_status returns error when Mnesia not running (fail-closed, B-6)", fun() ->
+          %% B-6 AUDIT MITIGATION: Without Mnesia, the check MUST fail-closed (deny).
+          %% Blocked users must not bypass by crashing the safety service.
           Result = iris_session:check_block_status(<<"sender">>, <<"recipient">>),
-          ?assertEqual(ok, Result)
+          ?assertMatch({error, _}, Result)
       end},
 
      {"check_block_status function is exported", fun() ->
