@@ -57,7 +57,7 @@ jobs:
   # COMPILE: Shared build step — uploads ebin/ for downstream jobs
   # ===========================================================================
   compile:
-    name: "Compile (OTP ${{ env.ERLANG_VERSION }})"
+    name: "Compile (OTP 26)"
     runs-on: ubuntu-latest
     timeout-minutes: 10
     if: github.event.inputs.tier != 'full'
