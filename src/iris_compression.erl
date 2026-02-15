@@ -11,7 +11,7 @@
 -export([maybe_compress/2]).
 -export([flag_compressed/1, is_compressed/1, original_opcode/1]).
 -export([negotiate/2]).
--export([available_algorithms/0]).  %% AUDIT: dynamic capability detection
+-export([available_algorithms/0]).  %% Dynamic capability detection
 
 -define(MIN_COMPRESS_SIZE, 128).  %% RFC v4.0: Skip compression below this
 
@@ -26,7 +26,7 @@ compress(zlib, Data) ->
     end;
 compress(zstd, Data) ->
     %% Real zstd via NIF (RFC Section 11.1: "zstd (recommended)")
-    %% AUDIT V2 P0-3: Transparent fallback to zlib when NIF unavailable.
+    %% Transparent fallback to zlib when NIF unavailable.
     %% Callers always get {ok, CompressedData} — no error handling needed.
     try iris_zstd_nif:compress(Data)
     catch
@@ -52,7 +52,7 @@ decompress(zlib, Compressed) ->
     end;
 decompress(zstd, Data) ->
     %% Real zstd via NIF (RFC Section 11.1)
-    %% AUDIT V2 P0-3: Transparent fallback to zlib when NIF unavailable.
+    %% Transparent fallback to zlib when NIF unavailable.
     try iris_zstd_nif:decompress(Data)
     catch
         error:undef ->
@@ -107,7 +107,7 @@ available_algorithms() ->
         false -> Base
     end.
 
-%% AUDIT M8: Verify NIF actually loads (not just file existence) and cache result.
+%% Verify NIF actually loads (not just file existence) and cache result.
 zstd_nif_available() ->
     case persistent_term:get(iris_zstd_nif_available, undefined) of
         undefined ->
@@ -139,7 +139,7 @@ try_zstd_nif() ->
             end
     end.
 
-%% AUDIT FIX (Finding 3): Emit metric when zstd NIF fallback triggers at runtime.
+%% Emit metric when zstd NIF fallback triggers at runtime.
 %% This makes silent compression degradation observable via dashboards/alerts.
 bump_fallback_metric() ->
     try

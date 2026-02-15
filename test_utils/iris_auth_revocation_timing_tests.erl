@@ -2,7 +2,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% P1-8 (IA-2): Revocation Propagation Timing Tests
+%%: Revocation Propagation Timing Tests
 %%
 %% RFC-001 v4.0 FR-11: Token revocation ≤10 seconds globally.
 %%
@@ -89,7 +89,7 @@ test_revoked_token_stays_revoked() ->
     %% Token must remain revoked after some time (no premature cleanup)
     {ok, Token} = iris_auth:create_token(<<"revoke_persist">>),
     ok = iris_auth:revoke_token(Token),
-    %% AUDIT V2 P1-1: Event-driven wait instead of timer:sleep(1000)
+    %% : Event-driven wait instead of timer:sleep(1000)
     ok = iris_test_utils:wait_until(fun() ->
         iris_auth:validate_token(Token) =:= {error, token_revoked}
     end, 2000),

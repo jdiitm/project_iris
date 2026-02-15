@@ -4,7 +4,7 @@
 %% =============================================================================
 %% Cluster Self-Healing Manager
 %% =============================================================================
-%% FORENSIC_AUDIT_FIX: Automates cluster topology management.
+%% Automates cluster topology management.
 %%
 %% Problem: When nodes die/restart, cross-region replication must be manually
 %% retriggered via shell scripts, which is error-prone and causes data stranding.
@@ -209,7 +209,7 @@ code_change(_OldVsn, State, _Extra) ->
 %% =============================================================================
 
 %% Check if a node is a core node.
-%% AUDIT FIX 2.3: Config-based role assignment with naming convention fallback.
+%% Config-based role assignment with naming convention fallback.
 is_core_node(Node) ->
     case application:get_env(iris_core, node_role) of
         {ok, core} -> true;

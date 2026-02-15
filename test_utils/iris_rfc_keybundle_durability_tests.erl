@@ -4,7 +4,7 @@
 %% =============================================================================
 %% F3: Key Bundle Quorum Write Durability Tests
 %%
-%% Audit finding: store_key_bundle_durable/2 silently falls back to
+%% store_key_bundle_durable/2 silently falls back to
 %% mnesia:sync_transaction when quorum write returns {error, quorum_not_reached}.
 %% This degrades from cluster-level to node-level durability for security-
 %% critical key bundles. CP > AP: failure is preferred over weak durability.

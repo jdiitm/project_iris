@@ -14,7 +14,7 @@
 -define(BATCH_SIZE, 1000).
 -define(FLUSH_INTERVAL, 500).
 -define(POOL_SIZE, 100).
-%% H-5 AUDIT MITIGATION: Hard upper bound on buffer size.
+%% Hard upper bound on buffer size.
 %% Defense-in-depth against unbounded growth if flushes fail.
 -define(MAX_BUFFER_SIZE, 10000).
 
@@ -40,7 +40,7 @@ init([Id]) ->
     {ok, #state{id = Id, timer_ref = TRef}}.
 
 handle_cast({update, User, _Status}, State = #state{buffer = Buff, count = Count}) ->
-    %% H-5 AUDIT MITIGATION: Drop items when buffer exceeds MAX_BUFFER_SIZE
+    %% Drop items when buffer exceeds MAX_BUFFER_SIZE
     if Count >= ?MAX_BUFFER_SIZE ->
         logger:warning("~p: buffer full (~p items), dropping update for ~p",
                        [?MODULE, Count, User]),
@@ -58,7 +58,7 @@ handle_cast({update, User, _Status}, State = #state{buffer = Buff, count = Count
         end
     end.
 
-%% B-7 AUDIT MITIGATION: Handle EXIT signals from linked processes.
+%% Handle EXIT signals from linked processes.
 %% Without this, EXIT messages cause gen_server termination because trap_exit
 %% converts them to messages but no clause handles them.
 handle_info({'EXIT', Pid, Reason}, State) ->

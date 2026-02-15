@@ -2,11 +2,9 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% Phase 6 TDD: Key change notification must reach online contacts
+%% Key change notification must reach online contacts
 %% =============================================================================
-%% RED:  detect_identity_key_change uses iris_router:route, which fails
 %%       silently when iris_async_router pool isn't running.
-%% GREEN: Change to direct pid delivery via iris_core:lookup_user.
 %% =============================================================================
 
 key_change_delivery_test_() ->

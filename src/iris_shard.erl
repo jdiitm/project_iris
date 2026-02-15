@@ -44,7 +44,7 @@ start_link() ->
 -spec get_shard(binary()) -> integer().
 get_shard(User) when is_binary(User) ->
     ShardCount = get_shard_count(),
-    %% AUDIT2 FIX: consistent hashing (Jump Hash) instead of modulo
+    %% Consistent hashing (Jump Hash) instead of modulo
     Hash = erlang:phash2(User),
     jump_hash(Hash, ShardCount);
 get_shard(User) when is_list(User) ->
@@ -86,7 +86,7 @@ get_shard_nodes(ShardId) ->
             %% No members in pg, try local lookup
             gen_server:call(?SERVER, {get_shard_nodes, ShardId});
         Members ->
-            %% AUDIT2 FIX (Issue 9): Randomize node selection to prevent load bias
+            %% Randomize node selection to prevent load bias
             %% lists:usort always picked first (alphabetical), causing uneven load
             Nodes = lists:usort([node(Pid) || Pid <- Members]),
             shuffle_nodes(Nodes)
@@ -144,7 +144,7 @@ init([]) ->
     
     ShardCount = get_shard_count(),
     
-    %% AUDIT FIX: Monitor node changes for shard redistribution
+    %% Monitor node changes for shard redistribution
     net_kernel:monitor_nodes(true),
     
     %% Auto-join shards based on even distribution across cluster
@@ -193,7 +193,7 @@ handle_call(get_shard_stats, _From, State = #state{shard_count = Count, local_sh
     NodeCounts = maps:values(AllShards),
     EmptyShards = length([C || C <- NodeCounts, C == 0]),
     
-    %% AUDIT2 FIX (Issue 6): Report shard coverage health
+    %% Report shard coverage health
     CoverageHealth = case EmptyShards of
         0 -> healthy;
         N when N < 5 -> degraded;
@@ -204,7 +204,7 @@ handle_call(get_shard_stats, _From, State = #state{shard_count = Count, local_sh
         shard_count => Count,
         local_shards => length(Local),
         empty_shards => EmptyShards,
-        coverage_health => CoverageHealth,  %% AUDIT2: Added health indicator
+        coverage_health => CoverageHealth,
         distribution => AllShards,
         avg_nodes_per_shard => safe_avg(NodeCounts)
     },
@@ -219,7 +219,7 @@ handle_cast({update_shard_count, Count}, State) ->
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
-%% AUDIT FIX: Redistribute shards when cluster topology changes
+%% Redistribute shards when cluster topology changes
 handle_info({nodeup, _Node}, State = #state{shard_count = ShardCount, local_shards = OldShards}) ->
     NewShards = calculate_local_shards(ShardCount),
     ToLeave = OldShards -- NewShards,
@@ -269,12 +269,12 @@ get_shard_nodes_internal(ShardId) ->
     case pg:get_members(?PG_SCOPE, GroupName) of
         [] -> [];
         Members -> 
-            %% AUDIT2 FIX: Use shuffle for internal lookups too
+            %% Use shuffle for internal lookups too
             Nodes = lists:usort([node(Pid) || Pid <- Members]),
             shuffle_nodes(Nodes)
     end.
 
-%% AUDIT2 FIX (Issue 9): Randomize node order for load balancing
+%% Randomize node order for load balancing
 shuffle_nodes([]) -> [];
 shuffle_nodes([Single]) -> [Single];
 shuffle_nodes(Nodes) ->
@@ -283,7 +283,7 @@ shuffle_nodes(Nodes) ->
     [N || {_, N} <- lists:sort(Tagged)].
 
 %% Calculate which shards this node should own based on cluster membership.
-%% AUDIT FIX: Old code only claimed 3 shards per node (out of 4096),
+%% Old code only claimed 3 shards per node (out of 4096),
 %% leaving 99%+ shards unowned. New code divides the full shard space
 %% evenly across all known nodes.
 calculate_local_shards(ShardCount) ->

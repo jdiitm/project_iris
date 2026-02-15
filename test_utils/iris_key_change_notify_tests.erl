@@ -7,7 +7,7 @@
 %% "When a user's Identity Key changes, the server MUST notify all active
 %% sessions that have communicated with that user."
 %%
-%% STATUS: IMPLEMENTED (GAP-13 + G2 audit)
+%% STATUS: IMPLEMENTED
 %%
 %% Implementation (iris_keys.erl):
 %%   - Identity key change DETECTION via detect_identity_key_change/2
@@ -36,7 +36,7 @@ key_change_metric_initialized_test() ->
     Metrics = iris_metrics:get_metrics(),
     ?assert(maps:is_key(iris_identity_key_changes, Metrics)).
 
-%% G2 AUDIT: Notification delivery is now IMPLEMENTED and tested.
+%% Notification delivery is implemented and tested.
 %% See iris_key_change_delivery_tests.erl for end-to-end tests covering:
 %%   - online_contact_receives_key_change_alert/0
 %%   - offline_contact_gets_alert_stored_for_later_delivery/0

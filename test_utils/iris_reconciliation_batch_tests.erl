@@ -9,9 +9,7 @@
 %% offline messages into the caller's RAM in one shot. With 1M+ messages,
 %% this causes OOM.
 %%
-%% RED: iris_core must export reconcile_batch/2 for cursor-based iteration.
 %%      The current code only exports reconcile_after_partition/0.
-%% GREEN: Implement cursor-based batched reconciliation.
 %% =============================================================================
 
 iris_reconciliation_batch_test_() ->

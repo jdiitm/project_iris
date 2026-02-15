@@ -73,7 +73,7 @@ do_write_durable(Table, Key, Value, Opts) ->
     Parent = self(),
     Ref = make_ref(),
     
-    %% P1-H4 FIX: Track Node -> {Pid, MRef} mapping for proper cleanup
+    %% Track Node -> {Pid, MRef} mapping for proper cleanup
     Workers = lists:foldl(fun(Node, Acc) ->
         {Pid, MRef} = spawn_monitor(fun() ->
             Result = do_replica_write(Node, Table, Key, Value, Timeout),
@@ -94,7 +94,7 @@ do_write_durable(Table, Key, Value, Opts) ->
             case Failures of
                 [] -> ok;
                 _ -> 
-                    %% B-3 AUDIT MITIGATION: Monitored spawn for replica repair
+                    %% Monitored spawn for replica repair
                     iris_async:spawn_monitored(quorum_repair, fun() ->
                         repair_failed_replicas(Failures, Table, Key, Value)
                     end)
@@ -139,7 +139,7 @@ read_quorum(Table, Key, Opts) ->
     Parent = self(),
     Ref = make_ref(),
     
-    %% P1-H4 FIX: Use map-based worker tracking
+    %% Use map-based worker tracking
     Workers = lists:foldl(fun(Node, Acc) ->
         {Pid, MRef} = spawn_monitor(fun() ->
             Result = do_replica_read(Node, Table, Key, Timeout),
@@ -198,7 +198,7 @@ get_replicas(Key) ->
 %% @doc Async repair for failed replicas (exported for manual triggering)
 -spec repair_async(atom(), term(), term(), [node()]) -> ok.
 repair_async(Table, Key, Value, FailedNodes) ->
-    %% B-3 AUDIT MITIGATION: Monitored spawn for async repair
+    %% Monitored spawn for async repair
     iris_async:spawn_monitored(quorum_repair_async, fun() ->
         repair_failed_replicas(FailedNodes, Table, Key, Value)
     end),
@@ -259,7 +259,7 @@ do_replica_read(Node, Table, Key, Timeout) ->
 %% Internal: Result Collection
 %% =============================================================================
 
-%% P1-H4 FIX: Workers is now a map of Node -> {Pid, MRef}
+%% Workers is now a map of Node -> {Pid, MRef}
 collect_results(_Ref, Workers, _Timeout, Successes, Failures) when map_size(Workers) == 0 ->
     {Successes, Failures};
 collect_results(Ref, Workers, Timeout, Successes, Failures) ->
@@ -286,7 +286,7 @@ collect_results(Ref, Workers, Timeout, Successes, Failures) ->
         {Successes, Failures ++ TimedOut}
     end.
 
-%% P1-H4 FIX: Workers is now a map of Node -> {Pid, MRef}
+%% Workers is now a map of Node -> {Pid, MRef}
 collect_read_results(_Ref, Workers, _Timeout, Results) when map_size(Workers) == 0 ->
     {Results, []};
 collect_read_results(Ref, Workers, Timeout, Results) ->
@@ -310,7 +310,7 @@ collect_read_results(Ref, Workers, Timeout, Results) ->
         {Results, []}
     end.
 
-%% P1-H4 FIX: Remove worker by node (O(1) lookup in map)
+%% Remove worker by node (O(1) lookup in map)
 remove_worker_for_node(Workers, Node) ->
     case maps:get(Node, Workers, undefined) of
         undefined ->
@@ -320,7 +320,7 @@ remove_worker_for_node(Workers, Node) ->
             maps:remove(Node, Workers)
     end.
 
-%% P1-H4 FIX: Remove worker by monitor reference (find node by MRef)
+%% Remove worker by monitor reference (find node by MRef)
 remove_worker_by_mref(Workers, MRef) ->
     case maps:fold(fun(Node, {_Pid, M}, Acc) ->
         case M of
@@ -378,7 +378,7 @@ get_available_nodes() ->
                 Nodes when is_list(Nodes), Nodes =/= [] -> Nodes;
                 _ -> [node()]
             catch
-                %% AUDIT MITIGATION P1-2: Fallback to local node only, not all
+                %% Fallback to local node only, not all
                 %% connected nodes. Using [node()|nodes()] is dangerous because
                 %% it includes edge nodes that don't run Mnesia.
                 Class:Reason ->
@@ -389,7 +389,7 @@ get_available_nodes() ->
         _ ->
             %% Use shard module for node discovery
             case pg:get_members(iris_shards) of
-                %% B-3 AUDIT FIX: Was [node()|nodes()] which includes edge
+                %% Was [node()|nodes()] which includes edge
                 %% nodes that don't run Mnesia. Fall back to local only.
                 [] -> [node()];
                 Pids -> lists:usort([node(P) || P <- Pids])
@@ -418,7 +418,7 @@ select_n_from_ring(Nodes, Idx, Count, Acc) ->
 %% Internal: Async Repair
 %% =============================================================================
 
-%% H-4 AUDIT MITIGATION: Retry with exponential backoff.
+%% Retry with exponential backoff.
 -define(MAX_REPAIR_RETRIES, 3).
 -define(REPAIR_BACKOFF_MS, [100, 500, 2000]).
 

@@ -2,13 +2,13 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% Audit Mitigation V1: TDD Tests
+%% Production Hardening V1: TDD Tests
 %% =============================================================================
 %%
-%% RED/GREEN tests for three critical audit findings:
-%%   1. Supervisor Cascade Risk (Finding 3B) — intensity must be <= 5
-%%   2. Mnesia Memory Guard (Finding 3A) — new iris_mnesia_guard module
-%%   3. Compression Startup Validation (Finding 2B) — startup check
+%% Tests for three critical findings:
+%%   1. Supervisor Cascade Risk — intensity must be <= 5
+%%   2. Mnesia Memory Guard — new iris_mnesia_guard module
+%%   3. Compression Startup Validation — startup check
 %%
 %% These tests inspect supervisor specs and module exports directly.
 %% No full application start or Mnesia required.

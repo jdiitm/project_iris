@@ -2,10 +2,10 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% AUDIT V2 P0-2 + CRIT-01: CP Consistency Mode Alarm Tests
+%% CP Consistency Mode Alarm Tests
 %% =============================================================================
 %%
-%% CRIT-01 removed the dev fallback. CP is now fatal in ALL modes.
+%% removed the dev fallback. CP is now fatal in ALL modes.
 %% These tests verify:
 %% 1. CP in dev returns {error, cp_not_implemented} (no fallback)
 %% 2. No metric or env marker is set (fallback path removed)
@@ -29,7 +29,7 @@ cleanup_env() ->
     application:unset_env(iris_core, consistency_mode_actual).
 
 %% =============================================================================
-%% Test: CP in dev returns error (CRIT-01: no fallback, no metric)
+%% Test: CP in dev returns error (no fallback, no metric)
 %% =============================================================================
 
 cp_dev_returns_error_test() ->
@@ -69,7 +69,7 @@ cp_dev_no_actual_mode_env_test() ->
 
 cp_rejection_uses_error_level_log_test() ->
     {ok, Src} = file:read_file("src/iris_core.erl"),
-    %% CRIT-01: The fallback path was removed. Verify that:
+    %% The fallback path was removed. Verify that:
     %% 1. "Falling back to hardened_ap" is NO LONGER in the source
     %% 2. The CP rejection uses logger:error (not logger:warning)
     FallbackMarker = <<"Falling back to hardened_ap">>,

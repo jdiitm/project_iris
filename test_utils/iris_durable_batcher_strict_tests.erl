@@ -2,7 +2,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% F4: Cluster Durability Semantics Tests (P2 Audit Finding)
+%% Cluster Durability Semantics Tests
 %%
 %% Tests verify:
 %% 1. In strict mode, remote WAL failure returns {error, remote_wal_failed}

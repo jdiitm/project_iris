@@ -2,7 +2,7 @@
 -behaviour(gen_server).
 
 %% =============================================================================
-%% AUDIT MITIGATION V1 — Finding 3A: Mnesia Scalability (RAM)
+%% Mnesia Scalability Guard (RAM)
 %% =============================================================================
 %% Periodic monitor for Mnesia table memory usage.
 %%
@@ -19,8 +19,8 @@
 
 %% API
 -export([start_link/0, check_memory/0, get_alarms/0, get_alarm_threshold/0]).
--export([is_memory_ok/0]).  %% AUDIT V2 P0-2: Backpressure check
--export([should_evict/0]). %% AUDIT MITIGATION (Blocker 1): Proactive eviction signal
+-export([is_memory_ok/0]).  %% Backpressure check
+-export([should_evict/0]). %% Proactive eviction signal
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
@@ -28,7 +28,7 @@
 -define(SERVER, ?MODULE).
 -define(CHECK_INTERVAL_MS, 60000).  %% 60 seconds
 -define(DEFAULT_ALARM_BYTES, 1073741824).  %% 1 GB
--define(EVICT_WARNING_RATIO, 0.60).        %% AUDIT MITIGATION: Trigger eviction at 60% of alarm threshold
+-define(EVICT_WARNING_RATIO, 0.60).        %% Trigger eviction at 60% of alarm threshold
 
 -record(state, {}).
 
@@ -95,7 +95,7 @@ get_alarms() ->
 get_alarm_threshold() ->
     application:get_env(iris_core, mnesia_memory_alarm_bytes, ?DEFAULT_ALARM_BYTES).
 
-%% @doc AUDIT V2 P0-2: Check if Mnesia memory is within acceptable bounds.
+%% @doc Check if Mnesia memory is within acceptable bounds.
 %% Returns ok when total memory is under threshold, {error, memory_pressure}
 %% when any table exceeds the configured alarm threshold.
 %% Used as a backpressure gate before accepting new offline messages.
@@ -114,7 +114,7 @@ is_memory_ok() ->
             {error, memory_pressure}
     end.
 
-%% @doc AUDIT MITIGATION (Blocker 1): Check if storage tier eviction should run.
+%% @doc Check if storage tier eviction should run.
 %% Returns true when total Mnesia memory exceeds 60% of the alarm threshold.
 %% This triggers proactive eviction before the hard backpressure limit.
 -spec should_evict() -> boolean().

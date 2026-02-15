@@ -2,7 +2,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% AUDIT MITIGATION — Finding 2.4: Legacy Storage Retrieval Deprecation
+%% : Legacy Storage Retrieval Deprecation
 %% =============================================================================
 %%
 %% retrieve/2 uses mnesia:activity(transaction, ...) which holds global locks.

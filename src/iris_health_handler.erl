@@ -16,7 +16,7 @@
 
 -export([start_link/0, start_link/1]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
--export([dispatch/2]).  %% AUDIT M3: exported for testability
+-export([dispatch/2]).  %% Exported for testability
 
 -record(state, {
     listen_socket :: gen_tcp:socket(),
@@ -137,14 +137,14 @@ dispatch(Path, Headers) ->
 dispatch_normalized(<<"/health">>, _Headers) -> health();
 dispatch_normalized(<<"/ready">>, _Headers)  -> ready();
 dispatch_normalized(<<"/metrics">>, Headers) ->
-    %% AUDIT P1-2: Bearer-token auth for /metrics endpoint
+    %% Bearer-token auth for /metrics endpoint
     case check_metrics_auth(Headers) of
         ok -> metrics();
         unauthorized -> {401, <<"text/plain">>, <<"Unauthorized">>}
     end;
 dispatch_normalized(_, _Headers) -> {404, <<"text/plain">>, <<"Not Found">>}.
 
-%% AUDIT M3: Normalize path by stripping query string and trailing slash
+%% Normalize path by stripping query string and trailing slash
 normalize_path(Path) ->
     %% Strip query string
     P1 = case binary:split(Path, <<"?">>) of

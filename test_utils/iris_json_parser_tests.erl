@@ -2,7 +2,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% TDD: JSON Parser Characterization Tests (Audit Finding 1.2)
+%% JSON Parser Characterization Tests
 %% =============================================================================
 %% These tests capture the exact behavior of the JWT JSON parser.
 %% Written BEFORE the iolist rewrite to lock in correct behavior.

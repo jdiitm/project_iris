@@ -6,7 +6,7 @@
 %% =============================================================================
 %%
 %% Purpose: Validates exactly-once delivery guarantees as specified in
-%% Principal Test Audit Mitigation Plan.
+%% the delivery guarantees specification.
 %%
 %% Invariants:
 %%   - Same msg_id is delivered exactly once (duplicates rejected)

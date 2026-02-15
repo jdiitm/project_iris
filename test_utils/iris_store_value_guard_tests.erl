@@ -2,7 +2,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% AUDIT: Store Value Size Guard Tests
+%% Store Value Size Guard Tests
 %% =============================================================================
 %%
 %% Tests verify that iris_store:put/4 rejects oversized values to prevent
@@ -11,11 +11,11 @@
 
 iris_store_value_guard_test_() ->
     [
-     {"AUDIT: oversized value (2MB) is rejected",
+     {"oversized value (2MB) is rejected",
       fun test_oversized_value_rejected/0},
-     {"AUDIT: value at limit (1MB) is accepted",
+     {"value at limit (1MB) is accepted",
       fun test_at_limit_value_accepted/0},
-     {"AUDIT: source has MAX_VALUE_SIZE guard",
+     {"source has MAX_VALUE_SIZE guard",
       fun test_source_has_value_guard/0}
     ].
 

@@ -2,7 +2,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% AUDIT V2 P1-2: get_status/1 Must Distinguish Non-Existent Users
+%% : get_status/1 Must Distinguish Non-Existent Users
 %% =============================================================================
 %%
 %% Tests verify that get_status_from_disk/1 returns {error, not_found}

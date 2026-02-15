@@ -8,9 +8,7 @@
 %% on tmpfs but does not fail. In production, a RAM-backed WAL defeats the
 %% purpose of write-ahead logging (data loss on crash = RPO > 0).
 %%
-%% RED: validate_wal_storage must return {error, tmpfs_in_production} when
 %%      env=production and the path is on tmpfs. Current code returns ok.
-%% GREEN: Add production env check; return error on tmpfs in production.
 %% =============================================================================
 
 iris_wal_tmpfs_enforcement_test_() ->

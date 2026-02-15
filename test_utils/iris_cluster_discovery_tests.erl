@@ -2,10 +2,10 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% AUDIT MITIGATION — Finding 2.3: Brittle Cluster Discovery
+%% : Brittle Cluster Discovery
 %% =============================================================================
 %%
-%% The audit found that is_core_node/1 in iris_core and iris_cluster_manager
+%% is_core_node/1 in iris_core and iris_cluster_manager
 %% relies on hardcoded string matching ("core", "iris_core") for node names.
 %% This breaks in K8s, IP-based naming, or any non-standard naming schema.
 %%

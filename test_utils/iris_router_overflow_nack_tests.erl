@@ -9,9 +9,7 @@
 %% but the caller believes it was accepted. This violates NFR-8 (Zero data
 %% loss) and the At-Least-Once guarantee.
 %%
-%% RED: route/3 currently always returns ok. We need it to return
 %%      {error, queue_overflow} when the outbox is saturated.
-%% GREEN: Add synchronous pre-flight overflow check in route/3.
 %% =============================================================================
 
 -define(DEPTH_ETS, iris_region_bridge_depth).

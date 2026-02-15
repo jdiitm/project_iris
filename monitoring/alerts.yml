@@ -1,0 +1,65 @@
+groups:
+  - name: iris_critical
+    rules:
+      - alert: EdgeDedupTableTooLarge
+        expr: iris_edge_dedup_table_size > 500000
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Edge dedup table exceeds 500K entries"
+          description: "iris_edge_dedup on {{ $labels.instance }} has {{ $value }} entries. Investigate 0x0D traffic volume."
+
+      - alert: EdgeDedupTableCritical
+        expr: iris_edge_dedup_table_size > 900000
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Edge dedup table approaching 1M cap"
+          description: "iris_edge_dedup on {{ $labels.instance }} has {{ $value }} entries (cap: 1M). Imminent eviction."
+
+      - alert: TLSCertExpiringSoon
+        expr: iris_cert_expiry_seconds > 0 and iris_cert_expiry_seconds < 604800
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "TLS certificate expires in less than 7 days"
+          description: "Certificate on {{ $labels.instance }} expires in {{ $value | humanizeDuration }}."
+
+      - alert: TLSCertExpiryCritical
+        expr: iris_cert_expiry_seconds > 0 and iris_cert_expiry_seconds < 86400
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "TLS certificate expires in less than 24 hours"
+          description: "Certificate on {{ $labels.instance }} expires in {{ $value | humanizeDuration }}. Rotate immediately."
+
+      - alert: PartitionDetected
+        expr: iris_partition_guard_state != 0
+        for: 30s
+        labels:
+          severity: critical
+        annotations:
+          summary: "Network partition detected"
+          description: "Partition guard on {{ $labels.instance }} in state {{ $value }} (1=suspect, 2=partitioned)."
+
+      - alert: HighMemoryUsage
+        expr: iris_memory_bytes > 8e9
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Erlang VM memory exceeds 8GB"
+          description: "Node {{ $labels.instance }} using {{ $value | humanize1024 }}B."
+
+      - alert: MessageLoss
+        expr: rate(iris_msg_lost_total[5m]) > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Message loss detected"
+          description: "{{ $labels.instance }} is reporting message loss. RPO=0 violated."

@@ -32,7 +32,7 @@ iris_durable_batcher_test_() ->
       {"Stats include replication metrics", fun test_stats_include_replication/0},
       {"Get durability mode function exists", fun test_get_durability_mode_export/0},
       
-      %% AUDIT FIX: Streaming WAL replay tests (Finding #4)
+      %% Streaming WAL replay tests
       {"Streaming replay uses two-pass approach", fun test_streaming_replay_design/0},
       {"Module has crash recovery functions", fun test_crash_recovery_functions/0}
      ]}.
@@ -94,7 +94,7 @@ test_get_durability_mode_export() ->
     ?assert(lists:member({get_durability_mode, 0}, Exports)).
 
 %% =============================================================================
-%% AUDIT FIX: Streaming WAL Replay Tests (Finding #4)
+%% Streaming WAL Replay Tests
 %% =============================================================================
 
 test_streaming_replay_design() ->
@@ -121,7 +121,7 @@ test_crash_recovery_functions() ->
     ?assert(is_list(Attrs)).
 
 %% =============================================================================
-%% AUDIT FIX: Integration-style Tests (enabled and expanded)
+%% Integration-style Tests (enabled and expanded)
 %% =============================================================================
 %% 
 %% These tests verify actual batcher behavior, not just exports.
@@ -218,7 +218,7 @@ durability_mode_behavior_test_() ->
      ]}.
 
 %% =============================================================================
-%% AUDIT FIX: Large WAL OOM Prevention Test
+%% Large WAL OOM Prevention Test
 %% =============================================================================
 %% 
 %% This test verifies that the streaming WAL replay doesn't cause OOM
@@ -228,7 +228,7 @@ durability_mode_behavior_test_() ->
 %% =============================================================================
 
 wal_oom_prevention_test_() ->
-    {"WAL OOM prevention (AUDIT FIX)",
+    {"WAL OOM prevention",
      [
       {"Streaming replay design prevents OOM", fun test_streaming_replay_prevents_oom/0},
       {"Two-pass approach collects integers only", fun test_two_pass_design/0},

@@ -2,17 +2,17 @@
 -behaviour(application).
 -export([start/2, stop/1]).
 -export([validate_production_config/0]).
-%% AUDIT MITIGATION P1-3: Config validation exports (for testing)
+%% Config validation exports (for testing)
 -export([validate_num_acceptors/1, validate_rate_limits/2,
          validate_tls_cert/1, validate_replication_factor/1]).
 
 start(_Type, _Args) ->
     logger:info("Starting Iris Edge Application..."),
 
-    %% AUDIT MITIGATION P0-1: Fail-fast in production if critical config is missing
+    %% Fail-fast in production if critical config is missing
     validate_production_config(),
 
-    %% AUDIT FIX: Warn if zstd NIF is not available
+    %% Warn if zstd NIF is not available
     case filelib:is_file("priv/iris_zstd_nif.so") of
         true -> ok;
         false ->
@@ -42,7 +42,7 @@ start(_Type, _Args) ->
             end, CoreNodes)
     end,
 
-    %% AUDIT 3.2/6.1: Verify mTLS is configured (DRY -- delegates to iris_core)
+    %% Verify mTLS is configured (DRY -- delegates to iris_core)
     iris_core:check_mtls_enforcement(),
 
     iris_edge_sup:start_link().
@@ -59,7 +59,7 @@ stop(_State) ->
     logger:info("Iris Edge stopped."),
     ok.
 
-%% @doc AUDIT MITIGATION P0-1: Validate critical config in production mode.
+%% @doc Validate critical config in production mode.
 %% Rejects empty core_nodes and missing JWT secret when deployment_mode=production.
 -spec validate_production_config() -> ok.
 validate_production_config() ->
@@ -91,7 +91,7 @@ validate_production_config() ->
                     end;
                 false -> ok
             end,
-            %% AUDIT MITIGATION P1-3: Validate additional production config
+            %% Validate additional production config
             validate_extended_config(),
             ok;
         _ ->
@@ -101,7 +101,7 @@ validate_production_config() ->
     end.
 
 %% =============================================================================
-%% AUDIT MITIGATION P1-3: Extended Config Validation (Startup)
+%% Extended Config Validation (Startup)
 %% =============================================================================
 
 validate_extended_config() ->
@@ -151,7 +151,7 @@ validate_extended_config_warn() ->
     ok.
 
 %% =============================================================================
-%% AUDIT MITIGATION P1-3: Configuration Validation Functions
+%% Configuration Validation Functions
 %% =============================================================================
 
 %% @doc Clamp num_acceptors to safe range [1, 10000].
@@ -178,4 +178,4 @@ validate_tls_cert(Path) ->
 validate_replication_factor(N) when is_integer(N), N > 0 -> ok;
 validate_replication_factor(_) -> {error, invalid_replication_factor}.
 
-%% AUDIT 5.2 DRY: check_mtls_enforcement/0 consolidated into iris_core.erl
+%% check_mtls_enforcement/0 consolidated into iris_core.erl

@@ -2,7 +2,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% AUDIT MITIGATION P1-1: Rate Limiting Granularity
+%% Rate Limiting Granularity
 %% Verifies that per-message-type rate limiting prevents cheap packet floods
 %% (typing, handshake, presence) from starving real message delivery.
 %% =============================================================================

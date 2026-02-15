@@ -2,7 +2,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% P0-4 (MO-2 residual): Bloom Filter FPR Alerting Tests
+%% Bloom Filter FPR Alerting Tests
 %%
 %% RFC-001 v4.0 Section 6.2: Bloom filter false positives are detected via
 %% dedup_log cross-check and tracked (bloom_false_positives counter).

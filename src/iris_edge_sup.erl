@@ -68,7 +68,7 @@ init([]) ->
     logger:info("ETS tables created (owned by supervisor)"),
     
     %% Supervisor flags
-    %% AUDIT MITIGATION V1: Reduced from 10 to 5 restarts per 60s.
+    %% Reduced from 10 to 5 restarts per 60s.
     %% Consistent with iris_core supervisor hardening.
     SupFlags = #{
         strategy => one_for_one,
@@ -136,11 +136,18 @@ init([]) ->
             shutdown => 5000,
             type => worker,
             modules => [iris_discovery]
+        },
+        %% Edge dedup cleaner: TTL eviction + cap for iris_edge_dedup
+        #{
+            id => iris_edge_dedup_cleaner,
+            start => {iris_edge_dedup_cleaner, start_link, []},
+            restart => permanent,
+            shutdown => 5000,
+            type => worker,
+            modules => [iris_edge_dedup_cleaner]
         }
     ] ++ [
-        %% ROUTER POOL (Multi-Core Optimization)
-        %% AUDIT FIX: Auto-tune pool size based on scheduler count
-        %% Uses iris_async_router:get_pool_size() for dynamic sizing
+        %% Router pool — auto-tuned pool size based on scheduler count
         #{
             id => list_to_atom("iris_async_router_" ++ integer_to_list(I)),
             start => {iris_async_router, start_link, [I]},

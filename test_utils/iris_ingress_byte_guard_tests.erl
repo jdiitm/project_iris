@@ -2,10 +2,10 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% AUDIT MITIGATION: Ingress Byte Guard (Micro-Burst Protection)
+%% Ingress Byte Guard (Micro-Burst Protection)
 %% =============================================================================
 %%
-%% Attack Vector 3 from audit: "The Micro-Burst"
+%% Attack Vector: "The Micro-Burst"
 %% An attacker sends 100MB in 100ms. The flow controller polls every 200ms.
 %% The burst is admitted before the controller reacts, causing Edge OOM.
 %%

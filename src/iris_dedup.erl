@@ -6,7 +6,7 @@
 %% =============================================================================
 %% Purpose: Prevent duplicate message delivery when clients retry after timeouts.
 %% 
-%% P0-C3 FIX: Tiered Dedup Architecture (RFC compliant 7-day window)
+%% Tiered Dedup Architecture (RFC compliant 7-day window)
 %% 
 %% Design:
 %% 1. HOT TIER: ETS-based cache for recent messages (5 min TTL)
@@ -31,7 +31,7 @@
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 %% Exported for testing (bloom filter race verification)
 -export([add_to_bloom/1, check_bloom/1, init_bloom_partition/1]).
-%% H-4 AUDIT: Exported for testing cleanup monitoring
+%% Exported for testing cleanup monitoring
 -export([cleanup_dedup_log/0]).
 
 -define(SERVER, ?MODULE).
@@ -52,8 +52,8 @@
     entries = 0 :: integer(),
     duplicates_caught = 0 :: integer(),
     bloom_hits = 0 :: integer(),
-    bloom_false_positives = 0 :: integer(),  %% P0-FIX: Track false positives
-    bloom_checks = 0 :: integer(),           %% MO-2: Total bloom lookups for FPR
+    bloom_false_positives = 0 :: integer(),  %% Track false positives
+    bloom_checks = 0 :: integer(),           %% Total bloom lookups for FPR
     evictions = 0 :: integer()
 }).
 
@@ -69,8 +69,8 @@ start_link(Opts) ->
 
 %% @doc Check if message ID was seen; if not, mark it as seen.
 %% Returns: new | duplicate
-%% P0-C3: Tiered check with ATOMIC ETS insert to prevent race conditions
-%% FIX: Use ets:insert_new/2 for atomic check-and-mark (RFC atomicity requirement)
+%% Tiered check with ATOMIC ETS insert to prevent race conditions.
+%% Use ets:insert_new/2 for atomic check-and-mark (RFC atomicity requirement)
 -spec check_and_mark(binary()) -> new | duplicate.
 check_and_mark(MsgId) ->
     Now = os:system_time(millisecond),
@@ -85,7 +85,7 @@ check_and_mark(MsgId) ->
         true ->
             %% Successfully claimed in hot tier - but check warm tier for 7-day dedup
             %% 
-            %% P0-FIX: ALWAYS check dedup_log (Mnesia disc_copies) first!
+            %% ALWAYS check dedup_log (Mnesia disc_copies) first!
             %% After crash/restart, bloom filter and ETS are empty, but dedup_log persists.
             %% Previous code only checked dedup_log when bloom returned true, causing
             %% duplicate delivery after crashes (RFC NFR-11 violation).
@@ -169,7 +169,7 @@ init(_Opts) ->
         _ -> ?TABLE
     end,
     
-    %% P0-C3: Create bloom filter table for warm tier (7-day window)
+    %% Create bloom filter table for warm tier (7-day window)
     %% Each partition is a bitarray stored as binary (idempotent)
     case ets:info(?BLOOM_TABLE) of
         undefined ->
@@ -232,7 +232,7 @@ handle_call(_Request, _From, State) ->
 
 handle_cast({new_entry, _Timestamp}, State) ->
     %% Track entry count for eviction
-    %% MO-2: Also count as a bloom check for FPR computation
+    %% Also count as a bloom check for FPR computation
     NewEntries = State#state.entries + 1,
     {noreply, State#state{entries = NewEntries, bloom_checks = State#state.bloom_checks + 1}};
 
@@ -246,8 +246,8 @@ handle_cast(bloom_hit, State) ->
     }};
 
 handle_cast({false_positive, _Timestamp}, State) ->
-    %% P0-FIX: Track bloom filter false positives (messages that bloom said "duplicate" but weren't)
-    %% MO-2: Also count as a bloom check for FPR computation
+    %% Track bloom filter false positives (messages that bloom said "duplicate" but weren't)
+    %% Also count as a bloom check for FPR computation
     {noreply, State#state{
         bloom_false_positives = State#state.bloom_false_positives + 1,
         bloom_checks = State#state.bloom_checks + 1
@@ -261,7 +261,7 @@ handle_cast(bloom_fp_in_is_duplicate, State) ->
     }};
 
 handle_cast({add_to_bloom, MsgId}, State) ->
-    %% F2 AUDIT FIX: Serialize bloom writes through gen_server to prevent
+    %% Serialize bloom writes through gen_server to prevent
     %% TOCTOU race in concurrent add_to_bloom calls.
     add_to_bloom_internal(MsgId),
     {noreply, State};
@@ -283,7 +283,7 @@ handle_info(cleanup, State) ->
         false -> 0
     end,
     
-    %% P0-FIX: Also cleanup old dedup_log entries (7-day TTL)
+    %% Also cleanup old dedup_log entries (7-day TTL)
     cleanup_dedup_log(),
     
     %% Reschedule cleanup
@@ -296,7 +296,7 @@ handle_info(cleanup, State) ->
     }};
 
 handle_info(rotate_bloom, State) ->
-    %% P0-C3: Rotate to next bloom partition
+    %% Rotate to next bloom partition
     NewPartition = get_current_partition(),
     
     %% Initialize new partition (clears old data for this slot)
@@ -359,7 +359,7 @@ evict_n(Key, Remaining, Evicted) ->
     evict_n(Next, Remaining - 1, Evicted + 1).
 
 %% =============================================================================
-%% P0-C3: Bloom Filter Implementation (7-day warm tier)
+%% Bloom Filter Implementation (7-day warm tier)
 %% =============================================================================
 
 %% Get current partition index (0-167 for 168 hourly partitions)
@@ -396,7 +396,7 @@ check_bloom_all_partitions(Hashes, Partition) ->
     end.
 
 %% Add message ID to current bloom partition.
-%% F2 AUDIT FIX: Route through gen_server to serialize writes and eliminate
+%% Route through gen_server to serialize writes and eliminate
 %% the TOCTOU race (ets:lookup -> modify -> ets:insert). The gen_server is
 %% single-threaded, so concurrent callers' bit-sets can never overwrite
 %% each other. The hot path (ets:insert_new in check_and_mark) remains lockfree.
@@ -467,11 +467,11 @@ cleanup_old_bloom_partitions(_CurrentPartition) ->
     ok.
 
 %% =============================================================================
-%% P0-FIX: Dedup Log (Mnesia-backed verification for bloom false positives)
+%% Dedup Log (Mnesia-backed verification for bloom false positives)
 %% =============================================================================
 
 %% Write message ID to dedup_log with crash-safe durability.
-%% AUDIT FIX: dirty_write -> sync_transaction (RFC 6.2 "Atomically deduplicate").
+%% dirty_write -> sync_transaction (RFC 6.2 "Atomically deduplicate").
 %% sync_transaction ensures the transaction log is fsynced before returning,
 %% so the dedup_log entry survives power loss / SIGKILL. Matches the durable
 %% write pattern used by iris_offline_storage, iris_durable_batcher, iris_keys.
@@ -494,12 +494,12 @@ write_dedup_log(MsgId, Timestamp) ->
 cleanup_dedup_log() ->
     Now = os:system_time(millisecond),
     CutoffMs = Now - (?WARM_TTL_HOURS * 3600 * 1000),  %% 7 days in ms
-    %% H-4 AUDIT FIX: Use iris_async:spawn_monitored instead of bare spawn
+    %% Use iris_async:spawn_monitored instead of bare spawn
     %% so failures are logged and observable (not silently swallowed).
     iris_async:spawn_monitored(dedup_log_cleanup, fun() ->
         try
             %% Use dirty_select for efficiency (no transaction overhead)
-            %% B-4 AUDIT MITIGATION: dirty_select for read, transaction for delete
+            %% dirty_select for read, transaction for delete
             OldEntries = mnesia:dirty_select(dedup_log, [
                 {{'dedup_log', '$1', '$2'}, [{'<', '$2', CutoffMs}], ['$1']}
             ]),

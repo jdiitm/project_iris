@@ -2,15 +2,13 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% G1: mTLS Production Enforcement Tests (NFR-15)
+%% G1: mTLS Production Enforcement Tests
 %%
 %% check_mtls_enforcement/0 defaults enforce_mtls to false, allowing
 %% production deployments to silently run without mTLS. The RFC mandates
 %% "MANDATORY mTLS for all internal traffic" (Section 4.4, NFR-15).
 %%
-%% RED: In production (env=production), check_mtls_enforcement must crash
 %%      even without enforce_mtls explicitly set. Currently it returns ok.
-%% GREEN: Default enforce_mtls to true when env=production.
 %% =============================================================================
 
 iris_mtls_production_test_() ->

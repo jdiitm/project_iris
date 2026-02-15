@@ -2,7 +2,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% AUDIT MITIGATION V2 — P1-1: Test Determinism
+%% Test Determinism
 %% =============================================================================
 %%
 %% Tests verify:

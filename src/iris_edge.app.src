@@ -15,7 +15,7 @@
     iris_async_router,
     iris_backpressure,
     iris_circuit_breaker,
-    %% AUDIT V2 P2-2: iris_discovery removed — provided by iris_core app
+    %% iris_discovery removed — provided by iris_core app
     iris_ingress_guard,
     iris_rate_limiter,
     iris_registry_ets,

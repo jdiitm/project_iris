@@ -10,8 +10,6 @@
 %% stays above a target for an entire interval, it begins dropping. Drops
 %% stop immediately when the queue drains below target.
 %%
-%% RED:  codel_check/3 does not exist yet. All tests fail with undef.
-%% GREEN: Implement codel_check/3 in iris_mailbox_guard.erl.
 %% =============================================================================
 
 codel_test_() ->

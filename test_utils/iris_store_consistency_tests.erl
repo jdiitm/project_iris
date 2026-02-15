@@ -2,7 +2,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% AUDIT: Store Durability Default Consistency Tests
+%% Store Durability Default Consistency Tests
 %% =============================================================================
 %%
 %% Tests verify that iris_store:put/4 and iris_store:batch_put/3 use the
@@ -11,9 +11,9 @@
 
 iris_store_consistency_test_() ->
     [
-     {"AUDIT M10: put default durability is quorum",
+     {"put default durability is quorum",
       fun test_put_default_durability/0},
-     {"AUDIT M10: batch_put default durability matches put",
+     {"batch_put default durability matches put",
       fun test_batch_put_default_durability/0}
     ].
 

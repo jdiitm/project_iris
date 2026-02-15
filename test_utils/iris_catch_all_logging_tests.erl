@@ -3,7 +3,7 @@
 -export([log/2]).  %% Logger handler callback
 
 %% =============================================================================
-%% H-2 Mitigation: Silent error suppression must emit warnings.
+%% Mitigation: Silent error suppression must emit warnings.
 %% =============================================================================
 %% Multiple modules have `catch _:_ -> ok` or `catch _:_ -> []` patterns
 %% that silently suppress errors. After the fix, these should emit

@@ -6,8 +6,8 @@
 %% Provides user-to-user blocking and reporting. Blocked users cannot
 %% send messages to the blocker. Reports are stored for admin review.
 %%
-%% AUDIT P0-5: All writes use mnesia:transaction for durability.
-%% AUDIT 7.4: Input validation on user ID size (max 128 bytes).
+%% All writes use mnesia:transaction for durability.
+%% Input validation on user ID size (max 128 bytes).
 %% =============================================================================
 
 -export([block_user/2, unblock_user/2, is_blocked/2]).
@@ -69,7 +69,7 @@ get_blocked(UserId) ->
         [Blocked || {?BLOCKS_TABLE, _Key, _Blocker, Blocked, _At} <- Records]
     catch
         Class:Reason ->
-            %% AUDIT P2-6: Log errors instead of silently returning empty list
+            %% Log errors instead of silently returning empty list
             logger:warning("get_blocked failed for ~p: ~p:~p", [UserId, Class, Reason]),
             []
     end.

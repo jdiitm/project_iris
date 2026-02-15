@@ -2,13 +2,13 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% Audit Mitigation Tests for iris_store.erl (TDD RED phase)
+%% Tests for iris_store.erl
 %% =============================================================================
 %%
 %% Tests cover:
-%% - 4.1: Quorum fallback must emit warning metric (quorum_fallback_count)
-%% - 7.5: Best-effort spawn failures must emit error metric (best_effort_write_error)
-%% - 7.4: Key validation rejects oversized/invalid keys
+%% - Quorum fallback must emit warning metric (quorum_fallback_count)
+%% - Best-effort spawn failures must emit error metric (best_effort_write_error)
+%% - Key validation rejects oversized/invalid keys
 %% =============================================================================
 
 %% =============================================================================
@@ -49,7 +49,7 @@ cleanup(_) ->
 %% =============================================================================
 
 quorum_fallback_test_() ->
-    {"Audit 4.1: Quorum fallback must be observable",
+    {"Quorum fallback must be observable",
      {setup, fun setup/0, fun cleanup/1,
       [
        {"quorum fallback increments quorum_fallback_count metric", fun() ->
@@ -71,7 +71,7 @@ quorum_fallback_test_() ->
 %% =============================================================================
 
 best_effort_error_test_() ->
-    {"Audit 7.5: Best-effort spawn errors must be observable",
+    {"Best-effort spawn errors must be observable",
      {setup, fun setup/0, fun cleanup/1,
       [
        {"best_effort write to nonexistent table increments error metric", fun() ->
@@ -93,7 +93,7 @@ best_effort_error_test_() ->
 %% =============================================================================
 
 key_validation_test_() ->
-    {"Audit 7.4: Mnesia key validation",
+    {"Mnesia key validation",
      {setup, fun setup/0, fun cleanup/1,
       [
        {"rejects oversized binary key (>1024 bytes)", fun() ->

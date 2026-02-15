@@ -2,7 +2,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% Audit Mitigation Tests for iris_session.erl
+%% Tests for iris_session.erl
 %% =============================================================================
 %%
 %% Tests cover:
@@ -65,7 +65,7 @@ block_enforcement_test_() ->
     ].
 
 %% =============================================================================
-%% H-2 AUDIT: Empty username must be rejected at login
+%% Empty username must be rejected at login
 %% =============================================================================
 %% RFC does not define behavior for empty usernames. Accepting them creates
 %% phantom entries in ETS/Mnesia keyed by <<>> which corrupt data structures.
@@ -112,7 +112,7 @@ empty_username_login_test_() ->
      ]}.
 
 %% =============================================================================
-%% H-3 AUDIT: authenticate must fail-closed when iris_auth is down
+%% authenticate must fail-closed when iris_auth is down
 %% =============================================================================
 %% If iris_auth gen_server is not running but auth is enabled, authenticate/2
 %% must return {error, auth_unavailable}, not ok.

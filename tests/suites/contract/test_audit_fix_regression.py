@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-AUDIT MITIGATION P2-1: Audit Fix Regression Tests
+Fix Regression Tests
 
-Canary tests that verify critical audit fixes have not been accidentally
+Canary tests that verify critical fixes have not been accidentally
 reverted during refactoring. Each test greps the source for the specific
-pattern that constitutes the fix.
+code pattern that constitutes the fix.
 
 Tier: 0 (Contract — no running server needed)
 """
@@ -43,21 +43,21 @@ def read_source(relative_path):
 
 
 # =============================================================================
-# Audit Fix Regression Tests
+# Fix Regression Tests
 # =============================================================================
 
-def test_audit_fix_comments_present():
-    """Critical AUDIT FIX comments must still exist in source files."""
-    log("\n=== Test: Critical audit fix comments present ===")
+def test_fix_implementations_present():
+    """Critical fix implementations must still exist in source files."""
+    log("\n=== Test: Critical fix implementations present ===")
 
     checks = [
-        ("src/iris_core.erl", "F1 AUDIT FIX", "RFC 7.1.1 union merge"),
-        ("src/iris_core.erl", "GAP-2 FIX", "generic table reconciliation"),
-        ("src/iris_core.erl", "AUDIT 6.5", "dedup key generation"),
-        ("src/iris_session.erl", "AUDIT 2.3a FIX", "graceful heap limit"),
-        ("src/iris_session.erl", "VIOLATION-4 FIX", "rate limit on send"),
-        ("src/iris_async_router.erl", "AUDIT FIX: Silent Loss Prevention", "offline fallback"),
-        ("src/iris_partition_guard.erl", "CB-1 FIX", "static membership"),
+        ("src/iris_core.erl", "reconcile_after_partition", "RFC 7.1.1 union merge"),
+        ("src/iris_core.erl", "reconcile_table", "generic table reconciliation"),
+        ("src/iris_core.erl", "crypto:hash", "dedup key generation uses strong hash"),
+        ("src/iris_session.erl", "kill => false", "graceful heap limit"),
+        ("src/iris_session.erl", "check_typed", "rate limit on send"),
+        ("src/iris_async_router.erl", "store_offline_durable", "offline fallback"),
+        ("src/iris_partition_guard.erl", "get_static_expected_nodes", "static membership"),
     ]
 
     for filepath, pattern, description in checks:
@@ -68,7 +68,7 @@ def test_audit_fix_comments_present():
 
 
 def test_core_reconcile_uses_transaction():
-    """AUDIT P1-1: reconcile_batch must use sync_transaction for durability."""
+    """reconcile_batch must use sync_transaction for durability."""
     log("\n=== Test: reconcile_batch uses sync_transaction ===")
     source = read_source("src/iris_core.erl")
     # The reconciliation code must use sync_transaction
@@ -78,7 +78,7 @@ def test_core_reconcile_uses_transaction():
 
 
 def test_session_heap_limit_not_kill():
-    """AUDIT 2.3a: Session must use {kill, false} for graceful heap limit."""
+    """Session must use {kill, false} for graceful heap limit."""
     log("\n=== Test: Session heap limit uses kill => false ===")
     source = read_source("src/iris_session.erl")
     check("heap limit uses kill => false",
@@ -87,7 +87,7 @@ def test_session_heap_limit_not_kill():
 
 
 def test_dedup_key_uses_strong_hash():
-    """AUDIT 6.5: make_dedup_key must use crypto:hash, NOT phash2."""
+    """make_dedup_key must use crypto:hash, NOT phash2."""
     log("\n=== Test: Dedup key uses strong hash ===")
     source = read_source("src/iris_core.erl")
     # Find the make_dedup_key function spec (the actual implementation)
@@ -106,7 +106,7 @@ def test_dedup_key_uses_strong_hash():
 
 
 def test_force_load_checks_peers():
-    """AUDIT V2 P1-3: repair_failed_tables must check active_replicas before force_load."""
+    """repair_failed_tables must check active_replicas before force_load."""
     log("\n=== Test: force_load checks active_replicas ===")
     source = read_source("src/iris_core.erl")
     check("iris_core checks active_replicas before force_load",
@@ -115,7 +115,7 @@ def test_force_load_checks_peers():
 
 
 def test_group_force_load_checks_peers():
-    """AUDIT MITIGATION P0-2: iris_group must check active_replicas before force_load."""
+    """iris_group must check active_replicas before force_load."""
     log("\n=== Test: iris_group checks active_replicas ===")
     source = read_source("src/iris_group.erl")
     check("iris_group checks active_replicas before force_load",
@@ -124,7 +124,7 @@ def test_group_force_load_checks_peers():
 
 
 def test_reconcile_checks_partition_guard():
-    """AUDIT MITIGATION P0-2: reconcile_after_partition must check partition guard mode."""
+    """reconcile_after_partition must check partition guard mode."""
     log("\n=== Test: reconcile checks partition guard ===")
     source = read_source("src/iris_core.erl")
     check("reconcile_after_partition checks partition guard",
@@ -133,7 +133,7 @@ def test_reconcile_checks_partition_guard():
 
 
 def test_per_type_rate_limiting_exists():
-    """AUDIT MITIGATION P1-1: Per-message-type rate limiting must exist."""
+    """Per-message-type rate limiting must exist."""
     log("\n=== Test: Per-type rate limiting ===")
     source = read_source("src/iris_rate_limiter.erl")
     check("check_typed/2 exists in iris_rate_limiter",
@@ -147,10 +147,10 @@ def test_per_type_rate_limiting_exists():
 
 if __name__ == '__main__':
     log("=" * 60)
-    log("AUDIT MITIGATION P2-1: Audit Fix Regression Tests")
+    log("Fix Regression Tests")
     log("=" * 60)
 
-    test_audit_fix_comments_present()
+    test_fix_implementations_present()
     test_core_reconcile_uses_transaction()
     test_session_heap_limit_not_kill()
     test_dedup_key_uses_strong_hash()

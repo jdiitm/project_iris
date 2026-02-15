@@ -15,8 +15,8 @@ setup() ->
         undefined -> ets:new(presence_cache, [named_table, public, set]);
         _ -> ets:delete_all_objects(presence_cache)
     end,
-    %% B-4 AUDIT: iris_auth_failed_logins ETS must exist for check_login_rate
-    %% to succeed (fail-closed when absent per audit fix).
+    %% iris_auth_failed_logins ETS must exist for check_login_rate
+    %% to succeed (fail-closed when absent).
     case ets:info(iris_auth_failed_logins) of
         undefined ->
             ets:new(iris_auth_failed_logins, [set, named_table, public,
@@ -271,7 +271,6 @@ test_ack_preserves_user() ->
     {ok, ReturnedUser, _} = Result,
     ?assertEqual(User, ReturnedUser).
 
-
 %% =============================================================================
 %% Error Packet Tests
 %% =============================================================================
@@ -346,7 +345,6 @@ test_empty_username() ->
     Result = iris_session:handle_packet({ack, <<"id">>}, User, self(), tcp),
     ?assertMatch({ok, <<>>, [{ack_received, <<"id">>}]}, Result).
 
-
 %% =============================================================================
 %% Protocol Response Format Tests
 %% =============================================================================
@@ -368,7 +366,6 @@ test_status_response_format() ->
     ?assertEqual(TargetUser, RetUser),
     ?assertEqual(0, Status),  %% offline
     ?assertEqual(9999, Time).
-
 
 test_transport_modules() ->
     User = <<"transport_user">>,

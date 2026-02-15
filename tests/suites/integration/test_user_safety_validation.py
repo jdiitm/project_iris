@@ -121,11 +121,11 @@ def test_source_logs_get_blocked_errors():
     """get_blocked must log errors instead of silently returning []."""
     log("\n=== Test: Source logs get_blocked errors ===")
     source = read_file(os.path.join(PROJECT_ROOT, "src", "iris_user_safety.erl"))
-    check("AUDIT P2-6 comment present",
-          "AUDIT P2-6" in source)
+    check("get_blocked error logging present",
+          "get_blocked" in source and "logger:warning" in source)
     check("logger:warning in get_blocked catch",
           "get_blocked failed" in source or "get_blocked" in source)
-    return "AUDIT P2-6" in source
+    return "get_blocked" in source and "logger:warning" in source
 
 
 # =============================================================================

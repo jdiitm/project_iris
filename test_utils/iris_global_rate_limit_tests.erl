@@ -2,10 +2,10 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% AUDIT MITIGATION: Global Rate Limit Tightening (Attack Vector 1)
+%% Global Rate Limit Tightening
 %% =============================================================================
 %%
-%% Attack Vector 1 from audit: "The Botnet"
+%% Attack Vector: "The Botnet"
 %% 100K bots across 100 Edge nodes, each under the per-connection limit.
 %% Global load: 400K msg/sec. Core nodes overwhelmed.
 %%

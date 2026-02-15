@@ -40,7 +40,7 @@ iris_flow_controller_test_() ->
       {"Get stats returns map", fun test_get_stats/0},
       {"Stats has admit count", fun test_stats_has_counts/0},
       
-      %% AUDIT FIX: CPU backpressure tests (Finding #5)
+      %% CPU backpressure tests
       {"Stats includes cpu_percent", fun test_stats_has_cpu_percent/0},
       {"CPU percent is a float", fun test_cpu_percent_is_float/0}
      ]}.
@@ -91,7 +91,7 @@ test_stats_has_counts() ->
     ?assert(maps:size(Stats) >= 1).
 
 %% =============================================================================
-%% AUDIT FIX: CPU Backpressure Tests (Finding #5)
+%% CPU Backpressure Tests
 %% =============================================================================
 
 test_stats_has_cpu_percent() ->

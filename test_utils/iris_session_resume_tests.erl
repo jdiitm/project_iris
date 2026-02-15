@@ -2,7 +2,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% P1-6 (FM-3): Connection Resume Tests
+%%: Connection Resume Tests
 %%
 %% RFC-001 v4.0 Section 6.5:
 %% - Sessions cached with session_id and last_seq on login

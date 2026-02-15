@@ -28,7 +28,7 @@ start_link() ->
 check() ->
     case get_atomics_ref() of
         undefined ->
-            %% AUDIT P0-3: Fail-closed in production to prevent bypass via
+            %% Fail-closed in production to prevent bypass via
             %% startup race or guard crash. Only fail-open in dev/test.
             case application:get_env(iris_edge, deployment_mode, development) of
                 production -> {deny, guard_not_ready};

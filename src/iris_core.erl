@@ -5,27 +5,27 @@
 %% OTP Callbacks
 -export([start/2, stop/1, init/1]).
 -export([init_db/0, init_db/1, join_cluster/1, init_cross_region_replication/0]).
--export([reconcile_after_partition/0]).  %% F1 AUDIT FIX: RFC 7.1.1 union merge
--export([reconcile_batch/2]).  %% G-2 FIX: cursor-based batched reconciliation
--export([reconcile_table/3]).  %% GAP-2 FIX: generic table reconciliation (RFC 7.1.1)
--export([merge_table_batch/3]).  %% F1 FIX: exported for conflict resolution testing
--export([should_overwrite/3]).   %% F1 FIX: timestamp-aware conflict resolution
+-export([reconcile_after_partition/0]).  %% RFC 7.1.1 union merge
+-export([reconcile_batch/2]).  %% Cursor-based batched reconciliation
+-export([reconcile_table/3]).  %% Generic table reconciliation (RFC 7.1.1)
+-export([merge_table_batch/3]).  %% Exported for conflict resolution testing
+-export([should_overwrite/3]).   %% Timestamp-aware conflict resolution
 
 %% High-Scale Messaging APIs
 -export([register_user/3, lookup_user/1]).
 -export([check_mtls_enforcement/0, check_mtls_enforcement/1]).
 -export([validate_production_cookie/0, validate_production_cookie/1]).
--export([is_core_node/1]).  %% AUDIT 5.4: exported for iris_cluster_join_worker
--export([validate_consistency_mode/0]).  %% AUDIT 4.2: CP mode hard-fail
--export([make_dedup_key/2]).  %% AUDIT 6.5: testable dedup key generation
--export([nuke_and_recreate_table/1]).  %% AUDIT 6.7: exported for testing production guard
+-export([is_core_node/1]).  %% Exported for iris_cluster_join_worker
+-export([validate_consistency_mode/0]).  %% CP mode hard-fail
+-export([make_dedup_key/2]).  %% Testable dedup key generation
+-export([nuke_and_recreate_table/1]).  %% Exported for testing production guard
 -export([store_offline/2, store_offline_durable/2, store_batch/2, retrieve_offline/1]).
 -export([retrieve_offline_paginated/3, get_offline_queue_depth/1, delete_offline_confirmed/2]).
 -export([get_bucket_count/1, set_bucket_count/2]).
 -export([update_status/2, get_status/1]).
--export([table_spec/1]).  %% AUDIT: exported for scalability test assertions
--export([cleanup_expired_entries/0]).  %% AUDIT: TTL cleanup for dedup/revoked/refresh
--export([validate_compression_startup/0]).  %% AUDIT MITIGATION V1: compression check
+-export([table_spec/1]).  %% Exported for scalability test assertions
+-export([cleanup_expired_entries/0]).  %% TTL cleanup for dedup/revoked/refresh
+-export([validate_compression_startup/0]).  %% Compression check at startup
 -export([reload_tls_config/0]).  %% SEC-01: Runtime TLS certificate rotation
 
 -define(SERVER, ?MODULE).
@@ -39,7 +39,7 @@ start(_StartType, _StartArgs) ->
     %% Rationale: Production systems use structured logging for grep-ability.
     logger:info("Starting Iris Core on node ~p", [node()]),
 
-    %% AUDIT 4.2: Validate consistency mode (fatal in production for CP)
+    %% Validate consistency mode (fatal in production for CP)
     case validate_consistency_mode() of
         ok -> ok;
         {error, cp_not_implemented} ->
@@ -78,7 +78,7 @@ start(_StartType, _StartArgs) ->
             ok
     end,
 
-    %% AUDIT MITIGATION P1-3: Validate replication_factor
+    %% Validate replication_factor
     case application:get_env(iris_core, replication_factor, 3) of
         RF when is_integer(RF), RF > 0 -> ok;
         BadRF ->
@@ -87,7 +87,7 @@ start(_StartType, _StartArgs) ->
             exit(invalid_replication_factor)
     end,
 
-    %% AUDIT MITIGATION P0-1: Validate critical config. Fatal in production mode.
+    %% Validate critical config. Fatal in production mode.
     case application:get_env(iris_core, deployment_mode, development) of
         production ->
             case application:get_env(iris_core, expected_cluster_nodes, []) of
@@ -111,7 +111,7 @@ start(_StartType, _StartArgs) ->
         _ -> ok
     end,
 
-    %% AUDIT 4.3: Reject default cookie in production mode
+    %% Reject default cookie in production mode
     case validate_production_cookie() of
         ok -> ok;
         {error, default_cookie_in_production} ->
@@ -119,10 +119,10 @@ start(_StartType, _StartArgs) ->
             exit(default_cookie_in_production)
     end,
 
-    %% AUDIT 3.2/6.1: Verify mTLS is configured if enforce_mtls=true
+    %% Verify mTLS is configured if enforce_mtls=true
     check_mtls_enforcement(),
 
-    %% AUDIT MITIGATION V1 (Finding 2B): Check compression algorithm availability
+    %% Check compression algorithm availability
     validate_compression_startup(),
 
     supervisor:start_link({local, ?SERVER}, ?MODULE, []).
@@ -132,7 +132,7 @@ stop(_State) ->
     logger:info("Stopping Iris Core on node ~p", [node()]),
     ok.
 
-%% @doc AUDIT 4.3: Validate that the default cookie is not used in production.
+%% @doc Validate that the default cookie is not used in production.
 -spec validate_production_cookie() -> ok | {error, default_cookie_in_production}.
 validate_production_cookie() ->
     validate_production_cookie(erlang:get_cookie()).
@@ -151,7 +151,7 @@ validate_production_cookie(Cookie) ->
         _ -> ok
     end.
 
-%% AUDIT 4.2 + CRIT-01 FIX: Validate consistency mode.
+%% Validate consistency mode.
 %% CP is not implemented — fatal in ALL deployment modes (no silent fallback).
 %% Unknown values are also rejected to prevent typos from degrading to AP.
 -spec validate_consistency_mode() -> ok | {error, cp_not_implemented | {unknown_consistency_mode, term()}}.
@@ -169,7 +169,7 @@ validate_consistency_mode() ->
             {error, {unknown_consistency_mode, Unknown}}
     end.
 
-%% AUDIT MITIGATION V1 (Finding 2B): Validate compression at startup.
+%% Validate compression at startup.
 %% Logs a warning if zstd is unavailable so operators know bandwidth
 %% efficiency is degraded by 30-50%. Always returns ok (non-fatal).
 -spec validate_compression_startup() -> ok.
@@ -180,7 +180,7 @@ validate_compression_startup() ->
             logger:info("Compression: zstd + zlib available"),
             ok;
         false ->
-            logger:warning("AUDIT WARNING: zstd compression NOT available. "
+            logger:warning("WARNING: zstd compression NOT available. "
                            "Only zlib is active. Bandwidth efficiency degraded 30-50%. "
                            "Install libzstd-dev and rebuild NIF to enable zstd."),
             ok
@@ -205,9 +205,9 @@ init([]) ->
     %% Rationale: strategy 'one_for_one' is replaced with a logic-based hierarchy.
     %% We use secondary supervisors for batchers to isolate their crashes.
     
-    %% AUDIT 5.3: rest_for_one ensures foundation services restart dependents
+    %% rest_for_one ensures foundation services restart dependents
     %%
-    %% AUDIT V2 P1-5: Restart Intensity Risk Documentation
+    %% Restart Intensity Risk Documentation
     %% ---------------------------------------------------
     %% The current rest_for_one strategy means that if an early child (e.g.
     %% iris_metrics) crashes, ALL subsequent children are restarted in order.
@@ -223,7 +223,7 @@ init([]) ->
     %% Future work: Split into tiered supervisors (foundation_sup, messaging_sup,
     %% cluster_sup) so that a crash in messaging does not cascade into cluster
     %% infrastructure. See: OTP Design Principles — Supervisor Behaviour.
-    %% AUDIT MITIGATION V1: Reduced from 10 to 7 restarts per 60s.
+    %% Reduced from 10 to 7 restarts per 60s.
     %% rest_for_one means EVERY upstream crash restarts ALL downstream children,
     %% so we need more headroom than one_for_one supervisors. 7/60 balances:
     %%   - Cascade prevention (30% fewer restarts before supervisor gives up)
@@ -248,7 +248,7 @@ init([]) ->
           type => worker,
           restart => permanent},
 
-        %% AUDIT MITIGATION V1: Mnesia Memory Guard (Finding 3A)
+        %% Mnesia Memory Guard
         %% Periodic monitor for Mnesia table memory usage.
         %% Must start after metrics (emits metrics) and before services
         %% that write to Mnesia (durable batcher, group, etc.)
@@ -271,14 +271,14 @@ init([]) ->
           restart => permanent},
 
         %% Presence Manager: ETS-backed lockfree presence registry
-        %% FORENSIC_AUDIT_FIX: Must start early - creates presence_local ETS table
+        %% Must start early - creates presence_local ETS table
         #{id => iris_presence,
           start => {iris_presence, start_link, []},
           type => worker,
           restart => permanent},
 
         %% Partition Guard: Split-brain detection and safe mode
-        %% AUDIT FIX: Detects cluster partitions and rejects writes to prevent divergence
+        %% Detects cluster partitions and rejects writes to prevent divergence
         #{id => iris_partition_guard,
           start => {iris_partition_guard, start_link, []},
           type => worker,
@@ -287,7 +287,7 @@ init([]) ->
         %% === Tier 2: Services (depend on foundation, isolated from each other) ===
 
         %% Cluster Manager: Self-healing cluster topology
-        %% FORENSIC_AUDIT_FIX: Monitors nodeup/nodedown and auto-wires replication
+        %% Monitors nodeup/nodedown and auto-wires replication
         #{id => iris_cluster_manager,
           start => {iris_cluster_manager, start_link, []},
           type => worker,
@@ -360,13 +360,13 @@ init([]) ->
           type => worker,
           restart => permanent},
 
-        %% AUDIT 5.4: Supervised cluster join worker (replaces bare spawn)
+        %% Supervised cluster join worker (replaces bare spawn)
         #{id => iris_cluster_join_worker,
           start => {iris_cluster_join_worker, start_link, [cluster_join]},
           type => worker,
           restart => transient},
 
-        %% AUDIT 5.4: Supervised region wiring worker (replaces bare spawn)
+        %% Supervised region wiring worker (replaces bare spawn)
         #{id => iris_region_wiring_worker,
           start => {iris_cluster_join_worker, start_link, [region_wiring]},
           type => worker,
@@ -430,7 +430,7 @@ check_mtls_enforcement(SslConfigured) ->
 
 -spec register_user(binary(), node(), pid()) -> ok | {error, term()}.
 register_user(User, Node, Pid) ->
-    %% FORENSIC_AUDIT_FIX: Default to ETS for lockfree presence (was mnesia).
+    %% Default to ETS for lockfree presence (was mnesia).
     %% Mnesia causes global lock bottleneck at scale (~10k tx/sec limit).
     %% ETS provides ~1μs lockfree operations.
     case application:get_env(iris_core, presence_backend, ets) of
@@ -454,7 +454,7 @@ register_user(User, Node, Pid) ->
 
 -spec lookup_user(binary()) -> {ok, node(), pid()} | not_found.
 lookup_user(User) ->
-    %% FORENSIC_AUDIT_FIX: Default to ETS for lockfree lookup.
+    %% Default to ETS for lockfree lookup.
     case application:get_env(iris_core, presence_backend, ets) of
         ets ->
             %% Lockfree ETS lookup
@@ -472,15 +472,15 @@ store_offline(User, Msg) ->
     Count = get_bucket_count(User),
     iris_offline_storage:store(User, Msg, Count).
 
-%% AUDIT FIX: Guaranteed durable store - use WAL + Async Replication
+%% Guaranteed durable store - use WAL + Async Replication
 %% Old: mnesia:sync_transaction (Global Lock)
 %% New: iris_durable_batcher (Local Disk WAL) -> Mnesia (Async)
-%% P0-B FIX: For multimaster durability, use sync_transaction when cluster mode
+%% For multimaster durability, use sync_transaction when cluster mode
 %% RFC NFR-11: Server-side deduplication with 7-day window
 %% RFC FR-5: FIFO ordering using client-provided sequence number
 -spec store_offline_durable(binary(), binary()) -> ok | {error, term()}.
 store_offline_durable(User, Msg) ->
-    %% HIGH-01 FIX: Mnesia memory backpressure gate (prevents OOM).
+    %% Mnesia memory backpressure gate (prevents OOM).
     %% This MUST be the first check — before inbox depth or any Mnesia read.
     case iris_mnesia_guard:is_memory_ok() of
         {error, memory_pressure} ->
@@ -489,7 +489,7 @@ store_offline_durable(User, Msg) ->
                            "(user=~s)", [User]),
             {error, memory_pressure};
         ok ->
-            %% RFC Section 8: Inbox Size limit enforcement (GAP-6 fix)
+            %% RFC Section 8: Inbox Size limit enforcement
             Depth = get_offline_queue_depth(User),
             MaxInbox = iris_limits:max_inbox_size(),
             case Depth >= MaxInbox of
@@ -497,7 +497,7 @@ store_offline_durable(User, Msg) ->
                     iris_metrics:inc(iris_inbox_full_rejected),
                     {error, inbox_full};
                 false ->
-                    %% AUDIT V2 P1-6: Soft warning at 95% capacity — alert operators
+                    %% Soft warning at 95% capacity — alert operators
                     %% before hard rejection so they can intervene (e.g. nudge user
                     %% to come online, or raise the limit).
                     case Depth >= trunc(MaxInbox * 0.95) of
@@ -558,11 +558,11 @@ store_offline_durable_inner(User, Msg) ->
             %% Check if we should use sync_transaction for guaranteed replication
             case application:get_env(iris_core, multimaster_durability, false) of
                 true ->
-                    %% P0-B FIX: Use sync_transaction to ensure replication BEFORE ACK
+                    %% Use sync_transaction to ensure replication BEFORE ACK
                     %% This is slower but guarantees RPO=0 even under SIGKILL
                     store_offline_sync_replicated(User, ActualMsg, Count, MaybeSeqNo);
                 false ->
-                    %% P1-H6 FIX: Use WAL for immediate durability (RPO=0) without global lock
+                    %% Use WAL for immediate durability (RPO=0) without global lock
                     %% RFC FR-5: Pass MaybeSeqNo for FIFO ordering
                     case iris_durable_batcher:store(User, ActualMsg, Count, MaybeSeqNo) of
                         ok -> ok;
@@ -573,7 +573,7 @@ store_offline_durable_inner(User, Msg) ->
             end
     end.
 
-%% AUDIT 6.5: Strong-hash dedup key generation (replaces phash2)
+%% Strong-hash dedup key generation (replaces phash2)
 %% Uses truncated SHA-256 (64-bit) for collision resistance.
 %% At 300 msgs/user: phash2 collision ~1:65K, sha256-64bit ~1:4B.
 -spec make_dedup_key(binary(), term()) -> binary().
@@ -586,7 +586,7 @@ make_dedup_key(User, Msg) ->
     HexHash = binary:encode_hex(HashBin),
     <<User/binary, ":hash:", HexHash/binary>>.
 
-%% P0-B FIX: Sync-replicated offline storage for multimaster durability
+%% Sync-replicated offline storage for multimaster durability
 %% Uses mnesia:sync_transaction which blocks until ALL disc_copies have the data
 %% This guarantees no message loss even under SIGKILL, but is slower (~20-100ms)
 %% RFC FR-5: Use client SeqNo as timestamp when available for FIFO ordering
@@ -635,7 +635,7 @@ retrieve_offline(User) ->
     iris_offline_storage:retrieve(User, Count).
 
 %% =============================================================================
-%% HOT-001 FIX: Paginated Offline Retrieval for Celebrity Hotspots
+%% Paginated Offline Retrieval for Celebrity Hotspots
 %% =============================================================================
 %% Instead of dumping all messages at once (OOM risk for 1M+ messages),
 %% we retrieve in batches and allow the client to ACK pages before continuing.
@@ -655,7 +655,7 @@ get_offline_queue_depth(User) ->
         end
     end, 0, lists:seq(0, Count - 1)).
 
-%% @doc Retrieve offline messages in paginated batches (HOT-001 FIX)
+%% @doc Retrieve offline messages in paginated batches
 %% Returns {Messages, NextCursor} where NextCursor is 'done' or an opaque cursor.
 %% Messages are NOT deleted - caller must confirm delivery via delete_offline_confirmed/2.
 %% 
@@ -668,7 +668,7 @@ retrieve_offline_paginated(User, _PageSize, Cursor) ->
     %% Use lockfree cursor-based retrieval (PageSize is handled by retrieve_cursor)
     iris_offline_storage:retrieve_cursor(User, Count, Cursor).
 
-%% @doc Delete offline messages after client confirms receipt (HOT-001 FIX)
+%% @doc Delete offline messages after client confirms receipt
 %% Call this AFTER client ACKs the page of messages.
 %% FromCursor/ToCursor define the range of buckets to delete.
 -spec delete_offline_confirmed(binary(), {non_neg_integer(), non_neg_integer()}) -> ok.
@@ -690,7 +690,7 @@ get_bucket_count(User) ->
             iris_storage_tier:touch(User),
             Count;  %% Legacy records
         _ ->
-            %% AUDIT MITIGATION (Blocker 1): Fall back to cold tier
+            %% Fall back to cold tier
             case iris_storage_tier:read_through(user_meta, user_meta_cold, User) of
                 {ok, {_, User, Count, _LastMod}} ->
                     %% Promote back to hot tier for future fast access
@@ -705,7 +705,7 @@ get_bucket_count(User) ->
     end.
 
 set_bucket_count(User, Count) ->
-    %% AUDIT FIX (Finding 2.1): Reject bucket count decreases to prevent
+    %% Reject bucket count decreases to prevent
     %% data stranding — messages in higher-numbered buckets become invisible
     %% if BucketCount shrinks.
     CurrentCount = get_bucket_count(User),
@@ -719,7 +719,7 @@ set_bucket_count(User, Count) ->
 
 %% @doc Update a user's presence status.
 %%
-%% AUDIT V2 P2-4: update_status(_User, online) is intentionally a no-op.
+%% update_status(_User, online) is intentionally a no-op.
 %% Online status is established exclusively via register_user/3, which
 %% atomically writes the presence record with the user's node and pid.
 %% Calling update_status(User, online) without a pid/node would create
@@ -727,7 +727,7 @@ set_bucket_count(User, Count) ->
 %% Callers wanting to mark a user as online MUST use register_user/3.
 update_status(_User, online) -> ok;
 update_status(User, offline) ->
-    %% FORENSIC_AUDIT_FIX: Unregister from correct backend
+    %% Unregister from correct backend
     %% Rationale: Atomic delete prevents "ghost" online status if batcher is slow.
     case application:get_env(iris_core, presence_backend, ets) of
         ets ->
@@ -741,7 +741,7 @@ update_status(User, offline) ->
 
 get_status(User) ->
     %% Rationale: Multi-tier lookup. RAM -> Disk.
-    %% FORENSIC_AUDIT_FIX: Default to ETS for lockfree status lookup.
+    %% Default to ETS for lockfree status lookup.
     case application:get_env(iris_core, presence_backend, ets) of
         ets ->
             %% ETS-backed presence lookup (lockfree)
@@ -758,7 +758,7 @@ get_status(User) ->
     end.
 
 %% Helper: Get status from disk (user_status table)
-%% AUDIT V2 P1-2: Return {error, not_found} for users that never existed
+%% Return {error, not_found} for users that never existed
 %% instead of an ambiguous zero-timestamp tuple.
 -spec get_status_from_disk(binary()) -> {online, false, non_neg_integer()} | {error, not_found}.
 get_status_from_disk(User) ->
@@ -876,12 +876,12 @@ safe_to_delete_schema(LivePeer) ->
     end.
 
 %% Repair tables that failed to load after crash recovery
-%% AUDIT V2 P1-3: Check for live peers before force_load_table to prevent
+%% Check for live peers before force_load_table to prevent
 %% data divergence when peers hold newer data.
 repair_failed_tables([]) -> ok;
 repair_failed_tables([Table | Rest]) ->
     logger:info("Repairing table: ~p", [Table]),
-    %% AUDIT V2 P1-3: Check if peers have a copy we can sync from
+    %% Check if peers have a copy we can sync from
     ActiveReplicas = mnesia:table_info(Table, active_replicas) -- [node()],
     case ActiveReplicas of
         [Peer | _] ->
@@ -906,7 +906,7 @@ repair_failed_tables([Table | Rest]) ->
     repair_failed_tables(Rest).
 
 %% Force-load a table when no peers are available (isolated node).
-%% AUDIT V2 P1-3: Emit metric + divergence warning since data may be stale.
+%% Emit metric + divergence warning since data may be stale.
 force_load_isolated(Table) ->
     logger:warning("DATA DIVERGENCE RISK: force_load_table(~p) with no active peers. "
                    "Local data may be stale or divergent.", [Table]),
@@ -925,8 +925,8 @@ force_load_isolated(Table) ->
     end.
 
 %% Completely destroy and recreate a corrupted table
-%% AUDIT FIX: Added safety gate to prevent accidental data loss
-%% AUDIT 6.7: Production mode blocks nuke unconditionally
+%% Safety gate to prevent accidental data loss
+%% Production mode blocks nuke unconditionally
 nuke_and_recreate_table(Table) ->
     case application:get_env(iris_core, deployment_mode, development) of
         production ->
@@ -973,7 +973,7 @@ do_nuke_and_recreate(Table) ->
     logger:info("Table ~p recreated successfully", [Table]).
 
 %% =============================================================================
-%% AUDIT FIX: Single source of truth for Mnesia table definitions.
+%% Single source of truth for Mnesia table definitions.
 %% Returns {StorageType, Options} so callers only supply the node list.
 %% =============================================================================
 table_spec(presence) ->
@@ -995,21 +995,21 @@ table_spec(user_blocks) ->
 table_spec(user_reports) ->
     {disc_copies, [{attributes, [id, reporter, reported, reason, created_at]}, {type, bag}]};
 
-%% AUDIT MITIGATION (Blocker 1): Cold-tier overflow for user_meta.
+%% Cold-tier overflow for user_meta.
 %% disc_only_copies keeps data on disc only (no keys in RAM).
 %% Same schema as user_meta so records can be moved transparently.
 table_spec(user_meta_cold) ->
     {disc_only_copies, [{attributes, [user, bucket_count, last_modified]}]}.
 
 %% ---------------------------------------------------------------------------
-%% AUDIT: TTL Cleanup — Purge expired entries from dedup_log, revoked_tokens,
+%% TTL Cleanup — Purge expired entries from dedup_log, revoked_tokens,
 %% and refresh_tokens. Called periodically (1-hour interval) or on demand.
 %% Entries older than 7 days are purged from dedup_log and revoked_tokens.
 %% Expired refresh_tokens are purged based on their expires_at field.
 %% ---------------------------------------------------------------------------
 -define(TTL_SECONDS, 7 * 86400).  %% 7 days
 
-%% AUDIT M5: Return {ok, TotalDeleted} instead of ok, so callers see cleanup activity.
+%% Return {ok, TotalDeleted} instead of ok, so callers see cleanup activity.
 -spec cleanup_expired_entries() -> {ok, non_neg_integer()}.
 cleanup_expired_entries() ->
     Cutoff = os:system_time(second) - ?TTL_SECONDS,
@@ -1019,7 +1019,7 @@ cleanup_expired_entries() ->
     {ok, N1 + N2 + N3}.
 
 %% Delete all records from Table where element at Position is < Cutoff.
-%% AUDIT M5: Returns count of deleted records; logs on error instead of swallowing.
+%% Returns count of deleted records; logs on error instead of swallowing.
 cleanup_table_by_timestamp(Table, TimestampPos, Cutoff) ->
     try
         case mnesia:transaction(fun() ->
@@ -1035,17 +1035,17 @@ cleanup_table_by_timestamp(Table, TimestampPos, Cutoff) ->
         end) of
             {atomic, Count} -> Count;
             {aborted, Reason} ->
-                logger:warning("AUDIT M5: cleanup_table_by_timestamp(~p) aborted: ~p", [Table, Reason]),
+                logger:warning("cleanup_table_by_timestamp(~p) aborted: ~p", [Table, Reason]),
                 0
         end
     catch
         Class:Error ->
-            logger:warning("AUDIT M5: cleanup_table_by_timestamp(~p) error: ~p:~p", [Table, Class, Error]),
+            logger:warning("cleanup_table_by_timestamp(~p) error: ~p:~p", [Table, Class, Error]),
             0
     end.
 
 %% Delete refresh_tokens where expires_at is in the past.
-%% AUDIT M5: Returns count of deleted records.
+%% Returns count of deleted records.
 cleanup_refresh_tokens_expired() ->
     Now = os:system_time(second),
     try
@@ -1063,12 +1063,12 @@ cleanup_refresh_tokens_expired() ->
         end) of
             {atomic, Count} -> Count;
             {aborted, Reason} ->
-                logger:warning("AUDIT M5: cleanup_refresh_tokens_expired aborted: ~p", [Reason]),
+                logger:warning("cleanup_refresh_tokens_expired aborted: ~p", [Reason]),
                 0
         end
     catch
         Class:Error ->
-            logger:warning("AUDIT M5: cleanup_refresh_tokens_expired error: ~p:~p", [Class, Error]),
+            logger:warning("cleanup_refresh_tokens_expired error: ~p:~p", [Class, Error]),
             0
     end.
 
@@ -1168,7 +1168,7 @@ init_cross_region_replication() ->
             replicate_table(cross_region_outbound, disc_copies, CoreNodes),
             replicate_table(cross_region_dead_letter, disc_copies, CoreNodes),
             
-            %% M20 FIX: Replicate e2ee_key_bundle table (disc_copies for NFR-23 durability)
+            %% Replicate e2ee_key_bundle table (disc_copies for durability)
             %% Key bundles MUST survive node failure (99.999% durability, same as messages).
             %% Without replication, a SIGKILL of the primary loses all key bundles.
             replicate_table(e2ee_key_bundle, disc_copies, CoreNodes),
@@ -1181,7 +1181,7 @@ init_cross_region_replication() ->
     end.
 
 %%%===================================================================
-%%% F1 AUDIT FIX: Post-Partition Reconciliation (RFC 7.1.1)
+%%% Post-Partition Reconciliation (RFC 7.1.1)
 %%%===================================================================
 %%% Called by iris_partition_guard when transitioning from diverged -> normal.
 %%% Performs union merge of append-only tables (offline_msg) across all
@@ -1197,7 +1197,7 @@ init_cross_region_replication() ->
 
 -spec reconcile_after_partition() -> ok | {error, term()}.
 reconcile_after_partition() ->
-    %% AUDIT MITIGATION P0-2: Refuse reconciliation while still diverged
+    %% Refuse reconciliation while still diverged
     case iris_partition_guard:get_status() of
         #{mode := diverged} ->
             logger:warning("Reconciliation aborted: partition guard still in diverged mode"),
@@ -1238,29 +1238,29 @@ do_reconcile_after_partition() ->
             ok
     end.
 
-%% @doc Cursor-based batched reconciliation (G-2 FIX).
+%% @doc Cursor-based batched reconciliation.
 %% Replaces the O(N) dirty_match_object which fetches ALL records into RAM.
 %% Iterates remote keys in batches using dirty_first/dirty_next.
 -spec reconcile_batch(node(), pos_integer()) -> {ok, non_neg_integer()} | {error, term()}.
 reconcile_batch(RemoteNode, BatchSize) when is_atom(RemoteNode), is_integer(BatchSize), BatchSize > 0 ->
-    logger:info("G-2: Batched reconciliation from ~p (batch_size=~p)", [RemoteNode, BatchSize]),
+    logger:info("Batched reconciliation from ~p (batch_size=~p)", [RemoteNode, BatchSize]),
     try
         FirstKey = rpc:call(RemoteNode, mnesia, dirty_first, [offline_msg], 5000),
         case FirstKey of
             {badrpc, Reason} ->
-                logger:warning("G-2: Failed to read first key from ~p: ~p", [RemoteNode, Reason]),
+                logger:warning("Failed to read first key from ~p: ~p", [RemoteNode, Reason]),
                 {error, Reason};
             '$end_of_table' ->
-                logger:info("G-2: Remote node ~p has no offline_msg records", [RemoteNode]),
+                logger:info("Remote node ~p has no offline_msg records", [RemoteNode]),
                 {ok, 0};
             _ ->
                 Merged = reconcile_batch_loop(RemoteNode, FirstKey, BatchSize, 0),
-                logger:info("G-2: Batched reconciliation from ~p complete (~p merged)", [RemoteNode, Merged]),
+                logger:info("Batched reconciliation from ~p complete (~p merged)", [RemoteNode, Merged]),
                 {ok, Merged}
         end
     catch
         _:Error ->
-            logger:warning("G-2: Error during batched reconciliation from ~p: ~p", [RemoteNode, Error]),
+            logger:warning("Error during batched reconciliation from ~p: ~p", [RemoteNode, Error]),
             {error, Error}
     end.
 
@@ -1302,7 +1302,7 @@ merge_key_batch(RemoteNode, Keys) ->
                 LocalRecords = mnesia:dirty_read(offline_msg, Key),
                 LocalSet = sets:from_list(LocalRecords),
                 Missing = [R || R <- Records, not sets:is_element(R, LocalSet)],
-                %% AUDIT P1-1: Transaction for reconciliation durability
+                %% Transaction for reconciliation durability
                 case Missing of
                     [] -> ok;
                     _ ->
@@ -1318,42 +1318,42 @@ merge_key_batch(RemoteNode, Keys) ->
     end, 0, Keys).
 
 %% Merge offline_msg records from a remote node into local table.
-%% G-2 FIX: Now delegates to reconcile_batch/2 for cursor-based iteration.
+%% Now delegates to reconcile_batch/2 for cursor-based iteration.
 merge_offline_msg_from(RemoteNode) ->
     logger:info("Reconciliation: reading offline_msg from ~p (batched)", [RemoteNode]),
     reconcile_batch(RemoteNode, 1000).
 
-%% @doc Generic table reconciliation (GAP-2 FIX: RFC 7.1.1).
+%% @doc Generic table reconciliation (RFC 7.1.1).
 %% Cursor-based batched union merge for any Mnesia table.
 %% Works for: presence, group_member, e2ee_key_bundle.
 -spec reconcile_table(node(), atom(), pos_integer()) -> {ok, non_neg_integer()} | {error, term()}.
 reconcile_table(RemoteNode, Table, BatchSize) when is_atom(RemoteNode), is_atom(Table), BatchSize > 0 ->
-    logger:info("GAP-2: Reconciling table ~p from ~p (batch_size=~p)", [Table, RemoteNode, BatchSize]),
+    logger:info("Reconciling table ~p from ~p (batch_size=~p)", [Table, RemoteNode, BatchSize]),
     try
         %% Check if table exists on remote node
         case rpc:call(RemoteNode, mnesia, table_info, [Table, size], 5000) of
             {badrpc, _Reason} ->
-                logger:info("GAP-2: Table ~p not available on ~p, skipping", [Table, RemoteNode]),
+                logger:info("Table ~p not available on ~p, skipping", [Table, RemoteNode]),
                 {ok, 0};
             _Size ->
                 FirstKey = rpc:call(RemoteNode, mnesia, dirty_first, [Table], 5000),
                 case FirstKey of
                     {badrpc, Reason2} ->
-                        logger:warning("GAP-2: Failed to read first key of ~p from ~p: ~p",
+                        logger:warning("Failed to read first key of ~p from ~p: ~p",
                                        [Table, RemoteNode, Reason2]),
                         {error, Reason2};
                     '$end_of_table' ->
-                        logger:info("GAP-2: Remote ~p table ~p is empty", [RemoteNode, Table]),
+                        logger:info("Remote ~p table ~p is empty", [RemoteNode, Table]),
                         {ok, 0};
                     _ ->
                         Merged = reconcile_table_loop(RemoteNode, Table, FirstKey, BatchSize, 0),
-                        logger:info("GAP-2: Reconciled ~p records from ~p:~p", [Merged, RemoteNode, Table]),
+                        logger:info("Reconciled ~p records from ~p:~p", [Merged, RemoteNode, Table]),
                         {ok, Merged}
                 end
         end
     catch
         _:Error ->
-            logger:warning("GAP-2: Error reconciling ~p from ~p: ~p", [Table, RemoteNode, Error]),
+            logger:warning("Error reconciling ~p from ~p: ~p", [Table, RemoteNode, Error]),
             {error, Error}
     end.
 
@@ -1391,10 +1391,10 @@ merge_table_batch(RemoteNode, Table, Keys) ->
             {badrpc, _} -> Count;
             Records when is_list(Records) ->
                 LocalRecords = mnesia:dirty_read(Table, Key),
-                %% F1 FIX: Use conflict-aware merge instead of blind write.
+                %% Use conflict-aware merge instead of blind write.
                 %% For bag tables (offline_msg): union merge (write missing).
                 %% For set tables: timestamp-aware LWW (see should_overwrite/3).
-                %% B-6 AUDIT FIX: e2ee_key_bundle is set type, uses updated_at LWW.
+                %% e2ee_key_bundle is set type, uses updated_at LWW.
                 TableType = try mnesia:table_info(Table, type)
                             catch Class:Reason ->
                                 logger:warning("iris_core: table_info(~p, type) failed: ~p:~p, defaulting to set", [Table, Class, Reason]),
@@ -1403,7 +1403,7 @@ merge_table_batch(RemoteNode, Table, Keys) ->
                 WrittenCount = case TableType of
                     bag ->
                         %% Append-only / bag: union merge (original logic)
-                        %% AUDIT P1-1: Transaction for reconciliation durability
+                        %% Transaction for reconciliation durability
                         LocalSet = sets:from_list(LocalRecords),
                         Missing = [R || R <- Records, not sets:is_element(R, LocalSet)],
                         case Missing of
@@ -1425,14 +1425,14 @@ merge_table_batch(RemoteNode, Table, Keys) ->
         end
     end, 0, Keys).
 
-%% F1 FIX: Merge set-type table records with timestamp-aware conflict resolution.
+%% Merge set-type table records with timestamp-aware conflict resolution.
 %% For each remote record, check if a local record exists with the same key.
 %% If local exists: overwrite only if remote is newer (should_overwrite).
 %% If local absent: write the remote record.
 merge_set_records(Table, RemoteRecords, LocalRecords) ->
     %% Build a map of local records by key (element 2 is the key field in records)
     LocalMap = maps:from_list([{element(2, R), R} || R <- LocalRecords]),
-    %% AUDIT P1-1: Collect records to write, then write in a single transaction
+    %% Collect records to write, then write in a single transaction
     ToWrite = lists:filter(fun(RemoteRec) ->
         RemoteKey = element(2, RemoteRec),
         case maps:get(RemoteKey, LocalMap, undefined) of
@@ -1451,7 +1451,7 @@ merge_set_records(Table, RemoteRecords, LocalRecords) ->
             length(ToWrite)
     end.
 
-%% F1 FIX: Determine if a remote record should overwrite a local record.
+%% Determine if a remote record should overwrite a local record.
 %% Implements per-table conflict resolution strategy (RFC 7.1.1):
 %%   - group_member: Compare last_seen timestamps (LWW)
 %%   - user_status: Compare last_seen timestamps (LWW)
@@ -1464,10 +1464,10 @@ should_overwrite(group_member, RemoteRec, LocalRec) ->
     LocalTS = element(6, LocalRec),
     RemoteTS > LocalTS;
 should_overwrite(user_status, RemoteRec, LocalRec) ->
-    %% AUDIT LWW: last_seen is element 3: {user_status, User, LastSeen}
+    %% LWW: last_seen is element 3: {user_status, User, LastSeen}
     element(3, RemoteRec) > element(3, LocalRec);
 should_overwrite(user_meta, RemoteRec, LocalRec) ->
-    %% AUDIT LWW: last_modified is element 4: {user_meta, User, BucketCount, LastModified}
+    %% LWW: last_modified is element 4: {user_meta, User, BucketCount, LastModified}
     %% Guard against legacy records without last_modified (tuple_size == 3)
     case {tuple_size(RemoteRec), tuple_size(LocalRec)} of
         {4, 4} -> element(4, RemoteRec) > element(4, LocalRec);
@@ -1478,7 +1478,7 @@ should_overwrite(presence, _RemoteRec, _LocalRec) ->
     %% Presence is ram_copies, ephemeral. Local is authoritative.
     false;
 should_overwrite(e2ee_key_bundle, RemoteRec, LocalRec) ->
-    %% B-6 AUDIT FIX: RFC 7.1.1 says "Key bundles: Union (all bundles are valid)."
+    %% RFC 7.1.1 says "Key bundles: Union (all bundles are valid)."
     %% Since e2ee_key_bundle is a set table (one record per user_id),
     %% "union" means keep the record with the most recent updated_at.
     %% updated_at is the 9th element of the key_bundle record.
@@ -1490,7 +1490,7 @@ should_overwrite(_Table, _RemoteRec, _LocalRec) ->
     false.
 
 %% Helper: Check if a node is a core node.
-%% AUDIT FIX 2.3: Config-based role assignment with naming convention fallback.
+%% Config-based role assignment with naming convention fallback.
 %% Supports K8s, IP-based naming, and any non-standard naming schema.
 is_core_node(Node) ->
     case application:get_env(iris_core, node_role) of

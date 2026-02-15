@@ -2,7 +2,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% AUDIT P1-2: Metrics Endpoint Authentication Tests
+%% Metrics Endpoint Authentication Tests
 %% =============================================================================
 %%
 %% Tests verify:
@@ -18,18 +18,18 @@
 
 source_structure_test_() ->
     [
-     {"P1-2: check_metrics_auth function exists in iris_health_handler.erl", fun() ->
+     {"check_metrics_auth function exists in iris_health_handler.erl", fun() ->
           {ok, Src} = file:read_file("src/iris_health_handler.erl"),
           ?assert(binary:match(Src, <<"check_metrics_auth">>) =/= nomatch)
       end},
 
-     {"P1-2: /metrics dispatch calls check_metrics_auth", fun() ->
+     {"/metrics dispatch calls check_metrics_auth", fun() ->
           {ok, Src} = file:read_file("src/iris_health_handler.erl"),
           %% The dispatch for /metrics should reference check_metrics_auth
           ?assert(binary:match(Src, <<"metrics_auth">>) =/= nomatch)
       end},
 
-     {"P1-2: /health dispatch does NOT check auth", fun() ->
+     {"/health dispatch does NOT check auth", fun() ->
           {ok, Src} = file:read_file("src/iris_health_handler.erl"),
           %% The dispatch for /health should call health() directly
           Lines = binary:split(Src, <<"\n">>, [global]),
@@ -41,17 +41,17 @@ source_structure_test_() ->
           ?assertEqual([], AuthInHealthDispatch)
       end},
 
-     {"P1-2: 401 status line exists", fun() ->
+     {"401 status line exists", fun() ->
           {ok, Src} = file:read_file("src/iris_health_handler.erl"),
           ?assert(binary:match(Src, <<"401 Unauthorized">>) =/= nomatch)
       end},
 
-     {"P1-2: Authorization header is collected from requests", fun() ->
+     {"Authorization header is collected from requests", fun() ->
           {ok, Src} = file:read_file("src/iris_health_handler.erl"),
           ?assert(binary:match(Src, <<"'Authorization'">>) =/= nomatch)
       end},
 
-     {"P1-2: Bearer token checked from application env", fun() ->
+     {"Bearer token checked from application env", fun() ->
           {ok, Src} = file:read_file("src/iris_health_handler.erl"),
           ?assert(binary:match(Src, <<"metrics_bearer_token">>) =/= nomatch)
       end}
@@ -61,7 +61,7 @@ source_structure_test_() ->
 
 auth_logic_test_() ->
     [
-     {"P1-2: no configured token = open access", fun() ->
+     {"no configured token = open access", fun() ->
           OldVal = application:get_env(iris_core, metrics_bearer_token, undefined),
           application:unset_env(iris_core, metrics_bearer_token),
           try
@@ -77,7 +77,7 @@ auth_logic_test_() ->
           end
       end},
 
-     {"P1-2: configured token requires matching Authorization header", fun() ->
+     {"configured token requires matching Authorization header", fun() ->
           OldVal = application:get_env(iris_core, metrics_bearer_token, undefined),
           application:set_env(iris_core, metrics_bearer_token, <<"test_metrics_secret">>),
           try

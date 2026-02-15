@@ -2,11 +2,8 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% Phase 1B TDD: Edge Supervisor must declare all critical gen_servers
 %% =============================================================================
-%% RED:  These tests FAIL because iris_edge_sup:init/1 does not include
 %%       iris_auth, iris_rate_limiter, iris_ingress_guard, iris_discovery.
-%% GREEN: Adding child specs to iris_edge_sup:init/1 makes them pass.
 %% =============================================================================
 
 %% iris_edge_sup:init/1 requires the iris_edge port env and creates ETS tables.
@@ -36,3 +33,7 @@ edge_supervisor_declares_iris_ingress_guard_test() ->
 edge_supervisor_declares_iris_discovery_test() ->
     Ids = get_child_ids(),
     ?assert(lists:member(iris_discovery, Ids)).
+
+edge_supervisor_declares_iris_edge_dedup_cleaner_test() ->
+    Ids = get_child_ids(),
+    ?assert(lists:member(iris_edge_dedup_cleaner, Ids)).

@@ -48,7 +48,7 @@
 %% Maximum message skip per ratchet advance (to prevent DoS)
 -define(MAX_SKIP, 1000).
 
-%% B-6 AUDIT MITIGATION: Maximum total skipped keys across all chains.
+%% Maximum total skipped keys across all chains.
 %% Prevents unbounded memory growth from accumulated out-of-order gaps.
 -define(MAX_TOTAL_SKIPPED, 5000).
 
@@ -454,7 +454,7 @@ skip_messages(DHRemote, TargetNum, ChainKey, CurrentNum, State) ->
     {MsgKey, NewChainKey} = kdf_ck(ChainKey),
     Key = {DHRemote, CurrentNum},
     Skipped0 = maps:put(Key, MsgKey, State#ratchet_state.skipped_keys),
-    %% B-6 AUDIT MITIGATION: Trim oldest entries if total exceeds bound
+    %% Trim oldest entries if total exceeds bound
     NewSkipped = trim_skipped_keys(Skipped0),
     skip_messages(DHRemote, TargetNum, NewChainKey, CurrentNum + 1, 
                   State#ratchet_state{
@@ -462,7 +462,7 @@ skip_messages(DHRemote, TargetNum, ChainKey, CurrentNum, State) ->
                       recv_chain_key = NewChainKey
                   }).
 
-%% B-6 AUDIT MITIGATION: Evict oldest skipped keys when total exceeds bound.
+%% Evict oldest skipped keys when total exceeds bound.
 %% Keys are {DHPub, MsgNum} tuples; we evict by lowest MsgNum first (oldest).
 trim_skipped_keys(Skipped) when map_size(Skipped) =< ?MAX_TOTAL_SKIPPED ->
     Skipped;

@@ -1,7 +1,7 @@
 -module(iris_ingress_byte_guard).
 
 %% =============================================================================
-%% AUDIT MITIGATION: Per-Socket Ingress Byte Guard (Attack Vector 3)
+%% Per-Socket Ingress Byte Guard
 %% =============================================================================
 %% The flow controller (iris_flow_controller) polls system memory every 200ms.
 %% An attacker can send 100MB in <200ms, OOM-ing the Edge node before

@@ -2,19 +2,19 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% AUDIT: sync_transaction Timeout Protection Tests
+%% sync_transaction Timeout Protection Tests
 %% =============================================================================
 %%
 %% Tests verify that iris_store's guaranteed durability path wraps
 %% sync_transaction with a timeout to prevent indefinite stalls during
-%% netsplits (Audit Section 5.3).
+%% netsplits.
 %% =============================================================================
 
 iris_store_timeout_test_() ->
     [
-     {"AUDIT M6: guaranteed write has timeout protection in source",
+     {"guaranteed write has timeout protection in source",
       fun test_guaranteed_has_timeout/0},
-     {"AUDIT M6: WRITE_TIMEOUT_MS is defined in source",
+     {"WRITE_TIMEOUT_MS is defined in source",
       fun test_timeout_constant_defined/0}
     ].
 

@@ -2,7 +2,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% 3-Tier Dedup Path Verification Tests (P1-3, RFC-001 v4.0 Section 6.2)
+%% 3-Tier Dedup Path Verification Tests (RFC-001 v4.0 Section 6.2)
 %%
 %% Verifies the 3-tier dedup architecture as specified in the updated RFC:
 %%   Hot Tier:  ETS (5 min TTL) — fast in-memory check
@@ -83,7 +83,6 @@ test_all_tiers_populated() ->
     DedupLogResult = mnesia:dirty_read(dedup_log, MsgId),
     ?assertMatch([{dedup_log, MsgId, _}], DedupLogResult).
 
-
 test_dedup_log_authoritative() ->
     %% Simulate post-crash state: ETS is cleared, bloom is empty,
     %% but dedup_log retains the record.
@@ -106,7 +105,6 @@ test_dedup_log_authoritative() ->
     Result = iris_dedup:check_and_mark(MsgId),
     ?assertEqual(duplicate, Result).
 
-
 test_bloom_fp_allows_new() ->
     %% When bloom says "probably seen" but dedup_log says "definitely not seen",
     %% the message MUST be allowed through (bloom false positive).
@@ -125,7 +123,6 @@ test_bloom_fp_allows_new() ->
     %% All 50 unique messages must be accepted as new
     ?assertEqual(50, NewCount).
 
-
 test_fp_counter_exposed() ->
     %% The stats map must include bloom_false_positives as a non-negative integer.
     Stats = iris_dedup:get_stats(),
@@ -133,7 +130,6 @@ test_fp_counter_exposed() ->
     FP = maps:get(bloom_false_positives, Stats),
     ?assert(is_integer(FP)),
     ?assert(FP >= 0).
-
 
 test_no_false_drops() ->
     %% 100 unique messages must ALL be accepted as 'new'.

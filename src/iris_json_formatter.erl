@@ -19,7 +19,7 @@
 -export([format/2]).
 -export([check_config/1]).
 
--define(MAX_MSG_SIZE, 32768).  %% AUDIT M9: 32KB max message size
+-define(MAX_MSG_SIZE, 32768).  %% 32KB max message size
 
 %% @doc Format a log event as a single-line JSON string.
 -spec format(logger:log_event(), logger:formatter_config()) -> unicode:chardata().
@@ -65,7 +65,7 @@ format_msg({report, Report}) ->
 format_msg({Format, Args}) ->
     truncate_msg(io_lib:format(Format, Args)).
 
-%% AUDIT M9: Truncate oversized messages to prevent memory bloat
+%% Truncate oversized messages to prevent memory bloat
 truncate_msg(Msg) ->
     Bin = iolist_to_binary([Msg]),
     case byte_size(Bin) > ?MAX_MSG_SIZE of

@@ -2,7 +2,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% AUDIT: Zstd Runtime Detection Tests
+%% Zstd Runtime Detection Tests
 %% =============================================================================
 %%
 %% Tests verify:
@@ -14,19 +14,19 @@
 
 iris_compression_detect_test_() ->
     [
-     {"AUDIT: available_algorithms/0 is exported",
+     {"available_algorithms/0 is exported",
       fun test_function_exported/0},
-     {"AUDIT: zlib is always available",
+     {"zlib is always available",
       fun test_zlib_always_available/0},
-     {"AUDIT: available_algorithms returns only binaries",
+     {"available_algorithms returns only binaries",
       fun test_returns_binaries/0},
-     {"AUDIT: zstd inclusion depends on NIF .so presence",
+     {"zstd inclusion depends on NIF .so presence",
       fun test_zstd_detection/0},
-     {"AUDIT: iris_session uses dynamic capabilities (not hardcoded list)",
+     {"iris_session uses dynamic capabilities (not hardcoded list)",
       fun test_session_dynamic_capabilities/0},
-     {"AUDIT M8: if zstd reported available, compress must not crash",
+     {"if zstd reported available, compress must not crash",
       fun test_zstd_load_verification/0},
-     {"AUDIT M8: source checks NIF loadability, not just file existence",
+     {"source checks NIF loadability, not just file existence",
       fun test_source_checks_nif_load/0}
     ].
 

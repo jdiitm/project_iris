@@ -2,7 +2,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% AUDIT: JSON Formatter Message Size Cap Tests
+%% JSON Formatter Message Size Cap Tests
 %% =============================================================================
 %%
 %% Tests verify that iris_json_formatter:format/2 truncates oversized log
@@ -11,11 +11,11 @@
 
 iris_json_formatter_test_() ->
     [
-     {"AUDIT M9: oversized message is truncated",
+     {"oversized message is truncated",
       fun test_oversized_message_truncated/0},
-     {"AUDIT M9: normal message is preserved",
+     {"normal message is preserved",
       fun test_normal_message_preserved/0},
-     {"AUDIT M9: source has MAX_MSG_SIZE",
+     {"source has MAX_MSG_SIZE",
       fun test_source_has_max_msg_size/0}
     ].
 

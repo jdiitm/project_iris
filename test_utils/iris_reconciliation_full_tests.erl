@@ -2,7 +2,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% GAP-2: Complete Partition Reconciliation Tests (RFC Section 7.1.1)
+%% Complete Partition Reconciliation Tests (RFC Section 7.1.1)
 %%
 %% reconcile_after_partition/0 currently only merges offline_msg.
 %% RFC 7.1.1 requires reconciliation of:
@@ -11,8 +11,6 @@
 %%   - Group membership: Union of adds (MISSING)
 %%   - Key bundles: Union (MISSING)
 %%
-%% RED: iris_core must export reconcile_table/3 for generic table reconciliation.
-%% GREEN: Implement generic batched reconciliation for all table types.
 %% =============================================================================
 
 iris_reconciliation_full_test_() ->

@@ -2,7 +2,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% TDD: Shard Coverage Tests (Audit Finding 1.1)
+%% Shard Coverage Tests
 %% =============================================================================
 %% Written BEFORE implementation. These tests define the contract:
 %%   - ALL shards must be covered by available nodes (zero gaps)

@@ -2,7 +2,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% AUDIT V2 P1-6: Inbox Depth Soft Limit Tests
+%% : Inbox Depth Soft Limit Tests
 %% =============================================================================
 %%
 %% Tests verify via source analysis that store_offline_durable/2:

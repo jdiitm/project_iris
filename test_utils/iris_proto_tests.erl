@@ -374,15 +374,15 @@ test_send_seq_v2_partial_packet() ->
     ?assertMatch({more, _}, Result).
 
 %% =============================================================================
-%% AUDIT FIX: Protocol Fuzzing Tests
+%% Protocol Fuzzing Tests
 %% =============================================================================
 %% 
-%% The audit identified no hostile input testing. These tests verify the
+%% These tests verify the
 %% protocol handles malformed input gracefully without crashing.
 %% =============================================================================
 
 fuzzing_test_() ->
-    {"Protocol fuzzing (AUDIT FIX)",
+    {"Protocol fuzzing",
      [
       {"Malformed length field (too large)", fun test_malformed_length_large/0},
       {"Zero length target", fun test_zero_length_target/0},
@@ -470,15 +470,15 @@ test_random_garbage() ->
     ?assert(is_tuple(Result)).
 
 %% =============================================================================
-%% AUDIT FIX: Configurable Batch Limit Tests
+%% Configurable Batch Limit Tests
 %% =============================================================================
 %% 
-%% The audit identified that batch limit of 1000 is hardcoded in tests.
+%% The batch limit of 1000 is now configurable.
 %% These tests verify the limit is configurable via application env.
 %% =============================================================================
 
 configurable_limit_test_() ->
-    {"Configurable limits (AUDIT FIX)",
+    {"Configurable limits",
      [
       {"Batch limit is configurable", fun test_batch_limit_configurable/0},
       {"Default batch limit is reasonable", fun test_batch_limit_default/0},
@@ -519,11 +519,11 @@ test_batch_over_limit() ->
     ?assertEqual({error, batch_too_large}, Result).
 
 %% =============================================================================
-%% AUDIT FIX: Deep Recursion / Stack Exhaustion Tests
+%% Deep Recursion / Stack Exhaustion Tests
 %% =============================================================================
 
 deep_recursion_test_() ->
-    {"Deep recursion protection (AUDIT FIX)",
+    {"Deep recursion protection",
      [
       {"Deeply nested batch doesn't exhaust stack", fun test_deep_batch/0}
      ]}.

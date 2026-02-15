@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-AUDIT P0-3: Ingress Guard Contract Tests
+Ingress Guard Contract Tests
 
 Contract tests verifying the fail-closed/fail-open behavior of
 iris_ingress_guard.erl via source analysis and Erlang eval.
@@ -103,11 +103,11 @@ def test_source_allows_in_development():
 
 
 def test_source_audit_comment():
-    """Source must have AUDIT P0-3 comment documenting the fix."""
-    log("\n=== Test: Source has AUDIT P0-3 comment ===")
+    """Source must have fail-closed guard logic for production mode."""
+    log("\n=== Test: Source has fail-closed guard logic ===")
     source = read_file(os.path.join(PROJECT_ROOT, "src", "iris_ingress_guard.erl"))
-    check("AUDIT P0-3 comment present", "AUDIT P0-3" in source)
-    return "AUDIT P0-3" in source
+    check("fail-closed guard present", "deny" in source and "guard_not_ready" in source)
+    return "deny" in source and "guard_not_ready" in source
 
 
 # =============================================================================
@@ -207,7 +207,7 @@ def test_close_safe_when_not_started():
 
 def main():
     log("=" * 60)
-    log("AUDIT P0-3: Ingress Guard Contract Tests")
+    log("Ingress Guard Contract Tests")
     log("=" * 60)
 
     tests = [

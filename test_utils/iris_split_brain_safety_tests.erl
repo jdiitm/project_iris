@@ -2,7 +2,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% AUDIT MITIGATION P0-2: Mnesia Split-Brain Safety
+%% Mnesia Split-Brain Safety
 %% Verifies that force_load_table has peer checks and reconciliation
 %% respects partition guard state.
 %% =============================================================================

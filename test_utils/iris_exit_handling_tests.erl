@@ -2,7 +2,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% B-7 Mitigation: Modules that trap_exit must handle EXIT signals.
+%% Mitigation: Modules that trap_exit must handle EXIT signals.
 %% =============================================================================
 %% iris_status_batcher, iris_flow_controller, iris_durable_batcher all call
 %% process_flag(trap_exit, true) but have no handle_info({'EXIT', ...}) clause.

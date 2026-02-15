@@ -2,7 +2,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% H-5 Mitigation: Status batcher buffer must be bounded.
+%% Mitigation: Status batcher buffer must be bounded.
 %% =============================================================================
 
 buffer_drops_when_oversized_test() ->

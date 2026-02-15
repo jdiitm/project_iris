@@ -2,15 +2,13 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% Finding 3: mTLS Node-to-Node Enforcement in Cluster Manager (NFR-15)
+%% mTLS Node-to-Node Enforcement in Cluster Manager
 %%
 %% iris_cluster_manager:do_replication/0 connects to remote nodes and triggers
 %% cross-region replication without checking if SSL distribution is active.
 %% In production with enforce_mtls=true, this can create plaintext links.
 %%
-%% RED: do_replication must return {error, mtls_required} when env=production
 %%      and ssl_dist_optfile is not set. Currently it proceeds regardless.
-%% GREEN: Add mTLS pre-check in do_replication/0.
 %% =============================================================================
 
 -export([]).

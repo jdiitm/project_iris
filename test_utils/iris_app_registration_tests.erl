@@ -2,7 +2,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% AUDIT P0-1: OTP Application Module Registration Tests
+%% OTP Application Module Registration Tests
 %% =============================================================================
 %%
 %% Tests verify that all required modules are listed in iris_core.app.src
@@ -19,47 +19,47 @@
 
 app_src_registration_test_() ->
     [
-     {"P0-1: iris_rpc listed in iris_core.app.src", fun() ->
+     {"iris_rpc listed in iris_core.app.src", fun() ->
           {ok, Src} = file:read_file("src/iris_core.app.src"),
           ?assert(binary:match(Src, <<"iris_rpc">>) =/= nomatch)
       end},
 
-     {"P0-1: iris_cluster_join_worker listed in iris_core.app.src", fun() ->
+     {"iris_cluster_join_worker listed in iris_core.app.src", fun() ->
           {ok, Src} = file:read_file("src/iris_core.app.src"),
           ?assert(binary:match(Src, <<"iris_cluster_join_worker">>) =/= nomatch)
       end},
 
-     {"P0-1: iris_discovery listed in iris_core.app.src", fun() ->
+     {"iris_discovery listed in iris_core.app.src", fun() ->
           {ok, Src} = file:read_file("src/iris_core.app.src"),
           ?assert(binary:match(Src, <<"iris_discovery">>) =/= nomatch)
       end},
 
-     {"P0-1: iris_group listed in iris_core.app.src", fun() ->
+     {"iris_group listed in iris_core.app.src", fun() ->
           {ok, Src} = file:read_file("src/iris_core.app.src"),
           ?assert(binary:match(Src, <<"iris_group">>) =/= nomatch)
       end},
 
-     {"P0-1: iris_keys listed in iris_core.app.src", fun() ->
+     {"iris_keys listed in iris_core.app.src", fun() ->
           {ok, Src} = file:read_file("src/iris_core.app.src"),
           ?assert(binary:match(Src, <<"iris_keys">>) =/= nomatch)
       end},
 
-     {"P0-1: iris_store listed in iris_core.app.src", fun() ->
+     {"iris_store listed in iris_core.app.src", fun() ->
           {ok, Src} = file:read_file("src/iris_core.app.src"),
           ?assert(binary:match(Src, <<"iris_store">>) =/= nomatch)
       end},
 
-     {"P0-1: iris_user_safety listed in iris_core.app.src", fun() ->
+     {"iris_user_safety listed in iris_core.app.src", fun() ->
           {ok, Src} = file:read_file("src/iris_core.app.src"),
           ?assert(binary:match(Src, <<"iris_user_safety">>) =/= nomatch)
       end},
 
-     {"P0-1: iris_metrics listed in iris_core.app.src", fun() ->
+     {"iris_metrics listed in iris_core.app.src", fun() ->
           {ok, Src} = file:read_file("src/iris_core.app.src"),
           ?assert(binary:match(Src, <<"iris_metrics">>) =/= nomatch)
       end},
 
-     {"P0-1: iris_core_registry listed in iris_core.app.src", fun() ->
+     {"iris_core_registry listed in iris_core.app.src", fun() ->
           {ok, Src} = file:read_file("src/iris_core.app.src"),
           ?assert(binary:match(Src, <<"iris_core_registry">>) =/= nomatch)
       end}
@@ -71,7 +71,7 @@ app_src_registration_test_() ->
 
 module_loadable_test_() ->
     [
-     {"P0-1: iris_rpc module is loadable", fun() ->
+     {"iris_rpc module is loadable", fun() ->
           {module, iris_rpc} = code:ensure_loaded(iris_rpc),
           Exports = iris_rpc:module_info(exports),
           ?assert(lists:member({call, 4}, Exports)),
@@ -79,13 +79,13 @@ module_loadable_test_() ->
           ?assert(lists:member({cast, 4}, Exports))
       end},
 
-     {"P0-1: iris_cluster_join_worker module is loadable", fun() ->
+     {"iris_cluster_join_worker module is loadable", fun() ->
           {module, iris_cluster_join_worker} = code:ensure_loaded(iris_cluster_join_worker),
           Exports = iris_cluster_join_worker:module_info(exports),
           ?assert(lists:member({start_link, 1}, Exports))
       end},
 
-     {"P0-1: iris_discovery module is loadable", fun() ->
+     {"iris_discovery module is loadable", fun() ->
           {module, iris_discovery} = code:ensure_loaded(iris_discovery),
           Exports = iris_discovery:module_info(exports),
           ?assert(length(Exports) > 0)

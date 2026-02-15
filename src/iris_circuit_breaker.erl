@@ -34,7 +34,7 @@
 get_failover_timeout() ->
     application:get_env(iris_core, failover_timeout_ms, ?DEFAULT_FAILOVER_TIMEOUT_MS).
 
-%% AUDIT2 FIX: ETS table for lockfree circuit checks
+%% ETS table for lockfree circuit checks
 -define(BREAKER_ETS, iris_circuit_breaker_ets).
 
 -record(breaker, {
@@ -215,7 +215,7 @@ notify_flow_controller(Node, Result) ->
 %% =============================================================================
 
 init([]) ->
-    %% AUDIT2 FIX: Create ETS table for lockfree circuit checks
+    %% Create ETS table for lockfree circuit checks
     %% This removes the gen_server:call bottleneck (20K/sec ceiling)
     ets:new(?BREAKER_ETS, [named_table, public, {read_concurrency, true}]),
     {ok, #state{}}.
@@ -262,7 +262,7 @@ handle_cast({failure, Node, Timestamp}, State = #state{breakers = Breakers}) ->
     update_ets_status(Node, NewBreaker),
     {noreply, State#state{breakers = NewBreakers}};
 
-%% AUDIT2: Handle half-open transition request from lockfree check
+%% Handle half-open transition request from lockfree check
 handle_cast({transition_half_open, Node}, State = #state{breakers = Breakers}) ->
     Breaker = maps:get(Node, Breakers, #breaker{}),
     NewBreaker = Breaker#breaker{status = half_open, successes = 0},
@@ -396,7 +396,7 @@ format_breaker_status(#breaker{status = Status, failures = F, successes = S,
         reset_timeout_ms => Timeout
     }.
 
-%% AUDIT2 FIX: Update ETS for lockfree reads
+%% Update ETS for lockfree reads
 %% P1-H5 FIX: half_open includes last probe timestamp for rate limiting
 update_ets_status(Node, #breaker{status = closed}) ->
     ets:insert(?BREAKER_ETS, {Node, closed});

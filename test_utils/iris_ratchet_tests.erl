@@ -213,8 +213,7 @@ forward_secrecy_key_evolution_test() ->
 %% Attack Resistance Tests (P1 - Correctness Critical)
 %% =============================================================================
 %%
-%% Per Principal Test Audit:
-%% "No tests for replay, drop, or mangled header attacks."
+%% Tests for replay, drop, and mangled header attacks.
 %%
 %% These tests verify the Double Ratchet implementation resists:
 %% 1. Replay attacks - decrypting the same message twice
@@ -590,7 +589,7 @@ test_nonce_uniqueness() ->
     ?assertEqual(100, length(UniqueIVs)).
 
 %% =============================================================================
-%% B-6 Mitigation: Skipped Keys Map Must Be Bounded
+%% Mitigation: Skipped Keys Map Must Be Bounded
 %% =============================================================================
 %% The skipped_keys map grows with every out-of-order message gap.
 %% Without a total limit, an attacker can exhaust memory by sending messages

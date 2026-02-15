@@ -6,7 +6,7 @@
 %% Minimal JSON encoder/decoder for JWT payloads (flat objects with string
 %% and integer values). Extracted from iris_auth.erl for testability.
 %%
-%% AUDIT FIX (Finding 1.2): Rewritten to use iolists instead of binary
+%% Rewritten to use iolists instead of binary
 %% append (<<Acc/binary, C>>) in parse_json_string/2. The old code was
 %% O(N^2) per string; the new code is O(N). Note: This is a code-quality
 %% fix, NOT a security fix — the protocol layer caps JWT input at 256 bytes.
@@ -39,7 +39,7 @@ encode_value(V) when is_atom(V) ->
 %% =============================================================================
 
 -define(MAX_INPUT_SIZE, 8192).
--define(MAX_DEPTH, 32).  %% AUDIT: Prevent stack exhaustion from nested JSON
+-define(MAX_DEPTH, 32).  %% Prevent stack exhaustion from nested JSON
 
 -spec decode(binary()) -> {ok, map()} | {error, invalid_json | input_too_large | max_depth_exceeded}.
 decode(Bin) when byte_size(Bin) > ?MAX_INPUT_SIZE ->
@@ -74,7 +74,7 @@ skip_colon(<<":", Rest/binary>>) -> Rest;
 skip_colon(<<" ", Rest/binary>>) -> skip_colon(Rest);
 skip_colon(Rest) -> Rest.
 
-%% AUDIT FIX: iolist accumulator instead of <<Acc/binary, C>> (O(N) vs O(N^2))
+%% iolist accumulator instead of <<Acc/binary, C>> (O(N) vs O(N^2))
 parse_string(<<"\"", Rest/binary>>, Acc) ->
     {iolist_to_binary(lists:reverse(Acc)), Rest};
 parse_string(<<"\\\"", Rest/binary>>, Acc) ->

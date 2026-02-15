@@ -2,7 +2,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% TDD: Key Change Notification Tests (GAP-13, P2)
+%% Key Change Notification Tests
 %% =============================================================================
 %% Written BEFORE implementation. These tests define the contract for:
 %%   - iris_keys:record_key_contact/2 — track who fetched whose keys
@@ -12,7 +12,7 @@
 %% =============================================================================
 
 setup() ->
-    %% GAP-3 FIX: key contacts now use Mnesia, not ETS.
+    %% FIX: key contacts now use Mnesia, not ETS.
     %% Start Mnesia and create the key_contact table for unit tests.
     catch mnesia:stop(),
     mnesia:delete_schema([node()]),

@@ -2,7 +2,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% AUDIT: JWT Hardening Tests — Algorithm Pinning & Malformed Input
+%% JWT Hardening Tests — Algorithm Pinning & Malformed Input
 %% =============================================================================
 %%
 %% Tests verify that the JWT validation layer rejects:
@@ -70,25 +70,25 @@ iris_auth_jwt_hardening_test_() ->
      fun setup/0,
      fun cleanup/1,
      [
-      {"AUDIT: alg:none token is rejected",
+      {"alg:none token is rejected",
        fun test_alg_none_rejected/0},
-      {"AUDIT: unsupported algorithm RS256 is rejected",
+      {"unsupported algorithm RS256 is rejected",
        fun test_unknown_alg_rejected/0},
-      {"AUDIT: malformed base64 token is rejected",
+      {"malformed base64 token is rejected",
        fun test_malformed_base64/0},
-      {"AUDIT: token with 4+ segments is rejected",
+      {"token with 4+ segments is rejected",
        fun test_extra_segments/0},
-      {"AUDIT: token missing signature segment is rejected",
+      {"token missing signature segment is rejected",
        fun test_truncated_token/0},
-      {"AUDIT: empty token is rejected",
+      {"empty token is rejected",
        fun test_empty_token/0},
-      {"AUDIT: dot-only token is rejected",
+      {"dot-only token is rejected",
        fun test_dot_only_token/0},
-      {"AUDIT: algorithm whitelist is HS256 and EdDSA only",
+      {"algorithm whitelist is HS256 and EdDSA only",
        fun test_algorithm_whitelist_in_source/0},
-      {"AUDIT: garbage header segment is rejected (not defaulted to HS256)",
+      {"garbage header segment is rejected (not defaulted to HS256)",
        fun test_garbage_header_rejected/0},
-      {"AUDIT: JTI replay table exists after init (no lazy creation race)",
+      {"JTI replay table exists after init (no lazy creation race)",
        fun test_jti_table_exists_after_init/0}
      ]}.
 

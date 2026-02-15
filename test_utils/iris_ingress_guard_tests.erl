@@ -2,13 +2,13 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% Comprehensive Tests for iris_ingress_guard.erl (AUDIT P0-3, P2-4)
+%% Comprehensive Tests for iris_ingress_guard.erl
 %% =============================================================================
 %%
 %% Tests cover:
-%% - P0-3: Fail-closed in production mode when guard not started
-%% - P0-3: Fail-open in development mode (backward compatible)
-%% - P0-3: Fail-open when deployment_mode unset (defaults to development)
+%% - Fail-closed in production mode when guard not started
+%% - Fail-open in development mode (backward compatible)
+%% - Fail-open when deployment_mode unset (defaults to development)
 %% - Connection limit enforcement via atomics
 %% - close/0 decrements counter correctly
 %% - get_active_count/0 accuracy
@@ -33,33 +33,33 @@ with_deployment_mode(Mode, Fun) ->
     end.
 
 %% =============================================================================
-%% P0-3: Fail-closed / fail-open behavior
+%% Fail-closed / fail-open behavior
 %% =============================================================================
 
 fail_closed_open_test_() ->
     [
-     {"P0-3: production mode denies when guard not started", fun() ->
+     {"production mode denies when guard not started", fun() ->
           clear_guard_state(),
           with_deployment_mode(production, fun() ->
               ?assertEqual({deny, guard_not_ready}, iris_ingress_guard:check())
           end)
       end},
 
-     {"P0-3: development mode allows when guard not started", fun() ->
+     {"development mode allows when guard not started", fun() ->
           clear_guard_state(),
           with_deployment_mode(development, fun() ->
               ?assertEqual(allow, iris_ingress_guard:check())
           end)
       end},
 
-     {"P0-3: test mode allows when guard not started", fun() ->
+     {"test mode allows when guard not started", fun() ->
           clear_guard_state(),
           with_deployment_mode(test, fun() ->
               ?assertEqual(allow, iris_ingress_guard:check())
           end)
       end},
 
-     {"P0-3: unset deployment_mode defaults to development (allow)", fun() ->
+     {"unset deployment_mode defaults to development (allow)", fun() ->
           clear_guard_state(),
           OldMode = application:get_env(iris_edge, deployment_mode, undefined),
           application:unset_env(iris_edge, deployment_mode),

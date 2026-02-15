@@ -4,7 +4,7 @@
 -export([start_link/1, set_socket/2]).
 -export([init/1, callback_mode/0, terminate/3, code_change/4]).
 -export([wait_for_socket/3, handshake/3, connected/3]).
--export([decode_frame/1, parse_http_upgrade/1]).  %% Exported for TDD (B-4 audit)
+-export([decode_frame/1, parse_http_upgrade/1]).  %% Exported for TDD
 
 -record(data, {
     socket :: gen_tcp:socket() | ssl:sslsocket(),
@@ -15,7 +15,7 @@
 
 -define(WS_GUID, "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").
 
-%% B-4 AUDIT MITIGATION: Bound frame and header sizes to prevent OOM DoS
+%% Bound frame and header sizes to prevent OOM DoS
 -define(MAX_FRAME_SIZE, 65536).          %% 64KB - RFC Section 8 payload limit
 -define(MAX_HTTP_HEADER_SIZE, 8192).     %% 8KB - standard HTTP header limit
 -define(MAX_FRAME_DEPTH, 100).           %% Max frames processed per read event
@@ -121,7 +121,7 @@ connected(info, {deliver_msg, Msg}, Data = #data{socket = Socket}) ->
     sock_send(Socket, Frame),
     keep_state_and_data;
 
-%% AUDIT 2.3a FIX: Handle session_overload from heap check
+%% Handle session_overload from heap check
 connected(info, session_overload, Data = #data{socket = Socket}) ->
     logger:warning("Session ~p: heap limit approaching, sending SERVER_OVERLOAD",
                    [Data#data.user]),
@@ -131,7 +131,7 @@ connected(info, session_overload, Data = #data{socket = Socket}) ->
 connected(info, _Other, _Data) ->
     keep_state_and_data.
 
-%% Frame Processing Loop (B-4/H-9 AUDIT MITIGATION: depth-limited)
+%% Frame Processing Loop (depth-limited)
 process_ws_frames(Buff, Data) ->
     process_ws_frames(Buff, Data, 0).
 
@@ -148,7 +148,7 @@ process_ws_frames(Buff, Data = #data{socket = Socket, user = User}, Depth) ->
                     %% Delegate Protocol Logic
                     {ok, NewUser, Actions} = iris_session:handle_packet(Packet, User, self(), ?MODULE),
                     handle_actions(Actions, Socket),
-                    %% AUDIT 2.3a FIX: Check heap_size after packet processing.
+                    %% Check heap_size after packet processing.
                     case check_heap_size() of
                         ok ->
                             process_ws_frames(Rest, NewData#data{user = NewUser}, Depth + 1);
@@ -161,7 +161,7 @@ process_ws_frames(Buff, Data = #data{socket = Socket, user = User}, Depth) ->
                 close -> {stop, normal, Data}
             end;
         {error, Reason} ->
-            %% B-4 AUDIT MITIGATION: Reject oversized or malformed frames
+            %% Reject oversized or malformed frames
             logger:warning("WS frame rejected: ~p", [Reason]),
             {stop, {shutdown, Reason}, Data};
         more ->
@@ -179,7 +179,7 @@ handle_actions([{send_batch, Bins} | T], Socket) ->
 handle_actions([close | _], Socket) ->
     sock_send(Socket, encode_frame(close, <<>>)).
 
-%% AUDIT 2.3a FIX: Soft heap limit check (80% of 1M words = 800K words).
+%% Soft heap limit check (80% of 1M words = 800K words).
 %% Called after each packet to detect approaching the max_heap_size limit
 %% and send SERVER_OVERLOAD before the hard limit triggers.
 -define(HEAP_SOFT_LIMIT, 800000).  %% 80% of 1,000,000 words (~6.4MB)
@@ -216,7 +216,7 @@ parse_len(_, 126, _) -> more;
 parse_len(_, 127, _) -> more;
 parse_len(Op, Len, Rest) -> parse_mask(Op, Len, Rest).
 
-%% B-4 AUDIT MITIGATION: Reject frames exceeding MAX_FRAME_SIZE before allocation
+%% Reject frames exceeding MAX_FRAME_SIZE before allocation
 parse_mask(_Op, Len, _Rest) when Len > ?MAX_FRAME_SIZE ->
     {error, frame_too_large};
 parse_mask(Op, Len, <<MaskKey:32, Rest/binary>>) ->
@@ -260,7 +260,7 @@ opcode(9) -> ping;
 opcode(10) -> pong;
 opcode(_) -> unknown.
 
-%% B-4 AUDIT MITIGATION: Reject oversized HTTP headers
+%% Reject oversized HTTP headers
 parse_http_upgrade(Bin) when byte_size(Bin) > ?MAX_HTTP_HEADER_SIZE ->
     error;
 parse_http_upgrade(Bin) ->

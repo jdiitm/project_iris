@@ -48,7 +48,7 @@ get_timestamp() ->
     writes_wal = 0 :: integer(),
     writes_mnesia = 0 :: integer(),
     batch_count = 0 :: integer(),
-    wal_checkpoints = 0 :: integer(),   %% AUDIT FIX: WAL truncation counter
+    wal_checkpoints = 0 :: integer(),   %% WAL truncation counter
     %% Cluster durability stats
     writes_remote = 0 :: integer(),
     remote_failures = 0 :: integer()
@@ -257,7 +257,7 @@ handle_call(get_stats_local, _From, State) ->
         writes_wal => State#state.writes_wal,
         writes_mnesia => State#state.writes_mnesia,
         batch_count => State#state.batch_count,
-        wal_checkpoints => State#state.wal_checkpoints,  %% AUDIT FIX: WAL checkpoint count
+        wal_checkpoints => State#state.wal_checkpoints,
         %% Cluster durability stats
         writes_remote => State#state.writes_remote,
         remote_failures => State#state.remote_failures
@@ -283,7 +283,7 @@ handle_info(replay_wal, State) ->
     NewState = replay_uncommitted(State),
     {noreply, NewState};
 
-%% B-7 AUDIT MITIGATION: Handle EXIT signals from linked processes.
+%% Handle EXIT signals from linked processes.
 handle_info({'EXIT', Pid, Reason}, State) ->
     logger:warning("~p received EXIT from ~p: ~p", [?MODULE, Pid, Reason]),
     {noreply, State};
@@ -408,8 +408,8 @@ do_cluster_wal_write(Log, Entry, Key, Timestamp, Msg, NewSeqNo, State) ->
             }};
         {ok, {error, RemoteReason}} ->
             %% Local succeeded, remote failed - degraded durability
-            %% F4 AUDIT FIX: Check strict mode. In strict mode, remote failure
-            %% is a hard error (CP > AP for cluster durability promises).
+            %% Check strict mode. In strict mode, remote failure is a hard
+            %% error (CP > AP for cluster durability promises).
             case application:get_env(iris_core, cluster_durability_strict, false) of
                 true ->
                     logger:error("Strict cluster durability: remote WAL failed (~p): ~p",
@@ -536,12 +536,12 @@ do_flush(State = #state{pending = Pending, wal_log = Log}) ->
         end, Pending)
     end,
     
-    %% AUDIT FIX: mnesia:activity can exit (not just return) on table errors.
+    %% mnesia:activity can exit (not just return) on table errors.
     %% Wrap in try to prevent gen_server crash and preserve pending entries.
     try mnesia:activity(sync_transaction, F) of
         ok ->
             mark_committed(Log, Pending),
-            checkpoint_wal(Log),  %% AUDIT FIX: Truncate WAL after successful flush
+            checkpoint_wal(Log),  %% Truncate WAL after successful flush
             State#state{
                 pending = [],
                 pending_count = 0,
@@ -551,7 +551,7 @@ do_flush(State = #state{pending = Pending, wal_log = Log}) ->
             };
         {atomic, _} ->
             mark_committed(Log, Pending),
-            checkpoint_wal(Log),  %% AUDIT FIX: Truncate WAL after successful flush
+            checkpoint_wal(Log),  %% Truncate WAL after successful flush
             State#state{
                 pending = [],
                 pending_count = 0,
@@ -582,7 +582,7 @@ mark_committed(Log, Pending) ->
     disk_log:log_terms(Log, Entries),
     ok.
 
-%% AUDIT FIX (Finding 1): Truncate WAL after successful Mnesia flush.
+%% Truncate WAL after successful Mnesia flush.
 %% Safe because: gen_server is single-threaded (no concurrent writes during flush),
 %% Mnesia sync_transaction guarantees durability before we reach here,
 %% and if crash occurs between Mnesia commit and truncate, replay re-applies
@@ -597,7 +597,7 @@ checkpoint_wal(Log) ->
     end.
 
 %% =============================================================================
-%% Internal: Crash Recovery (AUDIT FIX - Finding #4: Streaming Replay)
+%% Internal: Crash Recovery (Streaming Replay)
 %% =============================================================================
 %% 
 %% PROBLEM: Original implementation loaded entire WAL into memory (Map),

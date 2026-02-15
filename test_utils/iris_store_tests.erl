@@ -228,9 +228,9 @@ durability_options_test_() ->
             ?assert((End - Start) < 100)
         end},
        
-       %% AUDIT FIX: Add quorum durability tests
+       %% Add quorum durability tests
        {"quorum durability option is accepted", fun() ->
-            %% AUDIT FIX: This test was missing despite comment claiming quorum was tested
+            %% This test was missing despite comment claiming quorum was tested
             %% Test that quorum durability option is handled
             Result = iris_store:put(test_store_table, quorum_key1, <<"quorum_value">>,
                                    #{durability => quorum}),
@@ -259,11 +259,11 @@ durability_options_test_() ->
       ]}}.
 
 %% =============================================================================
-%% AUDIT FIX: Quorum Durability Tests
+%% Quorum Durability Tests
 %% =============================================================================
 
 quorum_durability_test_() ->
-    {"Quorum durability (AUDIT FIX)",
+    {"Quorum durability",
      {setup, fun setup/0, fun cleanup/1,
       [
        {"quorum option recognized by put/4", fun() ->
@@ -328,11 +328,11 @@ quorum_durability_test_() ->
       ]}}.
 
 %% =============================================================================
-%% AUDIT FIX: Mnesia Failure Mode Tests
+%% Mnesia Failure Mode Tests
 %% =============================================================================
 
 mnesia_failure_test_() ->
-    {"Mnesia failure handling (AUDIT FIX)",
+    {"Mnesia failure handling",
      {setup, fun setup/0, fun cleanup/1,
       [
        {"handles transaction conflict gracefully", fun() ->
@@ -399,7 +399,7 @@ error_handling_test_() ->
      {setup, fun setup/0, fun cleanup/1,
       [
        {"put to nonexistent table returns error", fun() ->
-            %% AUDIT M6: With timeout wrapper, Mnesia errors are returned, not thrown
+            %% With timeout wrapper, Mnesia errors are returned, not thrown
             Result = iris_store:put(nonexistent_table, key, value),
             ?assertMatch({error, _}, Result)
         end},

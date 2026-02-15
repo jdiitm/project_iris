@@ -10,7 +10,7 @@
 %%   iris_limits:max_inbox_size() returns 10000 but the value is never checked
 %%   in iris_core:store_offline_durable/2.
 %%
-%% After the fix (GAP-6), this characterization test should be replaced by
+%% After the fix, this characterization test should be replaced by
 %% iris_inbox_limit_tests.erl which asserts rejection at 10001.
 %% =============================================================================
 

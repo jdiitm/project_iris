@@ -3,7 +3,7 @@
 
 %% =============================================================================
 %% Partition Guard Tests
-%% Tests for split-brain detection and dynamic membership (AUDIT FIX Finding #3)
+%% Tests for split-brain detection and dynamic membership
 %% =============================================================================
 
 %% =============================================================================
@@ -42,13 +42,13 @@ iris_partition_guard_test_() ->
       {"Module has get_status API", fun test_get_status_export/0},
       {"Module has force_unsafe_mode API", fun test_force_unsafe_export/0},
       
-      %% AUDIT FIX: Dynamic membership tests (Finding #3)
+      %% Dynamic membership tests
       {"Membership mode default is static", fun test_membership_mode_default/0},
       {"Membership mode can be set to dynamic", fun test_membership_mode_dynamic/0},
       {"Status includes membership_mode field", fun test_status_has_membership_mode/0},
       {"Dynamic mode uses pg for discovery", fun test_dynamic_mode_design/0},
 
-      %% AUDIT V2 P0-1: Safe-AP — writes rejected in minority partition
+      %% : Safe-AP — writes rejected in minority partition
       {"Writes rejected during minority partition (safe-AP)", fun test_writes_rejected_during_minority_partition/0},
       {"Partition mode is 'diverged' not 'safe_mode'", fun test_partition_mode_is_diverged/0}
      ]}.
@@ -75,7 +75,7 @@ test_force_unsafe_export() ->
     ?assert(lists:member({force_unsafe_mode, 1}, Exports)).
 
 %% =============================================================================
-%% AUDIT FIX: Dynamic Membership Tests (Finding #3)
+%% Dynamic Membership Tests
 %% =============================================================================
 
 test_membership_mode_default() ->
@@ -94,7 +94,7 @@ test_membership_mode_default() ->
     end.
 
 test_membership_mode_dynamic() ->
-    %% FIX: CB-1 audit deprecated dynamic mode for safety reasons.
+    %% Dynamic mode was deprecated for safety reasons.
     %% Even when dynamic is configured, the service now reports 'static' internally
     %% because dynamic mode defeats split-brain protection (both sides see 100% quorum).
     application:set_env(iris_core, partition_guard_mode, dynamic),
@@ -102,7 +102,7 @@ test_membership_mode_dynamic() ->
         {ok, Pid} ->
             Status = iris_partition_guard:get_status(),
             gen_server:stop(Pid, normal, 1000),
-            %% Should return 'static' even with dynamic configured (CB-1 safety fix)
+            %% Should return 'static' even with dynamic configured (safety fix)
             ?assertEqual(static, maps:get(membership_mode, Status));
         {error, {already_started, _}} ->
             %% If already running, skip - can't change mode on running guard
@@ -154,7 +154,7 @@ test_writes_rejected_during_minority_partition() ->
             %% so quorum (>50%) is lost (1 of 2 visible = 50%, not >50%).
             Pid ! check_partition,
             timer:sleep(100),  %% Let the check complete
-            %% AUDIT V2 P0-1: Safe-AP — writes REJECTED in minority partition
+            %% : Safe-AP — writes REJECTED in minority partition
             Result = iris_partition_guard:is_safe_for_writes(),
             gen_server:stop(Pid, normal, 1000),
             ?assertEqual({error, minority_partition}, Result);
@@ -180,7 +180,7 @@ test_partition_mode_is_diverged() ->
             ?assertEqual(diverged, maps:get(mode, Status)),
             %% Epoch should have incremented from 0 to 1
             ?assert(maps:get(epoch, Status) >= 1),
-            %% AUDIT V2: Writes rejected in diverged mode (safe-AP)
+            %% V2: Writes rejected in diverged mode (safe-AP)
             ?assertEqual(false, maps:get(safe_for_writes, Status));
         {error, {already_started, ExistingPid}} ->
             gen_server:stop(ExistingPid, normal, 1000),
@@ -218,7 +218,7 @@ test_permissive_when_no_config_() ->
      end}.
 
 %% =============================================================================
-%% AUDIT FIX 2.2: resolve_authority/4 — Split-Brain Resolution (FM-2)
+%% 2.2: resolve_authority/4 — Split-Brain Resolution
 %% RFC-001 v4.0 Section 7.1.1: Higher epoch wins; tie-break by lowest node ID.
 %% =============================================================================
 
@@ -244,7 +244,7 @@ resolve_authority_symmetric_test() ->
     ?assertEqual(WinnerAB, WinnerBA).
 
 %% =============================================================================
-%% AUDIT FIX 2.2: force_unsafe_mode overrides minority partition rejection
+%% 2.2: force_unsafe_mode overrides minority partition rejection
 %% =============================================================================
 
 force_unsafe_mode_overrides_minority_test() ->

@@ -2,7 +2,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% H-8 AUDIT MITIGATION: Application-level health check
+%% Application-level health check
 %% =============================================================================
 %% The /ready endpoint MUST return 503 when Mnesia is not running.
 %% Docker healthcheck MUST use /ready (HTTP), not epmd (process check).

@@ -2,7 +2,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% TDD: Bucket Count Guard Tests (Audit Finding 2.1)
+%% Bucket Count Guard Tests
 %% =============================================================================
 %% Written BEFORE implementation. These tests define the contract:
 %%   - set_bucket_count/2 MUST reject decreases (prevents data stranding)

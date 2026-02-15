@@ -2,16 +2,14 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% GAP-3: Deduplication Log Synchronous Write Tests (RFC Section 6.2)
+%% Deduplication Log Synchronous Write Tests (RFC Section 6.2)
 %%
 %% The current write_dedup_log/2 uses spawn(fun() -> dirty_write end) which
 %% creates a crash window: check_and_mark returns "new" but the dedup_log
 %% entry hasn't landed yet. If the node crashes in that window, the message
 %% can be re-processed on restart.
 %%
-%% RED: After check_and_mark returns "new", dedup_log entry must exist
 %%      IMMEDIATELY (no timer:sleep needed). Current async write fails this.
-%% GREEN: Make write_dedup_log synchronous.
 %% =============================================================================
 
 -define(TABLE, iris_dedup_seen).

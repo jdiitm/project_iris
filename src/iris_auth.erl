@@ -15,15 +15,15 @@
 -export([start_link/0]).
 -export([validate_token/1, validate_token/2]).
 -export([create_token/1, create_token/2, create_token/3]).
--export([create_eddsa_token/1, create_eddsa_token/2, create_eddsa_token/3]). %% P1-4: EdDSA JWT
+-export([create_eddsa_token/1, create_eddsa_token/2, create_eddsa_token/3]).
 -export([revoke_token/1]).
 -export([get_user_from_token/1]).
 -export([is_auth_enabled/0]).
--export([get_eddsa_public_key/0]).  %% P1-4: EdDSA public key retrieval
--export([receive_revocation/2]).  %% P1-H2: Cross-node revocation propagation
-%% IA-3: Refresh token API (RFC-001 v4.0 FR-11a)
+-export([get_eddsa_public_key/0]).
+-export([receive_revocation/2]).
 -export([create_refresh_token/1, create_refresh_token/2, exchange_refresh_token/1]).
--export([validate_and_rotate_refresh/1]).  %% Mnesia-only validation (for cross-node RPC)
+-export([validate_and_rotate_refresh/1]).
+-export([rotate_signing_key/1]).  %% Zero-downtime key rotation
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
 -define(SERVER, ?MODULE).
@@ -34,22 +34,33 @@
 -define(FAILED_LOGIN_TABLE, iris_auth_failed_logins).
 -define(FAILED_LOGIN_MAX, 10).              %% Max 10 failures per window
 -define(FAILED_LOGIN_WINDOW_SECS, 3600).    %% 1-hour window
--define(JTI_SEEN_TABLE, iris_auth_jti_seen).  %% RFC Section 9.1: JWT replay protection (GAP-15)
+-define(JTI_SEEN_TABLE, iris_auth_jti_seen).  %% RFC Section 9.1: JWT replay protection
+
+-define(MAX_ACTIVE_KEYS, 2).  %% Key ring size: current + 1 previous
 
 -record(state, {
-    secret :: binary(),
+    secret :: binary(),              %% Current HMAC key (head of signing_keys)
+    signing_keys = [] :: [{binary(), binary()}],  %% [{Kid, Secret}] — head is current
     issuer :: binary(),
     revoked_count = 0 :: integer(),
-    eddsa_pub :: binary() | undefined,    %% P1-4: Ed25519 public key
-    eddsa_priv :: binary() | undefined,   %% P1-4: Ed25519 private key
-    auth_mode = signer :: signer | verifier  %% RFC Section 9.1: Key isolation
+    eddsa_pub :: binary() | undefined,
+    eddsa_priv :: binary() | undefined,
+    auth_mode = signer :: signer | verifier
 }).
 
 %% @doc Get current auth mode (signer or verifier).
 -export([get_auth_mode/0]).
 %% RFC Section 10.1: Failed login rate limiting
 -export([check_login_rate/1, record_failed_login/1]).
--export([revoke_refresh_family/1]).  %% B-7/H-6: Exported for testability
+-export([revoke_refresh_family/1]).
+
+%% @doc Rotate to a new HMAC signing key. Old tokens remain valid until
+%% the previous key is evicted from the ring (max 2 active keys).
+-spec rotate_signing_key(binary()) -> ok | {error, term()}.
+rotate_signing_key(NewSecret) when is_binary(NewSecret), byte_size(NewSecret) >= 32 ->
+    gen_server:call(?SERVER, {rotate_signing_key, NewSecret});
+rotate_signing_key(_) ->
+    {error, secret_too_short}.
 
 %% =============================================================================
 %% API
@@ -61,7 +72,7 @@ start_link() ->
 %% Check if authentication is enabled
 -spec is_auth_enabled() -> boolean().
 is_auth_enabled() ->
-    %% AUDIT MITIGATION P0-2: Default to true (secure by default).
+    %% Default to true (secure by default).
     %% Test configs explicitly set auth_enabled=false.
     application:get_env(iris_edge, auth_enabled, true).
 
@@ -88,7 +99,7 @@ create_token(UserId, Claims) ->
 create_token(UserId, Claims, TTL) ->
     gen_server:call(?SERVER, {create, UserId, Claims, TTL}).
 
-%% @doc Create an EdDSA-signed JWT token (P1-4: RFC-001 v4.0 Section 6.3).
+%% @doc Create an EdDSA-signed JWT token (RFC-001 v4.0 Section 6.3).
 -spec create_eddsa_token(binary()) -> {ok, binary()} | {error, term()}.
 create_eddsa_token(UserId) ->
     create_eddsa_token(UserId, #{}).
@@ -147,9 +158,9 @@ get_user_from_token(Token) ->
 %% =============================================================================
 
 init([]) ->
-    %% P0-C4 FIX: Require explicit JWT secret configuration
-    %% Random secrets cause auth failures when users connect to different nodes
-    %% AUDIT FIX: Check IRIS_JWT_SECRET env var first (secrets management).
+    %% Require explicit JWT secret configuration.
+    %% Random secrets cause auth failures when users connect to different nodes.
+    %% Check IRIS_JWT_SECRET env var first (secrets management).
     %% This allows operators to inject secrets via environment without config files.
     Secret = case os:getenv("IRIS_JWT_SECRET") of
         EnvVal when is_list(EnvVal), length(EnvVal) >= 32 ->
@@ -170,7 +181,7 @@ init([]) ->
                                 [length(S)]),
                     error({jwt_secret_too_short, length(S)});
                 undefined -> 
-                    %% P0-C4: Strict enforcement based on allow_random_secret flag
+                    %% Strict enforcement based on allow_random_secret flag
                     case application:get_env(iris_edge, allow_random_secret, false) of
                         true ->
                             logger:warning("JWT secret not configured, generating random (NOT FOR PRODUCTION)"),
@@ -211,7 +222,7 @@ init([]) ->
         _ -> ?FAILED_LOGIN_TABLE
     end,
     
-    %% AUDIT M7: Create JTI replay table eagerly to prevent race on first use (idempotent)
+    %% Create JTI replay table eagerly to prevent race on first use (idempotent)
     case ets:info(?JTI_SEEN_TABLE) of
         undefined -> ets:new(?JTI_SEEN_TABLE, [named_table, public, set, {read_concurrency, true}]);
         _ -> ?JTI_SEEN_TABLE
@@ -220,7 +231,7 @@ init([]) ->
     %% Schedule cleanup of expired revocations
     erlang:send_after(3600000, self(), cleanup_revocations),
     
-    %% P1-4: Generate or load EdDSA key pair
+    %% Generate or load EdDSA key pair
     EdDSAResult = case application:get_env(iris_edge, jwt_eddsa_private_key) of
         {ok, PrivKeyBin} when is_binary(PrivKeyBin), byte_size(PrivKeyBin) =:= 32 ->
             %% Derive public key from private key
@@ -236,7 +247,7 @@ init([]) ->
             {ephemeral, Pub, Priv}
     end,
 
-    %% AUDIT 2.1a FIX: Reject ephemeral keys when auth_enabled=true
+    %% Reject ephemeral keys when auth_enabled=true.
     %% Ephemeral keys cause thundering herd on restart: all tokens become invalid,
     %% 100% of clients disconnect and re-login simultaneously.
     case {EdDSAResult, application:get_env(iris_edge, auth_enabled, false)} of
@@ -260,10 +271,12 @@ init([]) ->
                     {EdDSAPub, EdDSAPriv, signer}
             end,
 
-            logger:info("JWT auth initialized (issuer: ~s, eddsa: ~s, mode: ~s)",
-                        [Issuer, case FinalPub of undefined -> "disabled"; _ -> "enabled" end, FinalMode]),
-            {ok, #state{secret = Secret, issuer = Issuer, eddsa_pub = FinalPub,
-                        eddsa_priv = FinalPriv, auth_mode = FinalMode}}
+            Kid = generate_kid(Secret),
+            SigningKeys = [{Kid, Secret}],
+            logger:info("JWT auth initialized (issuer: ~s, eddsa: ~s, mode: ~s, kid: ~s)",
+                        [Issuer, case FinalPub of undefined -> "disabled"; _ -> "enabled" end, FinalMode, Kid]),
+            {ok, #state{secret = Secret, signing_keys = SigningKeys, issuer = Issuer,
+                        eddsa_pub = FinalPub, eddsa_priv = FinalPriv, auth_mode = FinalMode}}
     end.
 
 handle_call({validate, Token, Opts}, _From, State) ->
@@ -276,7 +289,7 @@ handle_call({create, UserId, ExtraClaims, TTL}, _From, State) ->
 
 handle_call({revoke, TokenId}, _From, State = #state{revoked_count = Count}) ->
     Now = os:system_time(second),
-    %% P1-H2 FIX: Synchronous revocation with cross-node propagation
+    %% Synchronous revocation with cross-node propagation
     %% 1. Store in local ETS (immediate effect on this node)
     ets:insert(?REVOCATION_TABLE, {TokenId, Now}),
     
@@ -308,6 +321,13 @@ handle_call(get_eddsa_public_key, _From, State = #state{eddsa_pub = Pub}) ->
 handle_call(get_auth_mode, _From, State = #state{auth_mode = Mode}) ->
     {reply, Mode, State};
 
+handle_call({rotate_signing_key, NewSecret}, _From, State = #state{signing_keys = OldKeys}) ->
+    NewKid = generate_kid(NewSecret),
+    %% Prepend new key, trim to MAX_ACTIVE_KEYS
+    NewKeys = lists:sublist([{NewKid, NewSecret} | OldKeys], ?MAX_ACTIVE_KEYS),
+    logger:info("JWT key rotated: new kid=~s, active_keys=~p", [NewKid, length(NewKeys)]),
+    {reply, ok, State#state{secret = NewSecret, signing_keys = NewKeys}};
+
 handle_call(_Request, _From, State) ->
     {reply, {error, unknown_request}, State}.
 
@@ -321,7 +341,7 @@ handle_info(cleanup_revocations, State) ->
     cleanup_revoked(Cutoff),
     %% Also clean expired failed-login windows
     cleanup_failed_logins(Now),
-    %% RFC Section 9.1: Clean expired jti nonce entries (GAP-15)
+    %% RFC Section 9.1: Clean expired jti nonce entries
     cleanup_jti_seen(Now),
     erlang:send_after(3600000, self(), cleanup_revocations),
     {noreply, State};
@@ -368,7 +388,7 @@ check_login_rate(UserId) ->
         end
     catch
         error:badarg ->
-            %% B-4 AUDIT FIX: ETS table doesn't exist (iris_auth not started yet).
+            %% ETS table doesn't exist (iris_auth not started yet).
             %% FAIL-CLOSED: If we can't track failed logins, we MUST NOT allow
             %% unlimited attempts. An attacker can crash iris_auth to reset the
             %% counter and brute-force. RFC Section 10.1 mandates 10/hour.
@@ -419,7 +439,7 @@ cleanup_failed_logins(Now) ->
     ok.
 
 %% =============================================================================
-%% Internal: JTI Replay Protection Cleanup (GAP-15)
+%% Internal: JTI Replay Protection Cleanup
 %% =============================================================================
 
 cleanup_jti_seen(Now) ->
@@ -446,10 +466,9 @@ cleanup_jti_seen(Now) ->
 %% Internal: JWT Validation
 %% =============================================================================
 
-do_validate(Token, Opts, State = #state{secret = Secret, issuer = ExpectedIssuer}) ->
+do_validate(Token, Opts, State = #state{signing_keys = SigningKeys, issuer = ExpectedIssuer}) ->
     case split_token(Token) of
         {ok, Header, Payload, Signature} ->
-            %% Determine algorithm from header
             case get_header_alg(Header) of
                 {error, invalid_header} ->
                     {error, invalid_header};
@@ -457,7 +476,7 @@ do_validate(Token, Opts, State = #state{secret = Secret, issuer = ExpectedIssuer
                     {error, missing_algorithm};
                 Alg ->
             
-            %% AUDIT: Algorithm whitelist — reject before signature verification
+            %% Algorithm whitelist
             AllowedAlgs = [<<"HS256">>, <<"EdDSA">>],
             case lists:member(Alg, AllowedAlgs) of
                 false ->
@@ -466,24 +485,19 @@ do_validate(Token, Opts, State = #state{secret = Secret, issuer = ExpectedIssuer
             
             SigningInput = <<Header/binary, ".", Payload/binary>>,
             
-            %% IA-1: Check HMAC deprecation flag before validation
             HmacAllowed = application:get_env(iris_edge, allow_hmac_jwt, false),
             SigValid = case Alg of
                 <<"EdDSA">> ->
-                    %% P1-4: EdDSA verification
                     verify_eddsa_signature(SigningInput, Signature, State);
                 _ when HmacAllowed =:= false ->
-                    %% IA-1: HMAC deprecated - reject
                     hmac_deprecated;
                 _ ->
-                    %% Default: HMAC-SHA256
-                    ExpectedSig = compute_signature(SigningInput, Secret),
-                    constant_time_compare(Signature, ExpectedSig)
+                    %% Try all active HMAC keys in the ring
+                    verify_hmac_any_key(SigningInput, Signature, SigningKeys)
             end,
             
             case SigValid of
                 true ->
-                    %% Decode and validate claims
                     case decode_base64url(Payload) of
                         {ok, ClaimsJson} ->
                             case decode_json(ClaimsJson) of
@@ -526,7 +540,7 @@ validate_claims(Claims, ExpectedIssuer, Opts) ->
                             case Jti =/= undefined andalso is_revoked(Jti) of
                                 true -> {error, token_revoked};
                                 false ->
-                                    %% RFC Section 9.1: Replay protection via jti nonce (GAP-15)
+                                    %% RFC Section 9.1: Replay protection via jti nonce
                                     case Jti =/= undefined andalso check_jti_replay(Jti, Exp) of
                                         true -> {error, token_replayed};
                                         false -> {ok, Claims}
@@ -536,10 +550,10 @@ validate_claims(Claims, ExpectedIssuer, Opts) ->
             end
     end.
 
-%% @doc Check if a jti has been seen before (replay attack detection) (GAP-15)
+%% @doc Check if a jti has been seen before (replay attack detection)
 %% RFC Section 9.1: "Replay attacks: Nonce + timestamp validation"
 %% Tracks seen jti values in ETS with TTL = token expiry time.
-%% AUDIT M7: Table is now created eagerly in init/1, no lazy creation needed.
+%% Table is now created eagerly in init/1, no lazy creation needed.
 check_jti_replay(Jti, Exp) ->
     case ets:lookup(?JTI_SEEN_TABLE, Jti) of
         [{Jti, _}] ->
@@ -552,11 +566,11 @@ check_jti_replay(Jti, Exp) ->
     end.
 
 is_revoked(TokenId) ->
-    %% P0-4 FIX: Check local ETS first (fast), then Mnesia (distributed)
+    %% Check local ETS first (fast), then Mnesia (distributed)
     case ets:member(?REVOCATION_TABLE, TokenId) of
         true -> true;
         false ->
-            %% B-4 AUDIT MITIGATION: Transactional read for revocation check
+            %% Transactional read for revocation check
             %% (was dirty_read -- could miss concurrent revocations)
             case mnesia:sync_transaction(fun() ->
                 mnesia:read(revoked_tokens, TokenId)
@@ -568,14 +582,14 @@ is_revoked(TokenId) ->
                     ets:insert(?REVOCATION_TABLE, {TokenId, Now}),
                     true;
                 {aborted, Reason} ->
-                    %% B-6 AUDIT MITIGATION: Fail-CLOSED on Mnesia failure.
+                    %% Fail-CLOSED on Mnesia failure.
                     %% A revoked token must not be accepted because Mnesia is down.
                     logger:warning("Revocation check failed (fail-closed): ~p", [Reason]),
                     true
             end
     end.
 
-%% P1-H2 FIX: Synchronous revocation persistence with proper error handling
+%% Synchronous revocation persistence with proper error handling
 persist_revocation_sync(TokenId, Timestamp) ->
     try
         F = fun() -> mnesia:write({revoked_tokens, TokenId, Timestamp}) end,
@@ -592,9 +606,9 @@ persist_revocation_sync(TokenId, Timestamp) ->
             {error, Error}
     end.
 
-%% P1-H2 FIX: Push revocation to all cluster nodes for immediate effect
-%% This ensures revocation takes effect within ~60s across all nodes (RFC FR-11)
-%% AUDIT 2.1b FIX: Use rpc:call (not rpc:cast) with timeout so failures are
+%% Push revocation to all cluster nodes for immediate effect.
+%% This ensures revocation takes effect within ~60s across all nodes (RFC FR-11).
+%% Use rpc:call (not rpc:cast) with timeout so failures are
 %% detected and logged. Spawn wrapper kept to avoid blocking the gen_server.
 propagate_revocation(TokenId, Timestamp) ->
     %% Get all connected nodes
@@ -602,7 +616,7 @@ propagate_revocation(TokenId, Timestamp) ->
     case Nodes of
         [] -> ok;  %% Single node deployment
         _ ->
-            %% B-3 AUDIT MITIGATION: Monitored spawn for revocation propagation
+            %% Monitored spawn for revocation propagation
             iris_async:spawn_monitored(revocation_propagation, fun() ->
                 lists:foreach(fun(Node) ->
                     case rpc:call(Node, ?MODULE, receive_revocation,
@@ -616,7 +630,7 @@ propagate_revocation(TokenId, Timestamp) ->
             end)
     end.
 
-%% P1-H2 FIX: Receive revocation push from another node
+%% Receive revocation push from another node
 -spec receive_revocation(binary(), integer()) -> ok.
 receive_revocation(TokenId, Timestamp) ->
     %% Insert into local ETS for immediate effect
@@ -627,7 +641,7 @@ receive_revocation(TokenId, Timestamp) ->
 %% Internal: JWT Creation
 %% =============================================================================
 
-do_create_token(UserId, ExtraClaims, TTL, #state{secret = Secret, issuer = Issuer}) ->
+do_create_token(UserId, ExtraClaims, TTL, #state{secret = Secret, issuer = Issuer, signing_keys = Keys}) ->
     Now = os:system_time(second),
     Jti = generate_jti(),
     
@@ -639,7 +653,11 @@ do_create_token(UserId, ExtraClaims, TTL, #state{secret = Secret, issuer = Issue
         <<"jti">> => Jti
     }),
     
-    Header = #{<<"alg">> => <<"HS256">>, <<"typ">> => <<"JWT">>},
+    Kid = case Keys of
+        [{K, _} | _] -> K;
+        _ -> generate_kid(Secret)
+    end,
+    Header = #{<<"alg">> => <<"HS256">>, <<"typ">> => <<"JWT">>, <<"kid">> => Kid},
     
     HeaderB64 = encode_base64url(encode_json(Header)),
     PayloadB64 = encode_base64url(encode_json(Claims)),
@@ -650,10 +668,10 @@ do_create_token(UserId, ExtraClaims, TTL, #state{secret = Secret, issuer = Issue
     {ok, Token}.
 
 %% =============================================================================
-%% Internal: EdDSA Token Creation (P1-4)
+%% Internal: EdDSA Token Creation
 %% =============================================================================
 
-do_create_eddsa_token(UserId, ExtraClaims, TTL, #state{issuer = Issuer, eddsa_priv = PrivKey}) ->
+do_create_eddsa_token(UserId, ExtraClaims, TTL, #state{issuer = Issuer, eddsa_priv = PrivKey, eddsa_pub = PubKey}) ->
     case PrivKey of
         undefined -> {error, no_eddsa_key};
         _ ->
@@ -666,7 +684,8 @@ do_create_eddsa_token(UserId, ExtraClaims, TTL, #state{issuer = Issuer, eddsa_pr
                 <<"exp">> => Now + TTL,
                 <<"jti">> => Jti
             }),
-            Header = #{<<"alg">> => <<"EdDSA">>, <<"typ">> => <<"JWT">>},
+            Kid = generate_kid(case PubKey of undefined -> PrivKey; _ -> PubKey end),
+            Header = #{<<"alg">> => <<"EdDSA">>, <<"typ">> => <<"JWT">>, <<"kid">> => Kid},
             HeaderB64 = encode_base64url(encode_json(Header)),
             PayloadB64 = encode_base64url(encode_json(Claims)),
             SigningInput = <<HeaderB64/binary, ".", PayloadB64/binary>>,
@@ -681,13 +700,27 @@ do_create_eddsa_token(UserId, ExtraClaims, TTL, #state{issuer = Issuer, eddsa_pr
 %% =============================================================================
 
 compute_signature(Input, Secret) ->
-    %% HMAC-SHA256
     Mac = crypto:mac(hmac, sha256, Secret, Input),
     encode_base64url(Mac).
 
-%% P1-4: Extract algorithm from JWT header
-%% AUDIT M2: Reject on decode failure instead of defaulting to HS256.
-%% H-1 AUDIT FIX: Also reject when 'alg' field is absent — a missing
+%% Try each HMAC key in the ring until one matches.
+%% If the token has a kid header, try the matching key first for O(1) path.
+verify_hmac_any_key(SigningInput, Signature, SigningKeys) ->
+    lists:any(fun({_Kid, Secret}) ->
+        ExpectedSig = compute_signature(SigningInput, Secret),
+        constant_time_compare(Signature, ExpectedSig)
+    end, SigningKeys).
+
+%% Generate a key ID from a secret: first 8 bytes of SHA-256, hex-encoded.
+generate_kid(Key) ->
+    <<Prefix:8/binary, _/binary>> = crypto:hash(sha256, Key),
+    list_to_binary(lists:flatten(
+        [io_lib:format("~2.16.0b", [B]) || <<B>> <= Prefix]
+    )).
+
+%% Extract algorithm from JWT header
+%% Reject on decode failure instead of defaulting to HS256.
+%% Also reject when 'alg' field is absent — a missing
 %% algorithm must not silently default to HS256 (algorithm confusion risk).
 get_header_alg(HeaderB64) ->
     case decode_base64url(HeaderB64) of
@@ -703,7 +736,7 @@ get_header_alg(HeaderB64) ->
         _ -> {error, invalid_header}
     end.
 
-%% P1-4: Verify EdDSA signature
+%% Verify EdDSA signature
 verify_eddsa_signature(SigningInput, SigB64, #state{eddsa_pub = PubKey}) ->
     case PubKey of
         undefined -> false;
@@ -778,7 +811,7 @@ decode_base64url(Bin) ->
         _:_ -> {error, invalid_base64}
     end.
 
-%% AUDIT FIX (Finding 1.2): Delegated to iris_auth_json module.
+%% Delegated to iris_auth_json module.
 %% Old inline parser used O(N^2) binary append; new module uses iolists (O(N)).
 encode_json(Map) -> iris_auth_json:encode(Map).
 decode_json(Bin) -> iris_auth_json:decode(Bin).
@@ -802,7 +835,7 @@ cleanup_fold(Key, Cutoff) ->
     cleanup_fold(Next, Cutoff).
 
 %% =============================================================================
-%% IA-3: Refresh Token Implementation (RFC-001 v4.0 FR-11a)
+%% Refresh Token Implementation (RFC-001 v4.0 FR-11a)
 %% =============================================================================
 
 -define(REFRESH_TABLE, refresh_tokens).
@@ -819,7 +852,7 @@ create_refresh_token(UserId, TTL) ->
     Now = os:system_time(second),
     ExpiresAt = Now + TTL,
     Record = {?REFRESH_TABLE, TokenId, UserId, FamilyId, false, Now, ExpiresAt},
-    %% AUDIT P0-4: sync_transaction for refresh token durability
+    %% sync_transaction for refresh token durability
     try
         {atomic, ok} = mnesia:sync_transaction(fun() ->
             mnesia:write(Record)
@@ -832,7 +865,7 @@ create_refresh_token(UserId, TTL) ->
 -spec exchange_refresh_token(binary()) -> {ok, binary(), binary()} | {error, term()}.
 exchange_refresh_token(TokenId) ->
     Now = os:system_time(second),
-    %% B-1 AUDIT FIX: Read-then-write inside a single sync_transaction with
+    %% Read-then-write inside a single sync_transaction with
     %% write lock to eliminate TOCTOU race. The write lock ensures only one
     %% concurrent caller can read the token as Used=false.
     case mnesia:sync_transaction(fun() ->
@@ -872,7 +905,7 @@ exchange_refresh_token(TokenId) ->
 -spec validate_and_rotate_refresh(binary()) -> {ok, binary(), binary()} | {error, term()}.
 validate_and_rotate_refresh(TokenId) ->
     Now = os:system_time(second),
-    %% B-1 AUDIT FIX: Same TOCTOU fix as exchange_refresh_token.
+    %% Same TOCTOU fix as exchange_refresh_token.
     %% Read with write lock inside sync_transaction.
     case mnesia:sync_transaction(fun() ->
         case mnesia:read(?REFRESH_TABLE, TokenId, write) of
@@ -910,15 +943,15 @@ create_refresh_token_in_family(UserId, FamilyId) ->
     Now = os:system_time(second),
     ExpiresAt = Now + ?REFRESH_TTL,
     Record = {?REFRESH_TABLE, TokenId, UserId, FamilyId, false, Now, ExpiresAt},
-    %% AUDIT P0-4: sync_transaction for refresh token durability
+    %% sync_transaction for refresh token durability
     {atomic, ok} = mnesia:sync_transaction(fun() ->
         mnesia:write(Record)
     end),
     {ok, TokenId}.
 
 revoke_refresh_family(FamilyId) ->
-    %% AUDIT P0-4: Transaction for family revocation durability
-    %% H-6 AUDIT MITIGATION: Do not silently swallow errors.
+    %% Transaction for family revocation durability.
+    %% Do not silently swallow errors.
     %% A failed revocation means stolen tokens may remain valid.
     try
         {atomic, ok} = mnesia:sync_transaction(fun() ->

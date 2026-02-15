@@ -2,7 +2,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% B-3 Mitigation: Fire-and-forget spawns must be monitored.
+%% Mitigation: Fire-and-forget spawns must be monitored.
 %% =============================================================================
 %% Critical operations use spawn(fun() -> ... end) with no monitoring.
 %% After the fix, iris_async:spawn_monitored/2 wraps spawn_monitor with

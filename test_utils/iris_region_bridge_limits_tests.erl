@@ -2,7 +2,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% P0-2 (FM-1): Outbox Queue Limit Tests
+%% Outbox Queue Limit Tests
 %%
 %% RFC-001 v4.0 Section 7.2 Outbox Queue Operational Parameters:
 %% - Max size: 10,000 messages per destination region

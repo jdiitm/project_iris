@@ -2,10 +2,8 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% Phase 7 TDD: mTLS enforcement check must exist and be config-gated
+%% mTLS enforcement check must exist and be config-gated
 %% =============================================================================
-%% RED:  check_mtls_enforcement/0 does not exist in iris_core.
-%% GREEN: Add exported check_mtls_enforcement/0 to iris_core and iris_edge_app.
 %% =============================================================================
 
 %% When enforce_mtls=true and no ssl_dist_optfile is set,

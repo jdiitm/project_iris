@@ -2,7 +2,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% P1-9 (RL-3): User Block/Report Tests
+%%: User Block/Report Tests
 %%
 %% RFC-001 v4.0 FR-8b: Users can block/unblock and report other users.
 %% Blocked users cannot send messages to the blocker.

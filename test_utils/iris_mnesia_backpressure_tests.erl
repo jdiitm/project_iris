@@ -2,7 +2,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% AUDIT MITIGATION V2 — P0-2: Mnesia Memory Backpressure
+%% Mnesia Memory Backpressure
 %% =============================================================================
 %%
 %% Tests verify:
@@ -75,7 +75,7 @@ is_memory_ok_returns_error_over_threshold_test() ->
 
 %% =============================================================================
 %% Test: offline_msg table spec uses disc_only_copies (NOT disc_copies)
-%% Verifies audit finding was WRONG about offline_msg being disc_copies.
+%% Verifies that offline_msg actually uses disc_only_copies (not disc_copies).
 %% =============================================================================
 
 offline_msg_table_type_is_disc_only_copies_test() ->
@@ -126,7 +126,7 @@ backpressure_emits_metric_on_rejection_test() ->
     end.
 
 %% =============================================================================
-%% Test: store/3 returns {error, memory_pressure} under backpressure (OPS-02)
+%% Test: store/3 returns {error, memory_pressure} under backpressure
 %% =============================================================================
 
 store_returns_error_under_backpressure_test() ->

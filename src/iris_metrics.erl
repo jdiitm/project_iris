@@ -3,7 +3,7 @@
 %% =============================================================================
 %% Prometheus-Compatible Metrics Exporter
 %% =============================================================================
-%% P1-4: Provides observability for production operations.
+%% Provides observability for production operations.
 %% Exposes metrics in Prometheus text format at /metrics endpoint.
 %% =============================================================================
 
@@ -12,8 +12,8 @@
 -export([start_link/0]).
 -export([inc/1, inc/2, observe/2, set/2]).
 -export([get_metrics/0, export_prometheus/0]).
--export([emit_mnesia_table_memory/0]).  %% AUDIT: per-table memory gauge
-%% PRINCIPAL_AUDIT_REPORT: Route-specific latency tracking
+-export([emit_mnesia_table_memory/0]).  %% Per-table memory gauge
+%% Route-specific latency tracking
 -export([observe_latency/3, observe_latency/4]).
 -export([get_latency_percentile/2, get_latency_stats/1]).
 
@@ -29,6 +29,9 @@
 %% RFC-001 v4.0 Appendix B: SLI/SLO Tracking
 -export([get_sli_availability/0, get_sli_durability/0, get_sli_latency/0]).
 -export([get_slo_report/0]).
+
+%% Critical operational gauges
+-export([edge_dedup_table_size/0, cert_expiry_seconds/0, partition_guard_state/0]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
@@ -91,16 +94,74 @@ get_metrics() ->
         error:badarg -> #{}
     end.
 
-%% @doc Export metrics in Prometheus text format
+%% @doc Return current edge_dedup table size (0 if table absent).
+-spec edge_dedup_table_size() -> non_neg_integer().
+edge_dedup_table_size() ->
+    case ets:info(iris_edge_dedup, size) of
+        undefined -> 0;
+        N -> N
+    end.
+
+%% @doc Return seconds until TLS certificate expiry (-1 if unavailable).
+-spec cert_expiry_seconds() -> integer().
+cert_expiry_seconds() ->
+    case whereis(iris_cert_monitor) of
+        undefined -> -1;
+        _Pid ->
+            try gen_server:call(iris_cert_monitor, get_expiry_seconds, 1000)
+            catch _:_ -> -1
+            end
+    end.
+
+%% @doc Return partition guard state: 0=normal, 1=suspect, 2=partitioned.
+-spec partition_guard_state() -> 0 | 1 | 2.
+partition_guard_state() ->
+    case whereis(iris_partition_guard) of
+        undefined -> 0;
+        _Pid ->
+            try
+                case gen_server:call(iris_partition_guard, get_state, 1000) of
+                    normal -> 0;
+                    suspect -> 1;
+                    partitioned -> 2;
+                    _ -> 0
+                end
+            catch _:_ -> 0
+            end
+    end.
+
+%% @doc Export metrics in Prometheus text format with TYPE/HELP directives.
 -spec export_prometheus() -> binary().
 export_prometheus() ->
     Metrics = get_metrics(),
-    Lines = maps:fold(fun(K, V, Acc) ->
+    %% Collect critical operational gauges (live-sampled, not from ETS)
+    CriticalGauges = [
+        {iris_edge_dedup_table_size, edge_dedup_table_size()},
+        {iris_cert_expiry_seconds, cert_expiry_seconds()},
+        {iris_partition_guard_state, partition_guard_state()}
+    ],
+    %% TYPE/HELP directives for critical metrics
+    TypeHelp = [
+        <<"# HELP iris_edge_dedup_table_size Current number of entries in edge dedup ETS table\n">>,
+        <<"# TYPE iris_edge_dedup_table_size gauge\n">>,
+        <<"# HELP iris_cert_expiry_seconds Seconds until TLS certificate expiry (-1 if unavailable)\n">>,
+        <<"# TYPE iris_cert_expiry_seconds gauge\n">>,
+        <<"# HELP iris_partition_guard_state Partition guard state (0=normal 1=suspect 2=partitioned)\n">>,
+        <<"# TYPE iris_partition_guard_state gauge\n">>
+    ],
+    %% Format stored metrics
+    StoredLines = maps:fold(fun(K, V, Acc) ->
         Name = atom_to_binary(K, utf8),
         Value = format_value(V),
         [<<Name/binary, " ", Value/binary, "\n">> | Acc]
     end, [], Metrics),
-    iolist_to_binary(Lines).
+    %% Format critical gauges
+    GaugeLines = [begin
+        Name = atom_to_binary(K, utf8),
+        Value = format_value(V),
+        <<Name/binary, " ", Value/binary, "\n">>
+    end || {K, V} <- CriticalGauges],
+    iolist_to_binary(TypeHelp ++ StoredLines ++ GaugeLines).
 
 %% =============================================================================
 %% gen_server callbacks
@@ -268,7 +329,7 @@ format_value(V) ->
     iolist_to_binary(io_lib:format("~p", [V])).
 
 %% =============================================================================
-%% AUDIT: Mnesia Table Memory Gauges
+%% Mnesia Table Memory Gauges
 %% =============================================================================
 
 %% @doc Emit per-table memory gauges for all known Mnesia tables.
@@ -293,7 +354,7 @@ emit_mnesia_table_memory() ->
     ok.
 
 %% =============================================================================
-%% Route-Specific Latency Tracking (Per PRINCIPAL_AUDIT_REPORT Section 5)
+%% Route-Specific Latency Tracking
 %% =============================================================================
 %% Metrics tracked:
 %% - iris.latency.intra_region.p50/p99

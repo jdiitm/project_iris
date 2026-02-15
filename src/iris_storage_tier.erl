@@ -1,7 +1,7 @@
 -module(iris_storage_tier).
 
 %% =============================================================================
-%% AUDIT MITIGATION: Storage Tiering (Blocker 1 — Mnesia RAM Architecture)
+%% Storage Tiering — Mnesia RAM Architecture
 %% =============================================================================
 %% Root cause: disc_copies tables load full key space into RAM. At 100M+ users,
 %% RAM exhaustion triggers iris_mnesia_guard read-only mode.

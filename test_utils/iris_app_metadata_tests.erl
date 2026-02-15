@@ -2,10 +2,8 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% Phase 2 TDD: .app.src files must not reference non-existent modules
+%% .app.src files must not reference non-existent modules
 %% =============================================================================
-%% RED:  iris_core.app.src lists iris_rocksdb which has no .erl file.
-%% GREEN: Remove phantom modules (or set modules to []).
 %% =============================================================================
 
 core_app_has_no_phantom_modules_test() ->

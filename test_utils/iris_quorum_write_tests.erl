@@ -423,7 +423,7 @@ integration_placeholder_test_() ->
      ]}.
 
 %% =============================================================================
-%% H-4 Mitigation: Quorum repair retry with backoff
+%% Mitigation: Quorum repair retry with backoff
 %% =============================================================================
 
 repair_retries_on_failure_test() ->
@@ -448,12 +448,12 @@ repair_retries_on_failure_test() ->
     ?assert(Elapsed >= 500).
 
 %% =============================================================================
-%% B-3 AUDIT: pg group empty with iris_shard registered must NOT include
+%% pg group empty with iris_shard registered must NOT include
 %% all connected nodes (edge nodes don't run Mnesia).
 %% =============================================================================
 
 pg_empty_fallback_test_() ->
-    {"B-3: pg empty fallback returns [node()] not [node()|nodes()]",
+    {"pg empty fallback returns [node()] not [node()|nodes()]",
      {setup, fun setup/0, fun cleanup/1,
       [
        {"iris_shard registered but pg group empty returns local only", fun() ->

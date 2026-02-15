@@ -8,9 +8,7 @@
 %% groups instead of iris_limits:max_broadcast_group_members() which returns
 %% 10,000. This test verifies the broadcast limit matches iris_limits.
 %%
-%% RED: A broadcast group with member_count=1000 should still accept new
 %%      members (limit is 10000). Current code rejects at 1000.
-%% GREEN: Replace ?MAX_GROUP_MEMBERS with iris_limits:max_broadcast_group_members().
 %% =============================================================================
 
 -record(group, {

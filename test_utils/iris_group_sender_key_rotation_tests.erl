@@ -1,7 +1,7 @@
 -module(iris_group_sender_key_rotation_tests).
 -include_lib("eunit/include/eunit.hrl").
 
-%% GAP-1: Helper to generate test keys ≥80 bytes (simulates E2EE-encrypted blob)
+%% Helper to generate test keys ≥80 bytes (simulates E2EE-encrypted blob)
 test_encrypted_key(Seed) ->
     %% SHA-512 gives 64 bytes; concatenate two to get 128 bytes
     H1 = crypto:hash(sha512, Seed),
@@ -9,7 +9,7 @@ test_encrypted_key(Seed) ->
     <<H1/binary, H2/binary>>.
 
 %% =============================================================================
-%% GAP-2: Sender Key Rotation on Member Removal (Amendment 6.3)
+%% Sender Key Rotation on Member Removal (Amendment 6.3)
 %%
 %% RFC-001-AMENDMENT-001 Section 6.3 item 4:
 %% "On member removal: All remaining members generate new Sender Keys"
@@ -60,7 +60,7 @@ test_all_sender_keys_deleted_on_removal() ->
     ok = iris_group:add_member(GroupId, <<"bob">>, <<"alice">>),
     ok = iris_group:add_member(GroupId, <<"charlie">>, <<"alice">>),
     
-    %% Each member distributes their sender key (GAP-1: must be ≥80 bytes)
+    %% Each member distributes their sender key (must be ≥80 bytes)
     iris_group:store_sender_key(GroupId, <<"alice">>, <<"key_a1">>, test_encrypted_key(<<"alice">>)),
     iris_group:store_sender_key(GroupId, <<"bob">>, <<"key_b1">>, test_encrypted_key(<<"bob">>)),
     iris_group:store_sender_key(GroupId, <<"charlie">>, <<"key_c1">>, test_encrypted_key(<<"charlie">>)),
@@ -99,7 +99,7 @@ test_remaining_member_keys_deleted() ->
     ok = iris_group:add_member(GroupId, <<"member1">>, <<"admin">>),
     ok = iris_group:add_member(GroupId, <<"member2">>, <<"admin">>),
     
-    %% Admin and member1 distribute sender keys (GAP-1: must be ≥80 bytes)
+    %% Admin and member1 distribute sender keys (must be ≥80 bytes)
     iris_group:store_sender_key(GroupId, <<"admin">>, <<"ak1">>, test_encrypted_key(<<"admin">>)),
     iris_group:store_sender_key(GroupId, <<"member1">>, <<"mk1">>, test_encrypted_key(<<"member1">>)),
     

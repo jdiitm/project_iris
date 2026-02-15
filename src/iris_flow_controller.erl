@@ -10,7 +10,7 @@
 %% 3. Per-destination queue tracking for fan-out throttling
 %% 4. Automatic recovery when pressure subsides
 %%
-%% AUDIT FIX: All admission checks are now lockfree via sharded ETS.
+%% All admission checks are lockfree via sharded ETS.
 %% Previously, non-NORMAL levels serialized through gen_server:call.
 %% Now all levels use ETS for admission decisions.
 %% =============================================================================
@@ -37,7 +37,7 @@
 -define(MEMORY_CRITICAL, 0.95).
 -define(CASCADE_FAILURE_THRESHOLD, 0.50).  %% 50% of cores failing
 
-%% AUDIT FIX (Finding #5): CPU thresholds for backpressure
+%% CPU thresholds for backpressure
 %% Prevents CPU starvation from small packet floods
 -define(CPU_WARNING, 0.70).    %% 70% - start throttling
 -define(CPU_CRITICAL, 0.90).   %% 90% - critical overload
@@ -60,7 +60,7 @@
 -define(CHECK_INTERVAL_MS, 200).   %% 200ms for fast degradation response
 -define(DECAY_INTERVAL_MS, 5000).
 
-%% AUDIT FIX: Sharded ETS for lockfree admission checks at ALL levels
+%% Sharded ETS for lockfree admission checks at ALL levels
 -define(FLOW_ETS, iris_flow_controller_ets).
 -define(SHARD_COUNT, 16).  %% Number of shards for rate counters
 -define(DEST_ETS, iris_flow_controller_dest_ets).  %% Per-destination tracking
@@ -103,7 +103,7 @@ start_link() ->
 %% Check if a request should be admitted
 %% Returns: {allow, Level} | {deny, Reason, RetryAfterMs}
 %% 
-%% AUDIT FIX: This is now FULLY lockfree - no gen_server:call at any level.
+%% Fully lockfree - no gen_server:call at any level.
 %% All state is read from ETS tables.
 -spec check_admission(binary()) -> {allow, integer()} | {deny, atom(), integer()}.
 check_admission(User) ->
@@ -226,8 +226,8 @@ get_stats() ->
 init([]) ->
     process_flag(trap_exit, true),
     
-    %% F3 AUDIT FIX: Enable scheduler_wall_time so CPU fallback works
-    %% even when iris_efficiency_monitor is not running.
+    %% Enable scheduler_wall_time so CPU fallback works even when
+    %% iris_efficiency_monitor is not running.
     %% Without this, get_scheduler_utilization() returns 0.0 (blind).
     erlang:system_flag(scheduler_wall_time, true),
     
@@ -264,7 +264,7 @@ handle_call(get_stats, _From, State) ->
     Stats = #{
         level => level_name(State#state.level),
         memory_percent => State#state.memory_percent,
-        cpu_percent => State#state.cpu_percent,  %% AUDIT FIX (Finding #5)
+        cpu_percent => State#state.cpu_percent,
         request_rate => State#state.request_rate,  %% RFC 7.4 FIX
         cascade_detected => State#state.cascade_detected,
         admitted => TotalAdmitted,
@@ -336,7 +336,7 @@ handle_info(decay_counters, State) ->
     erlang:send_after(?DECAY_INTERVAL_MS, self(), decay_counters),
     {noreply, State#state{core_health = NewHealth}};
 
-%% B-7 AUDIT MITIGATION: Handle EXIT signals from linked processes.
+%% Handle EXIT signals from linked processes.
 handle_info({'EXIT', Pid, Reason}, State) ->
     logger:warning("~p received EXIT from ~p: ~p", [?MODULE, Pid, Reason]),
     {noreply, State};
@@ -405,7 +405,7 @@ update_resource_metrics(State) ->
         _ -> Total / MaxMem
     end,
     
-    %% AUDIT FIX (Finding #5): CPU check
+    %% CPU check
     %% cpu_sup:util() returns percentage or {error, _} if not available
     CpuPercent = get_cpu_percent(),
     
@@ -434,7 +434,7 @@ get_connection_count() ->
         _:_ -> 0
     end.
 
-%% AUDIT FIX (Finding #5): Get CPU utilization percentage
+%% Get CPU utilization percentage
 get_cpu_percent() ->
     try
         case cpu_sup:util() of
@@ -486,7 +486,7 @@ get_max_memory() ->
             end
     end.
 
-%% AUDIT FIX (Finding #5): Include CPU in level calculation
+%% Include CPU in level calculation
 %% RFC 7.4 FIX: Include request rate AND connection count for throughput-based degradation
 %% Prevents CPU starvation from small packet floods that don't consume memory
 %% Also triggers degradation under high message load or connection count before resources exhaust
@@ -534,7 +534,7 @@ detect_cascade(Health) ->
     end, {0, 0}, Health),
     
     Total = TotalSuccess + TotalFailure,
-    %% F3 AUDIT FIX: Require minimum sample size before declaring cascade.
+    %% Require minimum sample size before declaring cascade.
     %% Without this, a single failure (ratio=1.0) incorrectly triggers
     %% LEVEL_SHED global backpressure in low-traffic scenarios.
     case Total of

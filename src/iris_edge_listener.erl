@@ -14,8 +14,8 @@
 -export([start_link/1, start_link/2]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 -export([days_until_cert_expiry/1]).
--export([check_tls_policy/1]).  %% Exported for testability (B-2 audit mitigation)
--export([check_conn_rate_tcp/1]).  %% Exported for TDD (B-6 audit mitigation)
+-export([check_tls_policy/1]).  %% Exported for testability
+-export([check_conn_rate_tcp/1]).  %% Exported for TDD
 
 -record(state, {
     lsock :: gen_tcp:socket() | ssl:sslsocket(),
@@ -48,7 +48,7 @@ init([Port, HandlerMod]) ->
     end.
 
 %% Check TLS policy compliance
-%% B-2 AUDIT MITIGATION: In production mode, TLS is unconditionally required.
+%% In production mode, TLS is unconditionally required.
 %% allow_insecure is only honored in development/test mode.
 check_tls_policy(true) -> ok;
 check_tls_policy(false) ->
@@ -78,7 +78,7 @@ start_listener(Port, HandlerMod, TlsEnabled) ->
     %% With trap_exit, we absorb the EXIT and respawn the dead acceptor.
     process_flag(trap_exit, true),
     
-    %% AUDIT FIX (Finding #7): TCP tuning for planet-scale
+    %% TCP tuning for planet-scale
     %% - backlog: 65535 (was 4096) - handles thundering herd reconnects
     %% - nodelay: true - disable Nagle's algorithm (~40ms latency reduction)
     %% - send_timeout: prevent blocking sends from stalling acceptors
@@ -178,7 +178,7 @@ ensure_ssl_started() ->
 get_tls_options() ->
     CertFile = application:get_env(iris_edge, tls_certfile, "certs/server.pem"),
     KeyFile = application:get_env(iris_edge, tls_keyfile, "certs/server.key"),
-    %% AUDIT 7.2: Warn if certificate is near expiry
+    %% Warn if certificate is near expiry
     check_cert_expiry_warning(CertFile),
     
     BaseOpts = [
@@ -206,7 +206,7 @@ get_tls_options() ->
             BaseOpts ++ [{verify, verify_none}]
     end.
 
-%% AUDIT 7.2: Certificate expiry detection and warning
+%% Certificate expiry detection and warning
 check_cert_expiry_warning(CertFile) ->
     case days_until_cert_expiry(CertFile) of
         Days when is_integer(Days), Days < 0 ->
@@ -413,7 +413,7 @@ check_conn_rate_tcp(Sock) ->
             {error, _} -> allow
         end
     catch Class:Reason ->
-        %% B-6 AUDIT MITIGATION: Fail-CLOSED on rate check exception.
+        %% Fail-CLOSED on rate check exception.
         %% Attackers must not bypass rate limiting by triggering errors.
         logger:warning("iris_edge_listener:check_conn_rate_tcp catch-all (fail-closed): ~p:~p", [Class, Reason]),
         deny

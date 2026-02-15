@@ -2,10 +2,8 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% Phase 3 TDD: token_refresh must NOT return a placeholder access token
+%% token_refresh must NOT return a placeholder access token
 %% =============================================================================
-%% RED:  iris_session.erl contains <<"access_token_pending">> placeholder.
-%% GREEN: Replace placeholder with a proper error response.
 %% =============================================================================
 
 %% Structural test: the source must not contain the dangerous placeholder.

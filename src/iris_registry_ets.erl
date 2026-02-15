@@ -3,7 +3,6 @@
 %% =============================================================================
 %% ETS-Backed Lockfree Registry
 %% =============================================================================
-%% Per PRINCIPAL_AUDIT_REPORT.md Hard Stop #3:
 %% Replace gen_server serialized lookups with direct ETS access.
 %%
 %% Design:
