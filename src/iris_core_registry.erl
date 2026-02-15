@@ -69,7 +69,7 @@ get_all_cores() ->
     end.
 
 %% @doc Get all core nodes except the specified one (for fallback routing).
-%% AUDIT 2.3b FIX: Used by token_refresh to try alternate cores on failure.
+%% Used by token_refresh to try alternate cores on failure.
 -spec get_fallback_cores(node()) -> [node()].
 get_fallback_cores(ExcludeNode) ->
     [N || N <- get_all_cores(), N =/= ExcludeNode].
@@ -101,8 +101,8 @@ handle_cast(_Msg, State) ->
 handle_info({route_remote, User, Msg}, State) ->
     %% Receive message from Edge Router and store offline
     %% Spawning to avoid blocking this registry process
-    %% DURABILITY FIX: Use store_offline_durable for RPO=0 guarantee
-    spawn(fun() -> 
+    %% Durable store for RPO=0 guarantee
+    iris_async:spawn_monitored(offline_store_durable, fun() -> 
         try iris_core:store_offline_durable(User, Msg)
         catch E:R -> logger:error("Failed to store routed msg: ~p:~p", [E, R])
         end

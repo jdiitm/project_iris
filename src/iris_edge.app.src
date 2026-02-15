@@ -5,8 +5,10 @@
     iris_edge_app,
     iris_edge_sup,
     iris_edge_listener,
-    iris_health_handler,
     iris_edge_conn,
+    iris_edge_dedup_cleaner,
+    iris_edge_fallback_drain,
+    iris_health_handler,
     iris_session,
     iris_ws_lite,
     iris_compression,
@@ -14,8 +16,10 @@
     iris_auth_json,
     iris_async_router,
     iris_backpressure,
+    iris_cert_monitor,
     iris_circuit_breaker,
-    %% AUDIT V2 P2-2: iris_discovery removed — provided by iris_core app
+    %% iris_discovery removed — provided by iris_core app
+    iris_ingress_byte_guard,
     iris_ingress_guard,
     iris_rate_limiter,
     iris_registry_ets,

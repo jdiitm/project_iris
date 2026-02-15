@@ -224,7 +224,7 @@ nfr_integration_test_() ->
       ]}}.
 
 %% ============================================================================
-%% Route-Specific Latency Tests (From PRINCIPAL_AUDIT_REPORT)
+%% Route-Specific Latency Tests
 %% ============================================================================
 
 route_latency_test_() ->

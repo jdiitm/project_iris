@@ -2,7 +2,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% GAP-3: Key Contact Tracking Persistence Tests (Amendment 5.3.2)
+%% Key Contact Tracking Persistence Tests (Amendment 5.3.2)
 %%
 %% The key contacts table tracks which users have fetched each other's key
 %% bundles. When a user's Identity Key changes, the server MUST notify all
@@ -84,6 +84,6 @@ test_contacts_not_empty_after_restart() ->
     {ok, _} = iris_keys:start_link(),
     timer:sleep(100),
     
-    %% Must not be empty (this is the core GAP-3 failure: ETS is wiped)
+    %% Must not be empty (ETS-only storage is wiped on restart)
     Contacts = iris_keys:get_key_contacts(<<"eve">>),
     ?assertNotEqual([], Contacts).

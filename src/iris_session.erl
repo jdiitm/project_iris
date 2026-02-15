@@ -1,14 +1,14 @@
 -module(iris_session).
 -export([handle_packet/4, terminate/1]).
--export([validate_e2ee_header/1]).  %% Exported for TDD (audit finding 1)
--export([group_fanout_recipients/3]).  %% Exported for TDD (audit finding 3)
--export([estimate_remaining_messages/3, calculate_remaining/2]).  %% AUDIT 4.4: testable queue depth
--export([check_block_status/2]).  %% AUDIT 3.1/6.3: user block enforcement
+-export([validate_e2ee_header/1]).
+-export([group_fanout_recipients/3]).
+-export([estimate_remaining_messages/3, calculate_remaining/2]).  %% Testable queue depth
+-export([check_block_status/2]).  %% User block enforcement
 
 -include_lib("kernel/include/inet.hrl").
 
 %% =============================================================================
-%% HOT-001 FIX: Paginated Offline Delivery Constants
+%% Paginated Offline Delivery Constants
 %% =============================================================================
 -define(OFFLINE_PAGE_SIZE, 500).      %% Messages per page
 -define(OFFLINE_INLINE_LIMIT, 1000).  %% Deliver all if under this limit
@@ -28,7 +28,7 @@
 
 %% RFC Section 11.1: Version/Capability Negotiation
 -define(SERVER_VERSIONS, [1]).
-%% AUDIT: Compression capabilities are now dynamically detected via
+%% Compression capabilities are now dynamically detected via
 %% iris_compression:available_algorithms/0 — no hardcoded zstd/zlib list.
 -define(SERVER_CAPABILITIES_STATIC, [<<"e2ee">>, <<"groups">>]).
 -define(SERVER_CAPABILITIES,
@@ -99,7 +99,7 @@ get_core_node() ->
 legacy_core_node() ->
     %% FIXED: Scan connected nodes for actual Core IP
     Connected = nodes(connected),
-    %% AUDIT FIX 2.3: Config-based role with naming convention fallback
+    %% Config-based role with naming convention fallback
     IsCoreNode = fun(N) ->
         case application:get_env(iris_core, node_role) of
             {ok, core} -> true;
@@ -164,14 +164,14 @@ handle_packet({login, LoginData}, _Current, TransportPid, _Mod) ->
     %% Parse login data: may be just username or "username:token" format
     Result = case parse_login_data(LoginData) of
         {error, empty_username} ->
-            %% H-2 AUDIT FIX: Reject empty username
+            %% Reject empty username
             logger:warning("Login rejected: empty username"),
             {ok, undefined, [{send, <<"EMPTY_USERNAME">>}, close]};
         {User, MaybeToken} ->
-            %% AUDIT3 FIX: Protect against session memory bloat
-            %% NFR-26 FIX: Increased from 100000 to 1000000 words to support 1000-member groups
+            %% Protect against session memory bloat.
+            %% Increased from 100000 to 1000000 words to support 1000-member groups
             %% 1000000 words = ~8MB, sufficient for large group roster/fanout operations
-            %% AUDIT 2.3a FIX: kill => false allows graceful close instead of TCP reset.
+            %% kill => false allows graceful close instead of TCP reset.
             %% iris_ws_lite checks heap_size after packet handling and sends SERVER_OVERLOAD.
             process_flag(max_heap_size, #{size => 1000000, kill => false, error_logger => true}), %% ~8MB soft limit
             
@@ -226,13 +226,13 @@ handle_packet({send_message, _Target, _Msg}, undefined, _Pid, _Mod) ->
 %% =============================================================================
 %% RFC FR-5: Sequence-numbered messages for FIFO ordering
 %% =============================================================================
-%% AUDIT FIX: Client includes sequence number to guarantee ordering even under
+%% Client includes sequence number to guarantee ordering even under
 %% parallel processing. The sequence number is used as the storage timestamp.
 %% 
 %% NOTE: Dedup (RFC NFR-11) is handled on the CORE side in iris_core:store_offline_durable
 %% because that's where messages are persisted. Edge nodes don't have iris_dedup running.
 handle_packet({send_seq, Target, SeqNo, Msg}, User, _Pid, _Mod) when User =/= undefined ->
-    %% B-1 AUDIT MITIGATION: Log deprecation warning for 0x07 (no idempotency key).
+    %% Log deprecation warning for legacy opcode 0x07 (no idempotency key).
     %% Clients should migrate to 0x0D (SEND_SEQ_V2) for RFC Section 1.2 compliance.
     iris_metrics:inc(send_seq_deprecated_usage),
     %% RFC NFR-31: Span instrumentation
@@ -296,7 +296,7 @@ handle_packet({send_seq_v2, _Target, _IdKey, _SeqNo, _Msg}, undefined, _Pid, _Mo
 
 handle_packet({batch_send, Target, Blob}, User, _Pid, _Mod) ->
     Msgs = iris_proto:unpack_batch(Blob),
-    %% P2-1 FIX: Use rpc:cast for fire-and-forget batch storage
+    %% Use rpc:cast for fire-and-forget batch storage
     %% No need to block on batch send - offline storage is best-effort
     iris_rpc:cast(get_core_node(), iris_core, store_batch, [Target, Msgs]),
     {ok, User, []};
@@ -345,7 +345,7 @@ handle_packet({typing_start, Target}, User, _Pid, _Mod) when User =/= undefined 
             %% Silently drop - typing is non-critical
             {ok, User, []};
         false ->
-            %% AUDIT MITIGATION P1-1: Per-type rate limit for typing
+            %% Per-type rate limit for typing
             case check_message_rate(User, typing) of
                 allow ->
                     relay_typing_indicator(Target, User, true),
@@ -361,7 +361,7 @@ handle_packet({typing_stop, Target}, User, _Pid, _Mod) when User =/= undefined -
         true ->
             {ok, User, []};
         false ->
-            %% AUDIT MITIGATION P1-1: Per-type rate limit for typing
+            %% Per-type rate limit for typing
             case check_message_rate(User, typing) of
                 allow ->
                     relay_typing_indicator(Target, User, false),
@@ -402,7 +402,7 @@ handle_packet({read_receipt, _MsgId, _OriginalSender}, undefined, _Pid, _Mod) ->
     {ok, undefined, []};
 
 %% =============================================================================
-%% HOT-001 FIX: Paginated Offline Message Retrieval
+%% Paginated Offline Message Retrieval
 %% =============================================================================
 %% For users with large offline queues (1000+ messages), messages are delivered
 %% in pages. Client requests additional pages with {get_offline_page, Cursor}.
@@ -421,7 +421,7 @@ handle_packet({get_offline_page, Cursor}, User, _Pid, _Mod) when User =/= undefi
             
             %% Confirm delivery of previous page (delete from storage)
             PrevCursor = max(0, Cursor - ?OFFLINE_PAGE_SIZE),
-            spawn(fun() ->
+            iris_async:spawn_monitored(offline_confirm_delete, fun() ->
                 iris_rpc:call(CoreNode, iris_core, delete_offline_confirmed, 
                          [User, {PrevCursor, Cursor}], 5000)
             end),
@@ -431,7 +431,7 @@ handle_packet({get_offline_page, Cursor}, User, _Pid, _Mod) when User =/= undefi
                 done ->
                     {ok, User, MsgActions};
                 _ ->
-                    %% AUDIT MITIGATION P2-2: Estimate remaining messages from queue depth.
+                    %% Estimate remaining messages from queue depth.
                     %% NextCursor is the bucket offset; depth - cursor gives a rough count.
                     Remaining = estimate_remaining_messages(CoreNode, User, NextCursor),
                     MoreIndicator = encode_offline_more(NextCursor, Remaining),
@@ -482,7 +482,7 @@ handle_packet({fetch_prekeys, TargetUser}, User, _Pid, _Mod) when User =/= undef
             %% Keys module not running
             {ok, User, [{send, <<16#22, 0:32>>}]};
         _ ->
-            %% GAP-13: Use fetch_bundle/3 to record requester as contact
+            %% Use fetch_bundle/3 to record requester as contact
             case iris_keys:fetch_bundle(TargetUser, true, User) of
                 {ok, Bundle} ->
                     Response = iris_proto:encode_prekey_response(Bundle),
@@ -507,21 +507,21 @@ handle_packet({e2ee_msg, Recipient, Ciphertext, Header}, User, _Pid, _Mod) when 
     iris_trace:new_span(<<"session.e2ee_msg">>),
     %% RFC NFR-32: Count incoming message
     iris_metrics:msg_in(),
-    %% AUDIT 3.1/6.3: Check if sender is blocked by recipient
+    %% Check if sender is blocked by recipient
     E2eeResult = case check_block_status(User, Recipient) of
         {error, blocked} ->
             {ok, User, [{send, encode_error(blocked)}]};
         ok ->
             %% Route E2EE message to recipient (server never decrypts)
-            %% RFC Section 8 / NFR-18: Validate payload size before routing (GAP-7 fix)
+            %% RFC Section 8: Validate payload size before routing
             case iris_limits:validate_payload(Ciphertext) of
                 {error, payload_too_large} ->
                     {ok, User, [{send, encode_error(payload_too_large)}]};
                 ok ->
-                    %% NFR-18: Validate E2EE header fields before routing
+                    %% Validate E2EE header fields before routing
                     case validate_e2ee_header(Header) of
                         ok ->
-                            %% VIOLATION-4 FIX: Rate limit check on message send
+                            %% Rate limit check on message send
                             case check_message_rate(User) of
                                 allow ->
                                     %% Encode delivery packet with sender info
@@ -623,7 +623,7 @@ handle_packet({group_msg, GroupId, Ciphertext, Header}, User, _Pid, _Mod) when U
     %% RFC NFR-32: Count incoming message
     iris_metrics:msg_in(),
     %% Route encrypted group message to all members
-    %% RFC Section 8: Validate payload size (GAP-7 fix)
+        %% RFC Section 8: Validate payload size
     GrpResult = case iris_limits:validate_payload(Ciphertext) of
         {error, payload_too_large} ->
             {ok, User, [{send, encode_error(payload_too_large)}]};
@@ -645,7 +645,7 @@ handle_packet({group_msg, GroupId, Ciphertext, Header}, User, _Pid, _Mod) when U
                                             %% Encode the message once
                                             DeliveryPacket = iris_proto:encode_group_msg(GroupId, 
                                                 maps:put(<<"sender">>, User, Header), Ciphertext),
-                                            %% Audit Finding 3: Re-check membership to close TOCTOU window
+                                            %% Re-check membership to close TOCTOU window
                                             Recipients = group_fanout_recipients(GroupId, User, Members),
                                             lists:foreach(fun(#{user_id := MemberId}) ->
                                                 iris_router:route(MemberId, DeliveryPacket),
@@ -782,7 +782,7 @@ handle_packet({token_refresh, RefreshToken}, User, _Pid, _Mod) ->
     iris_trace:new_span(<<"session.token_refresh">>),
     CoreNode = get_core_node(),
     %% Step 1: Validate and rotate on Core (mnesia-only, no gen_server needed)
-    %% AUDIT 2.3b FIX: Use call_with_fallback to try alternate cores on failure
+    %% Use call_with_fallback to try alternate cores on failure
     FallbackCores = iris_core_registry:get_fallback_cores(CoreNode),
     TrResult = iris_circuit_breaker:call_with_fallback(CoreNode, iris_auth, validate_and_rotate_refresh, [RefreshToken], FallbackCores),
     TrResponse = case TrResult of
@@ -864,10 +864,10 @@ handle_packet({cbor_msg, _Target, _Map}, undefined, _Pid, _Mod) ->
 handle_packet({error, _}, User, _Pid, _Mod) ->
      {ok, User, []};
 
-%% AUDIT MITIGATION P1-3: Catch-all for unrecognized packet types.
+%% Catch-all for unrecognized packet types.
 %% Prevents function_clause crash if iris_proto:decode/1 returns an unexpected tuple.
 handle_packet(Unknown, User, _Pid, _Mod) ->
-    %% AUDIT V2 P1-4: Narrow catch to only badarg (what element/2 throws).
+    %% Narrow catch to only badarg (what element/2 throws).
     %% Other exception classes (exit, throw, system_limit) must propagate.
     Tag = try element(1, Unknown) catch error:badarg -> Unknown end,
     logger:warning("Unrecognized packet type: ~p (user=~p)", [Tag, User]),
@@ -926,7 +926,7 @@ validate_cbor_idempotency_key(Map) when is_map(Map) ->
     end.
 
 %% =============================================================================
-%% Internal: Group Fan-out Recipient Filtering (Audit Finding 3: TOCTOU Fix)
+%% Internal: Group Fan-out Recipient Filtering (TOCTOU Fix)
 %% =============================================================================
 
 %% @doc Filter group member list to valid recipients for fan-out.
@@ -941,13 +941,13 @@ group_fanout_recipients(GroupId, Sender, Members) ->
     end, Members).
 
 %% =============================================================================
-%% Internal: E2EE Header Validation (RFC-001-AMENDMENT-001 Section 4.1, NFR-18)
+%% Internal: E2EE Header Validation (RFC-001-AMENDMENT-001 Section 4.1)
 %% =============================================================================
 
 %% @doc Validate E2EE message header contains required fields with correct sizes.
 %% Required: ik (identity key, 32 bytes), ek (ephemeral key, 32 bytes).
 %% The server cannot decrypt but CAN validate structural integrity and key sizes.
-%% Audit Finding 1: Prevent trivially empty/garbage headers that bypass E2EE.
+%% Prevent trivially empty/garbage headers that bypass E2EE.
 -define(MIN_E2EE_KEY_LEN, 32).  %% X25519 public key size
 
 -spec validate_e2ee_header(term()) -> ok | {error, term()}.
@@ -961,7 +961,7 @@ validate_e2ee_header(Header) when is_map(Header) ->
         _ -> {error, {missing_e2ee_fields, Missing}}
     end;
 validate_e2ee_header(_) ->
-    %% Non-map header MUST be rejected (NFR-18).
+    %% Non-map header MUST be rejected.
     %% E2EE headers are always CBOR maps per RFC-001-AMENDMENT-001 Section 4.1.
     %% A non-map value cannot contain required keys (ik, ek).
     {error, invalid_header_type}.
@@ -996,9 +996,9 @@ complete_login(User, TransportPid) ->
     
     %% PHASE 2: Async Core registration (eventual consistency acceptable)
     %% Local ETS registration (Phase 1) handles immediate routing
-    %% AUDIT FIX: Reduces worst-case login time from 10s to 5s
+    %% Reduces worst-case login time from 10s to 5s
     CoreNode = get_core_node(),
-    spawn(fun() ->
+    iris_async:spawn_monitored(core_registration, fun() ->
         case traced_rpc(CoreNode, iris_core, register_user, [User, node(), TransportPid]) of
             ok -> ok;
             {error, {rpc_failed, _Node, Reason}} -> 
@@ -1008,7 +1008,7 @@ complete_login(User, TransportPid) ->
         end
     end),
 
-    %% PHASE 3: Retrieve offline messages (HOT-001 FIX: Paginated for large queues)
+    %% PHASE 3: Retrieve offline messages (paginated for large queues)
     %% Messages MUST be delivered when recipient connects (RFC FR-2 compliance)
     %% But for celebrity accounts with 1M+ messages, we stream in pages to prevent OOM
     OfflineActions = deliver_offline_messages(User),
@@ -1035,7 +1035,7 @@ complete_login(User, TransportPid) ->
     {ok, User, [{send, LoginOkPayload}, {set_session_id, SessionId} | OfflineActions]}.
 
 %% =============================================================================
-%% HOT-001 FIX: Paginated Offline Delivery for Celebrity Hotspots
+%% Paginated Offline Delivery for Celebrity Hotspots
 %% For normal users (<1000 offline messages): deliver all at once
 %% For hot users (>=1000 messages): deliver first page + OFFLINE_MORE indicator
 %% Client must request subsequent pages via {get_offline_page, Cursor}
@@ -1051,7 +1051,7 @@ deliver_offline_messages(User) ->
             deliver_all_offline(User, CoreNode);
         N when is_integer(N), N > ?OFFLINE_INLINE_LIMIT ->
             %% Large queue - deliver first page + continuation indicator
-            logger:info("HOT-001: User ~p has ~p offline messages, using paginated delivery", [User, N]),
+            logger:info("User ~p has ~p offline messages, using paginated delivery", [User, N]),
             deliver_offline_page(User, CoreNode, 0, N);
         unknown_try_anyway ->
             %% Failed to get queue depth - try direct retrieval anyway (failover path)
@@ -1222,7 +1222,7 @@ parse_login_data(Data) ->
     case binary:split(Data, <<":">>) of
         [User, Token] when byte_size(User) > 0 -> {User, Token};
         [User] when byte_size(User) > 0 -> {User, undefined};
-        %% H-2 AUDIT FIX: Reject empty username at parse stage
+        %% Reject empty username at parse stage
         _ -> {error, empty_username}
     end.
 
@@ -1236,7 +1236,7 @@ authenticate(_User, undefined) ->
     %% No token provided - check if auth is required
     case whereis(iris_auth) of
         undefined ->
-            %% H-3 AUDIT FIX: If iris_auth is down, check if auth should be enabled.
+            %% If iris_auth is down, check if auth should be enabled.
             %% If auth_enabled=true in config, fail-closed (reject).
             case application:get_env(iris_edge, auth_enabled, false) of
                 true -> {error, auth_unavailable};
@@ -1251,7 +1251,7 @@ authenticate(_User, undefined) ->
 authenticate(User, Token) ->
     case whereis(iris_auth) of
         undefined ->
-            %% H-3 AUDIT FIX: If iris_auth is down, check if auth should be enabled.
+            %% If iris_auth is down, check if auth should be enabled.
             %% If auth_enabled=true in config, fail-closed (reject).
             case application:get_env(iris_edge, auth_enabled, false) of
                 true -> {error, auth_unavailable};
@@ -1278,7 +1278,7 @@ authenticate(User, Token) ->
 %% =============================================================================
 
 fetch_and_cache(TargetUser, Now) ->
-    %% P2-1 FIX: Use async fetch with fallback for status
+    %% Use async fetch with fallback for status
     %% Status queries are non-critical - return cached/default on timeout
     Result = try
         case iris_rpc:call(get_core_node(), iris_core, get_status, [TargetUser], 1000) of
@@ -1295,7 +1295,7 @@ fetch_and_cache(TargetUser, Now) ->
     Result.
 
 %% =============================================================================
-%% Internal: Rate Limiting (VIOLATION-4 FIX)
+%% Internal: Rate Limiting
 %% =============================================================================
 %% Rate limit on message sending, not just login
 %% RFC 7.4 FIX: Also track request for flow controller rate-based degradation
@@ -1303,7 +1303,7 @@ fetch_and_cache(TargetUser, Now) ->
 check_message_rate(User) ->
     check_message_rate(User, message).
 
-%% AUDIT MITIGATION P1-1: Per-message-type rate limiting
+%% Per-message-type rate limiting
 check_message_rate(User, Type) ->
     %% Track request for flow controller (rate-based degradation)
     iris_flow_controller:track_request(User),
@@ -1352,7 +1352,7 @@ relay_typing_indicator(Target, Sender, IsTyping) ->
         [] ->
             %% Target not on this node - check Core for remote routing
             %% Fire-and-forget: don't wait for result
-            spawn(fun() ->
+            iris_async:spawn_monitored(typing_relay_remote, fun() ->
                 case iris_rpc:call(get_core_node(), iris_core, lookup_user, [Target], 1000) of
                     {online, TargetNode, TargetPid} when is_pid(TargetPid) ->
                         %% Send to remote node
@@ -1398,7 +1398,7 @@ terminate(User) ->
     end.
 
 %% =============================================================================
-%% AUDIT 4.4: Queue depth estimation with error observability
+%% Queue depth estimation with error observability
 %% =============================================================================
 
 -spec estimate_remaining_messages(node(), binary(), integer()) -> integer().
@@ -1425,7 +1425,7 @@ calculate_remaining(Depth, NextCursor) ->
     max(0, Depth - NextCursor).
 
 %% =============================================================================
-%% AUDIT 3.1/6.3: User block enforcement
+%% User block enforcement
 %% =============================================================================
 
 -spec check_block_status(binary(), binary()) -> ok | {error, blocked}.
@@ -1446,7 +1446,7 @@ check_block_status(Sender, Recipient) ->
             %% iris_user_safety module not loaded — feature not deployed.
             ok;
         _:Reason ->
-            %% B-6 AUDIT MITIGATION: Fail-CLOSED for transient runtime failures.
+            %% Fail-CLOSED for transient runtime failures.
             %% Blocked users must not be able to bypass by crashing the safety service.
             logger:warning("Block check failed (fail-closed): ~p sender=~p", [Reason, Sender]),
             iris_metrics:inc(block_check_service_unavailable),

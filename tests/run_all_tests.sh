@@ -224,6 +224,25 @@ is_heavy_test() {
 }
 
 # ============================================================================
+# TIER 2 TESTS (only run in full mode — too long for CI quick runs)
+# ============================================================================
+# These tests require extended durations and are designed for pre-release
+# validation, not every-PR gating.
+TIER2_TESTS=(
+    "test_soak_24h"  # 24h soak test — memory/WAL/FD leak detection
+)
+
+is_tier2_test() {
+    local test_name=$1
+    for t2 in "${TIER2_TESTS[@]}"; do
+        if [[ "$test_name" == *"$t2"* ]]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+# ============================================================================
 # RUN TEST HELPER (standalone)
 # ============================================================================
 run_test() {
@@ -672,12 +691,19 @@ else
         stress_heavy_timeout=300
     fi
     
-    # Sort stress tests - run lighter ones first
+    # Sort stress tests - run lighter ones first, skip Tier 2 in quick mode
     STRESS_TESTS_LIGHT=()
     STRESS_TESTS_HEAVY=()
     for test in tests/suites/stress/stress_*.py tests/suites/stress/test_*.py; do
         if [ -f "$test" ]; then
             test_name=$(basename "$test" .py)
+            # Skip Tier 2 tests (e.g. 24h soak) in quick mode
+            if [ "$QUICK_MODE" = "true" ] && is_tier2_test "$test_name"; then
+                echo "  $test_name  (skipped — Tier 2, full mode only)"
+                TOTAL_SKIP=$((TOTAL_SKIP + 1))
+                SKIPPED_TESTS+=("$test_name (tier2)")
+                continue
+            fi
             if is_heavy_test "$test_name"; then
                 STRESS_TESTS_HEAVY+=("$test")
             else

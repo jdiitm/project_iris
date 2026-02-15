@@ -2,7 +2,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% AUDIT P1-1: Core Reconciliation Transaction Durability Tests
+%% Core Reconciliation Transaction Durability Tests
 %% =============================================================================
 %%
 %% Tests verify that iris_core.erl conflict resolution / replication merges use
@@ -19,7 +19,7 @@
 
 source_analysis_test_() ->
     [
-     {"P1-1: merge_key_batch uses mnesia:transaction", fun() ->
+     {"merge_key_batch uses mnesia:transaction", fun() ->
           {ok, Src} = file:read_file("src/iris_core.erl"),
           %% Find merge_key_batch function
           ?assert(binary:match(Src, <<"merge_key_batch">>) =/= nomatch),
@@ -27,17 +27,17 @@ source_analysis_test_() ->
           ?assert(binary:match(Src, <<"mnesia:transaction">>) =/= nomatch)
       end},
 
-     {"P1-1: merge_table_batch uses mnesia:transaction", fun() ->
+     {"merge_table_batch uses mnesia:transaction", fun() ->
           {ok, Src} = file:read_file("src/iris_core.erl"),
           ?assert(binary:match(Src, <<"merge_table_batch">>) =/= nomatch)
       end},
 
-     {"P1-1: merge_set_records uses mnesia:transaction", fun() ->
+     {"merge_set_records uses mnesia:transaction", fun() ->
           {ok, Src} = file:read_file("src/iris_core.erl"),
           ?assert(binary:match(Src, <<"merge_set_records">>) =/= nomatch)
       end},
 
-     {"P1-1: no dirty_write in merge functions", fun() ->
+     {"no dirty_write in merge functions", fun() ->
           {ok, Src} = file:read_file("src/iris_core.erl"),
           Lines = binary:split(Src, <<"\n">>, [global]),
           %% Find lines containing dirty_write AND merge
@@ -47,9 +47,9 @@ source_analysis_test_() ->
           ?assertEqual([], MergeDirtyLines)
       end},
 
-     {"P1-1: iris_core.erl contains AUDIT P1-1 comments at transaction sites", fun() ->
+     {"iris_core.erl uses mnesia:transaction in merge paths", fun() ->
           {ok, Src} = file:read_file("src/iris_core.erl"),
-          ?assert(binary:match(Src, <<"AUDIT P1-1">>) =/= nomatch)
+          ?assert(binary:match(Src, <<"mnesia:transaction">>) =/= nomatch)
       end}
     ].
 
@@ -59,7 +59,7 @@ source_analysis_test_() ->
 
 transaction_pattern_test_() ->
     [
-     {"P1-1: transactions wrap lists:foreach for batch atomicity", fun() ->
+     {"transactions wrap lists:foreach for batch atomicity", fun() ->
           {ok, Src} = file:read_file("src/iris_core.erl"),
           %% The pattern should be: mnesia:transaction(fun() -> lists:foreach(...)  end)
           %% We verify both mnesia:transaction and lists:foreach are present in merge context
@@ -67,7 +67,7 @@ transaction_pattern_test_() ->
           ?assert(binary:match(Src, <<"{atomic, ok} = mnesia:transaction">>) =/= nomatch)
       end},
 
-     {"P1-1: merge writes use mnesia:write with table and write lock", fun() ->
+     {"merge writes use mnesia:write with table and write lock", fun() ->
           {ok, Src} = file:read_file("src/iris_core.erl"),
           %% Pattern: mnesia:write(Table, Record, write)
           ?assert(binary:match(Src, <<"mnesia:write(Table, Rec, write)">>) =/= nomatch)

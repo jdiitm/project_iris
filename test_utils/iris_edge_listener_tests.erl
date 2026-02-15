@@ -3,7 +3,7 @@
 
 %% =============================================================================
 %% Edge Listener Tests
-%% Tests for TCP tuning optimizations (AUDIT FIX Finding #7)
+%% Tests for TCP tuning optimizations
 %% =============================================================================
 
 %% =============================================================================
@@ -17,7 +17,7 @@ iris_edge_listener_test_() ->
      {"Module exports start_link/2", fun test_start_link_2_export/0},
      {"Module is gen_server", fun test_is_gen_server/0},
      
-     %% AUDIT FIX: TCP tuning verification (Finding #7)
+     %% TCP tuning verification
      {"Module compiles with TCP tuning options", fun test_tcp_tuning_compiles/0},
      {"Module has TLS support", fun test_tls_support/0}
     ].
@@ -44,7 +44,7 @@ test_is_gen_server() ->
     ?assert(lists:member({terminate, 2}, Exports)).
 
 %% =============================================================================
-%% AUDIT FIX: TCP Tuning Tests (Finding #7)
+%% TCP Tuning Tests
 %% =============================================================================
 
 test_tcp_tuning_compiles() ->
@@ -82,7 +82,7 @@ test_tls_support() ->
 %% by checking module structure and documentation.
 
 tcp_options_design_test() ->
-    %% This test documents the expected TCP options (AUDIT FIX Finding #7)
+    %% This test documents the expected TCP options
     %% The following options should be set in iris_edge_listener:start_listener/3:
     %%
     %% BaseOpts = [
@@ -96,7 +96,7 @@ tcp_options_design_test() ->
     %%     {send_timeout_close, true}  %% NEW: Close on send timeout
     %% ]
     %%
-    %% These options address the "Thundering Herd" issue (Finding #7):
+    %% These options address the "Thundering Herd" issue:
     %% - Higher backlog handles mass reconnection scenarios
     %% - nodelay reduces latency by ~40ms
     %% - send_timeout prevents blocking during network issues

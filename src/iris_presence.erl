@@ -3,7 +3,6 @@
 %% =============================================================================
 %% ETS-Backed Regional Presence Manager
 %% =============================================================================
-%% Per PRINCIPAL_AUDIT_REPORT.md Hard Stop #1:
 %% Replace mnesia:transaction for presence with lockfree ETS.
 %%
 %% Design:
@@ -75,7 +74,7 @@ register(User, Node, Pid) ->
     %% window under rest_for_one), return error instead of crashing the caller.
     try
         true = ets:insert(?ETS_TABLE, {User, Entry}),
-        spawn(fun() -> broadcast_update(User, Node, Pid) end),
+        iris_async:spawn_monitored(presence_broadcast_update, fun() -> broadcast_update(User, Node, Pid) end),
         ok
     catch
         error:badarg ->
@@ -87,7 +86,7 @@ register(User, Node, Pid) ->
 -spec unregister(binary()) -> ok.
 unregister(User) ->
     try ets:delete(?ETS_TABLE, User) catch error:badarg -> ok end,
-    spawn(fun() -> broadcast_removal(User) end),
+    iris_async:spawn_monitored(presence_broadcast_removal, fun() -> broadcast_removal(User) end),
     ok.
 
 
@@ -197,7 +196,7 @@ get_stats() ->
 %% @doc Broadcast presence update to other nodes
 -spec broadcast_update(binary(), node(), pid()) -> ok.
 broadcast_update(User, Node, Pid) ->
-    %% AUDIT FIX: Shard-aware routing (Limit broadcast to shard owners)
+    %% Shard-aware routing (Limit broadcast to shard owners)
     ShardId = iris_shard:get_shard(User),
     Members = iris_shard:get_shard_nodes(ShardId),
     logger:info("DEBUG: broadcast_update ~p -> Shard ~p -> Nodes ~p", [User, ShardId, Members]),

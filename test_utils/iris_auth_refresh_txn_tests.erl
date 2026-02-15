@@ -2,7 +2,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% AUDIT P0-4: Refresh Token Transaction Durability Tests
+%% Refresh Token Transaction Durability Tests
 %% =============================================================================
 %%
 %% Tests verify that refresh token operations use mnesia:sync_transaction
@@ -72,17 +72,17 @@ iris_auth_refresh_txn_test_() ->
      fun setup/0,
      fun cleanup/1,
      [
-      {"P0-4: Source uses sync_transaction, not dirty_write",
+      {"Source uses sync_transaction, not dirty_write",
        fun test_source_uses_sync_transaction/0},
-      {"P0-4: create_refresh_token stores token via transaction",
+      {"create_refresh_token stores token via transaction",
        fun test_create_token_transactional/0},
-      {"P0-4: exchange_refresh_token marks used via transaction",
+      {"exchange_refresh_token marks used via transaction",
        fun test_exchange_marks_used_transactionally/0},
-      {"P0-4: validate_and_rotate_refresh marks used via transaction",
+      {"validate_and_rotate_refresh marks used via transaction",
        fun test_validate_rotate_marks_used/0},
-      {"P0-4: revoke_refresh_family marks all tokens in family as used",
+      {"revoke_refresh_family marks all tokens in family as used",
        fun test_revoke_family_marks_all_used/0},
-      {"P0-4: create_refresh_token returns error on failure gracefully",
+      {"create_refresh_token returns error on failure gracefully",
        fun test_create_token_error_handling/0}
      ]}.
 

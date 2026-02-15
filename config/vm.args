@@ -1,0 +1,23 @@
+## Name of the node
+-sname iris
+
+## Cookie for distributed Erlang
+-setcookie iris_dev_cookie
+
+## Enable heartbeat monitoring
+##-heart
+
+## Increase process limit
++P 262144
+
+## Increase port limit
++Q 65536
+
+## Enable SMP
+-smp auto
+
+## Kernel poll
++K true
+
+## Async threads
++A 64

@@ -2,7 +2,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% H-6 Mitigation: revoke_refresh_family must not silently swallow errors.
+%% Mitigation: revoke_refresh_family must not silently swallow errors.
 %% =============================================================================
 %% Currently, revoke_refresh_family catches all errors with `catch _:_ -> ok`.
 %% This means a failed revocation (e.g., Mnesia down, table missing) returns

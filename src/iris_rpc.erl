@@ -1,8 +1,8 @@
 -module(iris_rpc).
 -export([call/4, call/5, cast/4]).
 
-%% AUDIT 6.3: RPC wrapper with error handling, metrics, and circuit breaker.
-%% AUDIT P0-2: Wraps {badrpc, Reason} into {error, {rpc_failed, Node, Reason}}
+%% RPC wrapper with error handling, metrics, and circuit breaker.
+%% Wraps {badrpc, Reason} into {error, {rpc_failed, Node, Reason}}
 %% so callers get a clean error tuple instead of raw badrpc propagation.
 
 -spec call(node(), module(), atom(), [term()]) -> term() | {error, {rpc_failed, node(), term()}}.
@@ -22,7 +22,7 @@ call(Node, Mod, Fun, Args, Timeout) ->
             Result
     end.
 
-%% AUDIT V2 P1-1: rpc:cast is fire-and-forget — it always returns 'true'
+%% rpc:cast is fire-and-forget — it always returns 'true'
 %% regardless of whether the remote node received or processed the call.
 %% There is no way to detect per-cast failure. We emit rpc_casts_unmonitored
 %% so dashboards can alert on cast volume as a proxy for potential issues.

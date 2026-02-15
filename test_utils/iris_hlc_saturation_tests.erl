@@ -2,7 +2,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% B-5 AUDIT MITIGATION: HLC logical counter saturation
+%% HLC logical counter saturation
 %% =============================================================================
 %% RFC Section 1.1: "Messages have strictly monotonic IDs (HLC)"
 %% When logical counter reaches MAX_LOGICAL (65535), the HLC MUST NOT produce

@@ -2,7 +2,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% B-4 Mitigation: Critical dirty Mnesia operations must be transactional.
+%% Mitigation: Critical dirty Mnesia operations must be transactional.
 %% =============================================================================
 %% dirty_delete on offline_msg and dedup_log, and dirty_read on revoked_tokens
 %% must use transactions to ensure atomicity and consistency.

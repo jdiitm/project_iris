@@ -2,7 +2,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% AUDIT MITIGATION P1-2: Async Router Fuzz Tests
+%% Async Router Fuzz Tests
 %% Validates phash2 distribution uniformity and edge-case resilience
 %% for the partitioned router pool.
 %% =============================================================================

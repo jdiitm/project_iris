@@ -2,7 +2,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% AUDIT: Mnesia Scalability Tests
+%% Mnesia Scalability Tests
 %% =============================================================================
 %%
 %% Tests verify:
@@ -39,23 +39,23 @@ iris_mnesia_scalability_test_() ->
      fun setup/0,
      fun cleanup/1,
      [
-      {"AUDIT: offline_msg uses disc_only_copies",
+      {"offline_msg uses disc_only_copies",
        fun test_offline_msg_disc_only/0},
-      {"AUDIT: dedup_log uses disc_only_copies",
+      {"dedup_log uses disc_only_copies",
        fun test_dedup_log_disc_only/0},
-      {"AUDIT: presence uses ram_copies (no disc)",
+      {"presence uses ram_copies (no disc)",
        fun test_presence_ram_copies/0},
-      {"AUDIT: table_spec is exported and covers all required tables",
+      {"table_spec is exported and covers all required tables",
        fun test_table_spec_coverage/0},
-      {"AUDIT: TTL cleanup function exists and is exported",
+      {"TTL cleanup function exists and is exported",
        fun test_ttl_cleanup_exists/0},
-      {"AUDIT: TTL cleanup deletes expired dedup_log entries",
+      {"TTL cleanup deletes expired dedup_log entries",
        fun test_ttl_cleanup_dedup/0},
-      {"AUDIT: TTL cleanup deletes expired revoked_tokens",
+      {"TTL cleanup deletes expired revoked_tokens",
        fun test_ttl_cleanup_revoked_tokens/0},
-      {"AUDIT: memory metric emission function exists",
+      {"memory metric emission function exists",
        fun test_memory_metric_function_exists/0},
-      {"AUDIT M5: cleanup_expired_entries returns {ok, Count}",
+      {"cleanup_expired_entries returns {ok, Count}",
        fun test_cleanup_returns_count/0}
      ]}.
 

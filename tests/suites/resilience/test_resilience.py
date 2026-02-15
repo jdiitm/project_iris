@@ -158,9 +158,9 @@ def check_partition_guard_status(node):
         return None
 
 
-def test_write_during_partition(node):
+def check_write_during_partition(node):
     """
-    AUDIT FIX: Test if writes are properly rejected during partition.
+    AUDIT FIX: Check if writes are properly rejected during partition.
     Returns: (write_attempted, write_rejected) tuple
     """
     try:
@@ -252,7 +252,7 @@ def run_split_brain(args) -> bool:
             
             # AUDIT FIX: Periodically test write behavior
             if connectivity_checks % 2 == 0:  # Every other check
-                attempted, rejected = test_write_during_partition(core_node)
+                attempted, rejected = check_write_during_partition(core_node)
                 if attempted:
                     write_attempts += 1
                     if rejected:

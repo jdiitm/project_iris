@@ -259,43 +259,15 @@ nuke_and_recreate_table(Table) ->
 
 ### Decision: Deterministic Test Execution with TLS Enforcement
 
-**Key Principles**:
-1. All tests use seeded random (`TEST_SEED` env var)
-2. Exit codes: 0=pass, 1=fail, 2=skip
-3. No CI-mode tricks that change pass/fail behavior
-4. Docker as canonical execution environment
-5. **TLS enforced** on all client connections (NFR-14)
+**Key Principles**: Seeded random (`TEST_SEED`), strict exit codes (0=pass, 1=fail, 2=skip), no CI-mode tricks, Docker as canonical environment, TLS enforced on all connections (NFR-14).
 
-**Test Counts** (as of 2026-02-11):
-- Python test files: 156 across 12 suites
-- Erlang test modules: 100 EUnit test modules + 6 support modules
-- Chaos_dist tests: 27 (Docker required, TLS enabled)
-- See [TESTING.md](TESTING.md) for current counts
-
-**TLS Test Infrastructure** (Feb 2026):
-- Server runs with `config/test_tls.config`
-- All Python clients use `ssl.SSLContext` with CA verification
-- Certificates in `certs/` directory (CA, server, client)
-- `tests/utilities/iris_client.py` defaults to TLS
-- `tests/suites/chaos_dist/utils.py` provides TLS helpers
-
-**Principal Test Audit Coverage** (Jan 29, 2026):
-- P0 (Safety): State machine, idempotency tests
-- P1 (Correctness): Fault injection, consensus, crypto attack tests
-- P2 (Scale): Concurrency torture, 24h soak tests
+See [TESTING.md](TESTING.md) for current test counts, suite details, and CI pipeline configuration.
 
 ---
 
 ## 8. Deferred Work
 
-### Completed (since last update)
-
-| Item | Resolution |
-|------|------------|
-| UUIDv7 message IDs | Implemented in `iris_uuid.erl` with server-side validation |
-| mTLS inter-node (NFR-15) | **Enforced in production** (`enforce_mtls=true` when `env=production`); `iris_cluster_manager` blocks replication without SSL dist |
-| Inbox overflow protection | 10K limit enforced in `iris_core.erl` (GAP-6) |
-| Outbox TTL | 7-day cleanup in `iris_region_bridge.erl` (GAP-1) |
+**Completed**: UUIDv7 message IDs, mTLS inter-node (NFR-15), inbox 10K limit (GAP-6), outbox 7-day TTL (GAP-1). See [CHANGELOG.md](../CHANGELOG.md) for details.
 
 ### Still Deferred
 
@@ -309,71 +281,22 @@ nuke_and_recreate_table(Table) ->
 
 ## 9. Module Overview
 
-See the [README](../README.md#modules-55-total) for the full module reference (55 modules, grouped by layer).
+See the [README](../README.md#modules-70-total) for the full module reference (70 modules, grouped by layer).
 
 ---
 
 ## 10. Deferred Architectural Work (Forensic Audit 2026-01-29)
 
-The Chief Architect forensic audit identified several items requiring separate RFCs or infrastructure work. These are tracked here for future implementation.
+**Completed**: Cross-region persistent queue (`iris_region_bridge.erl`, FIFO + 7-day TTL), mailbox overflow AQM (`iris_mailbox_guard.erl`, CoDel), `iris_router_pool` removed (dead code), TLS stabilization (all clients default TLS), HOL blocking fix (`iris_async_router.erl` ephemeral spawn), ETS presence default, cluster manager. See [CHANGELOG.md](../CHANGELOG.md) for details.
 
-### ~~P1 - Cross-Region Persistent Queue~~ — DONE
-
-| Attribute | Value |
-|-----------|-------|
-| **Issue** | Messages to offline cross-region users are tried once then stored locally |
-| **Impact** | Messages can be stranded on local nodes if cross-region link is down |
-| **Fix** | Mnesia `disc_copies` persistent queue in `iris_region_bridge.erl` |
-| **Status** | **IMPLEMENTED**. FIFO ordering, 7-day TTL, 10K queue depth limit, overflow rejection. |
-
-### ~~P1 - Mailbox Overflow Protection (AQM)~~ — DONE
+### P2 - Network Partition Drill Infrastructure (Still Deferred)
 
 | Attribute | Value |
 |-----------|-------|
-| **Issue** | "Messi Test" - 1M messages to single user causes mailbox overflow |
-| **Impact** | Celebrity/popular user accounts can crash their shard process |
-| **Fix** | CoDel (Controlled Delay) AQM implemented in `iris_mailbox_guard.erl` |
-| **Status** | **IMPLEMENTED** (2026-02-10). Exports `codel_new/0,1`, `codel_check/3`. Tested in `iris_codel_tests.erl`. |
-
-### P2 - Network Partition Drill Infrastructure
-
-| Attribute | Value |
-|-----------|-------|
-| **Issue** | No automated chaos testing for network partitions |
-| **Impact** | Cannot validate partition tolerance in CI |
-| **Fix** | Integrate `pumba` or `tc`-based network simulation in CI |
+| **Issue** | No automated chaos testing for network partitions in CI |
+| **Fix** | Integrate `pumba` or `tc`-based network simulation |
 | **Effort** | 1 week |
 | **Blocked By** | Docker infrastructure changes, CI pipeline updates |
-
-### P3 - iris_router_pool (Removed)
-
-| Attribute | Value |
-|-----------|-------|
-| **Issue** | Worker pool module with zero callers, never started by any supervisor |
-| **Decision** | Removed (dead code). Ephemeral spawn + circuit breaker is the active routing path |
-| **Date** | 2026-02-11 |
-
-### Implemented Fixes (2026-02-03)
-
-**TLS Stabilization Fixes**:
-
-| Finding | Fix | Module/File |
-|---------|-----|-------------|
-| TLS not enforced in tests | All clients now use TLS by default | `iris_client.py`, all test files |
-| Chaos_dist plaintext connections | Created TLS helpers module | `tests/suites/chaos_dist/utils.py` |
-| Reliable message ACKs missing | Implemented proper ACK handling | `test_bridge_durability.py`, `test_cross_region_chaos.py` |
-| Non-blocking TLS socket issues | Changed to timeout-based blocking | All chaos_dist tests |
-| Server port not configured | Added explicit port to TLS config | `config/test_tls.config` |
-
-### Implemented Fixes (2026-01-29)
-
-The following audit findings were addressed:
-
-| Finding | Fix | Module |
-|---------|-----|--------|
-| HOL Blocking | Spawn ephemeral tasks for remote lookups | `iris_async_router.erl` |
-| Mnesia Global Lock | Default to ETS presence backend | `iris_core.erl` |
-| Missing Cluster Manager | Created self-healing topology manager | `iris_cluster_manager.erl` |
 
 ---
 

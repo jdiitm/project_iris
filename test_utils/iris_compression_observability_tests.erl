@@ -2,7 +2,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% AUDIT MITIGATION: Compression Fallback Observability (Finding 3)
+%% Compression Fallback Observability
 %%
 %% When zstd NIF is unavailable at runtime, the fallback should emit a metric
 %% so operators can detect silent degradation via dashboards/alerts.
@@ -45,7 +45,7 @@ zstd_nif_loadable() ->
 %% ---------------------------------------------------------------------------
 
 %% Test: zstd compress fallback increments metric when NIF is absent.
-%% AUDIT V2: compress(zstd, ...) now always returns {ok, _} via transparent
+%% V2: compress(zstd, ...) now always returns {ok, _} via transparent
 %% zlib fallback. Metric distinguishes NIF-native vs fallback path.
 zstd_fallback_emits_metric_test() ->
     ensure_metrics_table(),
@@ -63,7 +63,7 @@ zstd_fallback_emits_metric_test() ->
     end.
 
 %% Test: zstd decompress fallback also increments metric when NIF is absent.
-%% AUDIT V2: decompress(zstd, ...) transparently falls back to zlib.
+%% V2: decompress(zstd, ...) transparently falls back to zlib.
 %% Invalid data will still return {error, _} from zlib:uncompress.
 zstd_decompress_fallback_emits_metric_test() ->
     ensure_metrics_table(),

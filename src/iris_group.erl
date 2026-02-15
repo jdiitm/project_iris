@@ -43,7 +43,7 @@
     get_all_sender_keys/2,    %% (GroupId, UserId) -> [{KeyId, SenderKey}]
     rotate_sender_key/3,      %% (GroupId, UserId, NewSenderKey) -> {ok, KeyId}
     
-    %% AUDIT FIX: Member reconnect and key sync
+    %% Member reconnect and key sync
     handle_member_reconnect/2,  %% (GroupId, UserId) -> {ok, [KeyUpdate]} | {error, Reason}
     get_sender_keys_since/2,    %% (GroupId, Since) -> [{UserId, KeyId, SenderKey}]
     update_member_last_seen/2,  %% (GroupId, UserId) -> ok
@@ -81,7 +81,7 @@
     role        :: admin | member,       %% Role in group
     joined_at   :: integer(),            %% Unix timestamp
     added_by    :: binary(),             %% Who added this member
-    last_seen   :: integer()             %% AUDIT FIX: Track last seen for key sync
+    last_seen   :: integer()             %% Track last seen for key sync
 }).
 
 %% Group sender keys (for E2EE)
@@ -147,7 +147,7 @@ list_groups(UserId) ->
 %% @doc Add a member to a group. Only admins can add members.
 -spec add_member(binary(), binary(), binary()) -> ok | {error, term()}.
 add_member(GroupId, UserId, AddedBy) ->
-    %% AUDIT V2 P1-2: Call directly instead of serializing through gen_server.
+    %% Call directly instead of serializing through gen_server.
     %% Mnesia transactions already provide isolation — the gen_server was
     %% a global bottleneck serializing ALL group mutations.
     Result = do_add_member(GroupId, UserId, AddedBy),
@@ -158,7 +158,7 @@ add_member(GroupId, UserId, AddedBy) ->
 %% @doc Remove a member from a group. Admins can remove anyone; members can remove themselves.
 -spec remove_member(binary(), binary(), binary()) -> ok | {error, term()}.
 remove_member(GroupId, UserId, RemovedBy) ->
-    %% AUDIT V2 P1-2: Direct call — same rationale as add_member.
+    %% Direct call — same rationale as add_member.
     Result = do_remove_member(GroupId, UserId, RemovedBy),
     try ets:delete(iris_group_roster_cache, GroupId) catch error:badarg -> ok end,
     Result.
@@ -277,7 +277,7 @@ store_sender_key(GroupId, UserId, KeyId, EncryptedKeyBlob) ->
                 created_at = erlang:system_time(second),
                 chain_index = 0
             },
-            %% AUDIT P1-1: Transaction for sender key durability
+            %% Transaction for sender key durability
             {atomic, ok} = mnesia:transaction(fun() ->
                 mnesia:write(group_sender_key, Record, write)
             end),
@@ -312,7 +312,7 @@ rotate_sender_key(GroupId, UserId, NewSenderKey) ->
     end.
 
 %% =============================================================================
-%% AUDIT FIX: Member Reconnect and Key Sync
+%% Member Reconnect and Key Sync
 %% =============================================================================
 %% When a member reconnects after being offline, they need to receive all
 %% sender keys that were rotated while they were away. This prevents the
@@ -374,7 +374,7 @@ update_member_last_seen(GroupId, UserId) ->
     case mnesia:dirty_read(group_member, {GroupId, UserId}) of
         [Member] ->
             UpdatedMember = Member#group_member{last_seen = Now},
-            %% AUDIT P1-1: Transaction for member state durability
+            %% Transaction for member state durability
             {atomic, ok} = mnesia:transaction(fun() ->
                 mnesia:write(group_member, UpdatedMember, write)
             end),
@@ -511,7 +511,7 @@ init_tables() ->
         ok -> ok;
         {timeout, BadTables} ->
             logger:warning("Timeout waiting for tables: ~p", [BadTables]),
-            %% AUDIT MITIGATION P0-2: Check for active replicas before force_load
+            %% Check for active replicas before force_load
             lists:foreach(fun(T) ->
                 ActiveReplicas = try mnesia:table_info(T, active_replicas) -- [node()]
                                 catch C1:R1 ->
@@ -538,7 +538,7 @@ init_tables() ->
             ok
     end.
 
-%% AUDIT MITIGATION P0-2: Isolated force_load with safety logging
+%% Isolated force_load with safety logging
 force_load_isolated(Table) ->
     logger:warning("DATA DIVERGENCE RISK: force_load_table(~p) with no active peers", [Table]),
     try mnesia:force_load_table(Table)
@@ -573,7 +573,7 @@ do_create_group(GroupName, CreatorId) ->
                     role = admin,
                     joined_at = Now,
                     added_by = CreatorId,
-                    last_seen = Now  %% AUDIT FIX: Initialize last_seen
+                    last_seen = Now
                 },
                 mnesia:write(group_member, Member, write),
                 
@@ -661,7 +661,7 @@ do_add_member(GroupId, UserId, AddedBy) ->
                                             role = member,
                                             joined_at = Now,
                                             added_by = AddedBy,
-                                            last_seen = Now  %% AUDIT FIX: Initialize last_seen
+                                            last_seen = Now
                                         },
                                         mnesia:write(group_member, Member, write),
                                         
@@ -728,7 +728,7 @@ do_remove_member_impl(GroupId, UserId) ->
         %% Remove member
         mnesia:delete(group_member, {GroupId, UserId}, write),
         
-        %% GAP-2 AUDIT FIX (RFC Amendment 6.3 item 4):
+        %% RFC Amendment 6.3 item 4:
         %% "On member removal: All remaining members generate new Sender Keys"
         %%
         %% Delete ALL sender keys for the entire group, not just the removed
@@ -754,9 +754,9 @@ do_remove_member_impl(GroupId, UserId) ->
     
     case mnesia:transaction(F) of
         {atomic, ok} ->
-            %% GAP-2 AUDIT FIX: Log for observability. Remaining members will
-            %% receive new keys via handle_member_reconnect/2 protocol.
-            logger:info("GAP-2: All sender keys invalidated for group ~s "
+            %% Log for observability. Remaining members will receive new
+            %% keys via handle_member_reconnect/2 protocol.
+            logger:info("All sender keys invalidated for group ~s "
                        "(member ~s removed, rotation required)", [GroupId, UserId]),
             ok;
         {aborted, Reason} -> {error, Reason}
@@ -771,7 +771,7 @@ do_promote_admin(GroupId, UserId, PromotedBy) ->
                 [#group_member{role = admin}] -> {error, already_admin};
                 [Member] ->
                     UpdatedMember = Member#group_member{role = admin},
-                    %% AUDIT P1-1: Transaction for role change durability
+                    %% Transaction for role change durability
                     {atomic, ok} = mnesia:transaction(fun() ->
                         mnesia:write(group_member, UpdatedMember, write)
                     end),
@@ -792,7 +792,7 @@ do_demote_admin(GroupId, UserId, DemotedBy) ->
                         1 -> {error, last_admin};
                         _ ->
                             UpdatedMember = Member#group_member{role = member},
-                            %% AUDIT P1-1: Transaction for role change durability
+                            %% Transaction for role change durability
                             {atomic, ok} = mnesia:transaction(fun() ->
                                 mnesia:write(group_member, UpdatedMember, write)
                             end),

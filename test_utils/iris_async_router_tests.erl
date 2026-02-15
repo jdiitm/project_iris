@@ -2,10 +2,10 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% AUDIT FIX: Unit Tests for iris_async_router.erl
+%% Unit Tests for iris_async_router.erl
 %% =============================================================================
 %% 
-%% The audit identified that this 426-line core routing module had zero unit
+%% This core routing module had zero unit
 %% tests. These tests cover:
 %% - Pool size configuration and auto-tuning
 %% - Shard selection via consistent hashing (phash2)
@@ -225,11 +225,11 @@ test_register_exported() ->
     ?assert(lists:member({get_local_count, 0}, Exports)).
 
 %% =============================================================================
-%% AUDIT FIX: Failover and Silent Loss Prevention Tests
+%% Failover and Silent Loss Prevention Tests
 %% =============================================================================
 
 failover_test_() ->
-    {"Failover behavior (AUDIT FIX)",
+    {"Failover behavior",
      [
       {"Module has offline fallback mechanism", fun test_offline_fallback_exists/0},
       {"Stats track offline routing", fun test_stats_track_offline/0},
@@ -270,11 +270,11 @@ test_route_return_types() ->
     ?assert(lists:member({route, 3}, Exports)).
 
 %% =============================================================================
-%% AUDIT FIX: Metrics Tracking Tests
+%% Metrics Tracking Tests
 %% =============================================================================
 
 metrics_test_() ->
-    {"Metrics tracking (AUDIT FIX)",
+    {"Metrics tracking",
      [
       {"Metrics ETS table name defined", fun test_metrics_table_defined/0},
       {"Module tracks route attempts", fun test_route_attempt_tracking/0}

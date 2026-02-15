@@ -7,7 +7,7 @@
 %% RFC-001 v4.0 NFR-32: "MUST emit: msg_in, msg_out, ack_sent, dedup_hit"
 %%
 %% This test documents which counters are actually called from production code.
-%% After the fix (GAP-5), all four counters should be incremented in the
+%% After the fix, all four counters should be incremented in the
 %% real message processing paths.
 %%
 %% Current state (2026-02-08):

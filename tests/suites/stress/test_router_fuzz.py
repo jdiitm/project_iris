@@ -54,6 +54,18 @@ def test_route_random_usernames():
 
 def test_offline_fallback_under_load():
     """Disconnect recipient, send burst, reconnect. Messages must be delivered."""
+    # Wait for circuit breaker recovery from prior stress tests.
+    # The circuit breaker opens after 5 failures with a 30s timeout.
+    # Verify edge→core path is functional before testing offline delivery.
+    for attempt in range(6):
+        try:
+            probe = IrisClient()
+            probe.login(f"cb_probe_{int(time.time())}_{attempt}")
+            probe.close()
+            break
+        except Exception:
+            time.sleep(10)
+
     sender = IrisClient()
     receiver = IrisClient()
 
@@ -67,26 +79,30 @@ def test_offline_fallback_under_load():
         receiver.close()
         time.sleep(0.5)
 
-        # Send burst to offline receiver
+        # Send to offline receiver, paced within rate limiter budget.
+        # Rate limit: 5 msg/sec sustained, initial tokens = 10.
+        # 210ms delay = 4.76 msg/sec (within sustained limit).
         msg_count = 50
         for i in range(msg_count):
             try:
                 sender.send_msg("offline_fuzz_receiver", f"offline_burst_{i}")
             except Exception:
                 pass
+            time.sleep(0.21)
 
-        time.sleep(1)
+        # Allow offline storage pipeline to complete
+        time.sleep(3)
 
-        # Reconnect receiver
+        # Reconnect receiver — allow time for offline delivery pipeline
         receiver = IrisClient()
         receiver.login("offline_fuzz_receiver")
-        time.sleep(2)
+        time.sleep(5)
 
         # Check for delivered messages - receive what we can
         msgs = []
         try:
             while True:
-                msg = receiver.recv_msg(timeout=2)
+                msg = receiver.recv_msg(timeout=3)
                 msgs.append(msg)
         except Exception:
             pass  # Timeout is expected after all messages received

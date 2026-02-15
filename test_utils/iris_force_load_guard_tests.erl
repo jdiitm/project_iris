@@ -2,7 +2,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% AUDIT V2 P1-3: force_load_table Cluster Awareness Guard Tests
+%% : force_load_table Cluster Awareness Guard Tests
 %% =============================================================================
 %%
 %% Tests verify via source analysis that repair_failed_tables/1 checks

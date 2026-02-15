@@ -2,7 +2,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% GAP-1: Sender Key Encryption Enforcement Tests (RFC Amendment 6.3)
+%% Sender Key Encryption Enforcement Tests (RFC Amendment 6.3)
 %%
 %% The server stores Group Sender Keys as raw binaries. RFC Amendment 6.3
 %% requires keys be "distributed via 1:1 E2EE pairwise sessions", meaning
@@ -12,8 +12,6 @@
 %% An E2EE-encrypted blob includes IV(16) + ciphertext(64+) + MAC(32) +
 %% header(16+) = 128+ bytes minimum.
 %%
-%% RED: store_sender_key currently accepts any binary (including plaintext).
-%% GREEN: Add minimum size validation to reject plaintext-sized keys.
 %% =============================================================================
 
 -define(MIN_ENCRYPTED_BLOB_SIZE, 80).  %% Minimum for E2EE envelope

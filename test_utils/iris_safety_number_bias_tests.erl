@@ -2,7 +2,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% GAP-1: Safety Number Uniformity Tests (Amendment 5.3.1)
+%% Safety Number Uniformity Tests (Amendment 5.3.1)
 %%
 %% The safety number is displayed as 12 groups of 5 digits (60 digits total).
 %% Each digit-pair is derived from hash bytes. The current implementation uses

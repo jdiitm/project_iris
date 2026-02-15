@@ -2,10 +2,8 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% Phase 5 TDD: iris_keys must handle check_spk_rotation and detect expired SPKs
+%% iris_keys must handle check_spk_rotation and detect expired SPKs
 %% =============================================================================
-%% RED:  handle_info(check_spk_rotation, State) is a catch-all no-op.
-%% GREEN: Add a dedicated handle_info clause that scans for expired SPKs
 %%        and increments a metric when one is found.
 %% =============================================================================
 

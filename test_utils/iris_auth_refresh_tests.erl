@@ -2,7 +2,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% P1-5 (IA-3): Refresh Token Flow Tests
+%%: Refresh Token Flow Tests
 %%
 %% RFC-001 v4.0 FR-11a: Refresh tokens are opaque, server-stored,
 %% rotated on each use. Reuse detection revokes the family.

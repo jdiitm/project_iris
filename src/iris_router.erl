@@ -24,7 +24,7 @@ route(User, Msg) ->
 %% =============================================================================
 %% RFC FR-5: Sequenced routing for FIFO ordering
 %% =============================================================================
-%% AUDIT FIX: Client provides sequence number to guarantee message ordering.
+%% Client provides sequence number to guarantee message ordering.
 %% The sequence number is used as the storage timestamp, ensuring messages
 %% from the same sender are delivered in order regardless of parallel processing.
 route_sequenced(User, Msg, SeqNo) ->

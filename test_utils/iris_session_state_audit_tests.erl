@@ -2,7 +2,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% AUDIT: Session State Documentation Tests
+%% Session State Documentation Tests
 %% =============================================================================
 %%
 %% Tests verify that:
@@ -13,11 +13,11 @@
 
 iris_session_state_audit_test_() ->
     [
-     {"AUDIT M13: edge_conn has documented state record",
+     {"edge_conn has documented state record",
       fun test_edge_conn_state_fields_documented/0},
-     {"AUDIT M13: session_cache covers session_id and capabilities",
+     {"session_cache covers session_id and capabilities",
       fun test_session_resume_covers_critical_fields/0},
-     {"AUDIT M13: README does not claim stateless edge",
+     {"README does not claim stateless edge",
       fun test_readme_no_stateless_claim/0}
     ].
 
@@ -30,9 +30,7 @@ test_edge_conn_state_fields_documented() ->
     ?assert(binary:match(Src, <<"session_id">>) =/= nomatch),
     ?assert(binary:match(Src, <<"capabilities">>) =/= nomatch),
     ?assert(binary:match(Src, <<"pending_acks">>) =/= nomatch),
-    ?assert(binary:match(Src, <<"buffer">>) =/= nomatch),
-    %% Must have field comments (AUDIT M13 marker)
-    ?assert(binary:match(Src, <<"AUDIT M13">>) =/= nomatch).
+    ?assert(binary:match(Src, <<"buffer">>) =/= nomatch).
 
 test_session_resume_covers_critical_fields() ->
     %% iris_edge_conn must save session_id and pending_acks on terminate

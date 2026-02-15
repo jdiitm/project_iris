@@ -1,7 +1,7 @@
 -module(iris_router_sup).
 -behaviour(supervisor).
 
-%% AUDIT FIX: Support both explicit pool size and auto-tuning
+%% Support both explicit pool size and auto-tuning
 -export([start_link/0, start_link/1, init/1]).
 
 -define(SERVER, ?MODULE).

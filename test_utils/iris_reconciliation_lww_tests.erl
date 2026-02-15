@@ -2,7 +2,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% AUDIT: Cross-Region LWW Reconciliation Tests
+%% Cross-Region LWW Reconciliation Tests
 %% =============================================================================
 %%
 %% Tests verify that:
@@ -21,23 +21,23 @@
 
 iris_reconciliation_lww_test_() ->
     [
-     {"AUDIT LWW: newer user_meta remote overwrites older local",
+     {"newer user_meta remote overwrites older local",
       fun test_user_meta_newer_wins/0},
-     {"AUDIT LWW: older user_meta remote is discarded",
+     {"older user_meta remote is discarded",
       fun test_user_meta_older_discarded/0},
-     {"AUDIT LWW: user_meta legacy format (no last_modified) handled",
+     {"user_meta legacy format (no last_modified) handled",
       fun test_user_meta_legacy_format/0},
-     {"AUDIT LWW: newer user_status remote overwrites older local",
+     {"newer user_status remote overwrites older local",
       fun test_user_status_newer_wins/0},
-     {"AUDIT LWW: older user_status remote is discarded",
+     {"older user_status remote is discarded",
       fun test_user_status_older_discarded/0},
-     {"AUDIT LWW: presence always keeps local",
+     {"presence always keeps local",
       fun test_presence_keeps_local/0},
-     {"AUDIT LWW: offline_msg both records kept (bag semantics)",
+     {"offline_msg both records kept (bag semantics)",
       fun test_offline_msg_both_kept/0},
-     {"AUDIT LWW: should_overwrite is exported",
+     {"should_overwrite is exported",
       fun test_should_overwrite_exported/0},
-     {"AUDIT LWW: source contains LWW comments",
+     {"source contains LWW comments",
       fun test_source_has_lww/0}
     ].
 
@@ -97,6 +97,6 @@ test_should_overwrite_exported() ->
 
 test_source_has_lww() ->
     {ok, Src} = file:read_file("src/iris_core.erl"),
-    ?assert(binary:match(Src, <<"AUDIT LWW">>) =/= nomatch),
+    ?assert(binary:match(Src, <<"LWW">>) =/= nomatch),
     ?assert(binary:match(Src, <<"should_overwrite">>) =/= nomatch),
     ?assert(binary:match(Src, <<"last_modified">>) =/= nomatch).

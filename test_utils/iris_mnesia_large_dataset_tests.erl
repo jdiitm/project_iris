@@ -2,11 +2,11 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% AUDIT MITIGATION: Mnesia Large-Dataset Behavior Tests
+%% Mnesia Large-Dataset Behavior Tests
 %% =============================================================================
 %%
-%% Blocker 3B from audit: No test for large-dataset Mnesia behavior.
-%% The audit identified that Mnesia disc_copies tables load all keys into RAM,
+%% No test for large-dataset Mnesia behavior.
+%% Mnesia disc_copies tables load all keys into RAM,
 %% which is a hard scalability limit. These tests verify:
 %%
 %%   1. disc_only_copies (offline_msg) handles large data without RAM growth
@@ -50,11 +50,11 @@ iris_mnesia_large_dataset_test_() ->
      fun setup/0,
      fun cleanup/1,
      [
-      {"AUDIT 3B: disc_only_copies handles bulk data without RAM explosion",
+      {"disc_only_copies handles bulk data without RAM explosion",
        {timeout, 30, fun test_disc_only_handles_large_data/0}},
-      {"AUDIT 3B: memory alarm triggers at configurable threshold",
+      {"memory alarm triggers at configurable threshold",
        fun test_memory_alarm_triggers_at_threshold/0},
-      {"AUDIT 3B: backpressure rejects stores under memory alarm",
+      {"backpressure rejects stores under memory alarm",
        fun test_backpressure_rejects_under_memory_alarm/0}
      ]}.
 

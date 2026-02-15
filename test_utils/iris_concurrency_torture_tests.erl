@@ -6,7 +6,7 @@
 %% =============================================================================
 %%
 %% Purpose: High-contention stress tests to verify system behavior under
-%% extreme concurrent load. Per Principal Test Audit: "No concuerror integration"
+%% extreme concurrent load.
 %%
 %% Note: Concuerror (formal race condition detection) is deferred.
 %% These tests use ETS-based torture tests for practical concurrency validation.

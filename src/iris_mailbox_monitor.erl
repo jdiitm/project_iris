@@ -3,7 +3,6 @@
 %% =============================================================================
 %% Process Mailbox Health Monitor
 %% =============================================================================
-%% Per PRINCIPAL_AUDIT_REPORT.md Section 6.2 (Falsification Criteria):
 %% - Poll process_info(Pid, message_queue_len) for critical processes
 %% - Alert when any gen_server > 10,000 messages
 %% - Export as Prometheus gauge

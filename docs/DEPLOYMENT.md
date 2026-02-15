@@ -388,15 +388,4 @@ openssl s_client -connect localhost:8085 -CAfile certs/ca.pem
 
 ## Troubleshooting
 
-**Edge can't reach Core**: Hidden nodes don't auto-reconnect.
-```erlang
-net_adm:ping('core_node').
-```
-
-**Data lost after restart**: Ensure `-mnesia dir` points to persistent storage.
-
-**Tables missing**: Check `mnesia:system_info(directory)` matches config.
-
-**Quorum not reached**: Check nodes available with `iris_quorum_write:get_replicas/1`.
-
-**Cross-region routing fails**: Verify `region_endpoints` config and network.
+See [OPERATIONS.md](OPERATIONS.md) for incident response, failover procedures, data recovery, and detailed troubleshooting.

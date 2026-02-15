@@ -2,7 +2,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% AUDIT MITIGATION: Storage Tiering Tests (Blocker 1)
+%% Storage Tiering Tests
 %% =============================================================================
 %%
 %% Root cause: disc_copies tables load all keys into RAM. At 100M+ users,
@@ -75,17 +75,17 @@ iris_storage_tiering_test_() ->
      fun setup/0,
      fun cleanup/1,
      [
-      {"AUDIT B1: cold data eviction moves entries to overflow",
+      {"cold data eviction moves entries to overflow",
        fun test_cold_data_eviction/0},
-      {"AUDIT B1: hot data stays in hot tier",
+      {"hot data stays in hot tier",
        fun test_hot_data_stays_in_ram/0},
-      {"AUDIT B1: read transparently falls back to cold tier",
+      {"read transparently falls back to cold tier",
        fun test_transparent_read_fallback/0},
-      {"AUDIT B1: access promotes cold data to hot tier",
+      {"access promotes cold data to hot tier",
        fun test_promotion_on_access/0},
-      {"AUDIT B1: eviction respects memory threshold signal",
+      {"eviction respects memory threshold signal",
        fun test_eviction_respects_memory_threshold/0},
-      {"AUDIT B1: table_spec includes user_meta_cold",
+      {"table_spec includes user_meta_cold",
        fun test_table_spec_includes_overflow/0}
      ]}.
 

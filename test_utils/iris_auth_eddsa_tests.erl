@@ -2,7 +2,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% P1-4: EdDSA JWT Validation Tests (RFC-001 v4.0 Section 6.3)
+%% EdDSA JWT Validation Tests (RFC-001 v4.0 Section 6.3)
 %%
 %% Verifies:
 %% 1. EdDSA (Ed25519) token verification succeeds

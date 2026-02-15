@@ -2,7 +2,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% AUDIT MITIGATION: Mnesia Overflow Table Tests (Blocker 1)
+%% Mnesia Overflow Table Tests
 %% =============================================================================
 %%
 %% Tests verify the properties of the cold-tier overflow table:

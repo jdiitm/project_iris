@@ -2,7 +2,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% AUDIT P1-1: Group Transaction Durability Tests
+%% Group Transaction Durability Tests
 %% =============================================================================
 %%
 %% Tests verify that iris_group.erl operations use mnesia:transaction
@@ -56,19 +56,19 @@ iris_group_txn_test_() ->
      fun setup/0,
      fun cleanup/1,
      [
-      {"P1-1: Source uses mnesia:transaction, not dirty_write",
+      {"Source uses mnesia:transaction, not dirty_write",
        fun test_source_uses_transactions/0},
-      {"P1-1: store_sender_key writes transactionally",
+      {"store_sender_key writes transactionally",
        fun test_store_sender_key_transactional/0},
-      {"P1-1: update_member_last_seen writes transactionally",
+      {"update_member_last_seen writes transactionally",
        fun test_update_member_last_seen_transactional/0},
-      {"P1-1: promote_admin writes transactionally",
+      {"promote_admin writes transactionally",
        fun test_promote_admin_transactional/0},
-      {"P1-1: demote_admin writes transactionally",
+      {"demote_admin writes transactionally",
        fun test_demote_admin_transactional/0},
-      {"P1-1: sender key is retrievable after transactional store",
+      {"sender key is retrievable after transactional store",
        fun test_sender_key_round_trip/0},
-      {"P1-1: role changes persist correctly",
+      {"role changes persist correctly",
        fun test_role_change_persistence/0}
      ]}.
 

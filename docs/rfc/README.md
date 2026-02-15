@@ -7,7 +7,7 @@ Formal requirements and design documents for Project Iris.
 | RFC | Title | Version | Status |
 |-----|-------|---------|--------|
 | [RFC-001](RFC-001-SYSTEM-REQUIREMENTS.md) | System Requirements | v4.0 | Implemented |
-| [RFC-001-AMENDMENT-001](RFC-001-AMENDMENT-001.md) | E2EE + Group Messaging | v1.0 | Approved / Implementing |
+| [RFC-001-AMENDMENT-001](RFC-001-AMENDMENT-001.md) | E2EE + Group Messaging | v1.3 | Implemented |
 
 ## RFC-001 Contents (v4.0)
 

@@ -259,7 +259,7 @@ code_change(_OldVsn, State, _Extra) ->
 %% Internal functions
 %%====================================================================
 
-%% @private Send event with B-5 AUDIT MITIGATION: counter overflow handling.
+%% @private Send event with counter overflow handling.
 %% When logical counter hits MAX_LOGICAL and wall clock hasn't advanced,
 %% spin-wait up to 5ms for wall clock to advance, ensuring strict monotonicity.
 do_send(LastHLC, NodeId, State) ->
@@ -280,7 +280,7 @@ do_send(LastHLC, NodeId, State, Attempts) ->
             NextLogical = LastHLC#hlc.logical + 1,
             case NextLogical > ?MAX_LOGICAL of
                 true ->
-                    %% B-5 AUDIT MITIGATION: Counter overflow.
+                    %% Counter overflow.
                     %% Spin-wait for wall clock to advance rather than
                     %% producing duplicate timestamps.
                     timer:sleep(1),
@@ -302,7 +302,7 @@ compute_node_id() ->
     Hash.
 
 %% @private Perform the receive merge operation.
-%% B-5 AUDIT MITIGATION: Uses min() to cap at MAX_LOGICAL; the send path
+%% Uses min() to cap at MAX_LOGICAL; the send path
 %% handles the spin-wait. Recv only merges -- the next send() will detect
 %% the saturated counter and wait for wall clock advance.
 do_recv_merge(PT, LastPT, RemotePT, LastHLC, RemoteHLC, NodeId, State) ->

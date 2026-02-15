@@ -9,7 +9,7 @@
 %% 2. Consistent Hashing via phash2 for sticky user routing.
 %% 3. Stats Aggregation across the pool.
 %%
-%% AUDIT FIX: Silent Loss Prevention
+%% Silent Loss Prevention
 %% - All routing failures MUST fall back to offline storage
 %% - Every message is tracked (route_attempt → route_success | route_offline)
 %% - Zero silent message drops
@@ -40,12 +40,12 @@
 -define(LOCAL_PRESENCE, local_presence_v2).
 
 %% Pool size configuration
-%% AUDIT FIX: Auto-tune based on scheduler count instead of hardcoded value
+%% Auto-tune based on scheduler count instead of hardcoded value
 -define(MIN_POOL_SIZE, 4).
 -define(MAX_POOL_SIZE, 128).
 -define(DEFAULT_POOL_SIZE, 8).  %% Fallback if auto-tune fails
 
-%% AUDIT FIX: Metrics ETS table for delivery tracking
+%% Metrics ETS table for delivery tracking
 -define(METRICS_ETS, iris_router_metrics).
 
 -record(state, {
@@ -53,8 +53,8 @@
     local_count = 0 :: integer(),
     routed_local = 0 :: integer(),
     routed_remote = 0 :: integer(),
-    routed_offline = 0 :: integer(),  %% AUDIT FIX: Track offline fallback
-    route_failures = 0 :: integer(),   %% AUDIT FIX: Track failures
+    routed_offline = 0 :: integer(),  %% Track offline fallback
+    route_failures = 0 :: integer(),   %% Track failures
     start_time :: integer()
 }).
 
@@ -88,12 +88,12 @@ route(User, Msg) ->
     route(User, Msg, #{}).
 
 %% @doc Route with options (including msg_id for tracking)
-%% G-1 FIX: Returns {error, queue_overflow} if outbox is saturated (NACK).
+%% Returns {error, queue_overflow} if outbox is saturated (NACK).
 %% This prevents silent message loss per RFC 7.2 / NFR-8.
 -spec route(binary(), binary(), map()) -> ok | {ok, offline} | {error, queue_overflow}.
 route(User, Msg, Opts) ->
-    %% G-1 FIX: Synchronous pre-flight overflow check before async cast.
-    %% Uses the O(1) ETS counter from G-3 -- cheap on the hot path.
+    %% Synchronous pre-flight overflow check before async cast.
+    %% Uses the O(1) ETS counter -- cheap on the hot path.
     case preflight_overflow_check(User) of
         ok ->
             %% Record attempt
@@ -152,7 +152,7 @@ get_stats() ->
     StatsList = [call_shard_stats(I) || I <- Shards],
     BaseStats = aggregate_stats(StatsList),
     
-    %% AUDIT FIX: Include global metrics
+    %% Include global metrics
     GlobalMetrics = get_global_metrics(),
     maps:merge(BaseStats, GlobalMetrics).
 
@@ -215,7 +215,7 @@ handle_call(get_stats_local, _From, State) ->
 handle_call(_Request, _From, State) ->
     {reply, ok, State}.
 
-%% AUDIT FIX: Handle route with MsgId for tracking
+%% Handle route with MsgId for tracking
 handle_cast({route, User, Msg, MsgId}, State) ->
     %% CRITICAL PATH - Sharded
     case ets:lookup(?LOCAL_PRESENCE, User) of
@@ -248,7 +248,7 @@ handle_cast({route, User, Msg, MsgId}, State) ->
 handle_cast({route, User, Msg}, State) ->
     handle_cast({route, User, Msg, undefined}, State);
 
-%% FORENSIC_AUDIT_FIX: Handle completion callback from spawned routing tasks
+%% Handle completion callback from spawned routing tasks
 handle_cast({route_complete, {success, remote}}, State) ->
     incr_metric(route_success),
     {noreply, State#state{routed_remote = State#state.routed_remote + 1}};
@@ -301,7 +301,7 @@ code_change(_OldVsn, State, _Extra) ->
 %% =============================================================================
 
 route_to_remote(User, Msg, MsgId, State) ->
-    %% FORENSIC_AUDIT_FIX: Spawn ephemeral task to avoid HOL blocking.
+    %% Spawn ephemeral task to avoid HOL blocking.
     %% The blocking rpc:call was causing shard GenServers to stall for up to
     %% 2 seconds per slow cross-region lookup, creating head-of-line blocking.
     %% Now: GenServer returns immediately, spawned task handles remote routing.
@@ -314,7 +314,7 @@ route_to_remote(User, Msg, MsgId, State) ->
 
 %% FIX: Sequenced remote routing - routes across edges/cores with sequence number
 %% This was missing, causing cross-edge messages to be stored offline directly
-%% F2 FIX: Process synchronously (NO spawn) to preserve FIFO ordering (RFC 1.3).
+%% Process synchronously (NO spawn) to preserve FIFO ordering (RFC 1.3).
 %% The shard GenServer already serializes casts, so inline processing guarantees
 %% that seq N completes before seq N+1 starts. The RPC timeout cost (~5s max)
 %% is acceptable for sequenced messages where correctness > throughput.
@@ -324,7 +324,7 @@ route_sequenced_remote(User, Msg, SeqNo, State) ->
     {noreply, State}.
 
 do_sequenced_remote_route(User, Msg, SeqNo) ->
-    %% RFC FR-5 FIX: Re-wrap message with SeqNo for offline storage path
+    %% Re-wrap message with SeqNo for offline storage path
     %% The handle_cast unwraps {sequenced_msg, SeqNo, Msg} for local delivery,
     %% but we need the wrapper for store_offline_via_node to extract SeqNo
     WrappedMsg = {sequenced_msg, SeqNo, Msg},
@@ -432,23 +432,23 @@ find_first_reachable([Node | Rest]) ->
         pang -> find_first_reachable(Rest)
     end.
 
-%% FORENSIC_AUDIT_FIX: Extracted blocking logic into separate function
+%% Extracted blocking logic into separate function
 %% This runs in a spawned process, not blocking the shard GenServer
 do_remote_route(User, Msg, MsgId) ->
-    %% HOT-002 FIX: Check destination rate limit before routing
+    %% Check destination rate limit before routing
     %% This protects hot recipients (celebrities) from being overwhelmed
     case check_destination_rate(User) of
         allow ->
             do_remote_route_inner(User, Msg, MsgId);
         {deny, RetryAfter} ->
             %% Destination is rate limited - store offline for later delivery
-            logger:warning("HOT-002: Destination ~p rate limited (msg_id=~p), storing offline. Retry in ~pms",
+            logger:warning("Destination ~p rate limited (msg_id=~p), storing offline. Retry in ~pms",
                           [User, MsgId, RetryAfter]),
             route_via_outbox_or_offline(User, Msg, MsgId),
             {success, offline}  %% Not a failure - graceful degradation
     end.
 
-%% HOT-002 FIX: Check destination rate limit
+%% Check destination rate limit
 check_destination_rate(User) ->
     case whereis(iris_rate_limiter) of
         undefined -> allow;  %% Rate limiter not running
@@ -509,7 +509,7 @@ get_shard_nodes(User) ->
     end.
 
 %% Fallback to discovery service
-%% P0-A FIX: Include ALL core nodes across ALL regions for cross-region routing
+%% Include ALL core nodes across ALL regions for cross-region routing
 get_discovery_nodes() ->
     LocalNodes = case whereis(iris_discovery) of
         undefined ->
@@ -524,7 +524,7 @@ get_discovery_nodes() ->
             end
     end,
     
-    %% P0-A FIX: Also include cross-region cores for global user lookup
+    %% Also include cross-region cores for global user lookup
     CrossRegionNodes = get_all_region_cores(),
     lists:usort(LocalNodes ++ CrossRegionNodes).
 
@@ -538,7 +538,7 @@ discover_via_pg_or_connected() ->
         Pids -> [node(P) || P <- Pids]
     end.
 
-%% P0-A FIX: Get all core nodes across all configured regions
+%% Get all core nodes across all configured regions
 get_all_region_cores() ->
     case whereis(iris_region_router) of
         undefined -> [];
@@ -602,8 +602,8 @@ find_user_across_cores([Core | Rest], User) ->
     end.
 
 store_offline_via_node(Node, User, Msg, Fallbacks) ->
-    %% DURABILITY FIX: Use store_offline_durable for RPO=0 guarantee
-    %% RFC FR-5 FIX: Unwrap sequenced messages to pass SeqNo for FIFO ordering
+    %% Use store_offline_durable for RPO=0 guarantee
+    %% Unwrap sequenced messages to pass SeqNo for FIFO ordering
     StorableMsg = case Msg of
         {sequenced_msg, SeqNo, RealMsg} when is_integer(SeqNo) ->
             %% Pass as {SeqNo, RealMsg} tuple so iris_core uses SeqNo as timestamp
@@ -645,8 +645,8 @@ try_route_fallbacks([Node | Rest], User, Msg) ->
             UserPid ! {deliver_msg, DeliverMsg},
             ok;
         {error, not_found} ->
-            %% DURABILITY FIX: Use store_offline_durable for RPO=0 guarantee
-            %% RFC FR-5 FIX: Unwrap sequenced messages to pass SeqNo for FIFO ordering
+            %% Use store_offline_durable for RPO=0 guarantee
+            %% Unwrap sequenced messages to pass SeqNo for FIFO ordering
             StorableMsg = case Msg of
                 {sequenced_msg, SeqNo, RealMsg} when is_integer(SeqNo) ->
                     {SeqNo, RealMsg};
@@ -704,7 +704,7 @@ route_via_outbox_or_offline(User, Msg, MsgId) ->
             end
     end.
 
-%% G-1 FIX: Synchronous pre-flight check for outbox overflow.
+%% Synchronous pre-flight check for outbox overflow.
 %% If iris_region_bridge is running (multi-region mode) and the target
 %% region's queue is at capacity, return {error, queue_overflow} immediately.
 %% The caller can then NACK the client instead of false-ACKing.
@@ -719,7 +719,7 @@ preflight_overflow_check(User) ->
             Depth = iris_region_bridge:get_queue_depth_fast(TargetRegion),
             case Depth >= MaxQueue of
                 true ->
-                    logger:warning("G-1: Pre-flight NACK for ~p: queue depth ~p >= max ~p",
+                    logger:warning("Pre-flight NACK for ~p: queue depth ~p >= max ~p",
                                    [User, Depth, MaxQueue]),
                     {error, queue_overflow};
                 false ->
@@ -741,7 +741,7 @@ get_target_region(User) ->
             end
     end.
 
-%% AUDIT FIX: Guaranteed offline storage - NEVER returns error
+%% Guaranteed offline storage - NEVER returns error
 %% If all nodes fail, store locally and queue for later delivery
 store_offline_guaranteed(User, Msg, MsgId) ->
     %% Try remote storage first
@@ -750,7 +750,7 @@ store_offline_guaranteed(User, Msg, MsgId) ->
         ok ->
             ok;
         {error, _Reason} ->
-            %% AUDIT FIX: Last resort - store locally in Mnesia
+            %% Last resort - store locally in Mnesia
             %% This ensures the message is NEVER silently dropped
             logger:warning("All remote offline storage failed for ~p, storing locally", [User]),
             store_offline_local(User, Msg, MsgId)

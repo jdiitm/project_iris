@@ -9,7 +9,7 @@
 %%    a reconciliation process is spawned.
 %% 2. The reconciliation performs union merge of offline_msg records.
 %%
-%% The audit found that maybe_exit_diverged_mode simply sets mode=normal
+%% maybe_exit_diverged_mode simply sets mode=normal
 %% without triggering any data reconciliation, violating RFC 7.1.1
 %% which requires "Union Merge of append-only logs".
 %% =============================================================================
@@ -67,7 +67,7 @@ test_healing_triggers_reconciliation() ->
     %% Trigger a partition check which should call maybe_exit_diverged_mode
     %% and find quorum restored (no expected nodes = always quorum).
     Pid ! check_partition,
-    %% AUDIT V2 P1-1: Event-driven wait for mode to change to normal
+    %% : Event-driven wait for mode to change to normal
     ok = iris_test_utils:wait_until(fun() ->
         S = iris_partition_guard:get_status(),
         maps:get(mode, S) =:= normal

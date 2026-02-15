@@ -1,18 +1,19 @@
 -module(iris_edge_app).
 -behaviour(application).
 -export([start/2, stop/1]).
--export([validate_production_config/0]).
-%% AUDIT MITIGATION P1-3: Config validation exports (for testing)
+-export([validate_production_config/0, validate_auth_mode/0]).
+-export([prep_stop/1, is_draining/0]).
+%% Config validation exports (for testing)
 -export([validate_num_acceptors/1, validate_rate_limits/2,
          validate_tls_cert/1, validate_replication_factor/1]).
 
 start(_Type, _Args) ->
     logger:info("Starting Iris Edge Application..."),
 
-    %% AUDIT MITIGATION P0-1: Fail-fast in production if critical config is missing
+    %% Fail-fast in production if critical config is missing
     validate_production_config(),
 
-    %% AUDIT FIX: Warn if zstd NIF is not available
+    %% Warn if zstd NIF is not available
     case filelib:is_file("priv/iris_zstd_nif.so") of
         true -> ok;
         false ->
@@ -42,24 +43,33 @@ start(_Type, _Args) ->
             end, CoreNodes)
     end,
 
-    %% AUDIT 3.2/6.1: Verify mTLS is configured (DRY -- delegates to iris_core)
+    %% Verify mTLS is configured (DRY -- delegates to iris_core)
     iris_core:check_mtls_enforcement(),
 
     iris_edge_sup:start_link().
 
-stop(_State) ->
+%% @doc Called BEFORE supervisor tree is terminated.
+%% Sets draining flag (makes /ready return 503), then sleeps for drain period
+%% to let in-flight operations complete and load balancer stop routing.
+prep_stop(State) ->
     logger:info("Iris Edge shutting down -- draining connections..."),
-    %% Close listen sockets first (stop accepting new connections).
-    %% supervisor:terminate_child handles this via iris_edge_listener:terminate/2
-    %% which already closes the listen socket.
-    %% Give active connections time to complete in-flight operations.
-    %% Each iris_edge_conn:terminate/3 saves pending ACKs and flushes messages.
+    persistent_term:put(iris_edge_draining, true),
     DrainMs = application:get_env(iris_edge, shutdown_drain_ms, 5000),
     timer:sleep(DrainMs),
+    logger:info("Iris Edge drain complete, proceeding with shutdown."),
+    State.
+
+stop(_State) ->
+    %% Drain already happened in prep_stop/1; just log and return.
     logger:info("Iris Edge stopped."),
     ok.
 
-%% @doc AUDIT MITIGATION P0-1: Validate critical config in production mode.
+%% @doc Returns true if the application is in graceful shutdown drain phase.
+-spec is_draining() -> boolean().
+is_draining() ->
+    persistent_term:get(iris_edge_draining, false).
+
+%% @doc Validate critical config in production mode.
 %% Rejects empty core_nodes and missing JWT secret when deployment_mode=production.
 -spec validate_production_config() -> ok.
 validate_production_config() ->
@@ -91,7 +101,17 @@ validate_production_config() ->
                     end;
                 false -> ok
             end,
-            %% AUDIT MITIGATION P1-3: Validate additional production config
+            %% Validate auth_mode (H-3: edge nodes must not be signers)
+            case validate_auth_mode() of
+                ok -> ok;
+                {error, signer_on_edge} ->
+                    logger:error("FATAL: auth_mode=signer on edge node in production. "
+                                 "Edge nodes MUST use auth_mode=verifier. "
+                                 "Only auth_service nodes may be signers."),
+                    init:stop(1),
+                    exit(signer_on_edge_node)
+            end,
+            %% Validate additional production config
             validate_extended_config(),
             ok;
         _ ->
@@ -101,7 +121,7 @@ validate_production_config() ->
     end.
 
 %% =============================================================================
-%% AUDIT MITIGATION P1-3: Extended Config Validation (Startup)
+%% Extended Config Validation (Startup)
 %% =============================================================================
 
 validate_extended_config() ->
@@ -151,7 +171,7 @@ validate_extended_config_warn() ->
     ok.
 
 %% =============================================================================
-%% AUDIT MITIGATION P1-3: Configuration Validation Functions
+%% Configuration Validation Functions
 %% =============================================================================
 
 %% @doc Clamp num_acceptors to safe range [1, 10000].
@@ -178,4 +198,26 @@ validate_tls_cert(Path) ->
 validate_replication_factor(N) when is_integer(N), N > 0 -> ok;
 validate_replication_factor(_) -> {error, invalid_replication_factor}.
 
-%% AUDIT 5.2 DRY: check_mtls_enforcement/0 consolidated into iris_core.erl
+%% =============================================================================
+%% Auth Mode Validation (H-3)
+%% =============================================================================
+
+%% @doc Validate auth_mode configuration.
+%% In production, edge nodes MUST use auth_mode=verifier.
+%% Only auth_service nodes may use auth_mode=signer.
+-spec validate_auth_mode() -> ok | {error, signer_on_edge}.
+validate_auth_mode() ->
+    case application:get_env(iris_edge, deployment_mode, development) of
+        production ->
+            AuthMode = application:get_env(iris_edge, auth_mode, verifier),
+            NodeRole = application:get_env(iris_edge, node_role, edge),
+            case {AuthMode, NodeRole} of
+                {signer, auth_service} -> ok;
+                {signer, _} -> {error, signer_on_edge};
+                _ -> ok
+            end;
+        _ ->
+            ok
+    end.
+
+%% check_mtls_enforcement/0 consolidated into iris_core.erl

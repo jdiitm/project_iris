@@ -13,16 +13,16 @@
 
 -export([start_link/0, start_link/1]).
 -export([check/1, check/2, allow/1, allow/2]).
-%% AUDIT MITIGATION P1-1: Per-message-type rate limiting
+%% Per-message-type rate limiting
 -export([check_typed/2]).
 -export([get_stats/0, get_user_tokens/1]).
-%% HOT-002 FIX: Destination rate limiting to protect hot recipients
+%% Destination rate limiting to protect hot recipients
 -export([check_destination/1, check_destination/2, get_destination_stats/1]).
 -export([promote_destination/2, is_destination_hot/1]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 %% RFC NFR-17: Distributed rate limit gossip
 -export([merge_remote_counters/1]).
-%% AUDIT MITIGATION: Hot-user detection and synchronous cross-node check
+%% Hot-user detection and synchronous cross-node check
 -export([is_hot_user/1, get_hot_users/0, sync_check/1]).
 
 -define(SERVER, ?MODULE).
@@ -36,7 +36,7 @@
 -define(DEFAULT_BURST, 20).        %% Burst capacity (20 msgs/sec for 10s)
 -define(REFILL_INTERVAL, 100).     %% Refill every 100ms
 
--define(GOSSIP_INTERVAL, 500).     %% AUDIT MITIGATION: Tightened from 1s to 500ms for faster convergence
+-define(GOSSIP_INTERVAL, 500).     %% Tightened from 1s to 500ms for faster convergence
 -define(GOSSIP_PG_GROUP, iris_rate_limit_gossip).
 
 -record(state, {
@@ -84,7 +84,7 @@ check(User, Tokens) ->
     case consume_tokens(RefilledBucket, Tokens) of
         {ok, NewBucket} ->
             save_bucket(NewBucket),
-            %% AUDIT MITIGATION: Flag user as hot when >80% tokens depleted
+            %% Flag user as hot when >80% tokens depleted
             maybe_flag_hot_user(NewBucket),
             gen_server:cast(?SERVER, allowed),
             allow;
@@ -97,7 +97,7 @@ check(User, Tokens) ->
             {deny, max(10, min(RetryAfter, 60000))}
     end.
 
-%% @doc AUDIT MITIGATION P1-1: Per-message-type rate limiting.
+%% @doc Per-message-type rate limiting.
 %% Each Type gets its own bucket so typing floods can't starve messages.
 %% Type :: message | typing | handshake | media | presence
 -spec check_typed(binary(), atom()) -> allow | {deny, integer()}.
@@ -152,7 +152,7 @@ init(_Opts) ->
         {write_concurrency, true}
     ]),
     
-    %% AUDIT MITIGATION: Hot-user tracking table for synchronous cross-node checks
+    %% Hot-user tracking table for synchronous cross-node checks
     try
         ets:new(?HOT_USERS_TABLE, [
             set,
@@ -190,7 +190,7 @@ handle_call(get_stats, _From, State) ->
     },
     {reply, Stats, State};
 
-%% AUDIT MITIGATION: Synchronous user usage query for cross-node checks
+%% Synchronous user usage query for cross-node checks
 handle_call({get_user_usage, User}, _From, State) ->
     Used = case ets:lookup(?TABLE, User) of
         [#bucket{burst = B, tokens = T}] -> round(B - T);
@@ -266,7 +266,7 @@ get_or_create_bucket(User, Now) ->
     case ets:lookup(?TABLE, User) of
         [Bucket] -> Bucket;
         [] ->
-            %% H-1 AUDIT MITIGATION: Initialize with half-burst tokens.
+            %% Initialize with half-burst tokens.
             %% This prevents burst abuse after process restart where all
             %% token buckets are empty. A newly-seen user gets half their
             %% burst capacity; the remaining half refills over time.
@@ -341,7 +341,7 @@ get_app_env(Key) ->
         undefined -> application:get_env(iris_core, Key)
     end.
 
-%% AUDIT MITIGATION P1-1: Typed bucket creation with per-type limits
+%% Typed bucket creation with per-type limits
 get_or_create_typed_bucket(Key, Type, Now) ->
     case ets:lookup(?TABLE, Key) of
         [Bucket] -> Bucket;
@@ -444,7 +444,7 @@ merge_remote_counters(RemoteCounters) ->
     gen_server:cast(?SERVER, {remote_counters, unknown, RemoteCounters}).
 
 %% =============================================================================
-%% AUDIT MITIGATION: Hot-User Detection and Synchronous Cross-Node Check
+%% Hot-User Detection and Synchronous Cross-Node Check
 %% =============================================================================
 %% When a user depletes >80% of their token bucket, they are flagged as "hot".
 %% Hot users get synchronous cross-node counter checks instead of waiting for
@@ -535,7 +535,7 @@ ensure_hot_users_table() ->
     end.
 
 %% =============================================================================
-%% HOT-002 FIX: Destination Rate Limiting
+%% Destination Rate Limiting
 %% =============================================================================
 %% Protect hot recipients (celebrities/VIPs) from being overwhelmed by limiting
 %% the rate of incoming messages per destination user. This prevents:
@@ -595,7 +595,7 @@ check_destination(DestUser, Tokens) ->
             RefillRate = RefilledBucket#dest_bucket.rate / 1000,
             RetryAfter = round(TokensNeeded / max(0.001, RefillRate)),
             
-            logger:warning("HOT-002: Destination ~p rate limited (tokens=~p, need=~p)", 
+            logger:warning("Destination ~p rate limited (tokens=~p, need=~p)", 
                           [DestUser, CurrentTokens, Tokens]),
             {deny, max(10, min(RetryAfter, 60000))}
     end.
@@ -625,7 +625,7 @@ promote_destination(DestUser, BucketMultiplier) ->
     },
     save_dest_bucket(NewBucket),
     
-    logger:info("HOT-002: Promoted ~p to hot destination (rate=~p, burst=~p)", 
+    logger:info("Promoted ~p to hot destination (rate=~p, burst=~p)", 
                [DestUser, Rate, Burst]),
     ok.
 
@@ -735,7 +735,7 @@ maybe_auto_promote(#dest_bucket{user = User, total_received = Total}) when Total
     case is_destination_hot(User) of
         true -> ok;
         false ->
-            logger:info("HOT-002: Auto-promoting ~p to hot destination (received ~p msgs)", [User, Total]),
+            logger:info("Auto-promoting ~p to hot destination (received ~p msgs)", [User, Total]),
             promote_destination(User, 10)
     end;
 maybe_auto_promote(_) ->

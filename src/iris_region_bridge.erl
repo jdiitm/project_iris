@@ -128,7 +128,7 @@ check_queue_overflow(TargetRegion) ->
         end
     catch
         Class:Reason ->
-            %% AUDIT MITIGATION P0-3: Fail-closed -- reject message if depth check crashes.
+            %% Fail-closed -- reject message if depth check crashes.
             %% Under memory pressure (the condition causing overflow), fail-open is useless.
             logger:error("Region bridge queue depth check failed for ~s: ~p:~p",
                          [TargetRegion, Class, Reason]),

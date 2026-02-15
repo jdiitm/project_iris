@@ -2,7 +2,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% P0-1 (EK-1): Safety Number Computation Tests
+%% Safety Number Computation Tests
 %%
 %% RFC-001-AMENDMENT-001 v1.3 Section 5.3.1:
 %% Safety Number = SHA-256(sort(IK_A, IK_B))[:30] displayed as 12 groups

@@ -1,7 +1,7 @@
 -module(iris_group_tests).
 -include_lib("eunit/include/eunit.hrl").
 
-%% GAP-1: Helper to generate test keys ≥80 bytes (simulates E2EE-encrypted blob)
+%% Helper to generate test keys ≥80 bytes (simulates E2EE-encrypted blob)
 test_encrypted_key(Seed) ->
     H1 = crypto:hash(sha512, Seed),
     H2 = crypto:hash(sha512, <<Seed/binary, "_extra">>),
@@ -241,7 +241,7 @@ test_sender_keys() ->
     {ok, GroupId} = iris_group:create_group(<<"Sender Key Test">>, Creator),
     iris_group:add_member(GroupId, Member, Creator),
     
-    %% Store sender key (GAP-1: must be ≥80 bytes encrypted blob)
+    %% Store sender key (must be ≥80 bytes encrypted blob)
     SenderKey = crypto:strong_rand_bytes(128),
     KeyId = <<"key_001">>,
     ?assertEqual(ok, iris_group:store_sender_key(GroupId, Creator, KeyId, SenderKey)),
@@ -254,7 +254,7 @@ test_sender_keys() ->
     ?assertEqual({error, not_found}, 
                  iris_group:get_sender_key(GroupId, Creator, <<"nonexistent">>)),
     
-    %% Store another key (GAP-1: must be ≥80 bytes)
+    %% Store another key (must be ≥80 bytes)
     SenderKey2 = crypto:strong_rand_bytes(128),
     iris_group:store_sender_key(GroupId, Creator, <<"key_002">>, SenderKey2),
     
@@ -262,7 +262,7 @@ test_sender_keys() ->
     Keys = iris_group:get_all_sender_keys(GroupId, Creator),
     ?assertEqual(2, length(Keys)),
     
-    %% Rotate key (GAP-1: must be ≥80 bytes)
+    %% Rotate key (must be ≥80 bytes)
     NewKey = crypto:strong_rand_bytes(128),
     {ok, NewKeyId} = iris_group:rotate_sender_key(GroupId, Creator, NewKey),
     ?assert(is_binary(NewKeyId)),
@@ -345,7 +345,7 @@ test_e2ee_detection() ->
     %% Initially no sender keys - not E2EE
     ?assertNot(iris_group:has_sender_keys(GroupId)),
     
-    %% Add a sender key - now E2EE (GAP-1: must be ≥80 bytes)
+    %% Add a sender key - now E2EE (must be ≥80 bytes)
     SenderKey = crypto:strong_rand_bytes(128),
     KeyId = <<"e2ee_key_001">>,
     ok = iris_group:store_sender_key(GroupId, Creator, KeyId, SenderKey),
@@ -403,7 +403,7 @@ test_e2ee_limit_error() ->
     ok.
 
 test_e2ee_group_hard_limit() ->
-    %% Audit Finding 2: Exercise the actual 256-member limit enforcement
+    %% Exercise the actual 256-member limit enforcement
     Creator = <<"hard_limit_creator">>,
     {ok, GroupId} = iris_group:create_group(<<"Hard Limit Test">>, Creator),
     
@@ -429,7 +429,7 @@ test_e2ee_group_hard_limit() ->
     ok.
 
 %% =============================================================================
-%% Member Reconnect and Key Sync Tests (AUDIT FIX)
+%% Member Reconnect and Key Sync Tests
 %% =============================================================================
 
 member_reconnect_test_() ->
@@ -470,7 +470,7 @@ test_keys_since() ->
     %% Record time BEFORE adding keys (subtract 2 seconds to handle clock granularity)
     Before = erlang:system_time(second) - 2,
     
-    %% AUDIT V2 P1-1: Event-driven wait for clock to advance past Before
+    %% : Event-driven wait for clock to advance past Before
     ok = iris_test_utils:wait_until(fun() ->
         erlang:system_time(second) > Before + 1
     end, 2000),
@@ -505,7 +505,7 @@ test_last_seen_update() ->
     ok.
 
 %% =============================================================================
-%% Audit Finding 3: Sender Key Race Condition (TOCTOU)
+%% Sender Key Race Condition (TOCTOU)
 %% =============================================================================
 %% The fan-out loop in iris_session must skip members who have been removed
 %% between the initial is_member check and the actual routing.

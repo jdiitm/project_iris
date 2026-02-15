@@ -2,7 +2,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% P1-11 (PD-2): Compression Negotiation Tests
+%%: Compression Negotiation Tests
 %%
 %% RFC-001 v4.0 Section 11.1:
 %% - zstd and zlib supported
@@ -52,7 +52,7 @@ iris_compression_test_() ->
 
 test_compress_zstd_roundtrip() ->
     Data = crypto:strong_rand_bytes(256),
-    %% AUDIT V2: compress(zstd, ...) always returns {ok, _} via NIF or zlib fallback
+    %% V2: compress(zstd, ...) always returns {ok, _} via NIF or zlib fallback
     {ok, Compressed} = iris_compression:compress(zstd, Data),
     {ok, Decompressed} = iris_compression:decompress(zstd, Compressed),
     ?assertEqual(Data, Decompressed).
@@ -68,7 +68,7 @@ test_compress_noop_small_payload() ->
     SmallData = crypto:strong_rand_bytes(64),
     Result = iris_compression:maybe_compress(zstd, SmallData),
     ?assertEqual({uncompressed, SmallData}, Result),
-    %% AUDIT V2: Large payload always compressed (NIF or zlib fallback)
+    %% V2: Large payload always compressed (NIF or zlib fallback)
     LargeData = crypto:strong_rand_bytes(256),
     Result2 = iris_compression:maybe_compress(zstd, LargeData),
     ?assertMatch({compressed, _}, Result2).
@@ -101,7 +101,7 @@ test_negotiate_capabilities() ->
 
 test_zstd_produces_real_format() ->
     Data = crypto:strong_rand_bytes(256),
-    %% AUDIT V2: compress always returns {ok, _} — either via NIF or zlib fallback
+    %% V2: compress always returns {ok, _} — either via NIF or zlib fallback
     {ok, Compressed} = iris_compression:compress(zstd, Data),
     %% Must NOT start with the fake "zstd:" tag
     ?assertNot(binary:match(Compressed, <<"zstd:">>) =:= {0, 5}),
@@ -120,7 +120,7 @@ test_zstd_produces_real_format() ->
     end.
 
 test_zstd_real_roundtrip() ->
-    %% AUDIT V2: Multiple data sizes — roundtrip always works via NIF or zlib fallback
+    %% V2: Multiple data sizes — roundtrip always works via NIF or zlib fallback
     lists:foreach(fun(Size) ->
         Data = crypto:strong_rand_bytes(Size),
         {ok, Compressed} = iris_compression:compress(zstd, Data),

@@ -58,17 +58,17 @@ iris_dedup_test_() ->
       {"Get stats returns map", fun test_get_stats/0},
       {"Stats tracks duplicates", fun test_stats_tracks_dups/0},
       
-      %% P0-C3: Bloom filter tier tests
+      %% Bloom filter tier tests
       {"Bloom tier stats exposed", fun test_bloom_tier_stats/0},
       {"Bloom catches duplicates", fun test_bloom_catches_duplicates/0},
       {"Mark seen populates bloom", fun test_mark_seen_populates_bloom/0},
       {"Hot TTL is 5 minutes", fun test_hot_ttl_is_5_minutes/0},
       
-      %% P0-FIX: Bloom false positive verification tests
+      %% Bloom false positive verification tests
       {"Stats include false positive counter", fun test_false_positive_stats/0},
       {"Dedup log verification prevents data loss", fun test_dedup_log_verification/0},
 
-      %% H-4 AUDIT: Cleanup must use monitored spawn
+      %% Cleanup must use monitored spawn
       {"Cleanup uses iris_async:spawn_monitored", fun test_cleanup_monitored/0}
      ]}.
 
@@ -154,11 +154,11 @@ test_stats_tracks_dups() ->
     ?assert(DupCount >= 1).
 
 %% =============================================================================
-%% P0-C3: Tiered Dedup / Bloom Filter Tests
+%% Tiered Dedup / Bloom Filter Tests
 %% =============================================================================
 
 test_bloom_tier_stats() ->
-    %% P0-C3 TEST: Verify bloom filter stats are exposed
+    %% Verify bloom filter stats are exposed
     Stats = iris_dedup:get_stats(),
     
     %% Should have bloom-related stats from tiered implementation
@@ -172,7 +172,7 @@ test_bloom_tier_stats() ->
     ?assertEqual(168, WarmTtl).
 
 test_bloom_catches_duplicates() ->
-    %% P0-C3 TEST: Bloom filter should catch duplicates
+    %% Bloom filter should catch duplicates
     MsgId = <<"bloom_catch_", (integer_to_binary(erlang:unique_integer()))/binary>>,
     
     %% Mark as seen (goes to both ETS and bloom)
@@ -185,7 +185,7 @@ test_bloom_catches_duplicates() ->
     ?assertEqual(duplicate, iris_dedup:check_and_mark(MsgId)).
 
 test_mark_seen_populates_bloom() ->
-    %% P0-C3 TEST: mark_seen should add to bloom filter
+    %% mark_seen should add to bloom filter
     MsgId = <<"bloom_mark_", (integer_to_binary(erlang:unique_integer()))/binary>>,
     
     %% Before marking - not a duplicate
@@ -198,17 +198,17 @@ test_mark_seen_populates_bloom() ->
     ?assert(iris_dedup:is_duplicate(MsgId)).
 
 test_hot_ttl_is_5_minutes() ->
-    %% P0-C3 TEST: Hot tier TTL should be 5 minutes (300000 ms)
+    %% Hot tier TTL should be 5 minutes (300000 ms)
     Stats = iris_dedup:get_stats(),
     HotTtl = maps:get(hot_ttl_ms, Stats, 0),
     ?assertEqual(300000, HotTtl).
 
 %% =============================================================================
-%% P0-FIX: Bloom False Positive Verification Tests
+%% Bloom False Positive Verification Tests
 %% =============================================================================
 
 test_false_positive_stats() ->
-    %% P0-FIX TEST: Stats should include bloom_false_positives counter
+    %% Stats should include bloom_false_positives counter
     Stats = iris_dedup:get_stats(),
     ?assert(maps:is_key(bloom_false_positives, Stats)),
     %% Counter should be a non-negative integer
@@ -216,7 +216,7 @@ test_false_positive_stats() ->
     ?assert(is_integer(FPCount) andalso FPCount >= 0).
 
 test_dedup_log_verification() ->
-    %% P0-FIX TEST: Verify that messages written via check_and_mark
+    %% Verify that messages written via check_and_mark
     %% are persisted to dedup_log for bloom verification.
     %% This prevents false positives from causing data loss.
     MsgId = <<"dedup_log_test_", (integer_to_binary(erlang:unique_integer()))/binary>>,
@@ -235,10 +235,10 @@ test_dedup_log_verification() ->
     ?assert(iris_dedup:is_duplicate(MsgId)).
 
 %% =============================================================================
-%% AUDIT FIX: Crash/Restart Tests
+%% Crash/Restart Tests
 %% =============================================================================
 %% 
-%% The audit identified that bloom filter is in-memory and no test verifies
+%% The bloom filter is in-memory and no test previously verified
 %% behavior after crash/restart. These tests verify that dedup_log allows
 %% the system to rebuild state correctly.
 %% =============================================================================
@@ -275,7 +275,7 @@ crash_cleanup({existing, _}) ->
     ok.
 
 crash_restart_test_() ->
-    {"Crash/restart behavior (AUDIT FIX)",
+    {"Crash/restart behavior",
      {setup,
       fun crash_setup/0,
       fun crash_cleanup/1,
@@ -285,7 +285,7 @@ crash_restart_test_() ->
       ]}}.
 
 test_dedup_survives_restart() ->
-    %% AUDIT FIX: Test that dedup state survives full Mnesia restart
+    %% Test that dedup state survives full Mnesia restart
     %% (not just gen_server restart). This validates disc_only_copies persistence.
     MsgId = <<"restart_test_", (integer_to_binary(erlang:unique_integer()))/binary>>,
     
@@ -310,7 +310,7 @@ test_dedup_survives_restart() ->
     ?assertEqual(duplicate, iris_dedup:check_and_mark(MsgId)).
 
 test_bloom_rebuilds_from_log() ->
-    %% AUDIT FIX: Test that bloom filter can be verified against dedup_log
+    %% Test that bloom filter can be verified against dedup_log
     %% This prevents false positives from causing message loss
     MsgId = <<"rebuild_test_", (integer_to_binary(erlang:unique_integer()))/binary>>,
     
@@ -328,15 +328,15 @@ test_bloom_rebuilds_from_log() ->
     ?assert(maps:is_key(bloom_false_positives, Stats)).
 
 %% =============================================================================
-%% AUDIT FIX: Concurrent Access Tests
+%% Concurrent Access Tests
 %% =============================================================================
 %% 
-%% The audit identified no concurrent access tests. While gen_server
+%% Concurrent access tests are important. While gen_server
 %% serializes calls, we should verify high-contention behavior.
 %% =============================================================================
 
 concurrent_access_test_() ->
-    {"Concurrent access (AUDIT FIX)",
+    {"Concurrent access",
      {setup,
       fun setup/0,
       fun cleanup/1,
@@ -347,7 +347,7 @@ concurrent_access_test_() ->
       ]}}.
 
 test_concurrent_check_and_mark() ->
-    %% AUDIT FIX: Test that concurrent check_and_mark on SAME ID
+    %% Test that concurrent check_and_mark on SAME ID
     %% results in exactly ONE "new" and rest "duplicate"
     MsgId = <<"concurrent_same_", (integer_to_binary(erlang:unique_integer()))/binary>>,
     
@@ -378,7 +378,7 @@ test_concurrent_check_and_mark() ->
     ?assertEqual(0, TimeoutCount).
 
 test_high_contention_throughput() ->
-    %% AUDIT FIX: Test throughput under high contention
+    %% Test throughput under high contention
     %% Should complete without timeout or crash
     
     Self = self(),
@@ -407,7 +407,7 @@ test_high_contention_throughput() ->
     ?assertEqual(Expected, TotalCompleted).
 
 test_multiple_unique_concurrent() ->
-    %% AUDIT FIX: Test that concurrent unique IDs all succeed
+    %% Test that concurrent unique IDs all succeed
     Self = self(),
     NumProcs = 50,
     
@@ -430,7 +430,7 @@ test_multiple_unique_concurrent() ->
     ?assertEqual(NumProcs, NewCount).
 
 %% =============================================================================
-%% H-4 AUDIT: Cleanup uses iris_async:spawn_monitored (not bare spawn)
+%% Cleanup uses iris_async:spawn_monitored (not bare spawn)
 %% =============================================================================
 %% A bare spawn means cleanup failures are silently swallowed, leading to
 %% unbounded dedup_log growth and eventual OOM. iris_async:spawn_monitored

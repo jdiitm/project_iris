@@ -2,14 +2,14 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% AUDIT P0-2: Session RPC Error Pattern Tests
+%% Session RPC Error Pattern Tests
 %% =============================================================================
 %%
 %% Tests verify that iris_session.erl correctly handles the new error tuple
 %% format {error, {rpc_failed, _Node, Reason}} from iris_rpc:call/4,5.
 %%
 %% Previously, iris_session matched on {badrpc, Reason} which was returned
-%% by raw rpc:call. After P0-2, iris_rpc wraps badrpc into the structured
+%% by raw rpc:call. iris_rpc wraps badrpc into the structured
 %% error tuple, and all 11 call sites in iris_session were updated.
 %%
 %% Tests cover:
@@ -26,7 +26,7 @@
 
 source_pattern_test_() ->
     [
-     {"P0-2: iris_session.erl does NOT match on {badrpc, _}", fun() ->
+     {"iris_session.erl does NOT match on {badrpc, _}", fun() ->
           {ok, Src} = file:read_file("src/iris_session.erl"),
           %% There should be NO {badrpc, Reason} pattern matches
           Lines = binary:split(Src, <<"\n">>, [global]),
@@ -37,12 +37,12 @@ source_pattern_test_() ->
           ?assertEqual([], BadrpcLines)
       end},
 
-     {"P0-2: iris_session.erl matches on {error, {rpc_failed, ...}}", fun() ->
+     {"iris_session.erl matches on {error, {rpc_failed, ...}}", fun() ->
           {ok, Src} = file:read_file("src/iris_session.erl"),
           ?assert(binary:match(Src, <<"{error, {rpc_failed,">>) =/= nomatch)
       end},
 
-     {"P0-2: iris_session.erl uses iris_rpc:call (not raw rpc:call)", fun() ->
+     {"iris_session.erl uses iris_rpc:call (not raw rpc:call)", fun() ->
           {ok, Src} = file:read_file("src/iris_session.erl"),
           %% Should have iris_rpc:call references
           ?assert(binary:match(Src, <<"iris_rpc:call">>) =/= nomatch),
@@ -56,7 +56,7 @@ source_pattern_test_() ->
           ?assertEqual([], RawRpcLines)
       end},
 
-     {"P0-2: iris_session.erl has 11+ rpc_failed matches (all call sites)", fun() ->
+     {"iris_session.erl has 11+ rpc_failed matches (all call sites)", fun() ->
           {ok, Src} = file:read_file("src/iris_session.erl"),
           Lines = binary:split(Src, <<"\n">>, [global]),
           RpcFailedLines = [L || L <- Lines,
@@ -72,7 +72,7 @@ source_pattern_test_() ->
 
 exported_error_handling_test_() ->
     [
-     {"P0-2: estimate_remaining_messages returns -1 for RPC failure", fun() ->
+     {"estimate_remaining_messages returns -1 for RPC failure", fun() ->
           %% Setup metrics table for the function
           Table = iris_metrics_table,
           case ets:info(Table) of
@@ -97,18 +97,18 @@ exported_error_handling_test_() ->
           ?assertEqual(1, Count)
       end},
 
-     {"P0-2: calculate_remaining returns correct values", fun() ->
+     {"calculate_remaining returns correct values", fun() ->
           ?assertEqual(5, iris_session:calculate_remaining(10, 5)),
           ?assertEqual(0, iris_session:calculate_remaining(3, 10)),
           ?assertEqual(0, iris_session:calculate_remaining(0, 0))
       end},
 
-     {"P0-2: check_block_status is exported", fun() ->
+     {"check_block_status is exported", fun() ->
           Exports = iris_session:module_info(exports),
           ?assert(lists:member({check_block_status, 2}, Exports))
       end},
 
-     {"P0-2: group_fanout_recipients is exported", fun() ->
+     {"group_fanout_recipients is exported", fun() ->
           Exports = iris_session:module_info(exports),
           ?assert(lists:member({group_fanout_recipients, 3}, Exports))
       end}

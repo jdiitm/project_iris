@@ -1,11 +1,11 @@
 -module(iris_offline_storage).
 -export([store/3, store_batch/3, retrieve/2]).
 -export([store_sync/3]).  %% Direct sync_transaction mode (for critical paths)
--export([store_durable/3]).  %% AUDIT FIX: Guaranteed durable - ACK only after persistence
--export([store_with_seq/3]).  %% AUDIT FIX: Store with client-provided sequence for FIFO
-%% PRINCIPAL_AUDIT_REPORT: Lockfree cursor-based retrieval (Hard Stop #2)
+-export([store_durable/3]).  %% Guaranteed durable - ACK only after persistence
+-export([store_with_seq/3]).  %% Store with client-provided sequence for FIFO
+%% Lockfree cursor-based retrieval
 -export([retrieve_cursor/3, delete_confirmed/4, retrieve_lockfree/2, delete_all_async/2]).
--export([notify_push/2]).  %% AUDIT M12: Push notification hook
+-export([notify_push/2]).  %% Push notification hook
 
 %% Mnesia table definition (created in iris_core:init_db/0):
 %% {offline_msg, User, Timestamp, Msg}
@@ -20,7 +20,7 @@
 %% =============================================================================
 
 store(User, Msg, Count) ->
-    %% AUDIT V2 P0-2: Backpressure — reject writes when Mnesia memory exceeds threshold
+    %% Backpressure — reject writes when Mnesia memory exceeds threshold
     case check_memory_backpressure() of
         ok ->
             %% Use durable batcher if available, fallback to direct sync
@@ -65,7 +65,7 @@ store_sync(User, Msg, Count) ->
     end.
 
 %% =============================================================================
-%% AUDIT FIX: Guaranteed Durable Store (RFC NFR-6, NFR-8)
+%% Guaranteed Durable Store (RFC NFR-6, NFR-8)
 %% =============================================================================
 %% This function MUST be used when the caller needs to ACK to the client.
 %% It guarantees:
@@ -78,7 +78,7 @@ store_sync(User, Msg, Count) ->
 %% - Any path where RPO=0 is required
 %% =============================================================================
 store_durable(User, Msg, Count) ->
-    %% AUDIT V2 P0-2: Backpressure check before durable write
+    %% Backpressure check before durable write
     case check_memory_backpressure() of
         {error, memory_pressure} ->
             {error, memory_pressure};
@@ -94,7 +94,7 @@ do_store_durable(User, Msg, Count) ->
         ok ->
             %% Log at debug level for durability auditing
             logger:debug("Durable store confirmed for user ~p", [User]),
-            %% AUDIT M12: Invoke push notification hook for offline users
+            %% Invoke push notification hook for offline users
             notify_push(User, Msg),
             ok;
         {error, Reason} ->
@@ -104,7 +104,7 @@ do_store_durable(User, Msg, Count) ->
     end.
 
 %% =============================================================================
-%% AUDIT FIX: Store with client-provided sequence number (RFC FR-5)
+%% Store with client-provided sequence number (RFC FR-5)
 %% =============================================================================
 %% This function uses the client-provided sequence number as the timestamp,
 %% guaranteeing FIFO ordering regardless of parallel processing or clock drift.
@@ -169,12 +169,12 @@ store_batch_sync(User, Msgs, Count) ->
             {error, Reason}
     end.
 
--define(MAX_RETRIEVE_BUCKETS, 1000).  %% H-3 AUDIT MITIGATION: Cap bucket count
+-define(MAX_RETRIEVE_BUCKETS, 1000).  %% Cap bucket count
 
 retrieve(User, Count) ->
-    %% AUDIT FIX 2.4: Deprecation metric — use retrieve_cursor/3 instead.
+    %% Deprecation metric — use retrieve_cursor/3 instead.
     iris_metrics:inc(offline_retrieve_deprecated_calls),
-    %% H-3 AUDIT MITIGATION: Cap bucket count to prevent OOM on large Count values
+    %% Cap bucket count to prevent OOM on large Count values
     BoundedCount = min(Count, ?MAX_RETRIEVE_BUCKETS),
     %% Read messages from all buckets
     F = fun() ->
@@ -199,7 +199,7 @@ retrieve(User, Count) ->
     end.
 
 %% =============================================================================
-%% Cursor-Based Retrieval (Per PRINCIPAL_AUDIT_REPORT Hard Stop #2)
+%% Cursor-Based Retrieval
 %% =============================================================================
 %% This provides lockfree retrieval using dirty reads.
 %% Messages are deleted async AFTER delivery is confirmed.
@@ -246,8 +246,8 @@ retrieve_cursor(User, Count, Cursor) ->
 %% Call this AFTER client ACKs receipt of messages from retrieve_cursor.
 -spec delete_confirmed(binary(), integer(), integer(), integer()) -> ok.
 delete_confirmed(User, _Count, FromCursor, ToCursor) ->
-    %% B-3 AUDIT MITIGATION: Monitored spawn for async delete
-    %% B-4 AUDIT MITIGATION: Transactional delete (was dirty_delete)
+    %% Monitored spawn for async delete
+    %% Transactional delete (was dirty_delete)
     iris_async:spawn_monitored(offline_msg_delete, fun() ->
         mnesia:sync_transaction(fun() ->
             lists:foreach(fun(ID) ->
@@ -277,8 +277,8 @@ retrieve_lockfree(User, Count) ->
 %% @doc Delete all offline messages for a user (async, for cleanup)
 -spec delete_all_async(binary(), integer()) -> ok.
 delete_all_async(User, Count) ->
-    %% B-3 AUDIT MITIGATION: Monitored spawn for async cleanup
-    %% B-4 AUDIT MITIGATION: Transactional delete (was dirty_delete)
+    %% Monitored spawn for async cleanup
+    %% Transactional delete (was dirty_delete)
     iris_async:spawn_monitored(offline_msg_cleanup, fun() ->
         mnesia:sync_transaction(fun() ->
             lists:foreach(fun(ID) ->
@@ -295,7 +295,7 @@ sort_and_extract(Records) ->
     lists:flatten(RawMsgs).
 
 %% =============================================================================
-%% AUDIT M12: Push Notification Hook
+%% Push Notification Hook
 %% =============================================================================
 %% Configurable hook for push notifications (APNS/FCM).
 %% Default is no-op. Configure via:
@@ -305,7 +305,7 @@ sort_and_extract(Records) ->
 %% =============================================================================
 
 %% =============================================================================
-%% AUDIT V2 P0-2: Memory Backpressure Check
+%% Memory Backpressure Check
 %% =============================================================================
 %% Rejects offline message writes when Mnesia memory exceeds the configured
 %% alarm threshold. This prevents OOM crashes from unbounded message growth.

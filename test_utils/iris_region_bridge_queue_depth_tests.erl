@@ -8,8 +8,6 @@
 %% is O(N). This test verifies that iris_region_bridge exports a fast
 %% counter-based depth function that doesn't scan the table.
 %%
-%% RED: The module does not export get_queue_depth_fast/1.
-%% GREEN: Add ETS counter + get_queue_depth_fast/1.
 %% =============================================================================
 
 iris_region_bridge_queue_depth_test_() ->

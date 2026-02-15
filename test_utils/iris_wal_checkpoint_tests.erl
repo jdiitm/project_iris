@@ -2,7 +2,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% AUDIT MITIGATION: WAL Checkpoint Tests (Finding 1 - Unbounded WAL Growth)
+%% WAL Checkpoint Tests (Unbounded WAL Growth)
 %%
 %% Verifies that the WAL is truncated after successful Mnesia flush,
 %% retained on failure, bounded under sustained load, and stats are tracked.
@@ -70,10 +70,12 @@ get_wal_log(Pid) ->
 get_wal_items(Log) ->
     case disk_log:info(Log) of
         InfoList when is_list(InfoList) ->
-            proplists:get_value(no_written_items, InfoList, -1);
+            %% Use no_items (current items in log) not no_written_items
+            %% (cumulative counter). For wrap logs, no_written_items never
+            %% decreases on truncate, but no_items reflects actual state.
+            proplists:get_value(no_items, InfoList, -1);
         _ -> -1
     end.
-
 
 store_entries(N) ->
     Name = list_to_atom("iris_durable_batcher_" ++ integer_to_list(?TEST_SHARD)),

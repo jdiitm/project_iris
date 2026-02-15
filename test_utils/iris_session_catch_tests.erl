@@ -2,7 +2,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% AUDIT V2 P1-4: Narrow Exception Catch in handle_packet/4
+%% : Narrow Exception Catch in handle_packet/4
 %% =============================================================================
 %%
 %% Tests verify that handle_packet/4's catch-all clause:

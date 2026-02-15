@@ -2,7 +2,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% AUDIT: JSON Parser Depth Limit Tests
+%% JSON Parser Depth Limit Tests
 %% =============================================================================
 %%
 %% Tests verify that iris_auth_json:decode/1 rejects deeply nested JSON
@@ -13,11 +13,11 @@
 
 iris_auth_json_depth_test_() ->
     [
-     {"AUDIT: 100-level nested JSON is rejected",
+     {"100-level nested JSON is rejected",
       fun test_deeply_nested_rejected/0},
-     {"AUDIT: JSON at max allowed depth is accepted",
+     {"JSON at max allowed depth is accepted",
       fun test_at_depth_limit_accepted/0},
-     {"AUDIT: source has MAX_DEPTH guard",
+     {"source has MAX_DEPTH guard",
       fun test_source_has_depth_guard/0}
     ].
 

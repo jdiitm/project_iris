@@ -2,7 +2,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% F2: Bloom Filter Race Condition Test (NFR-11 Audit Finding)
+%% Bloom Filter Race Condition Test (NFR-11)
 %%
 %% The bloom filter's add_to_bloom/1 uses a non-atomic Read-Modify-Write
 %% pattern: ets:lookup -> modify binary -> ets:insert. Two concurrent

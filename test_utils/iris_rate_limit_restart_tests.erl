@@ -2,7 +2,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% H-1 AUDIT MITIGATION: Rate limit persistence across restart
+%% Rate limit persistence across restart
 %% =============================================================================
 %% Token bucket resets on process restart allow burst abuse.
 %% After restart, new buckets must initialize with conservative defaults
@@ -46,7 +46,7 @@ rate_limit_restart_test_() ->
 test_new_bucket_conservative() ->
     User = <<"test_conservative_user">>,
     %% Send a batch of tokens. With burst=20, old behavior would allow 20.
-    %% With H-1 fix (initial tokens = burst/2 = 10), should deny after ~10.
+    %% With initial tokens = burst/2 = 10, should deny after ~10.
     Results = [iris_rate_limiter:check(User) || _ <- lists:seq(1, 15)],
     Allowed = length([R || R <- Results, R =:= allow]),
     Denied = length([R || R <- Results, R =/= allow]),

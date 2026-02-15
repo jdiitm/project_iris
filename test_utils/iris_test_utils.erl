@@ -1,7 +1,7 @@
 -module(iris_test_utils).
 
 %% =============================================================================
-%% AUDIT MITIGATION V2 — P1-1: Test Determinism Utilities
+%% Test Determinism Utilities
 %% =============================================================================
 %%
 %% Event-driven assertion helpers to replace timer:sleep() in tests.

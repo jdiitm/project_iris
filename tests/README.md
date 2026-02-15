@@ -1,6 +1,6 @@
 # Test Suite
 
-**155 Python + 100 Erlang tests** | **TLS Enforced** | **Last Verified**: 2026-02-11
+**169 Python + 185 Erlang tests** | **TLS Enforced** | **Last Verified**: 2026-02-15
 
 Full documentation: [docs/TESTING.md](../docs/TESTING.md)
 

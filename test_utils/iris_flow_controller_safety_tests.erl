@@ -2,7 +2,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% F3: Flow Controller Safety Tests (RFC 7.4 Audit Findings)
+%% Flow Controller Safety Tests (RFC 7.4)
 %%
 %% Tests verify:
 %% 1. CPU monitoring is not blind when iris_efficiency_monitor is absent

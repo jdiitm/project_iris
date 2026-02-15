@@ -2,7 +2,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% AUDIT: Store Adapter Behaviour Interface Tests
+%% Store Adapter Behaviour Interface Tests
 %% =============================================================================
 %%
 %% Tests verify that iris_store exports a function to identify the current
@@ -11,11 +11,11 @@
 
 iris_store_adapter_test_() ->
     [
-     {"AUDIT M11: iris_store exports backend_type/0",
+     {"iris_store exports backend_type/0",
       fun test_store_has_backend_type/0},
-     {"AUDIT M11: default backend is mnesia",
+     {"default backend is mnesia",
       fun test_default_backend_is_mnesia/0},
-     {"AUDIT M11: source has adapter documentation",
+     {"source has adapter documentation",
       fun test_source_has_adapter_doc/0}
     ].
 

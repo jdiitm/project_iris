@@ -26,6 +26,7 @@ import time
 import threading
 import concurrent.futures
 import subprocess
+import pytest
 from pathlib import Path
 
 # Add project root to path
@@ -39,6 +40,36 @@ CA_CERT = Path(PROJECT_ROOT) / "certs" / "ca.pem"
 
 # Results tracking
 results = []
+
+
+@pytest.fixture(autouse=True, scope="module")
+def ensure_server_recovery():
+    """After all connection-flood tests in this module, wait for full server recovery.
+    This prevents connection exhaustion from leaking into subsequent test modules."""
+    yield
+    # Post-module cleanup: poll until the server accepts 5 consecutive connections.
+    consecutive_ok = 0
+    for _ in range(60):
+        try:
+            ctx = ssl.create_default_context()
+            ca = str(CA_CERT)
+            if os.path.exists(ca):
+                ctx.load_verify_locations(ca)
+            else:
+                ctx.check_hostname = False
+                ctx.verify_mode = ssl.CERT_NONE
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(3.0)
+            tls = ctx.wrap_socket(sock, server_hostname=SERVER_HOST)
+            tls.connect((SERVER_HOST, SERVER_PORT))
+            tls.close()
+            consecutive_ok += 1
+            if consecutive_ok >= 5:
+                break
+            time.sleep(0.5)
+        except Exception:
+            consecutive_ok = 0
+            time.sleep(2)
 
 
 def set_conn_rate_limit(limit):

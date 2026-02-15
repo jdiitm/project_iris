@@ -2,7 +2,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% P1-7 (IA-1 residual): HMAC Deprecation Enforcement Tests
+%%: HMAC Deprecation Enforcement Tests
 %%
 %% RFC-001 v4.0 FR-9 mandates EdDSA (Ed25519). HMAC path should be
 %% disableable via config for production.

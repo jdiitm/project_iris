@@ -2,7 +2,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% Audit Mitigation Tests for iris_edge_listener.erl (TDD RED phase)
+%% Tests for iris_edge_listener.erl
 %% =============================================================================
 %%
 %% Tests cover:

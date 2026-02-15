@@ -2,16 +2,13 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% Audit Mitigation V2: TDD Tests
+%% Production Readiness TDD Tests
 %% =============================================================================
 %%
-%% RED/GREEN tests for three production-readiness audit findings:
-%%   CRIT-01: CP mode configurable but not implemented — must be fatal everywhere
-%%   HIGH-01: No backpressure on store_offline_durable primary write path
-%%   HIGH-02: Cookie enforcement regression (already mitigated, verify it holds)
-%%
-%% Phase 1 (RED): These tests FAIL against the unmodified codebase.
-%% Phase 2 (GREEN): Minimal changes to iris_core.erl make them pass.
+%% Tests for three production-readiness findings:
+%%   CP mode configurable but not implemented — must be fatal everywhere
+%%   No backpressure on store_offline_durable primary write path
+%%   Cookie enforcement regression (already mitigated, verify it holds)
 %% =============================================================================
 
 -define(METRICS_TABLE, iris_metrics_table).
@@ -40,7 +37,7 @@ cleanup_consistency() ->
     ok.
 
 %% =============================================================================
-%% CRIT-01: CP mode must be fatal in ALL deployment modes
+%% CP mode must be fatal in ALL deployment modes
 %% =============================================================================
 
 %% CP mode in development must return {error, cp_not_implemented}.
@@ -69,7 +66,7 @@ unknown_consistency_mode_rejected_test() ->
     end.
 
 %% =============================================================================
-%% HIGH-01: store_offline_durable must reject under memory pressure
+%% store_offline_durable must reject under memory pressure
 %% =============================================================================
 
 %% store_offline_durable/2 must return {error, memory_pressure} when
@@ -110,7 +107,7 @@ store_offline_emits_backpressure_metric_test() ->
     end.
 
 %% =============================================================================
-%% HIGH-02: Cookie enforcement regression (already mitigated)
+%% Cookie enforcement regression (already mitigated)
 %% =============================================================================
 
 %% Verify that validate_production_cookie/1 rejects iris_secret in production.

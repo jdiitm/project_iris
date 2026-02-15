@@ -2,7 +2,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% AUDIT MITIGATION V2 — P0-1: Partition-Safe Write Rejection
+%% Partition-Safe Write Rejection
 %% =============================================================================
 %%
 %% Tests verify that the partition guard rejects writes when this node is

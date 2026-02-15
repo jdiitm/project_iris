@@ -5,9 +5,9 @@
 -export([init/1, callback_mode/0, terminate/3, code_change/4]).
 -export([wait_for_socket/3, connected/3]).
 -export([maybe_compress_outbound/2, maybe_decompress_inbound/2]).  %% Pure, exported for TDD
--export([collect_queued_msgs/1]).  %% H-3 AUDIT MITIGATION: Exported for TDD
+-export([collect_queued_msgs/1]).  %% Exported for TDD
 
-%% AUDIT M13: Edge nodes hold significant per-connection state (not stateless).
+%% Edge nodes hold significant per-connection state (not stateless).
 %% This record documents all state held per connection. On disconnect,
 %% critical fields (session_id, pending_acks) are saved via
 %% queue_pending_to_session_cache and save_pending_acks for session resume.
@@ -34,8 +34,8 @@ setopts(Socket, ssl, Opts) -> ssl:setopts(Socket, Opts).
 -define(MAX_PENDING_ACKS, 1000). %% Bounded pending acks
 -define(HIBERNATE_AFTER_MS, 30000). %% Hibernate after 30s idle
 -define(MAX_BUFFER_SIZE, 65536). %% 64KB max buffer (DoS protection)
--define(MAX_PROCESS_DEPTH, 100). %% H-9 AUDIT MITIGATION: Max recursion depth for process_buffer
--define(MAX_DRAIN_MSGS, 100).   %% H-3 AUDIT MITIGATION: Max messages drained per flush
+-define(MAX_PROCESS_DEPTH, 100). %% Max recursion depth for process_buffer
+-define(MAX_DRAIN_MSGS, 100).   %% Max messages drained per flush
 
 %% Dynamic Core node discovery with failover
 get_core_node() ->
@@ -77,14 +77,14 @@ set_socket(Pid, Socket) ->
 
 %% Callbacks
 init(_Args) ->
-    %% AUDIT3 FIX: Enforce global connection limits
+    %% Enforce global connection limits
     case iris_ingress_guard:check() of
         allow ->
-            %% AUDIT3 FIX: Kill process if it grows too large (prevent OOM)
+            %% Kill process if it grows too large (prevent OOM)
             %% TLS + cross-region routing requires significant memory
             %% Increased to 500000 (~4MB) to handle complex routing operations
             process_flag(max_heap_size, #{size => 500000, kill => true}),
-            %% AUDIT MITIGATION (Attack Vector 3): Initialize per-socket byte guard
+            %% Initialize per-socket byte guard
             iris_ingress_byte_guard:reset(),
             Now = os:system_time(millisecond),
             Timer = erlang:send_after(?RETRY_INTERVAL, self(), check_acks),
@@ -146,7 +146,7 @@ connected(info, {deliver_msg, Msg}, Data = #data{socket = Socket, transport = Tr
     case PendingCount >= ?MAX_PENDING_ACKS of
         true ->
             %% At capacity even after enforcement - store offline immediately
-            %% DURABILITY FIX: Use store_offline_durable for RPO=0 guarantee
+            %% Use store_offline_durable for RPO=0 guarantee
             logger:warning("Pending ACKs at capacity for ~p. Storing offline.", [User]),
             iris_circuit_breaker:call(get_core_node(), iris_core, store_offline_durable, [User, Msg]),
             {keep_state, Data#data{last_activity = Now}};
@@ -161,7 +161,7 @@ connected(info, {deliver_msg, Msg}, Data = #data{socket = Socket, transport = Tr
                 ok -> 
                     {keep_state, Data#data{pending_acks = NewPending, timeouts = 0, last_activity = Now}};
                 {error, Reason} ->
-                    %% DURABILITY FIX: Use store_offline_durable for RPO=0 guarantee
+                    %% Use store_offline_durable for RPO=0 guarantee
                     logger:warning("Send failed for ~p (reason: ~p). Storing offline.", [User, Reason]),
                     iris_circuit_breaker:call(get_core_node(), iris_core, store_offline_durable, [User, Msg]),
                     {keep_state, Data#data{last_activity = Now}}
@@ -193,7 +193,7 @@ connected(info, check_acks, Data = #data{pending_acks = Pending, user = User, re
     NewPending = maps:filter(fun(MsgId, {Msg, Ts, _Retries}) ->
         if (Now - Ts) > 10 ->
             logger:warning("Msg ~p timed out (No ACK). Moving to offline storage.", [MsgId]),
-            %% DURABILITY FIX: Use store_offline_durable for RPO=0 guarantee
+            %% Use store_offline_durable for RPO=0 guarantee
             iris_circuit_breaker:call(get_core_node(), iris_core, store_offline_durable, [User, Msg]),
             false; %% Remove from map
         true -> 
@@ -231,7 +231,7 @@ enforce_pending_limit(Pending, User) ->
     {RemoveEntries, KeepEntries} = lists:split(min(ToRemove, length(Sorted)), Sorted),
     
     %% Store removed messages offline
-    %% DURABILITY FIX: Use store_offline_durable for RPO=0 guarantee
+    %% Use store_offline_durable for RPO=0 guarantee
     lists:foreach(fun({MsgId, {Msg, _Ts, _Retries}}) ->
         logger:warning("Pending ACK overflow: moving msg ~p to offline for ~p", [MsgId, User]),
         iris_circuit_breaker:call(get_core_node(), iris_core, store_offline_durable, [User, Msg])
@@ -243,7 +243,7 @@ enforce_pending_limit(Pending, User) ->
 handle_socket_data(Bin, Data = #data{buffer = Buff}) ->
     Now = os:system_time(millisecond),
 
-    %% AUDIT MITIGATION (Attack Vector 3): Per-socket byte counting.
+    %% Per-socket byte counting.
     %% Rejects connections exceeding max_ingress_bytes_per_sec BEFORE
     %% buffering, so micro-bursts cannot OOM the Edge node.
     case iris_ingress_byte_guard:check_bytes(byte_size(Bin)) of
@@ -326,7 +326,7 @@ send_compressed(Socket, Transport, Caps, Msg) ->
 process_buffer(Bin, Data) ->
     process_buffer(Bin, Data, 0).
 
-%% H-9 AUDIT MITIGATION: Depth-limited recursive buffer processing
+%% Depth-limited recursive buffer processing
 process_buffer(_Bin, Data, Depth) when Depth > ?MAX_PROCESS_DEPTH ->
     logger:warning("Edge conn: Max process_buffer depth ~p exceeded, closing", [?MAX_PROCESS_DEPTH]),
     {stop, {shutdown, process_depth_exceeded}, Data};
@@ -370,7 +370,7 @@ process_buffer(Bin, Data = #data{socket = Socket, transport = Transport, user = 
 
 
 terminate(Reason, _State, #data{user = User, pending_acks = Pending, session_id = SessionId}) ->
-    %% AUDIT3 FIX: Decrement connection counter
+    %% Decrement connection counter
     iris_ingress_guard:close(),
     %% RFC Section 3.4: Queue pending messages in session cache for resume
     queue_pending_to_session_cache(SessionId, Pending),
@@ -418,7 +418,7 @@ save_pending_acks(User, Pending) ->
         0 -> ok;
         Len ->
             logger:info("Saving ~p pending acks for ~p to offline storage", [Len, User]),
-            %% P0-C1 FIX: Ensure durability BEFORE terminate completes (RPO=0)
+            %% Ensure durability BEFORE terminate completes (RPO=0)
             %% Strategy: WAL first, then Mnesia - never fire-and-forget
             case whereis(iris_durable_batcher_1) of
                 undefined ->
@@ -431,7 +431,7 @@ save_pending_acks(User, Pending) ->
             end
     end.
 
-%% P0-C1 FIX: Synchronous durable save with retry and local fallback
+%% Synchronous durable save with retry and local fallback
 save_msgs_durable_sync(User, Msgs) ->
     CoreNode = get_core_node(),
     save_msgs_durable_sync(User, Msgs, CoreNode, 3).
@@ -476,6 +476,7 @@ save_to_local_fallback(User, Msgs) ->
         lists:foreach(fun(Msg) ->
             ets:insert(Table, {User, Msg, Now})
         end, Msgs),
+        iris_metrics:inc(edge_fallback_store_count, length(Msgs)),
         logger:warning("Stored ~p msgs in local fallback for ~p", [length(Msgs), User])
     catch
         _:_ ->
@@ -491,7 +492,7 @@ flush_pending_msgs(User) ->
         [] -> ok;
         _ ->
             logger:info("Flushing ~p queued msgs for ~p to offline storage", [length(Msgs), User]),
-            %% P0-C1 FIX: Use durable save path for RPO=0 guarantee
+            %% Use durable save path for RPO=0 guarantee
             case whereis(iris_durable_batcher_1) of
                 undefined ->
                     %% Use sync RPC with retry for durability
@@ -501,7 +502,7 @@ flush_pending_msgs(User) ->
             end
     end.
 
-%% H-3 AUDIT MITIGATION: Bounded message drain to prevent OOM on disconnect
+%% Bounded message drain to prevent OOM on disconnect
 collect_queued_msgs(Acc) ->
     collect_queued_msgs(Acc, ?MAX_DRAIN_MSGS).
 

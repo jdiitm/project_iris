@@ -2,7 +2,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% P0-3 (FM-2): Split-Brain Resolution Tests
+%% Split-Brain Resolution Tests
 %%
 %% RFC-001 v4.0 Section 7.1.1:
 %% - Each node tracks epoch counter, incremented on partition detection

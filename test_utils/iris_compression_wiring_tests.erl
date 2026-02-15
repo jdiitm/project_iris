@@ -2,7 +2,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% TDD: Compression Wiring Tests (Audit Finding — P3)
+%% Compression Wiring Tests
 %% =============================================================================
 %% Written BEFORE implementation. These tests define the contract for
 %% iris_edge_conn:maybe_compress_outbound/2 and maybe_decompress_inbound/2.

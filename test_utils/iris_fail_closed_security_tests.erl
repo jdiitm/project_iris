@@ -2,7 +2,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% B-6 AUDIT MITIGATION: Fail-closed security patterns
+%% Fail-closed security patterns
 %% =============================================================================
 %% Security-critical code paths MUST fail-closed (deny) when dependent
 %% services are unavailable, rather than fail-open (allow).

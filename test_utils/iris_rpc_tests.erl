@@ -2,12 +2,12 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% Comprehensive Tests for iris_rpc.erl (AUDIT P0-2)
+%% Comprehensive Tests for iris_rpc.erl
 %% =============================================================================
 %%
 %% Tests cover:
-%% - P0-2: {badrpc, Reason} wrapping into {error, {rpc_failed, Node, Reason}}
-%% - P0-2: Circuit breaker integration (record_success/record_failure)
+%% - {badrpc, Reason} wrapping into {error, {rpc_failed, Node, Reason}}
+%% - Circuit breaker integration (record_success/record_failure)
 %% - 6.3: Metric increments for calls, casts, and errors
 %% - Spec compliance: call/4, call/5, cast/4 return types
 %% - 5.1: iris_rpc is not dead code (callers exist in src/)
@@ -46,7 +46,7 @@ cleanup(_) ->
     ok.
 
 %% =============================================================================
-%% P0-2: badrpc wrapping tests
+%% badrpc wrapping tests
 %% =============================================================================
 
 rpc_badrpc_wrapping_test_() ->
@@ -89,7 +89,7 @@ rpc_badrpc_wrapping_test_() ->
      ]}.
 
 %% =============================================================================
-%% P0-2: Metric counter tests
+%% Metric counter tests
 %% =============================================================================
 
 rpc_metrics_test_() ->
@@ -145,7 +145,7 @@ rpc_metrics_test_() ->
      ]}.
 
 %% =============================================================================
-%% P0-2: Circuit breaker integration tests
+%% Circuit breaker integration tests
 %% =============================================================================
 
 rpc_circuit_breaker_test_() ->
@@ -180,7 +180,7 @@ rpc_cast_test_() ->
           ?assertEqual(true, Result)
       end},
 
-     {"AUDIT V2 P1-1: cast/4 increments rpc_casts_unmonitored metric", fun() ->
+     {": cast/4 increments rpc_casts_unmonitored metric", fun() ->
           setup_metrics_table(),
           ets:insert(iris_metrics_table, {rpc_casts_unmonitored, 0}),
           iris_rpc:cast(node(), erlang, node, []),

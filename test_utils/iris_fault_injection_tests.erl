@@ -6,7 +6,7 @@
 %% =============================================================================
 %%
 %% Purpose: Validates that system faults do not crash the BEAM.
-%% Per Principal Test Audit: "Disk full, EACCES, Nodedown must not crash BEAM."
+%% Disk full, EACCES, Nodedown must not crash BEAM.
 %%
 %% Fault Scenarios Tested:
 %%   1. WAL write to read-only directory

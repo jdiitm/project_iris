@@ -2,18 +2,18 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% Comprehensive Tests for iris_user_safety.erl (AUDIT P0-5, P2-6, 7.4)
+%% Comprehensive Tests for iris_user_safety.erl
 %% =============================================================================
 %%
 %% Tests cover:
 %% - Table creation (user_blocks, user_reports)
-%% - P0-5: Transactional writes for block/unblock/report
-%% - P0-5 / 7.4: Input validation (oversized user IDs rejected)
-%% - P0-5: block/unblock round-trip
-%% - P0-5: check_can_message respects blocks
-%% - P0-5: get_blocked returns blocked users
-%% - P0-5: report_user stores reports
-%% - P2-6: get_blocked logs errors instead of silent empty list
+%% - Transactional writes for block/unblock/report
+%% - Input validation (oversized user IDs rejected)
+%% - block/unblock round-trip
+%% - check_can_message respects blocks
+%% - get_blocked returns blocked users
+%% - report_user stores reports
+%% - get_blocked logs errors instead of silent empty list
 %% - Non-binary input rejection
 %% - Boundary cases (exactly 128 bytes)
 %% =============================================================================
@@ -33,32 +33,32 @@ user_safety_tables_test_() ->
       {"block/check/unblock roundtrip works",
        fun block_and_check_roundtrip/0},
 
-      %% P0-5: Input validation - oversized IDs
-      {"P0-5/7.4: oversized user ID rejected by block_user",
+      %% Input validation - oversized IDs
+      {"oversized user ID rejected by block_user",
        fun oversized_id_rejected_block/0},
-      {"P0-5/7.4: oversized user ID rejected by unblock_user",
+      {"oversized user ID rejected by unblock_user",
        fun oversized_id_rejected_unblock/0},
-      {"P0-5/7.4: oversized user ID rejected by report_user",
+      {"oversized user ID rejected by report_user",
        fun oversized_id_rejected_report/0},
 
-      %% P0-5: Boundary - exactly 128 bytes is valid
-      {"P0-5: exactly 128-byte user ID is accepted",
+      %% Boundary - exactly 128 bytes is valid
+      {"exactly 128-byte user ID is accepted",
        fun boundary_128_bytes_accepted/0},
 
-      %% P0-5: report_user
-      {"P0-5: report_user stores a report",
+      %% report_user
+      {"report_user stores a report",
        fun report_user_stores_report/0},
 
-      %% P0-5: check_can_message
-      {"P0-5: check_can_message returns blocked when user is blocked",
+      %% check_can_message
+      {"check_can_message returns blocked when user is blocked",
        fun check_can_message_blocked/0},
-      {"P0-5: check_can_message returns ok when user is not blocked",
+      {"check_can_message returns ok when user is not blocked",
        fun check_can_message_not_blocked/0},
 
-      %% P0-5: get_blocked
-      {"P0-5: get_blocked returns list of blocked users",
+      %% get_blocked
+      {"get_blocked returns list of blocked users",
        fun get_blocked_returns_users/0},
-      {"P0-5: get_blocked returns empty list for no blocks",
+      {"get_blocked returns empty list for no blocks",
        fun get_blocked_empty_for_no_blocks/0},
 
       %% Unblock then re-check
@@ -116,7 +116,7 @@ block_and_check_roundtrip() ->
     ?assertNot(iris_user_safety:is_blocked(<<"rt_alice">>, <<"rt_bob">>)).
 
 %% =============================================================================
-%% P0-5 / 7.4: Input validation
+%% Input validation
 %% =============================================================================
 
 oversized_id_rejected_block() ->

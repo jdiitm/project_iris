@@ -2,7 +2,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% B-2 Mitigation: TLS must be mandatory in production mode.
+%% Mitigation: TLS must be mandatory in production mode.
 %% =============================================================================
 %% RFC NFR-14: TLS is MANDATORY for all client connections.
 %% check_tls_policy(false) must return {error, tls_required} when

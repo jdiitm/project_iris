@@ -2,7 +2,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% AUDIT: JSON Parser Hardening Tests
+%% JSON Parser Hardening Tests
 %% =============================================================================
 %%
 %% Tests verify that iris_auth_json:decode/1 safely handles:
@@ -17,23 +17,23 @@
 
 iris_auth_json_fuzz_test_() ->
     [
-     {"AUDIT: oversized input (16KB) rejected with input_too_large",
+     {"oversized input (16KB) rejected with input_too_large",
       fun test_oversized_input_rejected/0},
-     {"AUDIT: exactly-at-limit input (8192 bytes) is accepted",
+     {"exactly-at-limit input (8192 bytes) is accepted",
       fun test_at_limit_input_accepted/0},
-     {"AUDIT: unterminated string returns error",
+     {"unterminated string returns error",
       fun test_unterminated_string/0},
-     {"AUDIT: control char in string does not crash",
+     {"control char in string does not crash",
       fun test_control_char_in_string/0},
-     {"AUDIT: large integer parses without crash",
+     {"large integer parses without crash",
       fun test_integer_overflow/0},
-     {"AUDIT: empty input returns error",
+     {"empty input returns error",
       fun test_empty_input/0},
-     {"AUDIT: non-object input returns error",
+     {"non-object input returns error",
       fun test_non_object_input/0},
-     {"AUDIT: encode/decode roundtrip preserves data",
+     {"encode/decode roundtrip preserves data",
       fun test_roundtrip/0},
-     {"AUDIT: source contains MAX_INPUT_SIZE guard",
+     {"source contains MAX_INPUT_SIZE guard",
       fun test_source_has_guard/0}
     ].
 

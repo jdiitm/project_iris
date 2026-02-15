@@ -15,7 +15,7 @@
 %% - Higher epoch wins; equal epoch ties broken by lowest node ID
 %% - Append-only tables merge via union
 %%
-%% CRITICAL: Dynamic mode is DEPRECATED (CB-1 Audit Finding)
+%% CRITICAL: Dynamic mode is DEPRECATED
 %% ---------------------------------------------------------
 %% Dynamic mode uses pg for membership discovery, which shrinks during
 %% partitions. This defeats split-brain protection because both sides
@@ -42,7 +42,7 @@
 
 -record(state, {
     mode = normal :: normal | diverged | forced_unsafe,
-    membership_mode = static :: static | dynamic,  %% AUDIT FIX (Finding #3)
+    membership_mode = static :: static | dynamic,
     expected_nodes = [] :: [node()],
     visible_nodes = [] :: [node()],
     last_quorum_loss :: integer() | undefined,
@@ -60,7 +60,7 @@ start_link() ->
     gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
 
 %% @doc Check if cluster is safe for write operations.
-%% AUDIT V2 P0-1: In diverged mode with static membership, writes are REJECTED
+%% In diverged mode with static membership, writes are REJECTED
 %% to prevent split-brain data corruption (safe-AP semantics).
 %% Returns ok when in majority or when guard is not running (permissive).
 -spec is_safe_for_writes() -> ok | {error, minority_partition}.
@@ -94,7 +94,7 @@ init([]) ->
     %% Determine membership mode (with deprecation check)
     MembershipMode = get_membership_mode(),
     
-    %% CB-1 AUDIT FIX: Emit CRITICAL warning for dynamic mode
+    %% Emit CRITICAL warning for dynamic mode
     case MembershipMode of
         dynamic ->
             logger:critical("======================================================="),
@@ -160,7 +160,7 @@ handle_call(is_safe_for_writes, _From, State = #state{mode = normal}) ->
 handle_call(is_safe_for_writes, _From, State = #state{mode = forced_unsafe}) ->
     {reply, ok, State};
 handle_call(is_safe_for_writes, _From, State = #state{mode = diverged}) ->
-    %% AUDIT V2 P0-1: Safe-AP — reject writes in minority partition
+    %% Safe-AP — reject writes in minority partition
     %% to prevent split-brain data corruption. Operators must resolve
     %% the partition or use force_unsafe_mode/1 for emergency writes.
     {reply, {error, minority_partition}, State};
@@ -168,8 +168,8 @@ handle_call(is_safe_for_writes, _From, State = #state{mode = diverged}) ->
 handle_call(get_status, _From, State) ->
     Status = #{
         mode => State#state.mode,
-        membership_mode => State#state.membership_mode,  %% AUDIT FIX (Finding #3)
-        safe_for_writes => State#state.mode =/= diverged,  %% AUDIT V2: false in diverged mode
+        membership_mode => State#state.membership_mode,
+        safe_for_writes => State#state.mode =/= diverged,  %% false in diverged mode
         expected_nodes => State#state.expected_nodes,
         visible_nodes => State#state.visible_nodes,
         partition_count => State#state.partition_count,
@@ -282,7 +282,7 @@ enter_diverged_mode(State) ->
     catch Class:Reason ->
         logger:warning("iris_partition_guard: metrics increment failed: ~p:~p", [Class, Reason])
     end,
-    %% AUDIT V2 P0-1: Emit read-only mode metric for observability
+    %% Emit read-only mode metric for observability
     try iris_metrics:set(partition_guard_read_only_mode, 1)
     catch C1:R1 ->
         logger:warning("~p: metrics set(read_only_mode, 1) failed ~p:~p", [?MODULE, C1, R1]),
@@ -306,13 +306,13 @@ maybe_exit_diverged_mode(State = #state{last_quorum_loss = LastLoss}) ->
             logger:info("Visible nodes: ~p", [State#state.visible_nodes]),
             logger:info("Exiting diverged mode - triggering reconciliation"),
             
-            %% F1 AUDIT FIX (RFC 7.1.1): Trigger data reconciliation before
-            %% declaring normal mode. Spawns a background process so the
-            %% gen_server doesn't block during potentially slow merge.
+            %% Trigger data reconciliation (RFC 7.1.1) before declaring
+            %% normal mode. Spawns a background process so the gen_server
+            %% doesn't block during potentially slow merge.
             spawn_reconciliation(State),
             
             logger:info("Reconciliation spawned - entering normal mode"),
-            %% AUDIT V2 P0-1: Clear read-only mode metric
+            %% Clear read-only mode metric
             try iris_metrics:set(partition_guard_read_only_mode, 0)
             catch C2:R2 ->
                 logger:warning("~p: metrics set(read_only_mode, 0) failed ~p:~p", [?MODULE, C2, R2]),
@@ -326,13 +326,13 @@ maybe_exit_diverged_mode(State = #state{last_quorum_loss = LastLoss}) ->
             State
     end.
 
-%% F1 AUDIT FIX: Spawn reconciliation as a background process.
+%% Spawn reconciliation as a background process.
 %% The process calls iris_core:reconcile_after_partition/0 which performs
 %% union merge of append-only tables (offline_msg) per RFC 7.1.1.
 spawn_reconciliation(State) ->
     VisibleNodes = State#state.visible_nodes,
     Epoch = State#state.epoch,
-    %% B-3 AUDIT MITIGATION: Monitored spawn for reconciliation
+    %% Monitored spawn for reconciliation
     iris_async:spawn_monitored(partition_reconciliation, fun() ->
         logger:info("Reconciliation process started (epoch=~p, nodes=~p)", 
                     [Epoch, VisibleNodes]),

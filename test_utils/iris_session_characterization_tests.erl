@@ -2,7 +2,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% AUDIT MITIGATION P2-2: Characterization Tests for iris_session
+%% Characterization Tests for iris_session
 %% Pins the public API contract to enable safe future refactoring.
 %% =============================================================================
 

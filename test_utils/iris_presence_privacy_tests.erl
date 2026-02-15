@@ -2,7 +2,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% P1-10 (PS-2): Presence Privacy Tests
+%%: Presence Privacy Tests
 %%
 %% RFC-001 v4.0 FR-8a: User configures visibility:
 %% - everyone: All users see real status (default)

@@ -2,7 +2,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% AUDIT: Health Handler Hardening Tests
+%% Health Handler Hardening Tests
 %% =============================================================================
 %%
 %% Tests verify that the HTTP health handler:
@@ -14,13 +14,13 @@
 
 iris_health_handler_hardening_test_() ->
     [
-     {"AUDIT: unknown path returns 404",
+     {"unknown path returns 404",
       fun test_unknown_path_returns_404/0},
-     {"AUDIT: trailing slash on /health is handled",
+     {"trailing slash on /health is handled",
       fun test_trailing_slash_handled/0},
-     {"AUDIT: query string on /health is ignored",
+     {"query string on /health is ignored",
       fun test_query_string_ignored/0},
-     {"AUDIT: source has path normalization",
+     {"source has path normalization",
       fun test_source_has_path_normalization/0}
     ].
 

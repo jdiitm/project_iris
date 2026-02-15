@@ -2,7 +2,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% B-4 AUDIT MITIGATION: WebSocket frame size limit
+%% WebSocket frame size limit
 %% =============================================================================
 %% RFC Section 8: Payload Size = 64 KB max.
 %% decode_frame/1 MUST reject frames claiming length > MAX_FRAME_SIZE.
@@ -56,7 +56,7 @@ frame_exceeding_limit_rejected_test() ->
 %% Test: Frame claiming 1TB MUST be rejected (DoS vector)
 %% ---------------------------------------------------------------------------
 frame_gigantic_rejected_test() ->
-    %% 1TB frame header -- the exact OOM DoS vector from the audit
+    %% 1TB frame header -- the exact OOM DoS vector
     Frame = build_ws_frame(1099511627776),
     Result = iris_ws_lite:decode_frame(Frame),
     ?assertMatch({error, frame_too_large}, Result).

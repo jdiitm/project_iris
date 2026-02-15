@@ -363,7 +363,7 @@ store_default_durability_test() ->
     ?assert(lists:member({put, 4}, Exports)).
 
 %% =============================================================================
-%% E2EE Header Validation Tests (Audit Finding 1: Key Length Enforcement)
+%% E2EE Header Validation Tests (Key Length Enforcement)
 %% =============================================================================
 
 %% Valid header: 32-byte ik and ek should be accepted

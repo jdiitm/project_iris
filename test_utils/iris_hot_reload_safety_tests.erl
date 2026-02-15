@@ -2,7 +2,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% AUDIT MITIGATION P0-1: Hot Code Loading Safety
+%% Hot Code Loading Safety
 %% Every gen_server/gen_statem module MUST export code_change so that
 %% hot-code upgrades do not crash processes holding complex state.
 %% =============================================================================

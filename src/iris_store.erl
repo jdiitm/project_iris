@@ -41,7 +41,7 @@
 -export([get/2, get/3]).
 -export([delete/2, delete/3]).
 -export([batch_put/2, batch_put/3]).
--export([backend_type/0]).  %% AUDIT M11: Storage backend identification
+-export([backend_type/0]).  %% Storage backend identification
 
 %% Inbox Log APIs (RFC-001 v3.0 compliant)
 -export([append_inbox/2, append_inbox/3]).
@@ -70,10 +70,10 @@ put(Table, Key, Value) ->
 %% node while maintaining durability.
 -spec put(atom(), term(), term(), map()) -> ok | {error, term()}.
 put(Table, Key, Value, Opts) ->
-    %% AUDIT 7.4: Validate key type and size at API boundary
+    %% Validate key type and size at API boundary
     case validate_key(Key) of
         ok ->
-            %% AUDIT M4: Validate value size
+            %% Validate value size
             case validate_value(Value) of
                 ok ->
                     case check_write_safety() of
@@ -90,24 +90,24 @@ put(Table, Key, Value, Opts) ->
             Err
     end.
 
--define(MAX_VALUE_SIZE, 1048576).  %% AUDIT M4: 1MB max value size
--define(WRITE_TIMEOUT_MS, 5000).  %% AUDIT M6: Timeout for sync_transaction to prevent netsplit stalls
+-define(MAX_VALUE_SIZE, 1048576).  %% 1MB max value size
+-define(WRITE_TIMEOUT_MS, 5000).  %% Timeout for sync_transaction to prevent netsplit stalls
 
-%% AUDIT 7.4: Validate Mnesia key type and size at API boundary
+%% Validate Mnesia key type and size at API boundary
 validate_key(K) when is_atom(K) -> ok;
 validate_key(K) when is_integer(K) -> ok;
 validate_key(K) when is_binary(K), byte_size(K) =< 1024 -> ok;
 validate_key(K) when is_binary(K) -> {error, {key_too_large, byte_size(K)}};
 validate_key(K) -> {error, {invalid_key_type, K}}.
 
-%% AUDIT M4: Validate value size to prevent Mnesia memory pressure
+%% Validate value size to prevent Mnesia memory pressure
 validate_value(V) when is_binary(V), byte_size(V) > ?MAX_VALUE_SIZE ->
     {error, {value_too_large, byte_size(V)}};
 validate_value(_V) -> ok.
 
 do_put(guaranteed, Table, Key, Value, Opts) ->
     %% sync_transaction: Waits for replication to ALL disc_copies nodes
-    %% AUDIT M6: Wrapped with timeout to prevent indefinite stall during netsplits
+    %% Wrapped with timeout to prevent indefinite stall during netsplits
     Timeout = maps:get(timeout, Opts, ?WRITE_TIMEOUT_MS),
     F = fun() -> mnesia:write({Table, Key, Value}) end,
     Parent = self(),
@@ -138,7 +138,7 @@ do_put(guaranteed, Table, Key, Value, Opts) ->
 do_put(best_effort, Table, Key, Value, _Opts) ->
     %% Async transaction: Fast but may lose data on crash
     %% Use ONLY for non-critical data (typing indicators, read receipts)
-    %% AUDIT FIX: Bound spawns to prevent scheduler exhaustion under load
+    %% Bound spawns to prevent scheduler exhaustion under load
     case erlang:system_info(process_count) < erlang:system_info(process_limit) - 1000 of
         true ->
             spawn(fun() ->
@@ -146,7 +146,7 @@ do_put(best_effort, Table, Key, Value, _Opts) ->
                     F = fun() -> mnesia:write({Table, Key, Value}) end,
                     mnesia:activity(transaction, F)
                 catch Class:Reason ->
-                    %% AUDIT 7.5: Make spawn failures observable
+                    %% Make spawn failures observable
                     logger:warning("best_effort write failed: ~p:~p table=~p",
                                    [Class, Reason, Table]),
                     iris_metrics:inc(best_effort_write_error)
@@ -164,7 +164,7 @@ do_put(quorum, Table, Key, Value, Opts) ->
     %% Falls back to guaranteed if quorum module not available
     case whereis(iris_quorum_write) of
         undefined ->
-            %% AUDIT 4.1: Log + metric on silent durability downgrade
+            %% Log + metric on silent durability downgrade
             logger:warning("quorum_write not registered -- downgrading to guaranteed "
                            "for table=~p key=~p", [Table, Key]),
             iris_metrics:inc(quorum_fallback_count),
@@ -266,7 +266,7 @@ batch_put(Table, KeyValuePairs) ->
 batch_put(Table, KeyValuePairs, Opts) ->
     case check_write_safety() of
         ok ->
-            %% AUDIT M10: Align default to quorum (same as put/4)
+            %% Align default to quorum (same as put/4)
             Durability = maps:get(durability, Opts, quorum),
             do_batch_put(Durability, Table, KeyValuePairs);
         {error, Reason} ->
@@ -302,7 +302,7 @@ do_batch_put(best_effort, Table, KeyValuePairs) ->
     end),
     ok;
 
-%% AUDIT M10: Quorum path for batch_put (aligned with put/4 default)
+%% Quorum path for batch_put (aligned with put/4 default)
 do_batch_put(quorum, Table, KeyValuePairs) ->
     case whereis(iris_quorum_write) of
         undefined ->
@@ -546,7 +546,7 @@ find_last_inbox_offset(SearchKey, UserID) ->
     end.
 
 %% =============================================================================
-%% AUDIT M11: Storage Backend Identification
+%% Storage Backend Identification
 %% =============================================================================
 %% Returns the current storage backend type. Future backends (Cassandra, S3)
 %% can be selected via application configuration.

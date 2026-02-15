@@ -6,7 +6,7 @@
 %% =============================================================================
 %%
 %% Purpose: Validates session state machine transitions as specified in 
-%% Principal Test Audit Mitigation Plan.
+%% the session state machine specification.
 %%
 %% State Machine:
 %%   INIT (undefined) -> AUTH -> READY (User set)

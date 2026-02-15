@@ -11,7 +11,7 @@
 %% - Signed Pre-Key (SPK): Medium-term key, rotates weekly
 %% - One-Time Pre-Keys (OPK): Single-use keys, pool of 100+
 %%
-%% AUDIT FIX: Key Bundle Durability
+%% Key Bundle Durability:
 %% - All key bundle operations use QUORUM WRITES (W=2 of N=3 replicas)
 %% - Ensures 99.999% durability even during node failures
 %% - Key bundles survive single node failure before replication completes
@@ -36,7 +36,7 @@
 %% Admin API
 -export([delete_user_keys/1, list_users/0]).
 
-%% Exported for testing (F3 audit: quorum write durability)
+%% Exported for testing (quorum write durability)
 -export([store_key_bundle_durable/2]).
 
 %% Metrics API
@@ -49,7 +49,7 @@
 -define(MIN_OPK_COUNT, 20).      %% Alert threshold for one-time prekeys (NFR-24)
 -define(DEFAULT_OPK_COUNT, 100). %% Default one-time prekey pool size
 
-%% AUDIT FIX: Metrics ETS table for OPK tracking
+%% Metrics ETS table for OPK tracking
 -define(METRICS_ETS, iris_keys_metrics).
 %% GAP-13: Key change contact tracking
 -define(CONTACTS_TABLE, iris_key_contacts).
@@ -146,11 +146,11 @@ list_users() ->
 
 %% @doc Record that FetcherUserId has fetched OwnerUserId's key bundle.
 %% Used to notify contacts when the owner's identity key changes.
-%% GAP-3 AUDIT FIX: Uses Mnesia (persistent) instead of ETS (RAM-only).
+%% Uses Mnesia (persistent) instead of ETS (RAM-only).
 -spec record_key_contact(binary(), binary()) -> ok.
 record_key_contact(OwnerUserId, FetcherUserId) ->
     %% Avoid duplicates: check before insert (bag table allows dupes otherwise)
-    %% AUDIT P1-1: Transaction for key contact durability
+    %% Transaction for key contact durability
     Existing = mnesia:dirty_match_object({key_contact, OwnerUserId, FetcherUserId}),
     case Existing of
         [] ->
@@ -162,7 +162,7 @@ record_key_contact(OwnerUserId, FetcherUserId) ->
     ok.
 
 %% @doc Get all users who have fetched this user's key bundle.
-%% GAP-3 AUDIT FIX: Reads from Mnesia (survives restart).
+%% Reads from Mnesia (survives restart).
 -spec get_key_contacts(binary()) -> [binary()].
 get_key_contacts(OwnerUserId) ->
     Entries = mnesia:dirty_read(key_contact, OwnerUserId),
@@ -176,7 +176,7 @@ init([]) ->
     %% Initialize Mnesia table for key storage
     ok = init_table(),
     
-    %% AUDIT FIX: Create metrics table for OPK tracking
+    %% Create metrics table for OPK tracking
     case ets:info(?METRICS_ETS) of
         undefined ->
             ets:new(?METRICS_ETS, [named_table, public, {write_concurrency, true}]),
@@ -187,7 +187,7 @@ init([]) ->
         _ -> ok
     end,
     
-    %% GAP-3 AUDIT FIX: Key contacts table MUST be persistent (Mnesia disc_copies).
+    %% Key contacts table MUST be persistent (Mnesia disc_copies).
     %% Previously ETS (RAM-only): restart wiped the contact graph, silently
     %% breaking key change notifications (Amendment 5.3.2 MUST requirement).
     init_contacts_table(),
@@ -291,7 +291,7 @@ init_table() ->
             {error, Reason}
     end.
 
-%% GAP-3 AUDIT FIX: Mnesia-backed key contacts table
+%% Mnesia-backed key contacts table
 %% Record: {key_contact, OwnerUserId, FetcherUserId}
 init_contacts_table() ->
     StorageType = case mnesia:table_info(schema, disc_copies) of
@@ -339,7 +339,7 @@ do_upload_bundle(UserId, Bundle) ->
                 updated_at = Now
             },
             
-            %% AUDIT FIX: Use quorum writes for key bundle durability
+            %% Use quorum writes for key bundle durability
             %% This ensures the key bundle survives node failures
             store_key_bundle_durable(UserId, Record);
         {error, _} = Error ->
@@ -389,7 +389,7 @@ detect_identity_key_change(UserId, NewIK) ->
             ok
     end.
 
-%% AUDIT FIX: Quorum-based durable storage for key bundles
+%% Quorum-based durable storage for key bundles
 store_key_bundle_durable(UserId, Record) ->
     %% Try quorum write first (if module is available)
     case whereis(iris_quorum_write) of
@@ -405,8 +405,8 @@ store_key_bundle_durable(UserId, Record) ->
             case iris_quorum_write:write_durable(e2ee_key_bundle, UserId, Record) of
                 ok -> ok;
                 {error, quorum_not_reached} ->
-                    %% F3 AUDIT FIX: CP > AP for key bundles. Do NOT fallback
-                    %% to single-node write. Propagate failure; clients should retry.
+                    %% CP > AP for key bundles. Do NOT fallback to single-node
+                    %% write. Propagate failure; clients should retry.
                     logger:error("Quorum write failed for key bundle ~p, rejecting (CP > AP)", [UserId]),
                     {error, quorum_not_reached};
                 {error, Reason} ->
@@ -446,7 +446,7 @@ do_fetch_bundle(UserId, ConsumeOPK, State) ->
                         mnesia:write(e2ee_key_bundle, UpdatedRecord, write),
                         {First, Index, UpdatedRecord, false};
                     {true, []} ->
-                        %% AUDIT FIX: OPK exhausted - X3DH fallback to SPK-only mode
+                        %% OPK exhausted - X3DH fallback to SPK-only mode
                         %% Per RFC, this is valid but less secure (no forward secrecy per-message)
                         {undefined, undefined, Record, true};
                     {false, _} ->
@@ -461,7 +461,7 @@ do_fetch_bundle(UserId, ConsumeOPK, State) ->
                     one_time_prekey => OPK,
                     one_time_prekey_index => OPKIndex,
                     prekeys_remaining => length(NewRecord#key_bundle.one_time_prekeys),
-                    %% AUDIT FIX: Signal to caller that this is SPK-only mode
+                    %% Signal to caller that this is SPK-only mode
                     spk_fallback_mode => FallbackMode
                 },
                 {ok, Bundle, FallbackMode};
@@ -476,7 +476,7 @@ do_fetch_bundle(UserId, ConsumeOPK, State) ->
             Remaining = maps:get(prekeys_remaining, Bundle, 0),
             NewState = maybe_alert_low_prekeys(UserId, Remaining, State),
             
-            %% AUDIT FIX: Track OPK exhaustion metrics
+            %% Track OPK exhaustion metrics
             case FallbackMode of
                 true ->
                     incr_metric(opk_exhausted_count),
@@ -571,7 +571,7 @@ do_refill_prekeys(UserId, NewPrekeys) ->
             end,
             case mnesia:sync_transaction(F) of
                 {atomic, {ok, Count, UpdatedRecord}} ->
-                    %% B-3 AUDIT MITIGATION: Monitored spawn for key replication
+                    %% Monitored spawn for key replication
                     iris_async:spawn_monitored(key_replication, fun() -> 
                         case whereis(iris_quorum_write) of
                             undefined -> ok;
@@ -655,7 +655,7 @@ maybe_alert_low_prekeys(UserId, Remaining, State) when Remaining < ?MIN_OPK_COUN
     %% Only alert once per hour per user
     case maps:get(UserId, Alerts, 0) of
         LastAlert when Now - LastAlert > 3600 ->
-            %% AUDIT FIX: Track low OPK alerts via metrics
+            %% Track low OPK alerts via metrics
             incr_metric(opk_low_alerts),
             logger:warning("User ~s has low one-time prekeys: ~p remaining (threshold: ~p) [NFR-24]",
                           [UserId, Remaining, ?MIN_OPK_COUNT]),
@@ -702,7 +702,7 @@ compute_safety_number(IK_A, IK_B) when is_binary(IK_A), is_binary(IK_B),
                                         byte_size(IK_A) >= 16, byte_size(IK_B) >= 16 ->
     Sorted = lists:sort([IK_A, IK_B]),
     Combined = erlang:iolist_to_binary(Sorted),
-    %% GAP-1 AUDIT FIX: Use SHA-512 (64 bytes) to provide enough entropy
+    %% Use SHA-512 (64 bytes) to provide enough entropy
     %% for 30 digit-pairs using 2 bytes each (60 bytes needed).
     Hash = crypto:hash(sha512, Combined),
     %% Take first 60 bytes -> 30 digit-pairs via 16-bit sampling
@@ -713,7 +713,7 @@ compute_safety_number(_, _) ->
     {error, invalid_key}.
 
 %% Convert 60 bytes to 60 decimal digits grouped as 12x5.
-%% GAP-1 AUDIT FIX: Read 2 bytes (16 bits, 0-65535) per digit-pair, then
+%% Read 2 bytes (16 bits, 0-65535) per digit-pair, then
 %% rem 100. Bias: 65536/100 = 655 full cycles + remainder 36, giving
 %% max bias of 655/656 ≈ 0.15% (negligible vs previous 1.5x from 8-bit).
 format_safety_number_digits(Bytes) ->

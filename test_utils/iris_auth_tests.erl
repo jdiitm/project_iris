@@ -80,13 +80,13 @@ iris_auth_test_() ->
       {"Revocation is synchronous", fun test_revocation_is_synchronous/0},
       {"Revocation immediate effect", fun test_revocation_immediate_effect/0},
 
-      %% B-1 AUDIT: Refresh token TOCTOU race condition
+      %% Refresh token TOCTOU race condition
       {"Concurrent refresh exchange - only one succeeds", fun test_concurrent_refresh_exchange/0},
 
-      %% B-4 AUDIT: Login rate limiter must fail-closed when ETS absent
+      %% Login rate limiter must fail-closed when ETS absent
       {"Login rate limiter fail-closed on missing ETS", fun test_login_rate_fail_closed/0},
 
-      %% H-1 AUDIT: JWT missing alg field must be rejected
+      %% JWT missing alg field must be rejected
       {"JWT missing alg field rejected", fun test_missing_alg_header/0}
      ]}.
 
@@ -287,7 +287,7 @@ test_revocation_immediate_effect() ->
     end, Tokens).
 
 %% =============================================================================
-%% B-1 AUDIT: Concurrent refresh token exchange TOCTOU test
+%% Concurrent refresh token exchange TOCTOU test
 %% =============================================================================
 %% RFC-001 v4.0 FR-11a: Refresh token rotation must detect concurrent reuse.
 %% If two concurrent exchange_refresh_token calls use the same token,
@@ -337,7 +337,7 @@ test_concurrent_refresh_exchange() ->
     ?assertEqual(1, Failures).
 
 %% =============================================================================
-%% B-4 AUDIT: Login rate limiter must fail-closed when ETS table absent
+%% Login rate limiter must fail-closed when ETS table absent
 %% =============================================================================
 %% RFC Section 10.1: 10 failed logins per hour per account.
 %% If the ETS table is missing (iris_auth crashed/restarting), the rate
@@ -358,7 +358,7 @@ test_login_rate_fail_closed() ->
                                        {write_concurrency, true}]).
 
 %% =============================================================================
-%% H-1 AUDIT: JWT with missing 'alg' header field must be rejected
+%% JWT with missing 'alg' header field must be rejected
 %% =============================================================================
 %% A JWT header without an 'alg' field must not silently default to HS256.
 %% This prevents algorithm confusion attacks.

@@ -2,10 +2,10 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% AUDIT MITIGATION V2 — P1-2: Group Add-Member Lock Contention
+%% Group Add-Member Lock Contention
 %% =============================================================================
 %%
-%% The audit found that ALL group mutations (add_member, remove_member, etc.)
+%% ALL group mutations (add_member, remove_member, etc.)
 %% serialize through a single gen_server process, creating a global bottleneck.
 %% Mnesia transactions already provide isolation — the gen_server wrapper is
 %% redundant for mutation paths.

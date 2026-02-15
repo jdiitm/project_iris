@@ -2,7 +2,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% H-3/H-4 AUDIT MITIGATION: Bounded operations
+%% Bounded operations
 %% =============================================================================
 %% Offline retrieval, WAL replay, and message drain must have explicit
 %% size limits to prevent OOM under adversarial conditions.

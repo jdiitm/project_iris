@@ -2,7 +2,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% AUDIT MITIGATION P1-3: Configuration Validation at Startup
+%% Configuration Validation at Startup
 %% Verifies that dangerous config values are rejected or clamped.
 %% =============================================================================
 
@@ -33,7 +33,7 @@ replication_factor_bounds_test() ->
     ?assertEqual({error, invalid_replication_factor}, iris_edge_app:validate_replication_factor(-1)).
 
 %% =============================================================================
-%% AUDIT MITIGATION: Production Secret Safety (Finding 2)
+%% Production Secret Safety
 %% Characterization tests verifying the existing fail-fast chain via source
 %% inspection. Cannot call validate_production_config() directly because
 %% it calls init:stop(1) which would kill the test node.

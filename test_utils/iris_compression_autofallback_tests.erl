@@ -2,7 +2,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% AUDIT MITIGATION V2 — P0-3: Transparent zlib Auto-Fallback
+%% Transparent zlib Auto-Fallback
 %% =============================================================================
 %%
 %% When the zstd NIF is unavailable, compress(zstd, Data) should transparently

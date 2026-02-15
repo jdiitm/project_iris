@@ -2,13 +2,13 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% AUDIT MITIGATION — Finding 2.1 + CRIT-01: CP Consistency Mode Contract Tests
+%% CP Consistency Mode Contract Tests
 %% =============================================================================
 %%
 %% The system is formally classified as AP-only (hardened_ap). CP mode is not
 %% implemented. These tests formalize the contract:
 %%   1. CP in production -> fatal error
-%%   2. CP in development -> fatal error (CRIT-01: no silent fallback)
+%%   2. CP in development -> fatal error (no silent fallback)
 %%   3. Default mode is hardened_ap
 %%   4. No fallback env marker is set (fallback path removed)
 %% =============================================================================
@@ -54,7 +54,7 @@ cp_mode_crashes_in_production_test() ->
     end.
 
 %% =============================================================================
-%% Test: CP mode is fatal in development (CRIT-01: no silent fallback)
+%% Test: CP mode is fatal in development (no silent fallback)
 %% =============================================================================
 
 cp_mode_fatal_in_dev_test() ->

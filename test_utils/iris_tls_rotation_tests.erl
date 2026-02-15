@@ -2,10 +2,10 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% AUDIT MITIGATION — SEC-01: TLS Certificate Rotation
+%% SEC-01: TLS Certificate Rotation
 %% =============================================================================
 %%
-%% Finding: No runtime certificate rotation. Expired certs require full node
+%% No runtime certificate rotation. Expired certs require full node
 %% restart to fix, causing downtime.
 %%
 %% Remediation: Add reload_tls_config/0 that calls ssl:clear_pem_cache/0

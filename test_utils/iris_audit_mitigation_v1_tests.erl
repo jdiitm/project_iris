@@ -2,13 +2,13 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% Audit Mitigation V1: TDD Tests
+%% Production Hardening V1: TDD Tests
 %% =============================================================================
 %%
-%% RED/GREEN tests for three critical audit findings:
-%%   1. Supervisor Cascade Risk (Finding 3B) — intensity must be <= 5
-%%   2. Mnesia Memory Guard (Finding 3A) — new iris_mnesia_guard module
-%%   3. Compression Startup Validation (Finding 2B) — startup check
+%% Tests for three critical findings:
+%%   1. Supervisor Cascade Risk — intensity must be <= 5
+%%   2. Mnesia Memory Guard — new iris_mnesia_guard module
+%%   3. Compression Startup Validation — startup check
 %%
 %% These tests inspect supervisor specs and module exports directly.
 %% No full application start or Mnesia required.
@@ -27,8 +27,21 @@ get_core_sup_flags() ->
 get_core_child_ids() ->
     application:ensure_started(iris_core),
     application:set_env(iris_core, presence_backend, ets),
-    {ok, {_SupFlags, Children}} = iris_core:init([]),
-    [maps:get(id, C) || C <- Children].
+    {ok, {_SupFlags, TopChildren}} = iris_core:init([]),
+    %% With tiered supervisors, traverse sub-supervisor children
+    lists:flatmap(fun(Child) ->
+        Id = maps:get(id, Child),
+        case maps:get(type, Child, worker) of
+            supervisor ->
+                {Mod, _Fun, _Args} = maps:get(start, Child),
+                case Mod:init([]) of
+                    {ok, {_, SubChildren}} ->
+                        [Id | [maps:get(id, SC) || SC <- SubChildren]];
+                    _ -> [Id]
+                end;
+            _ -> [Id]
+        end
+    end, TopChildren).
 
 get_edge_sup_flags() ->
     application:set_env(iris_edge, port, 9999),

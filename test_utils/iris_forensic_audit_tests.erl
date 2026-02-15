@@ -1,10 +1,8 @@
 -module(iris_forensic_audit_tests).
 
 %% =============================================================================
-%% Forensic Audit Validation Tests
+%% Forensic Validation Tests
 %% =============================================================================
-%% These tests validate the fixes implemented for the Chief Architect forensic
-%% audit dated 2026-01-29. Each test maps to a specific audit finding.
 %%
 %% Test Categories:
 %% 1. HOL Blocking Fix - Verify async router doesn't block on slow RPCs
@@ -125,7 +123,7 @@ cleanup_cluster_manager(_) ->
 
 test_router_returns_immediately() ->
     %% Test that route/2 returns immediately without blocking
-    %% This validates the FORENSIC_AUDIT_FIX in iris_async_router
+    %% This validates the non-blocking route in iris_async_router
     
     %% Since we can't easily test the actual spawned process behavior in EUnit,
     %% we verify the code structure by checking the module exports
@@ -179,7 +177,7 @@ test_route_completion_callbacks() ->
 
 test_ets_is_default() ->
     %% Test that ETS is now the default presence backend
-    %% FORENSIC_AUDIT_FIX: Changed default from mnesia to ets
+    %% Changed default from mnesia to ets
     
     %% Get the default value (when not configured)
     Default = application:get_env(iris_core, presence_backend, ets),

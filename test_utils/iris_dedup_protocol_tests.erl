@@ -2,7 +2,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% B-1 AUDIT MITIGATION: Protocol-level idempotency enforcement
+%% Protocol-level idempotency enforcement
 %% =============================================================================
 %% RFC Section 1.2: Server MUST deduplicate by (user_id, idempotency_key).
 %% Opcode 0x0D (SEND_SEQ_V2) includes a mandatory UUIDv7 idempotency key.

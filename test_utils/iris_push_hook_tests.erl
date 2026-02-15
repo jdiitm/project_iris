@@ -2,7 +2,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% =============================================================================
-%% AUDIT: Push Notification Hook Interface Tests
+%% Push Notification Hook Interface Tests
 %% =============================================================================
 %%
 %% Tests verify that iris_offline_storage has a configurable push notification
@@ -11,9 +11,9 @@
 
 iris_push_hook_test_() ->
     [
-     {"AUDIT M12: push_notify hook exists in source",
+     {"push_notify hook exists in source",
       fun test_push_hook_in_source/0},
-     {"AUDIT M12: default push hook is no-op",
+     {"default push hook is no-op",
       fun test_push_hook_default_is_noop/0}
     ].
 
