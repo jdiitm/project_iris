@@ -11,12 +11,14 @@ FROM erlang:26-alpine
 
 # Install testing tools
 # libfaketime is REQUIRED for RFC NFR-16 clock skew verification
+# curl is REQUIRED for Docker healthcheck (curl -sf http://localhost:9090/ready)
 RUN apk add --no-cache \
     libfaketime \
     procps \
     iptables \
     iproute2 \
     bash \
+    curl \
     zstd-dev \
     gcc \
     musl-dev \
