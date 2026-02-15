@@ -480,6 +480,22 @@ jobs:
           chmod +x tests/run_all_tests.sh
           ./tests/run_all_tests.sh --docker-only
 
+      # --- Short soak: memory/WAL/FD leak detection (5 min) ---
+      - name: "Soak stability check (5 min)"
+        run: |
+          make start CONFIG=config/test_tls > /tmp/soak_server.log 2>&1
+          sleep 5
+          for i in $(seq 1 12); do
+            if nc -z localhost 8085 2>/dev/null; then
+              echo "Server ready for soak test"
+              break
+            fi
+            sleep 5
+          done
+          SOAK_DURATION_SECONDS=300 SOAK_SAMPLE_INTERVAL=10 \
+            python3 -u tests/suites/stress/test_soak_24h.py -v
+          pkill -9 -f "beam.smp.*iris_" 2>/dev/null || true
+
       - name: Verify NFR-15 internal mTLS
         run: |
           cd docker/global-cluster
@@ -538,7 +554,7 @@ jobs:
       - name: Compile
         run: make all
 
-      - name: Run full test suite
+      - name: Run full test suite (incl. soak @ 1h)
         run: |
           chmod +x tests/run_all_tests.sh
           chmod +x docker/global-cluster/cluster.sh
@@ -546,6 +562,8 @@ jobs:
           ./tests/run_all_tests.sh
         env:
           TEST_PROFILE: full
+          SOAK_DURATION_SECONDS: '3600'
+          SOAK_SAMPLE_INTERVAL: '30'
 
       - name: Cleanup
         if: always()
