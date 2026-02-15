@@ -1,33 +1,27 @@
 # =============================================================================
-# Project Iris CI/CD Pipeline
+# Project Iris CI/CD Pipeline — Production Release Gate
 # =============================================================================
-# Uses proven test scripts for reliable, reproducible test execution.
+# 7 focused facet jobs running in parallel after compile, plus a strict
+# quality gate that blocks merge unless ALL facets pass.
 #
-# Proven Scripts:
-#   - tests/run_all_tests.sh (main test runner)
-#   - docker/global-cluster/cluster.sh (cluster management)
-#   - docker/global-cluster/init_cluster.sh (Mnesia initialization)
+# Job Graph:
+#   compile ──┬── erlang-tests
+#             ├── python-quick ──── docker-chaos (nightly/main only)
+#             ├── static-analysis
+#             ├── security-gate
+#             └── release-build
+#   compat-otp27 (independent)
+#   quality-gate (requires all)
 #
-# Maps directly to run_all_tests.sh modes:
-#   --quick       → Tier 0 (non-Docker: unit, integration, e2e, contract,
-#                            compatibility, security, resilience, perf, stress,
-#                            chaos_controlled)
-#   --docker-only → Tier 1 (Docker chaos tests with fresh cluster per test)
-#   (no flag)     → Tier 2 (ALL tests: Tier 0 + Tier 1 combined)
+# Triggers:
+#   push to main/master/develop  → compile + all PR gates + docker-chaos
+#   pull_request                 → compile + all PR gates (no docker-chaos)
+#   nightly schedule             → compile + all PR gates + docker-chaos
+#   workflow_dispatch tier=0     → compile + all PR gates
+#   workflow_dispatch tier=1     → docker-chaos only
+#   workflow_dispatch tier=full  → full suite (run_all_tests.sh, 24hr)
 #
-# Schedule:
-#   Tier 0: Every commit + every PR     (~25 min)
-#   Tier 1: Nightly + main push         (~2 hours)
-#   Tier 2: Manual / pre-release        (~24 hours)
-#
-# Trigger strategy:
-#   - push: Only main/master/develop (post-merge validation + tier1 gate)
-#   - pull_request: All PRs targeting main/master/develop (pre-merge CI)
-#   - Feature branch pushes WITHOUT an open PR get no CI run. Open a PR
-#     or use workflow_dispatch to trigger manually.
-#
-# Concurrency: Only one CI run per branch at a time. New pushes cancel
-# in-progress runs to prevent wasted minutes.
+# Concurrency: one run per branch, newer pushes cancel in-progress runs.
 # =============================================================================
 
 name: CI
@@ -46,18 +40,8 @@ on:
         required: true
         default: '0'
         type: choice
-        options: ['0', '1', '2']
+        options: ['0', '1', 'full']
 
-# ---------------------------------------------------------------------------
-# CONCURRENCY: Prevent duplicate runs for the same branch.
-#
-# Groups by branch name (head_ref for PRs, ref_name for pushes).
-# cancel-in-progress ensures only the latest commit is tested.
-#
-# Since push only fires for main/master/develop (not feature branches),
-# and pull_request fires for PRs, there is no longer a push+PR overlap
-# for feature branches.
-# ---------------------------------------------------------------------------
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true
@@ -70,24 +54,96 @@ env:
 
 jobs:
   # ===========================================================================
-  # TIER 0: All Non-Docker Tests (Every Commit + Every PR)
+  # COMPILE: Shared build step — uploads ebin/ for downstream jobs
   # ===========================================================================
-  # Runs: run_all_tests.sh --quick
-  # Covers: Unit, Integration, E2E, Contract, Compatibility, Security,
-  #         Resilience, Performance, Stress, ClusterManager (chaos_controlled)
-  # Skips:  Docker chaos tests only (no Docker daemon needed)
-  #
-  # Skip when tier=2 dispatch — Tier 2 is a superset that runs everything.
-  # ===========================================================================
-  tier0:
-    name: "Tier 0 - All Non-Docker Tests"
+  compile:
+    name: "Compile (OTP ${{ env.ERLANG_VERSION }})"
     runs-on: ubuntu-latest
-    timeout-minutes: 35
-    if: github.event.inputs.tier != '2'
+    timeout-minutes: 10
+    if: github.event.inputs.tier != 'full'
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+
+      - name: Setup Erlang
+        uses: erlef/setup-beam@v1
+        with:
+          otp-version: ${{ env.ERLANG_VERSION }}
+
+      - name: Cache ebin
+        uses: actions/cache@v4
+        with:
+          path: ebin
+          key: ebin-otp${{ env.ERLANG_VERSION }}-${{ hashFiles('src/**/*.erl', 'test_utils/**/*.erl') }}
+
+      - name: Compile
+        run: make all
+
+      - name: Upload ebin artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ebin-otp${{ env.ERLANG_VERSION }}
+          path: ebin/
+          retention-days: 1
+
+  # ===========================================================================
+  # ERLANG TESTS: EUnit (185 modules) + property tests + coverage
+  # ===========================================================================
+  erlang-tests:
+    name: "Erlang Tests + Coverage"
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: compile
+    if: github.event.inputs.tier != 'full'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Erlang
+        uses: erlef/setup-beam@v1
+        with:
+          otp-version: ${{ env.ERLANG_VERSION }}
+
+      - name: Download ebin
+        uses: actions/download-artifact@v4
+        with:
+          name: ebin-otp${{ env.ERLANG_VERSION }}
+          path: ebin/
+
+      - name: Run EUnit tests
+        run: make test
+
+      - name: Run property-based tests
+        run: |
+          erl -pa ebin -noshell -eval \
+            "case iris_proto_props:test_all() of ok -> halt(0); error -> halt(1) end."
+
+      - name: Run coverage analysis
+        if: always()
+        run: |
+          make test-cover || true
+          echo "Coverage report generated in coverage/"
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: erlang-coverage
+          path: coverage/
+          retention-days: 14
+
+  # ===========================================================================
+  # PYTHON QUICK: All non-Docker Python tests (12 suites)
+  # ===========================================================================
+  python-quick:
+    name: "Python Tests (non-Docker)"
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    needs: compile
+    if: github.event.inputs.tier != 'full'
+
+    steps:
+      - uses: actions/checkout@v4
 
       - name: Setup Erlang
         uses: erlef/setup-beam@v1
@@ -99,91 +155,294 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      - name: Install Dependencies
-        run: |
-          pip install -r requirements-test.txt
-          sudo apt-get update -qq && sudo apt-get install -y -qq libzstd-dev
+      - name: Install Python dependencies
+        run: pip install -r requirements-test.txt
 
-      - name: Dependency vulnerability scan
-        run: |
-          pip install pip-audit
-          pip-audit -r requirements-test.txt --strict
+      - name: Install system dependencies
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq libzstd-dev
 
-      - name: Cache Erlang builds
+      - name: Download ebin
+        uses: actions/download-artifact@v4
+        with:
+          name: ebin-otp${{ env.ERLANG_VERSION }}
+          path: ebin/
+
+      - name: Run quick tests (non-Docker)
+        run: |
+          chmod +x tests/run_all_tests.sh
+          ./tests/run_all_tests.sh --quick
+
+      - name: Upload test artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-quick-artifacts
+          path: tests/artifacts/
+
+  # ===========================================================================
+  # STATIC ANALYSIS: Dialyzer (hard-fail) + Xref + dep scan + alert lint
+  # ===========================================================================
+  static-analysis:
+    name: "Static Analysis"
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: compile
+    if: github.event.inputs.tier != 'full'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Erlang
+        uses: erlef/setup-beam@v1
+        with:
+          otp-version: ${{ env.ERLANG_VERSION }}
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Download ebin
+        uses: actions/download-artifact@v4
+        with:
+          name: ebin-otp${{ env.ERLANG_VERSION }}
+          path: ebin/
+
+      # --- Dialyzer (HARD FAIL) ---
+      - name: Cache Dialyzer PLT
         uses: actions/cache@v4
         with:
-          path: ebin
-          key: ebin-${{ hashFiles('src/**/*.erl', 'test_utils/**/*.erl') }}
+          path: .iris_dialyzer.plt
+          key: plt-otp${{ env.ERLANG_VERSION }}-${{ hashFiles('src/**/*.erl') }}
+          restore-keys: |
+            plt-otp${{ env.ERLANG_VERSION }}-
 
-      - name: Compile
-        run: make all
-
-      - name: Validate Production Config
+      - name: Build Dialyzer PLT (if needed)
         run: |
-          # AUDIT V2 P0-1: Fail CI if production.config has unsafe defaults
-          escript scripts/validate_production_config.escript config/production.config && \
-            echo "::error::production.config passed validation — it should fail until properly configured" && exit 1 || \
-            echo "OK: production.config correctly rejected (ships with development defaults)"
+          if [ ! -f .iris_dialyzer.plt ]; then
+            echo "Building Dialyzer PLT (first run, ~2 min)..."
+            dialyzer --build_plt --apps erts kernel stdlib mnesia crypto ssl public_key \
+              --output_plt .iris_dialyzer.plt
+          fi
 
-      - name: Static Analysis (Dialyzer)
+      - name: Dialyzer type analysis
         run: |
-          # AUDIT P2-2: Type analysis to catch undefined functions and type errors
-          dialyzer --src src/ --no_check_plt -Wunmatched_returns -Werror_handling 2>&1 || true
+          dialyzer --plt .iris_dialyzer.plt -r ebin/ \
+            --no_check_plt \
+            -Wunmatched_returns -Werror_handling
 
-      - name: Cross-Reference Check (Xref)
+      # --- Xref (dead code / undefined calls) ---
+      - name: Cross-reference check (Xref)
         run: |
-          # AUDIT P2-2: Detect dead code and undefined function calls
           erl -noshell -eval '
             xref:start(iris_xref),
             xref:add_directory(iris_xref, "ebin"),
             {ok, Undef} = xref:analyze(iris_xref, undefined_function_calls),
             case Undef of
-              [] -> io:format("Xref: No undefined function calls~n");
+              [] -> io:format("Xref: No undefined function calls~n"), xref:stop(iris_xref), init:stop(0);
               _  -> io:format("Xref: ~p undefined call(s):~n", [length(Undef)]),
                     lists:foreach(fun({{FM,FF,FA},{TM,TF,TA}}) ->
                       io:format("  ~p:~p/~p -> ~p:~p/~p~n", [FM,FF,FA,TM,TF,TA])
-                    end, Undef)
-            end,
-            xref:stop(iris_xref),
-            init:stop().'
+                    end, Undef),
+                    xref:stop(iris_xref),
+                    init:stop(1)
+            end.'
 
-      - name: Validate Security Config (B-3 Audit)
+      # --- Dependency vulnerability scan ---
+      - name: Dependency vulnerability scan (pip-audit)
         run: |
-          # B-3 AUDIT MITIGATION: Verify production config enforces TLS + auth
-          python3 tests/suites/contract/test_ci_security_config.py
+          pip install pip-audit
+          pip-audit -r requirements-test.txt --strict
 
-      - name: Run Quick Tests (non-Docker)
+      # --- Prometheus alert rules validation ---
+      - name: Validate alert rules (YAML)
         run: |
-          chmod +x tests/run_all_tests.sh
-          ./tests/run_all_tests.sh --quick
+          python3 -c "
+          import yaml, sys
+          try:
+              with open('monitoring/alerts.yml') as f:
+                  data = yaml.safe_load(f)
+              groups = data.get('groups', [])
+              rule_count = sum(len(g.get('rules', [])) for g in groups)
+              print(f'Alert rules valid: {len(groups)} group(s), {rule_count} rule(s)')
+          except Exception as e:
+              print(f'FAIL: Invalid alert rules: {e}', file=sys.stderr)
+              sys.exit(1)
+          "
 
-      - name: Upload Artifacts
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: tier0-artifacts
-          path: tests/artifacts/
+      # --- Certificate expiry check ---
+      - name: Check certificate expiry
+        run: |
+          erl -pa ebin -noshell -eval '
+            CertFiles = filelib:wildcard("certs/*.pem"),
+            Results = lists:map(fun(F) ->
+              case iris_cert_monitor:check_expiry(F) of
+                {ok, Days} ->
+                  io:format("  ~s: ~p days remaining~n", [F, Days]),
+                  Days > 30;
+                {error, Reason} ->
+                  io:format("  ~s: error (~p)~n", [F, Reason]),
+                  true  %% Non-cert PEM files are OK to skip
+              end
+            end, CertFiles),
+            case lists:all(fun(X) -> X end, Results) of
+              true -> io:format("OK: All certificates valid (>30 days)~n"), init:stop(0);
+              false -> io:format("WARN: Certificate expiring within 30 days~n"), init:stop(1)
+            end.'
 
   # ===========================================================================
-  # TIER 1: Docker Chaos Tests (Nightly + Main Push)
+  # SECURITY GATE: Dedicated security verification
   # ===========================================================================
-  # Runs: run_all_tests.sh --docker-only
-  # Covers: 27 Docker chaos tests (fresh cluster per test) + NFR-15 mTLS
-  # Requires: Docker daemon (ubuntu-latest provides this)
-  #
-  # Triggers:
-  #   - Nightly schedule
-  #   - Push to main/master (post-merge validation)
-  #   - Explicit tier=1 dispatch
-  # Skip when tier=2 dispatch — Tier 2 is a superset.
-  # ===========================================================================
-  tier1-docker:
-    name: "Tier 1 - Docker Chaos Tests"
+  security-gate:
+    name: "Security Gate"
     runs-on: ubuntu-latest
-    timeout-minutes: 120
-    needs: tier0
+    timeout-minutes: 15
+    needs: compile
+    if: github.event.inputs.tier != 'full'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Erlang
+        uses: erlef/setup-beam@v1
+        with:
+          otp-version: ${{ env.ERLANG_VERSION }}
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install Python dependencies
+        run: pip install -r requirements-test.txt
+
+      - name: Install system dependencies
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq libzstd-dev
+
+      - name: Download ebin
+        uses: actions/download-artifact@v4
+        with:
+          name: ebin-otp${{ env.ERLANG_VERSION }}
+          path: ebin/
+
+      # --- Config validation ---
+      - name: Validate production config (ships with dev defaults)
+        run: |
+          escript scripts/validate_production_config.escript config/production.config && \
+            echo "::error::production.config passed validation — it should fail until properly configured" && exit 1 || \
+            echo "OK: production.config correctly rejected (ships with development defaults)"
+
+      - name: Validate CI security config contract
+        run: python3 tests/suites/contract/test_ci_security_config.py
+
+      # --- Live security tests (requires running server) ---
+      - name: Start TLS server
+        run: |
+          make start CONFIG=config/test_tls > /tmp/server_start.log 2>&1
+          sleep 5
+          for i in $(seq 1 12); do
+            if nc -z localhost 8085 2>/dev/null; then
+              echo "Server ready (attempt $i)"
+              break
+            fi
+            sleep 5
+          done
+
+      - name: "TLS enforcement (NFR-14)"
+        run: python3 -u tests/suites/security/test_tls_enforcement.py
+
+      - name: "TLS mandatory connection"
+        run: python3 -u tests/suites/security/test_tls_mandatory.py
+
+      - name: "Plaintext rejection"
+        run: python3 -u tests/suites/security/test_plaintext_rejection.py
+
+      - name: "HMAC deprecation"
+        run: python3 -u tests/suites/security/test_hmac_deprecation.py
+
+      - name: "Token expiry boundary"
+        run: python3 -u tests/suites/security/test_token_expiry_boundary.py
+
+      - name: Stop server
+        if: always()
+        run: pkill -9 -f "beam.smp.*iris_" 2>/dev/null || true
+
+  # ===========================================================================
+  # RELEASE BUILD: Verify OTP release packages with rebar3
+  # ===========================================================================
+  release-build:
+    name: "Release Build"
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    if: github.event.inputs.tier != 'full'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Erlang + rebar3
+        uses: erlef/setup-beam@v1
+        with:
+          otp-version: ${{ env.ERLANG_VERSION }}
+          rebar3-version: '3.23'
+
+      - name: Build OTP release
+        run: rebar3 release
+
+      - name: Smoke test release
+        run: |
+          # Start the release in background
+          _build/default/rel/iris/bin/iris daemon 2>/dev/null || \
+            _build/default/rel/iris/bin/iris start 2>/dev/null || \
+            echo "Release start command returned non-zero (may still be starting)"
+
+          # Give it time to boot
+          sleep 10
+
+          # Check if the BEAM is running
+          if pgrep -f "beam.*iris" > /dev/null 2>&1; then
+            echo "OK: Release is running"
+          else
+            echo "WARN: Release process not found (may need config adjustment)"
+            echo "Release build succeeded — smoke test is best-effort"
+          fi
+
+          # Cleanup
+          _build/default/rel/iris/bin/iris stop 2>/dev/null || true
+          pkill -9 -f "beam.*iris" 2>/dev/null || true
+
+  # ===========================================================================
+  # OTP 27 COMPATIBILITY: Compile + EUnit on next OTP version
+  # ===========================================================================
+  compat-otp27:
+    name: "Compat: OTP 27"
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    if: github.event.inputs.tier != 'full'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Erlang OTP 27
+        uses: erlef/setup-beam@v1
+        with:
+          otp-version: '27'
+
+      - name: Compile
+        run: make all
+
+      - name: Run EUnit tests
+        run: make test
+
+  # ===========================================================================
+  # DOCKER CHAOS: Fault injection (nightly / main push / dispatch)
+  # ===========================================================================
+  docker-chaos:
+    name: "Docker Chaos Tests"
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    needs: python-quick
     if: |
-      github.event.inputs.tier != '2' &&
+      github.event.inputs.tier != 'full' &&
       (
         github.event_name == 'schedule' ||
         github.event.inputs.tier == '1' ||
@@ -191,8 +450,7 @@ jobs:
       )
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: Setup Erlang
         uses: erlef/setup-beam@v1
@@ -204,39 +462,29 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      - name: Install Dependencies
+      - name: Install dependencies
         run: |
           pip install -r requirements-test.txt
           sudo apt-get update -qq && sudo apt-get install -y -qq libzstd-dev
 
-      - name: Cache Erlang builds
-        uses: actions/cache@v4
+      - name: Download ebin
+        uses: actions/download-artifact@v4
         with:
-          path: ebin
-          key: ebin-${{ hashFiles('src/**/*.erl', 'test_utils/**/*.erl') }}
-      - name: Compile
-        run: make all          
+          name: ebin-otp${{ env.ERLANG_VERSION }}
+          path: ebin/
 
-      - name: Run Docker Chaos Tests (proven scripts)
+      - name: Run Docker chaos tests
         run: |
           chmod +x docker/global-cluster/cluster.sh
           chmod +x docker/global-cluster/init_cluster.sh
           chmod +x tests/run_all_tests.sh
           ./tests/run_all_tests.sh --docker-only
 
-      - name: Verify NFR-15 Internal mTLS
+      - name: Verify NFR-15 internal mTLS
         run: |
-          echo "=========================================="
-          echo "NFR-15: Internal mTLS Verification"
-          echo "=========================================="
-          
           cd docker/global-cluster
-          
-          # Start mTLS cluster
           docker compose -f docker-compose.yml -f docker-compose.mtls.yml up -d
-          
-          # Poll for cluster readiness instead of fixed sleep
-          echo "Waiting for mTLS cluster to be ready..."
+          echo "Waiting for mTLS cluster..."
           for i in $(seq 1 60); do
             if docker exec core-east-1 epmd -names 2>/dev/null | grep -q core_east_1; then
               echo "Cluster ready after ${i}s"
@@ -244,44 +492,33 @@ jobs:
             fi
             sleep 1
           done
-          
-          # Verify mTLS
           ./cluster.sh verify-mtls || echo "mTLS verification completed"
-          
-          # Cleanup
           docker compose -f docker-compose.yml -f docker-compose.mtls.yml down -v
 
-      - name: Final Cleanup
+      - name: Cleanup
         if: always()
         run: |
           cd docker/global-cluster
           ./cluster.sh down || true
 
-      - name: Upload Artifacts
+      - name: Upload artifacts
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: tier1-docker-artifacts
+          name: docker-chaos-artifacts
           path: tests/artifacts/
 
   # ===========================================================================
-  # TIER 2: Full Suite (Manual / Pre-Release)
+  # FULL SUITE: Manual pre-release (all phases, 24hr)
   # ===========================================================================
-  # Runs: run_all_tests.sh (no flags — ALL phases)
-  # Covers: Everything (Tier 0 + Tier 1 scope) in a single run at full profile
-  #
-  # Standalone — no dependency on Tier 0 or Tier 1. When tier=2 is dispatched,
-  # Tier 0 and Tier 1 are skipped (they would be redundant).
-  # ===========================================================================
-  tier2-full:
-    name: "Tier 2 - Full Suite"
+  full-suite:
+    name: "Full Suite (Pre-Release)"
     runs-on: ubuntu-latest
-    timeout-minutes: 1440  # 24 hours
-    if: github.event.inputs.tier == '2'
+    timeout-minutes: 1440
+    if: github.event.inputs.tier == 'full'
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: Setup Erlang
         uses: erlef/setup-beam@v1
@@ -293,14 +530,15 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      - name: Install Dependencies
+      - name: Install dependencies
         run: |
           pip install -r requirements-test.txt
           sudo apt-get update -qq && sudo apt-get install -y -qq libzstd-dev
+
       - name: Compile
         run: make all
 
-      - name: Run Full Test Suite
+      - name: Run full test suite
         run: |
           chmod +x tests/run_all_tests.sh
           chmod +x docker/global-cluster/cluster.sh
@@ -309,71 +547,131 @@ jobs:
         env:
           TEST_PROFILE: full
 
-      - name: Final Cleanup
+      - name: Cleanup
         if: always()
         run: |
           cd docker/global-cluster
           ./cluster.sh down || true
 
-      - name: Upload Results
+      - name: Upload results
         uses: actions/upload-artifact@v4
         with:
-          name: tier2-full-results
+          name: full-suite-results
           path: tests/artifacts/
 
   # ===========================================================================
-  # Quality Gate (merge blocker)
-  # ===========================================================================
-  # Passes if the relevant tier for this run succeeded:
-  #   - Normal push/PR: tier0 must pass
-  #   - Tier 2 dispatch: tier2-full must pass (tier0 is skipped)
-  #   - Nightly: tier0 + tier1 must pass
-  #
-  # Uses !cancelled() instead of always() so that runs cancelled by the
-  # concurrency group don't produce a misleading "Quality Gate failed."
+  # QUALITY GATE: Merge blocker — ALL facets must pass
   # ===========================================================================
   quality-gate:
-    name: Quality Gate
+    name: "Quality Gate"
     runs-on: ubuntu-latest
-    needs: [tier0, tier1-docker, tier2-full]
+    needs:
+      - compile
+      - erlang-tests
+      - python-quick
+      - static-analysis
+      - security-gate
+      - release-build
+      - compat-otp27
+      - docker-chaos
+      - full-suite
     if: ${{ !cancelled() }}
 
     steps:
-      - name: Evaluate Results
+      - name: Evaluate results
         run: |
-          tier0="${{ needs.tier0.result }}"
-          tier1="${{ needs.tier1-docker.result }}"
-          tier2="${{ needs.tier2-full.result }}"
-          echo "Results: tier0=$tier0, tier1=$tier1, tier2=$tier2"
+          echo "==========================================="
+          echo "  Quality Gate — Production Release Check"
+          echo "==========================================="
+
+          compile="${{ needs.compile.result }}"
+          erlang="${{ needs.erlang-tests.result }}"
+          python="${{ needs.python-quick.result }}"
+          analysis="${{ needs.static-analysis.result }}"
+          security="${{ needs.security-gate.result }}"
+          release="${{ needs.release-build.result }}"
+          compat="${{ needs.compat-otp27.result }}"
+          chaos="${{ needs.docker-chaos.result }}"
+          full="${{ needs.full-suite.result }}"
+
+          echo ""
+          echo "  compile:         $compile"
+          echo "  erlang-tests:    $erlang"
+          echo "  python-quick:    $python"
+          echo "  static-analysis: $analysis"
+          echo "  security-gate:   $security"
+          echo "  release-build:   $release"
+          echo "  compat-otp27:    $compat"
+          echo "  docker-chaos:    $chaos"
+          echo "  full-suite:      $full"
+          echo ""
 
           failed=false
 
-          # Tier 0: must pass when it runs (skip is OK if tier2 handles it)
-          if [[ "$tier0" == "failure" || "$tier0" == "cancelled" ]]; then
-            echo "::error::Tier 0 failed ($tier0) — merge blocked"
+          # Compile must pass
+          if [[ "$compile" == "failure" || "$compile" == "cancelled" ]]; then
+            echo "::error::Compile failed ($compile)"
             failed=true
           fi
 
-          # Tier 1: must pass when it runs (skip is OK — only nightly/main)
-          if [[ "$tier1" == "failure" || "$tier1" == "cancelled" ]]; then
-            echo "::error::Tier 1 Docker tests failed ($tier1)"
+          # Erlang tests must pass when they run
+          if [[ "$erlang" == "failure" || "$erlang" == "cancelled" ]]; then
+            echo "::error::Erlang tests failed ($erlang)"
             failed=true
           fi
 
-          # Tier 2: must pass when it runs (skip is OK — only manual)
-          if [[ "$tier2" == "failure" || "$tier2" == "cancelled" ]]; then
-            echo "::error::Tier 2 full suite failed ($tier2)"
+          # Python tests must pass when they run
+          if [[ "$python" == "failure" || "$python" == "cancelled" ]]; then
+            echo "::error::Python tests failed ($python)"
             failed=true
           fi
 
-          # At least one tier must have run
-          if [[ "$tier0" == "skipped" && "$tier1" == "skipped" && "$tier2" == "skipped" ]]; then
-            echo "::error::No test tiers ran — pipeline misconfiguration"
+          # Static analysis must pass when it runs
+          if [[ "$analysis" == "failure" || "$analysis" == "cancelled" ]]; then
+            echo "::error::Static analysis failed ($analysis)"
             failed=true
           fi
 
+          # Security gate must pass when it runs
+          if [[ "$security" == "failure" || "$security" == "cancelled" ]]; then
+            echo "::error::Security gate failed ($security)"
+            failed=true
+          fi
+
+          # Release build must pass when it runs
+          if [[ "$release" == "failure" || "$release" == "cancelled" ]]; then
+            echo "::error::Release build failed ($release)"
+            failed=true
+          fi
+
+          # OTP 27 compat must pass when it runs
+          if [[ "$compat" == "failure" || "$compat" == "cancelled" ]]; then
+            echo "::error::OTP 27 compatibility failed ($compat)"
+            failed=true
+          fi
+
+          # Docker chaos must pass when it runs (skip is OK — nightly only)
+          if [[ "$chaos" == "failure" || "$chaos" == "cancelled" ]]; then
+            echo "::error::Docker chaos tests failed ($chaos)"
+            failed=true
+          fi
+
+          # Full suite must pass when it runs (skip is OK — manual only)
+          if [[ "$full" == "failure" || "$full" == "cancelled" ]]; then
+            echo "::error::Full suite failed ($full)"
+            failed=true
+          fi
+
+          # At least one real test tier must have run
+          if [[ "$erlang" == "skipped" && "$python" == "skipped" && "$full" == "skipped" ]]; then
+            echo "::error::No test jobs ran — pipeline misconfiguration"
+            failed=true
+          fi
+
+          echo ""
           if [[ "$failed" == "true" ]]; then
+            echo "::error::Quality gate FAILED — merge blocked"
             exit 1
           fi
 
-          echo "Quality gate passed"
+          echo "Quality gate PASSED — all facets green"
