@@ -224,9 +224,11 @@ handle_info(collect_system_metrics, State = #state{start_time = StartTime}) ->
     [{total, TotalMem}] = erlang:memory([total]),
     set(iris_memory_bytes, TotalMem),
     
-    %% ETS memory
-    EtsMem = lists:sum([ets:info(T, memory) * erlang:system_info(wordsize) 
-                        || T <- ets:all(), is_atom(T)]),
+    %% ETS memory (guard: table may be deleted between ets:all() and ets:info())
+    WordSize = erlang:system_info(wordsize),
+    EtsMem = lists:sum([M * WordSize
+                        || T <- ets:all(), is_atom(T),
+                           (M = ets:info(T, memory)) =/= undefined]),
     set(iris_ets_memory_bytes, EtsMem),
     
     %% Scheduler utilization (if available)
