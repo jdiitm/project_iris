@@ -389,7 +389,9 @@ get_available_nodes() ->
         _ ->
             %% Use shard module for node discovery
             case pg:get_members(iris_shards) of
-                [] -> [node() | nodes()];
+                %% B-3 AUDIT FIX: Was [node()|nodes()] which includes edge
+                %% nodes that don't run Mnesia. Fall back to local only.
+                [] -> [node()];
                 Pids -> lists:usort([node(P) || P <- Pids])
             end
     end.

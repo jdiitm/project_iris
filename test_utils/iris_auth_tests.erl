@@ -78,7 +78,16 @@ iris_auth_test_() ->
       %% P0-C4 / P1-H2: Security hardening tests
       {"JWT secret 32 bytes minimum", fun test_jwt_secret_minimum_length/0},
       {"Revocation is synchronous", fun test_revocation_is_synchronous/0},
-      {"Revocation immediate effect", fun test_revocation_immediate_effect/0}
+      {"Revocation immediate effect", fun test_revocation_immediate_effect/0},
+
+      %% B-1 AUDIT: Refresh token TOCTOU race condition
+      {"Concurrent refresh exchange - only one succeeds", fun test_concurrent_refresh_exchange/0},
+
+      %% B-4 AUDIT: Login rate limiter must fail-closed when ETS absent
+      {"Login rate limiter fail-closed on missing ETS", fun test_login_rate_fail_closed/0},
+
+      %% H-1 AUDIT: JWT missing alg field must be rejected
+      {"JWT missing alg field rejected", fun test_missing_alg_header/0}
      ]}.
 
 %% =============================================================================
@@ -276,3 +285,121 @@ test_revocation_immediate_effect() ->
     lists:foreach(fun(T) ->
         ?assertMatch({error, token_revoked}, iris_auth:validate_token(T))
     end, Tokens).
+
+%% =============================================================================
+%% B-1 AUDIT: Concurrent refresh token exchange TOCTOU test
+%% =============================================================================
+%% RFC-001 v4.0 FR-11a: Refresh token rotation must detect concurrent reuse.
+%% If two concurrent exchange_refresh_token calls use the same token,
+%% exactly one MUST succeed and the other MUST return {error, token_reused}.
+%% The dirty_read TOCTOU bug allows both to succeed.
+
+test_concurrent_refresh_exchange() ->
+    %% Create the refresh_tokens table if not exists
+    case mnesia:create_table(refresh_tokens, [
+        {ram_copies, [node()]},
+        {attributes, [token_id, user_id, family_id, used, created_at, expires_at]},
+        {type, set}
+    ]) of
+        {atomic, ok} -> ok;
+        {aborted, {already_exists, refresh_tokens}} ->
+            mnesia:clear_table(refresh_tokens)
+    end,
+    mnesia:wait_for_tables([refresh_tokens], 5000),
+
+    %% Create a refresh token
+    UserId = <<"toctou_user">>,
+    {ok, TokenId} = iris_auth:create_refresh_token(UserId),
+
+    %% Spawn two concurrent exchange attempts
+    Parent = self(),
+    Ref = make_ref(),
+    spawn(fun() ->
+        Result = iris_auth:exchange_refresh_token(TokenId),
+        Parent ! {Ref, 1, Result}
+    end),
+    spawn(fun() ->
+        Result = iris_auth:exchange_refresh_token(TokenId),
+        Parent ! {Ref, 2, Result}
+    end),
+
+    %% Collect both results
+    R1 = receive {Ref, 1, Res1} -> Res1 after 5000 -> timeout end,
+    R2 = receive {Ref, 2, Res2} -> Res2 after 5000 -> timeout end,
+
+    ?assertNotEqual(timeout, R1),
+    ?assertNotEqual(timeout, R2),
+
+    %% Exactly one should succeed, one should fail with token_reused
+    Successes = length([R || R <- [R1, R2], element(1, R) =:= ok]),
+    Failures = length([R || R <- [R1, R2], R =:= {error, token_reused}]),
+    ?assertEqual(1, Successes),
+    ?assertEqual(1, Failures).
+
+%% =============================================================================
+%% B-4 AUDIT: Login rate limiter must fail-closed when ETS table absent
+%% =============================================================================
+%% RFC Section 10.1: 10 failed logins per hour per account.
+%% If the ETS table is missing (iris_auth crashed/restarting), the rate
+%% limiter MUST reject (fail-closed), not allow (fail-open).
+
+test_login_rate_fail_closed() ->
+    %% Delete the failed logins ETS table to simulate iris_auth crash
+    case ets:info(iris_auth_failed_logins) of
+        undefined -> ok;  %% Already doesn't exist
+        _ -> ets:delete(iris_auth_failed_logins)
+    end,
+    %% With the table gone, check_login_rate should fail-closed
+    Result = iris_auth:check_login_rate(<<"brute_force_user">>),
+    ?assertEqual({error, rate_limited}, Result),
+    %% Recreate the table so cleanup doesn't crash
+    ets:new(iris_auth_failed_logins, [set, named_table, public,
+                                       {read_concurrency, true},
+                                       {write_concurrency, true}]).
+
+%% =============================================================================
+%% H-1 AUDIT: JWT with missing 'alg' header field must be rejected
+%% =============================================================================
+%% A JWT header without an 'alg' field must not silently default to HS256.
+%% This prevents algorithm confusion attacks.
+
+test_missing_alg_header() ->
+    %% Build a JWT with header that has no "alg" field
+    Header = #{<<"typ">> => <<"JWT">>},  %% No "alg" key
+    Payload = #{
+        <<"sub">> => <<"test_user">>,
+        <<"iss">> => <<"iris">>,
+        <<"iat">> => os:system_time(second),
+        <<"exp">> => os:system_time(second) + 3600,
+        <<"jti">> => base64:encode(crypto:strong_rand_bytes(16))
+    },
+    HeaderB64 = base64url_encode(jsx_encode(Header)),
+    PayloadB64 = base64url_encode(jsx_encode(Payload)),
+    %% Sign with HMAC to make it look valid
+    Secret = <<"test_secret_key_for_testing_only">>,
+    SigningInput = <<HeaderB64/binary, ".", PayloadB64/binary>>,
+    Sig = crypto:mac(hmac, sha256, Secret, SigningInput),
+    SigB64 = base64url_encode(Sig),
+    Token = <<SigningInput/binary, ".", SigB64/binary>>,
+
+    Result = iris_auth:validate_token(Token),
+    ?assertMatch({error, missing_algorithm}, Result).
+
+%% Helper: minimal JSON encode for test JWT construction
+jsx_encode(Map) ->
+    Pairs = maps:fold(fun(K, V, Acc) ->
+        KEnc = <<"\"", K/binary, "\"">>,
+        VEnc = case V of
+            B when is_binary(B) -> <<"\"", B/binary, "\"">>;
+            I when is_integer(I) -> integer_to_binary(I);
+            _ -> <<"null">>
+        end,
+        [<<KEnc/binary, ":", VEnc/binary>> | Acc]
+    end, [], Map),
+    iolist_to_binary([<<"{">>, lists:join(<<",">>, Pairs), <<"}">>]).
+
+base64url_encode(Bin) ->
+    B64 = base64:encode(Bin),
+    B1 = binary:replace(B64, <<"+">>, <<"-">>, [global]),
+    B2 = binary:replace(B1, <<"/">>, <<"_">>, [global]),
+    binary:replace(B2, <<"=">>, <<>>, [global]).

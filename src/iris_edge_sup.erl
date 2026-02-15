@@ -48,6 +48,14 @@ init([]) ->
                              {read_concurrency, true}, 
                              {write_concurrency, true}]),
     
+    %% Edge-local idempotency dedup table (RFC Section 1.2)
+    %% On edge nodes, iris_dedup (iris_core) is not running. This ETS table
+    %% provides hot-tier dedup for 0x0D (SEND_SEQ_V2) messages routed locally.
+    %% Owned by supervisor so it survives router shard crashes.
+    ets:new(iris_edge_dedup, [set, named_table, public,
+                             {read_concurrency, true},
+                             {write_concurrency, true}]),
+
     %% Per-IP connection rate limiting table (RFC Section 10)
     %% Owned by supervisor so it survives listener crashes.
     ets:new(iris_conn_rate, [public, named_table, bag,

@@ -1392,8 +1392,9 @@ merge_table_batch(RemoteNode, Table, Keys) ->
             Records when is_list(Records) ->
                 LocalRecords = mnesia:dirty_read(Table, Key),
                 %% F1 FIX: Use conflict-aware merge instead of blind write.
-                %% For bag tables (offline_msg, e2ee_key_bundle): union merge (write missing).
-                %% For set tables (group_member, presence): timestamp-aware LWW.
+                %% For bag tables (offline_msg): union merge (write missing).
+                %% For set tables: timestamp-aware LWW (see should_overwrite/3).
+                %% B-6 AUDIT FIX: e2ee_key_bundle is set type, uses updated_at LWW.
                 TableType = try mnesia:table_info(Table, type)
                             catch Class:Reason ->
                                 logger:warning("iris_core: table_info(~p, type) failed: ~p:~p, defaulting to set", [Table, Class, Reason]),
@@ -1476,6 +1477,14 @@ should_overwrite(user_meta, RemoteRec, LocalRec) ->
 should_overwrite(presence, _RemoteRec, _LocalRec) ->
     %% Presence is ram_copies, ephemeral. Local is authoritative.
     false;
+should_overwrite(e2ee_key_bundle, RemoteRec, LocalRec) ->
+    %% B-6 AUDIT FIX: RFC 7.1.1 says "Key bundles: Union (all bundles are valid)."
+    %% Since e2ee_key_bundle is a set table (one record per user_id),
+    %% "union" means keep the record with the most recent updated_at.
+    %% updated_at is the 9th element of the key_bundle record.
+    RemoteUpdatedAt = element(9, RemoteRec),
+    LocalUpdatedAt = element(9, LocalRec),
+    RemoteUpdatedAt > LocalUpdatedAt;
 should_overwrite(_Table, _RemoteRec, _LocalRec) ->
     %% Conservative default: keep local record
     false.

@@ -162,39 +162,44 @@ handle_packet({login, LoginData}, _Current, TransportPid, _Mod) ->
     %% RFC NFR-31: Span instrumentation for login
     iris_trace:new_span(<<"session.login">>),
     %% Parse login data: may be just username or "username:token" format
-    {User, MaybeToken} = parse_login_data(LoginData),
-    
-    %% AUDIT3 FIX: Protect against session memory bloat
-    %% NFR-26 FIX: Increased from 100000 to 1000000 words to support 1000-member groups
-    %% 1000000 words = ~8MB, sufficient for large group roster/fanout operations
-    %% AUDIT 2.3a FIX: kill => false allows graceful close instead of TCP reset.
-    %% iris_ws_lite checks heap_size after packet handling and sends SERVER_OVERLOAD.
-    process_flag(max_heap_size, #{size => 1000000, kill => false, error_logger => true}), %% ~8MB soft limit
-    
-    %% RFC Section 10.1: Check failed-login rate limit first
-    Result = case iris_auth:check_login_rate(User) of
-        {error, rate_limited} ->
-            logger:warning("Failed-login rate limited for ~p (10/hour)", [User]),
-            Actions = [{send, <<"LOGIN_RATE_LIMITED">>}, close],
-            {ok, undefined, Actions};
-        ok ->
-            %% Per-message rate limiting check
-            case rate_limit_check(User) of
-                {deny, _RetryAfter} ->
-                    logger:warning("Login rate limited for ~p", [User]),
-                    Actions2 = [{send, <<"RATE_LIMITED">>}, close],
-                    {ok, undefined, Actions2};
-                allow ->
-                    %% Optional JWT authentication
-                    case authenticate(User, MaybeToken) of
-                        ok ->
-                            complete_login(User, TransportPid);
-                        {error, Reason} ->
-                            %% RFC Section 10.1: Record failed login attempt
-                            iris_auth:record_failed_login(User),
-                            logger:warning("Auth failed for ~p: ~p", [User, Reason]),
-                            Actions3 = [{send, <<"AUTH_FAILED">>}, close],
-                            {ok, undefined, Actions3}
+    Result = case parse_login_data(LoginData) of
+        {error, empty_username} ->
+            %% H-2 AUDIT FIX: Reject empty username
+            logger:warning("Login rejected: empty username"),
+            {ok, undefined, [{send, <<"EMPTY_USERNAME">>}, close]};
+        {User, MaybeToken} ->
+            %% AUDIT3 FIX: Protect against session memory bloat
+            %% NFR-26 FIX: Increased from 100000 to 1000000 words to support 1000-member groups
+            %% 1000000 words = ~8MB, sufficient for large group roster/fanout operations
+            %% AUDIT 2.3a FIX: kill => false allows graceful close instead of TCP reset.
+            %% iris_ws_lite checks heap_size after packet handling and sends SERVER_OVERLOAD.
+            process_flag(max_heap_size, #{size => 1000000, kill => false, error_logger => true}), %% ~8MB soft limit
+            
+            %% RFC Section 10.1: Check failed-login rate limit first
+            case iris_auth:check_login_rate(User) of
+                {error, rate_limited} ->
+                    logger:warning("Failed-login rate limited for ~p (10/hour)", [User]),
+                    Actions = [{send, <<"LOGIN_RATE_LIMITED">>}, close],
+                    {ok, undefined, Actions};
+                ok ->
+                    %% Per-message rate limiting check
+                    case rate_limit_check(User) of
+                        {deny, _RetryAfter} ->
+                            logger:warning("Login rate limited for ~p", [User]),
+                            Actions2 = [{send, <<"RATE_LIMITED">>}, close],
+                            {ok, undefined, Actions2};
+                        allow ->
+                            %% Optional JWT authentication
+                            case authenticate(User, MaybeToken) of
+                                ok ->
+                                    complete_login(User, TransportPid);
+                                {error, Reason} ->
+                                    %% RFC Section 10.1: Record failed login attempt
+                                    iris_auth:record_failed_login(User),
+                                    logger:warning("Auth failed for ~p: ~p", [User, Reason]),
+                                    Actions3 = [{send, <<"AUTH_FAILED">>}, close],
+                                    {ok, undefined, Actions3}
+                            end
                     end
             end
     end,
@@ -265,8 +270,12 @@ handle_packet({send_seq_v2, Target, IdKey, SeqNo, Msg}, User, _Pid, _Mod) when U
             %% RFC 1.2: Validate UUIDv7 format
             case iris_uuid:validate_idempotency_key(IdKey) of
                 ok ->
-                    %% Wrap as {idempotent_msg, IdKey, {SeqNo, Msg}} for dedup by key
-                    RoutedMsg = {idempotent_msg, IdKey, {SeqNo, Msg}},
+                    %% Wrap as {idempotent_msg, IdKey, Msg} for dedup by key.
+                    %% Only Msg (binary content) is in the wrapper — SeqNo is NOT
+                    %% included because the delivery layer (encode_reliable_msg)
+                    %% requires binary payloads, and embedding SeqNo as a tuple
+                    %% would crash byte_size/1 at delivery time.
+                    RoutedMsg = {idempotent_msg, IdKey, Msg},
                     iris_router:route(Target, RoutedMsg),
                     iris_metrics:msg_out(),
                     {ok, User, []};
@@ -1211,8 +1220,10 @@ encode_offline_more(NextCursor, Remaining) ->
 
 parse_login_data(Data) ->
     case binary:split(Data, <<":">>) of
-        [User, Token] -> {User, Token};
-        [User] -> {User, undefined}
+        [User, Token] when byte_size(User) > 0 -> {User, Token};
+        [User] when byte_size(User) > 0 -> {User, undefined};
+        %% H-2 AUDIT FIX: Reject empty username at parse stage
+        _ -> {error, empty_username}
     end.
 
 rate_limit_check(User) ->
@@ -1224,7 +1235,13 @@ rate_limit_check(User) ->
 authenticate(_User, undefined) ->
     %% No token provided - check if auth is required
     case whereis(iris_auth) of
-        undefined -> ok;
+        undefined ->
+            %% H-3 AUDIT FIX: If iris_auth is down, check if auth should be enabled.
+            %% If auth_enabled=true in config, fail-closed (reject).
+            case application:get_env(iris_edge, auth_enabled, false) of
+                true -> {error, auth_unavailable};
+                false -> ok
+            end;
         _ ->
             case iris_auth:is_auth_enabled() of
                 false -> ok;
@@ -1233,7 +1250,13 @@ authenticate(_User, undefined) ->
     end;
 authenticate(User, Token) ->
     case whereis(iris_auth) of
-        undefined -> ok;
+        undefined ->
+            %% H-3 AUDIT FIX: If iris_auth is down, check if auth should be enabled.
+            %% If auth_enabled=true in config, fail-closed (reject).
+            case application:get_env(iris_edge, auth_enabled, false) of
+                true -> {error, auth_unavailable};
+                false -> ok
+            end;
         _ ->
             case iris_auth:is_auth_enabled() of
                 false -> ok;
@@ -1413,10 +1436,19 @@ check_block_status(Sender, Recipient) ->
             logger:info("Blocked message from ~p to ~p", [Sender, Recipient]),
             iris_metrics:inc(blocked_message_count),
             {error, blocked}
-    catch _:Reason ->
-        %% B-6 AUDIT MITIGATION: Fail-CLOSED when user_safety is unavailable.
-        %% Blocked users must not be able to bypass by crashing the safety service.
-        logger:warning("Block check failed (fail-closed): ~p sender=~p", [Reason, Sender]),
-        iris_metrics:inc(block_check_service_unavailable),
-        {error, service_unavailable}
+    catch
+        exit:{aborted, {no_exists, _}} ->
+            %% Mnesia table not created — blocking feature not deployed.
+            %% This is NOT a transient failure; the feature simply isn't configured.
+            %% Allow messages through (no blocks exist to enforce).
+            ok;
+        error:undef ->
+            %% iris_user_safety module not loaded — feature not deployed.
+            ok;
+        _:Reason ->
+            %% B-6 AUDIT MITIGATION: Fail-CLOSED for transient runtime failures.
+            %% Blocked users must not be able to bypass by crashing the safety service.
+            logger:warning("Block check failed (fail-closed): ~p sender=~p", [Reason, Sender]),
+            iris_metrics:inc(block_check_service_unavailable),
+            {error, blocked}
     end.

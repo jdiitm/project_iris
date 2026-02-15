@@ -56,6 +56,28 @@ def generate_msg_id():
     return f"msg_{uuid.uuid4().hex[:16]}"
 
 
+def generate_uuidv7_bytes():
+    """Generate a 16-byte UUIDv7 per RFC 9562.
+    
+    Layout:
+      - Bits  0-47: Unix timestamp in milliseconds
+      - Bits 48-51: Version (0b0111 = 7)
+      - Bits 52-63: rand_a (12 random bits)
+      - Bits 64-65: Variant (0b10)
+      - Bits 66-127: rand_b (62 random bits)
+    """
+    import os as _os
+    ts_ms = int(time.time() * 1000) & 0xFFFFFFFFFFFF  # 48-bit ms timestamp
+    rand_bytes = _os.urandom(10)  # 80 random bits
+    # Parse random bytes into integers
+    rand_a = int.from_bytes(rand_bytes[:2], 'big') & 0x0FFF  # 12 bits
+    rand_b = int.from_bytes(rand_bytes[2:], 'big') & 0x3FFFFFFFFFFFFFFF  # 62 bits
+    # Assemble: timestamp(48) | version(4)=7 | rand_a(12) | variant(2)=2 | rand_b(62)
+    high64 = (ts_ms << 16) | (0x7 << 12) | rand_a
+    low64 = (0b10 << 62) | rand_b
+    return high64.to_bytes(8, 'big') + low64.to_bytes(8, 'big')
+
+
 class IdempotencyTestClient(IrisClient):
     """Extended client for idempotency testing with controlled message IDs."""
     
@@ -118,13 +140,19 @@ class IdempotencyTestClient(IrisClient):
 
 def test_same_msgid_once():
     """
-    B-2 AUDIT MITIGATION: Test actual idempotency via 0x0D (SEND_SEQ_V2).
+    B-2 AUDIT FIX: Test actual idempotency via 0x0D (SEND_SEQ_V2).
     
     RFC Section 1.2: "Server MUST atomically deduplicate by (user_id, idempotency_key)"
     
-    Sends the same idempotency_key 10 times via opcode 0x0D.
+    Sends the SAME idempotency_key 10 times via opcode 0x0D (send_msg_v2).
     The server MUST deliver the message at most once (dedup the rest).
-    Fallback: if server doesn't support 0x0D, test via 0x07 stability check.
+    
+    This test WILL FAIL if:
+    - The server does not parse 0x0D correctly
+    - Deduplication by idempotency_key is broken
+    - The bloom filter or dedup_log is not working
+    
+    INVARIANT: Exactly 1 delivery for N sends with same idempotency_key.
     """
     log("=" * 60)
     log("TEST: Idempotency via 0x0D (SEND_SEQ_V2) - RFC Section 1.2")
@@ -148,33 +176,39 @@ def test_same_msgid_once():
         
         log("PASS: Connected sender and receiver")
         
-        # Generate a single idempotency key (16 bytes UUIDv7)
-        idempotency_key = uuid.uuid4().bytes
+        # Generate a SINGLE idempotency key (16 bytes UUIDv7 per RFC 9562)
+        # This SAME key will be sent 10 times -- server must dedup to 1 delivery
+        idempotency_key = generate_uuidv7_bytes()
         num_sends = 10
+        dedup_marker = f"dedup_v2_{uuid.uuid4().hex[:8]}"
         
-        # Send SAME idempotency_key 10 times via 0x0D
+        # Send SAME idempotency_key 10 times via 0x0D (SEND_SEQ_V2)
         for i in range(num_sends):
-            sender.send_msg_with_id(receiver_name, f"dedup_test_content", 
-                                     generate_msg_id())
+            sender.send_msg_v2(
+                receiver_name,
+                dedup_marker,
+                idempotency_key=idempotency_key
+            )
             time.sleep(0.01)
         
-        log(f"Sent {num_sends} messages with same content via 0x07")
+        log(f"Sent {num_sends} messages with SAME idempotency_key via 0x0D")
         
         time.sleep(1.0)
         
         received = receiver.recv_messages_until_timeout(timeout=2.0)
-        matching = [m for m in received if "dedup_test_content" in m]
+        matching = [m for m in received if dedup_marker in m]
         
-        log(f"Total received: {len(received)}, matching: {len(matching)}")
+        log(f"Total received: {len(received)}, matching dedup marker: {len(matching)}")
         
-        # Via 0x07: each send is unique (different seq_no), so all delivered
-        # The key invariant: system is stable, no crashes
-        if len(matching) >= 1:
-            log(f"PASS: Messages delivered ({len(matching)} total)")
-            log("NOTE: True dedup requires 0x0D; 0x07 treats each as unique")
+        # RFC Section 1.2 INVARIANT: exactly 1 delivery for duplicate keys
+        if len(matching) == 1:
+            log("PASS: Exactly 1 message delivered (dedup working correctly)")
             return True
+        elif len(matching) == 0:
+            log("FAIL: No messages delivered (server may be dropping 0x0D)")
+            return False
         else:
-            log(f"FAIL: No messages delivered")
+            log(f"FAIL: {len(matching)} messages delivered (dedup BROKEN, expected exactly 1)")
             return False
             
     except socket.error as e:

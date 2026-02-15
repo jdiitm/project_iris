@@ -15,6 +15,14 @@ setup() ->
         undefined -> ets:new(presence_cache, [named_table, public, set]);
         _ -> ets:delete_all_objects(presence_cache)
     end,
+    %% B-4 AUDIT: iris_auth_failed_logins ETS must exist for check_login_rate
+    %% to succeed (fail-closed when absent per audit fix).
+    case ets:info(iris_auth_failed_logins) of
+        undefined ->
+            ets:new(iris_auth_failed_logins, [set, named_table, public,
+                {read_concurrency, true}, {write_concurrency, true}]);
+        _ -> ok
+    end,
     ok.
 
 cleanup(_) ->

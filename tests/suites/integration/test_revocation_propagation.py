@@ -152,8 +152,9 @@ def test_revocation_logs_failures():
 def test_revocation_still_non_blocking():
     """
     Contract: propagate_revocation/2 MUST remain non-blocking for the
-    gen_server caller. The spawn wrapper should be kept -- only the
-    inner rpc:cast should change to rpc:call.
+    gen_server caller. An async wrapper (spawn or iris_async:spawn_monitored)
+    must be used so the rpc:call happens off the gen_server process.
+    iris_async:spawn_monitored is preferred (audit fix) as it adds monitoring.
     """
     log("\n=== Test: Revocation Remains Non-blocking ===")
 
@@ -161,12 +162,16 @@ def test_revocation_still_non_blocking():
     source = read_file(auth_erl)
     func_body = extract_function(source, "propagate_revocation", 2)
 
-    # Must still use spawn to avoid blocking the gen_server
-    has_spawn = bool(re.search(r'spawn\(fun\(\)', func_body))
+    # Must use an async wrapper to avoid blocking the gen_server.
+    # Accept either bare spawn(fun() or iris_async:spawn_monitored (preferred).
+    has_async_wrapper = bool(
+        re.search(r'spawn\(fun\(\)', func_body) or
+        re.search(r'iris_async:spawn_monitored\(', func_body)
+    )
     check(
-        "propagate_revocation still uses spawn (non-blocking)",
-        has_spawn,
-        "The spawn wrapper must remain to avoid blocking the gen_server caller"
+        "propagate_revocation uses async wrapper (non-blocking)",
+        has_async_wrapper,
+        "Must use spawn or iris_async:spawn_monitored to avoid blocking the gen_server caller"
     )
 
 

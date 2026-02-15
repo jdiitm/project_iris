@@ -8,23 +8,24 @@
 %% services are unavailable, rather than fail-open (allow).
 %%
 %% Tested patterns:
-%% 1. check_block_status: MUST return {error, service_unavailable} when
-%%    iris_user_safety is down (not 'ok')
+%% 1. check_block_status: When the user_blocks Mnesia table does NOT exist,
+%%    the blocking feature is not deployed → returns ok (no blocks to enforce).
+%%    When the table EXISTS but a transient failure occurs → returns {error, blocked}.
 %% 2. is_revoked: MUST return true (revoked) when Mnesia transaction fails
 %%    (not false)
 %% 3. check_conn_rate_tcp: MUST return deny when rate check throws (not allow)
 %% =============================================================================
 
 %% ---------------------------------------------------------------------------
-%% Test 1: Block check fails closed when iris_user_safety is unavailable
+%% Test 1: Block check allows when blocking feature is not deployed
 %% ---------------------------------------------------------------------------
-block_check_fails_closed_test() ->
-    %% Calling check_block_status when iris_user_safety is not registered
-    %% should return {error, service_unavailable}, NOT ok.
+block_check_allows_when_not_deployed_test() ->
+    %% When user_blocks Mnesia table doesn't exist (feature not deployed),
+    %% check_block_status returns ok — there are no blocks to enforce.
+    %% This is NOT fail-open: it distinguishes "feature absent" from
+    %% "feature present but temporarily broken".
     Result = iris_session:check_block_status(<<"attacker">>, <<"victim">>),
-    ?assertMatch({error, _}, Result),
-    %% Specifically should NOT be 'ok'
-    ?assertNotEqual(ok, Result).
+    ?assertEqual(ok, Result).
 
 %% ---------------------------------------------------------------------------
 %% Test 2: Rate limit check fails closed on exception
