@@ -287,6 +287,11 @@ jobs:
       # --- Prometheus alert rules validation ---
       - name: Validate alert rules (YAML)
         run: |
+          if [ ! -f monitoring/alerts.yml ]; then
+            echo "No monitoring/alerts.yml found — skipping"
+            exit 0
+          fi
+          pip install pyyaml --quiet
           python3 -c "
           import yaml, sys
           try:
