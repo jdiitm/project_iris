@@ -256,3 +256,18 @@ certs:
 certs-clean:
 	@echo "Removing certificates..."
 	@rm -f certs/*.pem certs/*.key certs/*.srl 2>/dev/null || true
+
+# SW-3: OTP Release packaging (requires rebar3)
+release: all
+	@echo "Building OTP release..."
+	@if command -v rebar3 >/dev/null 2>&1; then \
+		rebar3 release; \
+	else \
+		echo "rebar3 not found. Install rebar3 to build releases."; \
+		echo "See: https://rebar3.org/docs/getting-started/"; \
+		exit 1; \
+	fi
+
+release-prod: all
+	@echo "Building production OTP release..."
+	@rebar3 as prod release

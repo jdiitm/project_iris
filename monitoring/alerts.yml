@@ -63,3 +63,30 @@ groups:
         annotations:
           summary: "Message loss detected"
           description: "{{ $labels.instance }} is reporting message loss. RPO=0 violated."
+
+      - alert: DiskUsageWarning
+        expr: iris_disk_usage_percent > 80
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Disk usage exceeds 80%"
+          description: "{{ $labels.instance }} disk usage at {{ $value }}%."
+
+      - alert: DiskUsageCritical
+        expr: iris_disk_usage_percent > 90
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Disk usage exceeds 90%"
+          description: "{{ $labels.instance }} disk usage at {{ $value }}%. Immediate action required."
+
+      - alert: EdgeFallbackAccumulating
+        expr: iris_edge_fallback_pending > 100
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Edge fallback ETS accumulating unsent messages"
+          description: "{{ $labels.instance }} has {{ $value }} messages pending in local fallback. Core may be unreachable."

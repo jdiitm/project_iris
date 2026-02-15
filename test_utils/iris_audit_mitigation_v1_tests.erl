@@ -27,8 +27,21 @@ get_core_sup_flags() ->
 get_core_child_ids() ->
     application:ensure_started(iris_core),
     application:set_env(iris_core, presence_backend, ets),
-    {ok, {_SupFlags, Children}} = iris_core:init([]),
-    [maps:get(id, C) || C <- Children].
+    {ok, {_SupFlags, TopChildren}} = iris_core:init([]),
+    %% With tiered supervisors, traverse sub-supervisor children
+    lists:flatmap(fun(Child) ->
+        Id = maps:get(id, Child),
+        case maps:get(type, Child, worker) of
+            supervisor ->
+                {Mod, _Fun, _Args} = maps:get(start, Child),
+                case Mod:init([]) of
+                    {ok, {_, SubChildren}} ->
+                        [Id | [maps:get(id, SC) || SC <- SubChildren]];
+                    _ -> [Id]
+                end;
+            _ -> [Id]
+        end
+    end, TopChildren).
 
 get_edge_sup_flags() ->
     application:set_env(iris_edge, port, 9999),

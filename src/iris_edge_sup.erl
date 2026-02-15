@@ -145,6 +145,15 @@ init([]) ->
             shutdown => 5000,
             type => worker,
             modules => [iris_edge_dedup_cleaner]
+        },
+        %% B-1: Fallback drain — flushes pending offline msgs to core
+        #{
+            id => iris_edge_fallback_drain,
+            start => {iris_edge_fallback_drain, start_link, []},
+            restart => permanent,
+            shutdown => 5000,
+            type => worker,
+            modules => [iris_edge_fallback_drain]
         }
     ] ++ [
         %% Router pool — auto-tuned pool size based on scheduler count

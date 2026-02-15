@@ -1,6 +1,6 @@
 # Project Iris: 5B DAU Roadmap
 
-**Last Updated**: 2026-02-11  
+**Last Updated**: 2026-02-15  
 **Status**: Active Development  
 **Target**: WhatsApp/Telegram-class scale (5 Billion Daily Active Users)
 
@@ -17,54 +17,24 @@
 | E2EE | ✅ Working | Signal Protocol implemented |
 | Cross-Region | ✅ Hardened | Multi-node disc_copies, TLS enabled |
 | **TLS Security** | ✅ **Enforced** | All client connections require TLS |
-| **Test Suite** | ✅ **100% Pass** | 155 Python + 100 Erlang tests, all TLS-enabled |
+| **Test Suite** | ✅ **100% Pass** | 169 Python + 185 Erlang tests, all TLS-enabled |
 | **RFC v4.0 Compliance** | ✅ **19 gaps closed** | See [RFC_COMPLIANCE.md](RFC_COMPLIANCE.md) |
 | **Operational Limits** | ✅ **Enforced** | Inbox 10K, payload 64KB, session 100K |
 | Scalability (10K) | ✅ Validated | Local testing with metrics |
 | Scalability (1M) | ⚠️ Designed | Architecture supports, not yet tested |
 | Production Ready | ❌ No | Development/Pre-alpha |
 
-### Recent Improvements (2026-02-07 — 2026-02-08)
-- Closed 19 RFC v4.0 compliance gaps via TDD
-- Inbox 10K limit, payload 64KB limit, outbox 7-day TTL enforced
-- JWT replay protection, key isolation, version negotiation
-- Test suite expanded to 155 Python + 100 Erlang tests (from 115+), all passing
-- Session cache bounded (100K), dedup Mnesia cross-check added
-- Edge listener hardened, Docker image aligned to OTP 26
+See [CHANGELOG.md](../CHANGELOG.md) for detailed change history.
 
 ---
 
-## Phase 1: Core Refactor (This Sprint) ✅ COMPLETE
+## Phase 1: Core Refactor ✅ COMPLETE
 
-**Goal**: Fix fundamental architectural blockers identified in forensic audit.
-
-| Task | Status | Module |
-|------|--------|--------|
-| ETS presence backend default | ✅ Done | `iris_core.erl` |
-| Async router HOL blocking fix | ✅ Done | `iris_async_router.erl` |
-| Cluster self-healing manager | ✅ Done | `iris_cluster_manager.erl` |
-| Validation tests | ✅ Done | `iris_forensic_audit_tests.erl` |
-
-**Changes Made**:
-- Changed `presence_backend` default from `mnesia` to `ets` (eliminates global lock)
-- Refactored `route_to_remote/4` to spawn ephemeral tasks (eliminates HOL blocking)
-- Created `iris_cluster_manager` to auto-wire replication on node join
-- Added forensic audit validation test suite
-
----
+ETS presence default, async router HOL blocking fix, cluster self-healing manager. All validated with forensic audit tests.
 
 ## Phase 2: Durability & Distribution ✅ MOSTLY COMPLETE
 
-**Goal**: Ensure data survives chaos.
-
-| Task | Status | Notes |
-|------|--------|-------|
-| Persistent cross-region queue | ✅ Done | `iris_region_bridge.erl` — FIFO, fsync, 7-day TTL |
-| Inbox overflow protection | ✅ Done | 10K limit in `iris_core.erl` (GAP-6) |
-| Outbox TTL enforcement | ✅ Done | 7-day cleanup in drain timer (GAP-1) |
-| Queue depth alerting | ✅ Done | 50% metric (GAP-2) |
-| Mailbox AQM (drop policy) | ✅ Done | CoDel implemented in `iris_mailbox_guard.erl` |
-| Cross-region Mnesia auto-setup | ⚠️ Partial | Docker volume config |
+Persistent cross-region queue, inbox 10K limit, outbox 7-day TTL, queue depth alerting, CoDel AQM. One item remaining: cross-region Mnesia auto-setup (partial, blocked by Docker volume config).
 
 ---
 
@@ -113,57 +83,25 @@ See [Scalability Analysis](SCALABILITY_ANALYSIS.md) for measured metrics and ext
 
 ---
 
-## Architecture Decisions Pending
+## Architecture Decisions (Resolved)
 
-### 1. ~~Cross-Region Message Queue~~ — DECIDED
+| Decision | Resolution |
+|----------|------------|
+| Cross-region message queue | Mnesia `disc_copies` in `iris_region_bridge.erl` (FIFO, 7-day TTL, 10K depth limit) |
+| Mailbox overflow policy | CoDel AQM in `iris_mailbox_guard.erl` (burst-tolerant, latency-focused) |
+| Worker pool strategy | Ephemeral spawn + circuit breaker; `iris_router_pool` removed as dead code |
 
-**Decision**: Mnesia `disc_copies` with `sync_transaction` — implemented in `iris_region_bridge.erl`.
-- FIFO ordering via `cross_region_outbound` table
-- 7-day TTL with automatic cleanup
-- Overflow rejection at 10K queue depth
-
-### 2. ~~Mailbox Overflow Policy~~ — DECIDED
-
-**Decision**: CoDel (Controlled Delay) — implemented in `iris_mailbox_guard.erl` (2026-02-10).
-- Exports `codel_new/0,1`, `codel_check/3` (pure functions for unit testing)
-- Burst-tolerant: allows short bursts above target without dropping
-- Latency-focused: drops only when sojourn time exceeds target for a full interval
-- Tested in `iris_codel_tests.erl` (5 tests)
-
-### 3. Worker Pool Strategy
-
-**Current**: Ephemeral spawn + circuit breaker
-
-**Decision**: Keep ephemeral spawn. `iris_router_pool` was removed as dead code (2026-02-11). Bounded pool adds complexity without clear benefit given circuit breaker isolation.
+See [DECISIONS.md](DECISIONS.md) for full rationale.
 
 ---
 
 ## Success Criteria
 
-### Phase 1 (Complete)
-- [x] No HOL blocking in async router
-- [x] ETS default for presence (no global lock)
-- [x] Self-healing cluster topology
-
-### Phase 1.5: Test Stabilization (Complete - 2026-02-03)
-- [x] TLS enforced on all client connections (NFR-14)
-- [x] 155 Python + 100 Erlang tests passing (100%)
-- [x] All chaos_dist tests working with Docker cluster
-- [x] Reliable message protocol (ACKs) properly implemented
-- [x] Cross-region durability validated (RPO=0)
-
-### Phase 1.75: RFC v4.0 Compliance (Complete - 2026-02-08)
-- [x] 19 RFC v4.0 gaps closed via TDD
-- [x] Inbox 10K, payload 64KB, outbox TTL enforced
-- [x] JWT replay protection + key isolation
-- [x] Span instrumentation + standard counters
-- [x] Session cache bounded, dedup cross-check added
-
-### Phase 2
-- [x] Messages survive cross-region link failure (queue durability)
-- [x] Inbox overflow protection (10K limit)
-- [x] Celebrity accounts don't crash shards (AQM/CoDel in `iris_mailbox_guard`)
-- [ ] Cross-region Mnesia auto-initializes
+### Completed Phases
+- **Phase 1** (Core Refactor): HOL blocking, ETS presence, cluster self-healing ✅
+- **Phase 1.5** (Test Stabilization, 2026-02-03): TLS enforced, 100% tests passing, ACK protocol ✅
+- **Phase 1.75** (RFC v4.0 Compliance, 2026-02-08): 19 gaps closed, limits enforced, JWT hardened ✅
+- **Phase 2** (Durability): Queue durability, inbox protection, CoDel AQM ✅ (cross-region Mnesia auto-init pending)
 
 ### Phase 3
 - [x] 10K connections validated locally

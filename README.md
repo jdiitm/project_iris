@@ -1,11 +1,11 @@
 # Project Iris: WhatsApp-Class Messaging Engine
 
-[![Tests](https://img.shields.io/badge/tests-156%2B%20passing-brightgreen)](tests/run_all_tests.sh)
+[![Tests](https://img.shields.io/badge/tests-354%2B%20passing-brightgreen)](tests/run_all_tests.sh)
 [![TLS](https://img.shields.io/badge/TLS-enforced-green)](docs/DEPLOYMENT.md)
 [![Erlang](https://img.shields.io/badge/Erlang-OTP%2026%2B-blue)](https://www.erlang.org/)
 
 > **Status**: Development / Pre-alpha. Tested at **10K concurrent connections** locally.
-> Full test suite (155 Python + 100 Erlang tests) passing with TLS enforced. Last verified: 2026-02-11.
+> Full test suite (169 Python + 185 Erlang tests) passing with TLS enforced. Last verified: 2026-02-15.
 > Architecture designed for 1M+ users per region. See [Scalability Analysis](docs/SCALABILITY_ANALYSIS.md).
 
 ## What This Is
@@ -34,13 +34,13 @@ See [DEPLOYMENT.md](docs/DEPLOYMENT.md) for architecture diagrams and setup.
 ### Known Limitations
 
 - **Mnesia RAM**: `disc_copies` loads all data into RAM at startup. >32 GB data requires multi-region sharding.
-- **Test sleeps**: ~500 `time.sleep()` calls remain in tests (RFC Section 13.2 violation). See [audit](docs/audit/time_sleep_audit.md).
+- **Test sleeps**: `time.sleep()` calls remain in tests (RFC Section 13.2 violation). See [audit](docs/audit/time_sleep_audit.md).
 - **mTLS inter-node**: Enforced in production (`enforce_mtls` defaults to `true` when `env=production`). Cluster manager blocks replication without SSL distribution.
 - **Key change notification**: Implemented -- detection, contact tracking (Mnesia-persisted), online delivery (direct pid), offline delivery (durable storage), opcode 0x1A.
 
 ---
 
-## Modules (59 total)
+## Modules (70 total)
 
 ### Edge Layer
 
@@ -58,6 +58,9 @@ See [DEPLOYMENT.md](docs/DEPLOYMENT.md) for architecture diagrams and setup.
 | `iris_edge_app` | Edge OTP application callback |
 | `iris_edge_sup` | Edge supervisor tree |
 | `iris_ingress_guard` | Ingress traffic guard |
+| `iris_ingress_byte_guard` | Per-socket byte counting to prevent pre-backpressure OOM |
+| `iris_edge_dedup_cleaner` | Periodic ETS cleanup for edge dedup table |
+| `iris_edge_fallback_drain` | Batch drain of pending offline messages to core nodes |
 | `iris_health_handler` | HTTP health/ready/metrics endpoints |
 
 ### Core Layer
@@ -67,6 +70,7 @@ See [DEPLOYMENT.md](docs/DEPLOYMENT.md) for architecture diagrams and setup.
 | `iris_core` | Application entry, Mnesia init, user registry, offline storage |
 | `iris_shard` | Jump consistent hash, vnode assignment, rebalancing |
 | `iris_async_router` | Auto-tuned worker pool, cross-core user lookup |
+| `iris_async` | Monitored async spawn with failure observability |
 | `iris_router` | Route-to-user dispatch (local / remote / offline) |
 | `iris_region_router` | Consistent-hash region assignment for 2B+ users |
 | `iris_region_bridge` | Cross-region outbox queue (7-day TTL, fsync, FIFO drain) |
@@ -78,6 +82,7 @@ See [DEPLOYMENT.md](docs/DEPLOYMENT.md) for architecture diagrams and setup.
 | `iris_rpc` | Observable RPC wrapper with metrics |
 | `iris_cluster_join_worker` | Supervised cluster join/region wiring |
 | `iris_discovery` | Node discovery |
+| `iris_schema` | Mnesia schema migration framework (versioned, sequential) |
 
 ### Storage & Durability
 
@@ -91,6 +96,8 @@ See [DEPLOYMENT.md](docs/DEPLOYMENT.md) for architecture diagrams and setup.
 | `iris_hlc` | 80-bit Hybrid Logical Clocks for cross-region ordering |
 | `iris_offline_storage` | Offline message storage helpers |
 | `iris_registry_ets` | ETS-backed user registry |
+| `iris_storage_tier` | Transparent hot/cold tiering for user_meta |
+| `iris_mnesia_guard` | Mnesia RAM usage monitor, triggers read-only on threshold |
 | `iris_durable_batcher_sup` | Durable batcher supervisor |
 | `iris_status_batcher` | Batched status updates |
 | `iris_status_batcher_sup` | Status batcher supervisor |
@@ -104,6 +111,7 @@ See [DEPLOYMENT.md](docs/DEPLOYMENT.md) for architecture diagrams and setup.
 | `iris_ratchet` | Double Ratchet (AES-256-GCM, HKDF-SHA256) |
 | `iris_keys` | Key bundle storage, identity key change detection |
 | `iris_sender_keys` | Sender Keys for group E2EE |
+| `iris_cert_monitor` | TLS certificate expiry monitoring |
 
 ### Resilience & Observability
 
@@ -125,6 +133,14 @@ See [DEPLOYMENT.md](docs/DEPLOYMENT.md) for architecture diagrams and setup.
 | `iris_router_sup` | Router pool supervisor |
 | `iris_router_worker` | Router worker process |
 | `iris_zstd_nif` | Optional zstd NIF compression stub |
+
+### Supervision
+
+| Module | Purpose |
+|--------|---------|
+| `iris_foundation_sup` | Foundation-layer supervisor |
+| `iris_messaging_sup` | Messaging-layer supervisor |
+| `iris_cluster_sup` | Cluster-layer supervisor |
 
 ---
 
@@ -163,7 +179,7 @@ cd docker/global-cluster
 
 ## Testing
 
-**155 Python + 100 Erlang tests** across 12 suites. See [TESTING.md](docs/TESTING.md) for full details.
+**169 Python + 185 Erlang tests** across 12 suites. See [TESTING.md](docs/TESTING.md) for full details.
 
 ```bash
 ./tests/run_all_tests.sh              # Full suite
@@ -209,22 +225,22 @@ See [DEPLOYMENT.md](docs/DEPLOYMENT.md) for TLS and certificate setup.
 
 ```
 project_iris/
-├── src/                    # 59 Erlang source modules (20K+ lines)
-├── test_utils/             # 100 Erlang EUnit test modules (non-standard location; see note below)
+├── src/                    # 70 Erlang source modules (20K+ lines)
+├── test_utils/             # 185 Erlang EUnit test modules (non-standard location; see note below)
 ├── tests/
 │   ├── run_all_tests.sh    # Authoritative test runner
 │   ├── suites/             # 12 test categories
-│   │   ├── unit/           # Property-based (Hypothesis, 4 tests)
-│   │   ├── integration/    # Core message flow (40 tests)
+│   │   ├── unit/           # Property-based (Hypothesis, 5 tests)
+│   │   ├── integration/    # Core message flow (43 tests)
 │   │   ├── e2e/            # End-to-end scenarios (11 tests)
-│   │   ├── security/       # TLS, auth, fuzz, rate limiting (23 tests)
+│   │   ├── security/       # TLS, auth, fuzz, rate limiting (26 tests)
 │   │   ├── resilience/     # Fault tolerance (8 tests)
-│   │   ├── stress/         # Load testing (18 tests)
+│   │   ├── stress/         # Load testing (20 tests)
 │   │   ├── performance_light/ # Benchmarks, NFR gates (8 tests)
-│   │   ├── chaos_dist/     # Docker chaos (27 tests, fresh cluster each)
+│   │   ├── chaos_dist/     # Docker chaos (26 tests, fresh cluster each)
 │   │   ├── chaos_controlled/ # Combined chaos (2 tests)
 │   │   ├── compatibility/  # Protocol versions, HLC migration (8 tests)
-│   │   ├── contract/       # Edge-core + RFC contracts (6 tests)
+│   │   ├── contract/       # Edge-core + RFC contracts (11 tests)
 │   │   └── conformance/    # WebSocket RFC 6455 (1 test)
 │   ├── framework/          # ClusterManager, assertions, wait utilities
 │   └── utilities/          # IrisClient (TLS-enabled), TLS helpers

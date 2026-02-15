@@ -13,6 +13,7 @@
 -export([inc/1, inc/2, observe/2, set/2]).
 -export([get_metrics/0, export_prometheus/0]).
 -export([emit_mnesia_table_memory/0]).  %% Per-table memory gauge
+-export([emit_disk_usage/0]).  %% H-4: Disk usage percent gauge
 %% Route-specific latency tracking
 -export([observe_latency/3, observe_latency/4]).
 -export([get_latency_percentile/2, get_latency_stats/1]).
@@ -239,6 +240,9 @@ handle_info(collect_system_metrics, State = #state{start_time = StartTime}) ->
     
     %% Node count
     set(iris_connected_nodes, length(nodes()) + 1),
+
+    %% H-4: Disk usage
+    emit_disk_usage(),
     
     %% Reschedule
     erlang:send_after(5000, self(), collect_system_metrics),
@@ -352,6 +356,41 @@ emit_mnesia_table_memory() ->
         end
     end, Tables),
     ok.
+
+%% =============================================================================
+%% H-4: Disk Usage Monitoring
+%% =============================================================================
+
+%% @doc Emit disk usage percentage as a gauge metric.
+%% Uses `df` command output as a portable fallback.
+-spec emit_disk_usage() -> ok.
+emit_disk_usage() ->
+    Percent = try
+        %% Try disksup (os_mon) first
+        case whereis(disksup) of
+            undefined -> get_disk_usage_df();
+            _ ->
+                DiskData = disksup:get_disk_data(),
+                case DiskData of
+                    [{_, _KBytes, Capacity} | _] -> Capacity;
+                    _ -> get_disk_usage_df()
+                end
+        end
+    catch
+        _:_ -> get_disk_usage_df()
+    end,
+    set(iris_disk_usage_percent, Percent),
+    ok.
+
+get_disk_usage_df() ->
+    try
+        %% Parse `df /` output to get usage percentage
+        Output = os:cmd("df / | tail -1 | awk '{print $5}' | tr -d '%'"),
+        Trimmed = string:trim(Output),
+        list_to_integer(Trimmed)
+    catch
+        _:_ -> 0
+    end.
 
 %% =============================================================================
 %% Route-Specific Latency Tracking

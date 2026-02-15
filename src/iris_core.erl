@@ -19,6 +19,7 @@
 -export([validate_consistency_mode/0]).  %% CP mode hard-fail
 -export([make_dedup_key/2]).  %% Testable dedup key generation
 -export([nuke_and_recreate_table/1]).  %% Exported for testing production guard
+-export([force_load_isolated/1]).  %% Exported for H-2 production guard testing
 -export([store_offline/2, store_offline_durable/2, store_batch/2, retrieve_offline/1]).
 -export([retrieve_offline_paginated/3, get_offline_queue_depth/1, delete_offline_confirmed/2]).
 -export([get_bucket_count/1, set_bucket_count/2]).
@@ -233,144 +234,27 @@ init([]) ->
                  intensity => 7,
                  period => 60},
 
+    %% Tiered sub-supervisors: each tier uses one_for_one internally,
+    %% so a crash in one tier does not cascade into another.
+    %% rest_for_one at the top level ensures foundation starts first.
     Children = [
-        %% === Tier 1: Foundation (must start first, crashes restart everything after) ===
-
-        %% Health Check HTTP endpoint (/health, /ready, /metrics)
-        #{id => iris_health_handler,
-          start => {iris_health_handler, start_link, []},
-          type => worker,
-          restart => permanent},
-
-        %% Metrics: Must start early -- other modules emit counters through it
-        #{id => iris_metrics,
-          start => {iris_metrics, start_link, []},
-          type => worker,
-          restart => permanent},
-
-        %% Mnesia Memory Guard
-        %% Periodic monitor for Mnesia table memory usage.
-        %% Must start after metrics (emits metrics) and before services
-        %% that write to Mnesia (durable batcher, group, etc.)
-        #{id => iris_mnesia_guard,
-          start => {iris_mnesia_guard, start_link, []},
-          type => worker,
-          restart => permanent},
-
-        %% Flow Controller: Global backpressure and cascade failure detection
-        #{id => iris_flow_controller,
-          start => {iris_flow_controller, start_link, []},
-          type => worker,
-          restart => permanent},
-
-        %% Deduplication Service: RFC NFR-11 - 7-day dedup window with Mnesia persistence
-        %% MUST start early - dedup checks happen during message processing
-        #{id => iris_dedup,
-          start => {iris_dedup, start_link, []},
-          type => worker,
-          restart => permanent},
-
-        %% Presence Manager: ETS-backed lockfree presence registry
-        %% Must start early - creates presence_local ETS table
-        #{id => iris_presence,
-          start => {iris_presence, start_link, []},
-          type => worker,
-          restart => permanent},
-
-        %% Partition Guard: Split-brain detection and safe mode
-        %% Detects cluster partitions and rejects writes to prevent divergence
-        #{id => iris_partition_guard,
-          start => {iris_partition_guard, start_link, []},
-          type => worker,
-          restart => permanent},
-
-        %% === Tier 2: Services (depend on foundation, isolated from each other) ===
-
-        %% Cluster Manager: Self-healing cluster topology
-        %% Monitors nodeup/nodedown and auto-wires replication
-        #{id => iris_cluster_manager,
-          start => {iris_cluster_manager, start_link, []},
-          type => worker,
-          restart => permanent},
-
-        %% Durable Batcher Supervisor: WAL + batched sync_transaction for durability
-        #{id => iris_durable_batcher_sup,
-          start => {iris_durable_batcher_sup, start_link, []},
+        %% Tier 1: Foundation (metrics, health, mnesia_guard, flow_controller, dedup, presence, partition_guard)
+        #{id => iris_foundation_sup,
+          start => {iris_foundation_sup, start_link, []},
           type => supervisor,
           restart => permanent},
 
-        %% Core Registry: Registers this Core with pg for Edge discovery
-        #{id => iris_core_registry,
-          start => {iris_core_registry, start_link, []},
-          type => worker,
-          restart => permanent},
-
-        %% Status Batcher Supervisor: Manages the 100 workers
-        #{id => iris_status_batcher_sup,
-          start => {iris_status_batcher_sup, start_link, [100]},
+        %% Tier 2: Messaging (group, shard, keys, region_bridge, read_receipts, mailbox_guard, mailbox_monitor, efficiency_monitor)
+        #{id => iris_messaging_sup,
+          start => {iris_messaging_sup, start_link, []},
           type => supervisor,
           restart => permanent},
 
-        %% Group Messaging Service: Handles group creation, membership, and message fanout
-        #{id => iris_group,
-          start => {iris_group, start_link, []},
-          type => worker,
-          restart => permanent},
-
-        %% Shard Manager: Consistent user-to-shard mapping for horizontal scaling
-        %% FIX: iris_shard was missing from supervisor - needed for message routing
-        #{id => iris_shard,
-          start => {iris_shard, start_link, []},
-          type => worker,
-          restart => permanent},
-
-        %% E2EE Key Bundle Storage (X3DH key bundles, SPK rotation)
-        #{id => iris_keys,
-          start => {iris_keys, start_link, []},
-          type => worker,
-          restart => permanent},
-
-        %% Cross-Region Message Bridge
-        #{id => iris_region_bridge,
-          start => {iris_region_bridge, start_link, []},
-          type => worker,
-          restart => permanent},
-
-        %% Optional Read Receipt Tracking
-        #{id => iris_read_receipts,
-          start => {iris_read_receipts, start_link, []},
-          type => worker,
-          restart => permanent},
-
-        %% Mailbox Guard: Per-user mailbox overflow protection
-        #{id => iris_mailbox_guard,
-          start => {iris_mailbox_guard, start_link, []},
-          type => worker,
-          restart => permanent},
-
-        %% Mailbox Monitor: Tracks mailbox sizes for backpressure signals
-        #{id => iris_mailbox_monitor,
-          start => {iris_mailbox_monitor, start_link, []},
-          type => worker,
-          restart => permanent},
-
-        %% Efficiency Monitor: Scheduler utilization and memory tracking
-        #{id => iris_efficiency_monitor,
-          start => {iris_efficiency_monitor, start_link, []},
-          type => worker,
-          restart => permanent},
-
-        %% Supervised cluster join worker (replaces bare spawn)
-        #{id => iris_cluster_join_worker,
-          start => {iris_cluster_join_worker, start_link, [cluster_join]},
-          type => worker,
-          restart => transient},
-
-        %% Supervised region wiring worker (replaces bare spawn)
-        #{id => iris_region_wiring_worker,
-          start => {iris_cluster_join_worker, start_link, [region_wiring]},
-          type => worker,
-          restart => transient}
+        %% Tier 3: Cluster (cluster_manager, durable_batcher_sup, core_registry, status_batcher_sup, join_worker, region_wiring)
+        #{id => iris_cluster_sup,
+          start => {iris_cluster_sup, start_link, []},
+          type => supervisor,
+          restart => permanent}
     ],
 
     %% SAFETY DEFAULT: Validate presence backend configuration
@@ -907,7 +791,18 @@ repair_failed_tables([Table | Rest]) ->
 
 %% Force-load a table when no peers are available (isolated node).
 %% Emit metric + divergence warning since data may be stale.
+%% H-2: Blocked in production to prevent loading stale/divergent data.
 force_load_isolated(Table) ->
+    case application:get_env(iris_core, deployment_mode, development) of
+        production ->
+            logger:error("BLOCKED: force_load_table(~p) refused in production. "
+                         "Requires peer with active replica or manual backup restore.", [Table]),
+            {error, blocked_in_production};
+        _ ->
+            force_load_isolated_inner(Table)
+    end.
+
+force_load_isolated_inner(Table) ->
     logger:warning("DATA DIVERGENCE RISK: force_load_table(~p) with no active peers. "
                    "Local data may be stale or divergent.", [Table]),
     case mnesia:force_load_table(Table) of

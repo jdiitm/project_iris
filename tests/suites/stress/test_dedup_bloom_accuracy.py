@@ -122,13 +122,14 @@ def test_zero_false_drops():
             sender = IrisClient(HOST, PORT)
             sender.login(sender_name)
 
-            # Send all messages
+            # Send all messages, paced within rate limiter budget.
+            # Rate limit: 5 msg/sec sustained, burst=20, initial=10.
+            # 210ms delay = 4.76 msg/sec per sender (within sustained limit).
             for i in range(count):
                 msg = f"bloom_{batch_id}_{i}_{uuid.uuid4().hex[:6]}"
                 sender.send_msg(receiver_name, msg)
                 local_sent += 1
-                if i > 0 and i % 200 == 0:
-                    time.sleep(0.01)
+                time.sleep(0.21)
 
             # Receive all messages
             for _ in range(local_sent):
@@ -210,11 +211,11 @@ def test_duplicate_detection():
         sender = IrisClient(HOST, PORT)
         sender.login(sender_name)
 
-        # Send 50 unique messages
+        # Send 50 unique messages, paced within rate limiter budget (5 msg/sec).
         expected_count = 50
         for i in range(expected_count):
             sender.send_msg(receiver_name, f"dup_test_{i}_{uuid.uuid4().hex[:6]}")
-            time.sleep(0.01)
+            time.sleep(0.21)
 
         # Receive them all
         received = 0

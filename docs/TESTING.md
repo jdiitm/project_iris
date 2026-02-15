@@ -1,6 +1,6 @@
 # Testing Guide
 
-**Status**: 155 Python + 100 Erlang tests passing | **Last Verified**: 2026-02-11
+**Status**: 169 Python + 185 Erlang tests passing | **Last Verified**: 2026-02-15
 
 ## Quick Start
 
@@ -65,24 +65,24 @@ Docker chaos tests (`chaos_dist/`) are **destructive** — they kill containers,
 
 ## Test Suites
 
-### Python Test Suites (156 files)
+### Python Test Suites (169 files)
 
 | Suite | Files | Description |
 |-------|-------|-------------|
-| unit | 4 | Property-based tests (Hypothesis) |
-| integration | 40 | Core message flow, dedup, metrics, presence |
+| unit | 5 | Property-based tests (Hypothesis) |
+| integration | 43 | Core message flow, dedup, metrics, presence |
 | e2e | 11 | End-to-end scenarios (conversation, key verification, ratchet) |
-| security | 23 | TLS, JWT, fuzz, CBOR, rate limiting, sender keys |
+| security | 26 | TLS, JWT, fuzz, CBOR, rate limiting, sender keys |
 | resilience | 8 | Fault tolerance, connection resume, clock skew |
 | performance_light | 8 | Benchmarks, CPU, memory (NFR-19 hard gate) |
-| stress | 18 | Load testing, fan-out, soak, reconnect storm |
-| chaos_dist | 27 | Docker-based chaos (SIGKILL, partition, disk full) |
+| stress | 20 | Load testing, fan-out, soak, reconnect storm |
+| chaos_dist | 26 | Docker-based chaos (SIGKILL, partition, disk full) |
 | chaos_controlled | 2 | Combined chaos (self-managed cluster) |
 | compatibility | 8 | Protocol versions, HLC migration, compression |
-| contract | 6 | Edge-core contract, rate limit constants, RFC v4 |
+| contract | 11 | Edge-core contract, rate limit constants, RFC v4 |
 | conformance | 1 | WebSocket RFC 6455 compliance |
 
-### Erlang Test Suites (100 test modules + 6 support modules)
+### Erlang Test Suites (185 test modules + 7 support modules)
 
 | Category | Modules | Examples |
 |----------|---------|----------|
@@ -189,6 +189,6 @@ tests/
 ├── utilities/           # IrisClient (TLS-enabled), TLS helpers
 └── artifacts/           # Test outputs (gitignored)
 
-test_utils/              # 100 Erlang EUnit test modules + 6 support modules
+test_utils/              # 185 Erlang EUnit test modules + 7 support modules
 docker/global-cluster/   # Docker cluster scripts
 ```

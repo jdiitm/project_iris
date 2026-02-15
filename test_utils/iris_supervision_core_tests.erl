@@ -19,8 +19,24 @@ get_child_ids() ->
     %% init/1 requires presence_backend to be configured
     application:ensure_started(iris_core),
     application:set_env(iris_core, presence_backend, ets),
-    {ok, {_SupFlags, Children}} = iris_core:init([]),
-    [maps:get(id, C) || C <- Children].
+    {ok, {_SupFlags, TopChildren}} = iris_core:init([]),
+    %% With tiered supervisors, we must also inspect sub-supervisor children
+    lists:flatmap(fun(Child) ->
+        Id = maps:get(id, Child),
+        case maps:get(type, Child, worker) of
+            supervisor ->
+                %% Get children from the sub-supervisor's init/1
+                {Mod, _Fun, _Args} = maps:get(start, Child),
+                case Mod:init([]) of
+                    {ok, {_, SubChildren}} ->
+                        [Id | [maps:get(id, SC) || SC <- SubChildren]];
+                    _ ->
+                        [Id]
+                end;
+            _ ->
+                [Id]
+        end
+    end, TopChildren).
 
 core_supervisor_declares_iris_metrics_test() ->
     Ids = get_child_ids(),
@@ -66,15 +82,18 @@ core_supervisor_uses_rest_for_one_test() ->
 
 metrics_starts_before_services_test() ->
     Ids = get_child_ids(),
+    %% With tiered supervisors, foundation_sup (which contains metrics)
+    %% starts before messaging_sup (which contains group, bridge).
+    %% So iris_foundation_sup must appear before iris_messaging_sup.
+    FoundationIdx = index_of(iris_foundation_sup, Ids),
+    MessagingIdx = index_of(iris_messaging_sup, Ids),
+    ClusterIdx = index_of(iris_cluster_sup, Ids),
+    ?assert(FoundationIdx < MessagingIdx),
+    ?assert(MessagingIdx < ClusterIdx),
+    %% Within foundation, metrics should still come before dedup
     MetricsIdx = index_of(iris_metrics, Ids),
-    %% iris_dedup, iris_group, iris_region_bridge all depend on metrics
-    %% They should come after iris_metrics in the child list
     DedupIdx = index_of(iris_dedup, Ids),
-    GroupIdx = index_of(iris_group, Ids),
-    BridgeIdx = index_of(iris_region_bridge, Ids),
-    ?assert(MetricsIdx < DedupIdx),
-    ?assert(MetricsIdx < GroupIdx),
-    ?assert(MetricsIdx < BridgeIdx).
+    ?assert(MetricsIdx < DedupIdx).
 
 index_of(Elem, List) ->
     index_of(Elem, List, 1).

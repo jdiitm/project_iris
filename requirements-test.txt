@@ -5,7 +5,7 @@
 # Core test dependencies
 hypothesis==6.92.1          # Property-based testing
 pytest==7.4.3               # Test framework (optional, for future migration)
-cryptography>=41.0.0        # E2EE crypto validation (AES-GCM, X25519)
+cryptography>=41.0.0,<44.0.0  # E2EE crypto validation (AES-GCM, X25519); upper-pinned for CVE scanning
 psutil>=5.9.0               # Process monitoring (benchmark_unit_cost)
 
 # Note: The test suite primarily uses:

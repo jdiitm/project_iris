@@ -192,6 +192,16 @@ health() ->
 
 %% --- /ready ---
 ready() ->
+    %% B-3: Return 503 immediately if application is draining
+    case iris_edge_app:is_draining() of
+        true ->
+            {503, <<"application/json">>,
+             <<"{\"ready\":false,\"reason\":\"draining\"}">>};
+        false ->
+            ready_check()
+    end.
+
+ready_check() ->
     MnesiaOk = try
         yes = mnesia:system_info(is_running),
         true

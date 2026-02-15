@@ -122,7 +122,8 @@ init_open_wal(ShardId, WalDir) ->
     WalLog = case disk_log:open([
         {name, LogName},
         {file, LogFile},
-        {type, halt},
+        {type, wrap},
+        {size, {wal_max_bytes(), 3}},
         {format, internal},
         {mode, read_write}
     ]) of
@@ -148,6 +149,10 @@ init_open_wal(ShardId, WalDir) ->
         wal_log = WalLog,
         timer_ref = TRef
     }}.
+
+%% B-2 FIX: Configurable max bytes per WAL shard file (default 100MB)
+wal_max_bytes() ->
+    application:get_env(iris_core, wal_max_bytes_per_shard, 104857600).
 
 %% P1-H6 FIX: Get configurable WAL directory
 get_wal_directory() ->

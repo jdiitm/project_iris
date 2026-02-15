@@ -114,12 +114,14 @@ def test_unique_messages_all_delivered():
         sender.login(sender_name)
 
         # Send unique messages
+        # Rate limiter: 5 msg/sec sustained, initial tokens = burst/2 = 10.
+        # Use 210ms delay to stay within sustained rate (4.76 msg/sec < 5 msg/sec).
         sent_messages = []
         for i in range(num_messages):
             msg = f"unique_3tier_{i}_{uuid.uuid4().hex[:8]}"
             sender.send_msg(receiver_name, msg)
             sent_messages.append(msg)
-            time.sleep(0.02)
+            time.sleep(0.21)
 
         # Receive all messages
         received_messages = []

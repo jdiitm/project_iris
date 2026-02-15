@@ -1,7 +1,8 @@
 -module(iris_edge_app).
 -behaviour(application).
 -export([start/2, stop/1]).
--export([validate_production_config/0]).
+-export([validate_production_config/0, validate_auth_mode/0]).
+-export([prep_stop/1, is_draining/0]).
 %% Config validation exports (for testing)
 -export([validate_num_acceptors/1, validate_rate_limits/2,
          validate_tls_cert/1, validate_replication_factor/1]).
@@ -47,17 +48,26 @@ start(_Type, _Args) ->
 
     iris_edge_sup:start_link().
 
-stop(_State) ->
+%% @doc Called BEFORE supervisor tree is terminated.
+%% Sets draining flag (makes /ready return 503), then sleeps for drain period
+%% to let in-flight operations complete and load balancer stop routing.
+prep_stop(State) ->
     logger:info("Iris Edge shutting down -- draining connections..."),
-    %% Close listen sockets first (stop accepting new connections).
-    %% supervisor:terminate_child handles this via iris_edge_listener:terminate/2
-    %% which already closes the listen socket.
-    %% Give active connections time to complete in-flight operations.
-    %% Each iris_edge_conn:terminate/3 saves pending ACKs and flushes messages.
+    persistent_term:put(iris_edge_draining, true),
     DrainMs = application:get_env(iris_edge, shutdown_drain_ms, 5000),
     timer:sleep(DrainMs),
+    logger:info("Iris Edge drain complete, proceeding with shutdown."),
+    State.
+
+stop(_State) ->
+    %% Drain already happened in prep_stop/1; just log and return.
     logger:info("Iris Edge stopped."),
     ok.
+
+%% @doc Returns true if the application is in graceful shutdown drain phase.
+-spec is_draining() -> boolean().
+is_draining() ->
+    persistent_term:get(iris_edge_draining, false).
 
 %% @doc Validate critical config in production mode.
 %% Rejects empty core_nodes and missing JWT secret when deployment_mode=production.
@@ -90,6 +100,16 @@ validate_production_config() ->
                         _ -> ok
                     end;
                 false -> ok
+            end,
+            %% Validate auth_mode (H-3: edge nodes must not be signers)
+            case validate_auth_mode() of
+                ok -> ok;
+                {error, signer_on_edge} ->
+                    logger:error("FATAL: auth_mode=signer on edge node in production. "
+                                 "Edge nodes MUST use auth_mode=verifier. "
+                                 "Only auth_service nodes may be signers."),
+                    init:stop(1),
+                    exit(signer_on_edge_node)
             end,
             %% Validate additional production config
             validate_extended_config(),
@@ -177,5 +197,27 @@ validate_tls_cert(Path) ->
 -spec validate_replication_factor(integer()) -> ok | {error, invalid_replication_factor}.
 validate_replication_factor(N) when is_integer(N), N > 0 -> ok;
 validate_replication_factor(_) -> {error, invalid_replication_factor}.
+
+%% =============================================================================
+%% Auth Mode Validation (H-3)
+%% =============================================================================
+
+%% @doc Validate auth_mode configuration.
+%% In production, edge nodes MUST use auth_mode=verifier.
+%% Only auth_service nodes may use auth_mode=signer.
+-spec validate_auth_mode() -> ok | {error, signer_on_edge}.
+validate_auth_mode() ->
+    case application:get_env(iris_edge, deployment_mode, development) of
+        production ->
+            AuthMode = application:get_env(iris_edge, auth_mode, verifier),
+            NodeRole = application:get_env(iris_edge, node_role, edge),
+            case {AuthMode, NodeRole} of
+                {signer, auth_service} -> ok;
+                {signer, _} -> {error, signer_on_edge};
+                _ -> ok
+            end;
+        _ ->
+            ok
+    end.
 
 %% check_mtls_enforcement/0 consolidated into iris_core.erl

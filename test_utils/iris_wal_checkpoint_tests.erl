@@ -70,7 +70,10 @@ get_wal_log(Pid) ->
 get_wal_items(Log) ->
     case disk_log:info(Log) of
         InfoList when is_list(InfoList) ->
-            proplists:get_value(no_written_items, InfoList, -1);
+            %% Use no_items (current items in log) not no_written_items
+            %% (cumulative counter). For wrap logs, no_written_items never
+            %% decreases on truncate, but no_items reflects actual state.
+            proplists:get_value(no_items, InfoList, -1);
         _ -> -1
     end.
 

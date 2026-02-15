@@ -1,0 +1,27 @@
+## Production vm.args
+## Name must be set via environment (IRIS_NODE_NAME)
+-name ${IRIS_NODE_NAME:-iris@127.0.0.1}
+
+## Cookie MUST be set via environment (IRIS_COOKIE)
+-setcookie ${IRIS_COOKIE:-CHANGE_ME}
+
+## Enable heartbeat monitoring
+-heart
+
+## Increase process limit for production
++P 1048576
+
+## Increase port limit
++Q 262144
+
+## Enable SMP
+-smp auto
+
+## Kernel poll
++K true
+
+## Async threads
++A 128
+
+## GC fullsweep after (default 65535, reduce for lower latency)
+-env ERL_FULLSWEEP_AFTER 20

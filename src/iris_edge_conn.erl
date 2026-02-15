@@ -476,6 +476,7 @@ save_to_local_fallback(User, Msgs) ->
         lists:foreach(fun(Msg) ->
             ets:insert(Table, {User, Msg, Now})
         end, Msgs),
+        iris_metrics:inc(edge_fallback_store_count, length(Msgs)),
         logger:warning("Stored ~p msgs in local fallback for ~p", [length(Msgs), User])
     catch
         _:_ ->
