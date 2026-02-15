@@ -16,6 +16,7 @@ get_child_ids() ->
     %% Delete ETS tables from prior test invocations so init/1 succeeds
     try ets:delete(local_presence_v2) catch error:badarg -> ok end,
     try ets:delete(presence_cache) catch error:badarg -> ok end,
+    try ets:delete(iris_edge_dedup) catch error:badarg -> ok end,
     try ets:delete(iris_conn_rate) catch error:badarg -> ok end,
     {ok, {_SupFlags, Children}} = iris_edge_sup:init([]),
     [maps:get(id, C) || C <- Children].

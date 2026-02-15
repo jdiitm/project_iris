@@ -588,3 +588,66 @@ test_nonce_uniqueness() ->
     %% All IVs should be unique
     UniqueIVs = lists:usort(IVs),
     ?assertEqual(100, length(UniqueIVs)).
+
+%% =============================================================================
+%% B-6 Mitigation: Skipped Keys Map Must Be Bounded
+%% =============================================================================
+%% The skipped_keys map grows with every out-of-order message gap.
+%% Without a total limit, an attacker can exhaust memory by sending messages
+%% with intentionally skipped sequence numbers.
+%% The total must be bounded at MAX_TOTAL_SKIPPED (5000).
+%% =============================================================================
+
+skipped_keys_bounded_test() ->
+    %% Set up a proper Alice/Bob session
+    SharedSecret = crypto:strong_rand_bytes(32),
+    BobKeyPair = {BobPub, _BobPriv} = iris_ratchet:generate_ratchet_keypair(),
+    {ok, AliceState0} = iris_ratchet:init_alice(SharedSecret, BobPub),
+    {ok, BobState0} = iris_ratchet:init_bob(SharedSecret, BobKeyPair, undefined),
+    
+    %% Alice encrypts message #0 (Bob will receive this to establish chain)
+    {ok, Ct0, Hdr0, AliceState1} = iris_ratchet:encrypt(<<"init">>, AliceState0),
+    {ok, <<"init">>, BobState1} = iris_ratchet:decrypt(Ct0, Hdr0, BobState0),
+    
+    %% Now inject 4500 fake skipped keys into Bob's state
+    BobStateMap = iris_ratchet:get_state(BobState1),
+    ExistingSkipped = maps:get(skipped_keys, BobStateMap),
+    FakeDH = crypto:strong_rand_bytes(32),
+    BigSkipped = lists:foldl(
+        fun(N, Acc) ->
+            maps:put({FakeDH, N}, crypto:strong_rand_bytes(32), Acc)
+        end,
+        ExistingSkipped,
+        lists:seq(1, 4500)
+    ),
+    BobState2 = iris_ratchet:from_state(BobStateMap#{skipped_keys => BigSkipped}),
+    
+    %% Alice encrypts 600 messages (we'll skip to the last one for Bob)
+    {AliceStateFinal, _Cts} = lists:foldl(
+        fun(_, {AS, Acc}) ->
+            {ok, C, H, AS2} = iris_ratchet:encrypt(<<"skip">>, AS),
+            {AS2, [{C, H} | Acc]}
+        end,
+        {AliceState1, []},
+        lists:seq(1, 599)
+    ),
+    {ok, CtLast, HdrLast, _} = iris_ratchet:encrypt(<<"target">>, AliceStateFinal),
+    
+    %% Bob decrypts only the last message -- should trigger skip_messages for 599
+    %% Total would be 4500 + 599 = 5099, exceeding the 5000 limit
+    %% After the fix: total must be bounded at 5000 (oldest evicted)
+    case catch iris_ratchet:decrypt(CtLast, HdrLast, BobState2) of
+        {ok, <<"target">>, NewBobState} ->
+            NewStateMap = iris_ratchet:get_state(NewBobState),
+            NewSkippedCount = maps:size(maps:get(skipped_keys, NewStateMap)),
+            ?assert(NewSkippedCount =< 5000);
+        {error, too_many_total_skipped} ->
+            %% Rejecting the operation is also acceptable behavior
+            ok;
+        {'EXIT', {error, too_many_total_skipped}} ->
+            %% Thrown error is also acceptable
+            ok;
+        Other ->
+            %% Any other result is unexpected -- fail
+            ?assert(false)
+    end.

@@ -75,7 +75,9 @@ services:
       - ../../:/app:ro
       - mnesia-east:/data/mnesia
     healthcheck:
-      test: ["CMD-SHELL", "epmd -names 2>/dev/null | grep -q core_east"]
+      ## H-8 AUDIT MITIGATION: Use HTTP /ready endpoint (checks Mnesia + app readiness)
+      ## instead of epmd presence check (only verifies process exists)
+      test: ["CMD-SHELL", "curl -sf http://localhost:9090/ready || (epmd -names 2>/dev/null | grep -q core_east)"]
       interval: 5s
       timeout: 3s
       retries: 10

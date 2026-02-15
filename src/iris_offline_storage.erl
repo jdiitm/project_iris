@@ -169,18 +169,22 @@ store_batch_sync(User, Msgs, Count) ->
             {error, Reason}
     end.
 
+-define(MAX_RETRIEVE_BUCKETS, 1000).  %% H-3 AUDIT MITIGATION: Cap bucket count
+
 retrieve(User, Count) ->
     %% AUDIT FIX 2.4: Deprecation metric — use retrieve_cursor/3 instead.
     iris_metrics:inc(offline_retrieve_deprecated_calls),
+    %% H-3 AUDIT MITIGATION: Cap bucket count to prevent OOM on large Count values
+    BoundedCount = min(Count, ?MAX_RETRIEVE_BUCKETS),
     %% Read messages from all buckets
     F = fun() ->
-        %% Iterate all buckets 0..Count-1
+        %% Iterate all buckets 0..BoundedCount-1
         Lists = lists:map(fun(ID) ->
             Key = {User, ID},
             Msgs = mnesia:read(offline_msg, Key, write),
             mnesia:delete({offline_msg, Key}),
             Msgs
-        end, lists:seq(0, Count - 1)),
+        end, lists:seq(0, BoundedCount - 1)),
         lists:append(Lists)
     end,
     
@@ -242,12 +246,15 @@ retrieve_cursor(User, Count, Cursor) ->
 %% Call this AFTER client ACKs receipt of messages from retrieve_cursor.
 -spec delete_confirmed(binary(), integer(), integer(), integer()) -> ok.
 delete_confirmed(User, _Count, FromCursor, ToCursor) ->
-    %% Spawn async delete to not block the caller
-    spawn(fun() ->
-        lists:foreach(fun(ID) ->
-            Key = {User, ID},
-            mnesia:dirty_delete(offline_msg, Key)
-        end, lists:seq(FromCursor, ToCursor - 1))
+    %% B-3 AUDIT MITIGATION: Monitored spawn for async delete
+    %% B-4 AUDIT MITIGATION: Transactional delete (was dirty_delete)
+    iris_async:spawn_monitored(offline_msg_delete, fun() ->
+        mnesia:sync_transaction(fun() ->
+            lists:foreach(fun(ID) ->
+                Key = {User, ID},
+                mnesia:delete({offline_msg, Key})
+            end, lists:seq(FromCursor, ToCursor - 1))
+        end)
     end),
     ok.
 
@@ -270,10 +277,14 @@ retrieve_lockfree(User, Count) ->
 %% @doc Delete all offline messages for a user (async, for cleanup)
 -spec delete_all_async(binary(), integer()) -> ok.
 delete_all_async(User, Count) ->
-    spawn(fun() ->
-        lists:foreach(fun(ID) ->
-            mnesia:dirty_delete(offline_msg, {User, ID})
-        end, lists:seq(0, Count - 1))
+    %% B-3 AUDIT MITIGATION: Monitored spawn for async cleanup
+    %% B-4 AUDIT MITIGATION: Transactional delete (was dirty_delete)
+    iris_async:spawn_monitored(offline_msg_cleanup, fun() ->
+        mnesia:sync_transaction(fun() ->
+            lists:foreach(fun(ID) ->
+                mnesia:delete({offline_msg, {User, ID}})
+            end, lists:seq(0, Count - 1))
+        end)
     end),
     ok.
 
@@ -304,7 +315,9 @@ check_memory_backpressure() ->
         ok -> ok;
         {error, memory_pressure} ->
             try iris_metrics:inc(offline_store_backpressure_rejects)
-            catch _:_ -> ok
+            catch C1:R1 ->
+                logger:warning("~p: metrics inc(backpressure_rejects) failed ~p:~p", [?MODULE, C1, R1]),
+                ok
             end,
             logger:warning("Offline store rejected: Mnesia memory pressure"),
             {error, memory_pressure}

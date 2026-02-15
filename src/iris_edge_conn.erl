@@ -5,6 +5,7 @@
 -export([init/1, callback_mode/0, terminate/3, code_change/4]).
 -export([wait_for_socket/3, connected/3]).
 -export([maybe_compress_outbound/2, maybe_decompress_inbound/2]).  %% Pure, exported for TDD
+-export([collect_queued_msgs/1]).  %% H-3 AUDIT MITIGATION: Exported for TDD
 
 %% AUDIT M13: Edge nodes hold significant per-connection state (not stateless).
 %% This record documents all state held per connection. On disconnect,
@@ -33,6 +34,8 @@ setopts(Socket, ssl, Opts) -> ssl:setopts(Socket, Opts).
 -define(MAX_PENDING_ACKS, 1000). %% Bounded pending acks
 -define(HIBERNATE_AFTER_MS, 30000). %% Hibernate after 30s idle
 -define(MAX_BUFFER_SIZE, 65536). %% 64KB max buffer (DoS protection)
+-define(MAX_PROCESS_DEPTH, 100). %% H-9 AUDIT MITIGATION: Max recursion depth for process_buffer
+-define(MAX_DRAIN_MSGS, 100).   %% H-3 AUDIT MITIGATION: Max messages drained per flush
 
 %% Dynamic Core node discovery with failover
 get_core_node() ->
@@ -255,7 +258,7 @@ handle_socket_data(Bin, Data = #data{buffer = Buff}) ->
                     logger:warning("Buffer overflow from client. Dropping connection."),
                     {stop, buffer_overflow, Data};
                 false ->
-                    process_buffer(NewBuff, Data#data{last_activity = Now, hibernated = false})
+                    process_buffer(NewBuff, Data#data{last_activity = Now, hibernated = false}, 0)
             end
     end.
 
@@ -320,7 +323,14 @@ send(Socket, ssl, Msg) -> ssl:send(Socket, Msg).
 send_compressed(Socket, Transport, Caps, Msg) ->
     send(Socket, Transport, maybe_compress_outbound(Caps, Msg)).
 
-process_buffer(Bin, Data = #data{socket = Socket, transport = Transport, user = CurrentUser, capabilities = Caps}) ->
+process_buffer(Bin, Data) ->
+    process_buffer(Bin, Data, 0).
+
+%% H-9 AUDIT MITIGATION: Depth-limited recursive buffer processing
+process_buffer(_Bin, Data, Depth) when Depth > ?MAX_PROCESS_DEPTH ->
+    logger:warning("Edge conn: Max process_buffer depth ~p exceeded, closing", [?MAX_PROCESS_DEPTH]),
+    {stop, {shutdown, process_depth_exceeded}, Data};
+process_buffer(Bin, Data = #data{socket = Socket, transport = Transport, user = CurrentUser, capabilities = Caps}, Depth) ->
     %% RFC Section 11.1: Decompress inbound if compression flag set
     DecompressedBin = maybe_decompress_inbound(Caps, Bin),
     case iris_proto:decode(DecompressedBin) of
@@ -335,33 +345,27 @@ process_buffer(Bin, Data = #data{socket = Socket, transport = Transport, user = 
             %% Execute Actions & Update State
             NewData = lists:foldl(fun
                 ({send, Msg}, D) -> 
-                    %% RFC Section 11.1: Compress outbound if negotiated
                     _ = send_compressed(Socket, Transport, D#data.capabilities, Msg), 
                     D;
                 ({send_batch, Msgs}, D) -> 
                     _ = [send_compressed(Socket, Transport, D#data.capabilities, M) || M <- Msgs], 
                     D;
                 ({deliver_msg, Msg}, D = #data{pending_acks = P}) ->
-                    %% Wrap in reliable message format
                     MsgId = generate_msg_id(),
                     OutPacket = iris_proto:encode_reliable_msg(MsgId, Msg),
                     NewP = maps:put(MsgId, {Msg, os:system_time(seconds), 0}, P),
-                    %% RFC Section 11.1: Compress outbound if negotiated
                     _ = send_compressed(Socket, Transport, D#data.capabilities, OutPacket),
                     D#data{pending_acks = NewP};
                 ({ack_received, MsgId}, D = #data{pending_acks = P}) -> 
-                    %% Remove from pending
                     D#data{pending_acks = maps:remove(MsgId, P)};
                 ({set_session_id, SId}, D) ->
-                    %% RFC Section 3.4: Store session_id for resume on disconnect
                     D#data{session_id = SId};
                 ({set_capabilities, NewCaps}, D) ->
-                    %% RFC Section 11.1: Store negotiated capabilities
                     D#data{capabilities = NewCaps};
                 (close, _D) -> gen_statem:stop({shutdown, closed}), error(closed)
             end, Data, Actions),
             
-            process_buffer(Rest, NewData#data{user = NewUser})
+            process_buffer(Rest, NewData#data{user = NewUser}, Depth + 1)
     end.
 
 
@@ -497,10 +501,16 @@ flush_pending_msgs(User) ->
             end
     end.
 
+%% H-3 AUDIT MITIGATION: Bounded message drain to prevent OOM on disconnect
 collect_queued_msgs(Acc) ->
+    collect_queued_msgs(Acc, ?MAX_DRAIN_MSGS).
+
+collect_queued_msgs(Acc, 0) ->
+    lists:reverse(Acc);
+collect_queued_msgs(Acc, Remaining) ->
     receive
         {deliver_msg, Msg} ->
-            collect_queued_msgs([Msg | Acc])
+            collect_queued_msgs([Msg | Acc], Remaining - 1)
     after 0 ->
         lists:reverse(Acc)
     end.

@@ -32,35 +32,25 @@ def test_server_responds():
 
 
 def test_tls_mode_check():
-    """Check if server is running in TLS mode."""
+    """Check if server is running in TLS mode.
+    
+    Detection strategy:
+    1. Try TLS connection first (positive case). If TLS handshake succeeds
+       and we get LOGIN_OK, the server is TLS-compliant.
+    2. Then try raw TCP + login. If we get LOGIN_OK over plaintext,
+       the server also accepts plaintext (which violates NFR-14 unless
+       allow_insecure=true).
+    
+    Previous bug: raw TCP to a TLS server receives TLS ServerHello bytes,
+    which the old code interpreted as "plaintext accepted". TLS handshake
+    bytes are NOT a valid application-level response.
+    """
     print("\n=== Test: TLS Mode Detection ===")
     
-    # Try plaintext connection
-    try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.settimeout(5)
-        s.connect(('localhost', 8085))
-        
-        # Send login packet
-        s.sendall(b'\x01test_user')
-        
-        try:
-            response = s.recv(1024)
-            s.close()
-            
-            if response:
-                print("⚠️  Server accepted PLAINTEXT connection")
-                print("   RFC NFR-14 requires TLS 1.3 mandatory")
-                print("   This is only acceptable with allow_insecure=true")
-                return "plaintext"
-        except:
-            pass
-        
-        s.close()
-    except Exception as e:
-        print(f"  Connection error: {e}")
+    tls_works = False
+    plaintext_works = False
     
-    # Try TLS connection
+    # Step 1: Try TLS connection (should succeed if server has TLS)
     try:
         context = ssl.create_default_context()
         context.check_hostname = False
@@ -71,18 +61,60 @@ def test_tls_mode_check():
         
         with context.wrap_socket(s, server_hostname='localhost') as tls_sock:
             tls_sock.connect(('localhost', 8085))
-            tls_sock.sendall(b'\x01test_user')
+            tls_sock.sendall(b'\x01tls_probe_user')
             response = tls_sock.recv(1024)
             
-            if response:
-                print("✓ Server is running in TLS mode (RFC NFR-14 compliant)")
-                return "tls"
+            if response and b"LOGIN_OK" in response:
+                print("  TLS connection: LOGIN_OK received")
+                tls_works = True
+            elif response:
+                print(f"  TLS connection: got response ({len(response)} bytes) but no LOGIN_OK")
+                tls_works = True  # TLS handshake succeeded even if login format differs
     except ssl.SSLError as e:
-        print(f"  TLS handshake failed: {e}")
+        print(f"  TLS connection: handshake failed ({e})")
     except Exception as e:
-        print(f"  TLS connection error: {e}")
+        print(f"  TLS connection: error ({e})")
     
-    return "unknown"
+    # Step 2: Try raw TCP + login (should NOT succeed if TLS is enforced)
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(3)
+        s.connect(('localhost', 8085))
+        s.sendall(b'\x01plaintext_probe_user')
+        
+        try:
+            response = s.recv(1024)
+            # Only classify as "plaintext works" if we get a valid LOGIN_OK.
+            # TLS ServerHello bytes are binary garbage at the application layer,
+            # not a valid plaintext acceptance.
+            if response and b"LOGIN_OK" in response:
+                print("  Plaintext connection: LOGIN_OK received (no TLS required)")
+                plaintext_works = True
+            else:
+                print("  Plaintext connection: no LOGIN_OK (likely TLS handshake bytes)")
+        except socket.timeout:
+            print("  Plaintext connection: timeout (server waiting for TLS ClientHello)")
+        except Exception:
+            print("  Plaintext connection: rejected")
+        
+        s.close()
+    except Exception as e:
+        print(f"  Plaintext connection: error ({e})")
+    
+    # Classify
+    if tls_works:
+        if plaintext_works:
+            print("  Server accepts BOTH TLS and plaintext (allow_insecure=true)")
+            print("✓ TLS is available (but plaintext fallback is enabled)")
+            return "tls"  # TLS works, so the test passes
+        else:
+            print("✓ Server is running in TLS-only mode (RFC NFR-14 compliant)")
+            return "tls"
+    elif plaintext_works:
+        print("⚠  Server accepts ONLY plaintext (no TLS)")
+        return "plaintext"
+    else:
+        return "unknown"
 
 
 def main():
@@ -108,14 +140,13 @@ def main():
         print("  Server is running with TLS enabled")
         return 0
     elif mode == "plaintext":
-        print("⚠️  TLS ENFORCEMENT: NON-COMPLIANT (but acceptable in test)")
-        print("  Server running in plaintext mode")
+        print("✗ TLS ENFORCEMENT: FAILED")
+        print("  Server is running in plaintext-only mode")
         print("  RFC-001 NFR-14: TLS MUST be mandatory in production")
-        print("\n  To enable TLS:")
+        print("\n  To fix:")
         print("    - Set tls_enabled=true in config")
         print("    - Provide tls_certfile and tls_keyfile")
-        # Return 0 in test env since allow_insecure is set
-        return 0
+        return 1
     else:
         print("? TLS ENFORCEMENT: UNKNOWN")
         print("  Could not determine server mode")

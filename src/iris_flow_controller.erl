@@ -336,6 +336,11 @@ handle_info(decay_counters, State) ->
     erlang:send_after(?DECAY_INTERVAL_MS, self(), decay_counters),
     {noreply, State#state{core_health = NewHealth}};
 
+%% B-7 AUDIT MITIGATION: Handle EXIT signals from linked processes.
+handle_info({'EXIT', Pid, Reason}, State) ->
+    logger:warning("~p received EXIT from ~p: ~p", [?MODULE, Pid, Reason]),
+    {noreply, State};
+
 handle_info(_Info, State) ->
     {noreply, State}.
 

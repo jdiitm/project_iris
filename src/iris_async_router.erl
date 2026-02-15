@@ -222,11 +222,21 @@ handle_cast({route, User, Msg, MsgId}, State) ->
         [{User, Pid}] when is_pid(Pid) ->
             case is_process_alive(Pid) of
                 true ->
-                    Pid ! {deliver_msg, Msg},
-                    incr_metric(route_success),
-                    {noreply, State#state{routed_local = State#state.routed_local + 1}};
+                    %% RFC 1.2: Dedup + unwrap {idempotent_msg, IdKey, Payload}
+                    %% before local delivery. Dedup MUST only run on the confirmed
+                    %% delivery path — marking the key before we know the path would
+                    %% cause the offline storage fallback to drop the message as
+                    %% "duplicate" even though it was never actually delivered.
+                    case dedup_and_deliver_local(User, Msg, Pid) of
+                        delivered ->
+                            incr_metric(route_success),
+                            {noreply, State#state{routed_local = State#state.routed_local + 1}};
+                        duplicate ->
+                            iris_metrics:dedup_hit(),
+                            {noreply, State}
+                    end;
                 false ->
-                    %% Stale entry
+                    %% Stale entry — pass original Msg (keeps wrapper for offline dedup)
                     ets:delete(?LOCAL_PRESENCE, User),
                     route_to_remote(User, Msg, MsgId, State)
             end;
@@ -340,9 +350,10 @@ do_sequenced_route_fallback(User, Msg, SeqNo) ->
     AllCores = get_discovery_nodes(),
     case find_user_across_cores(AllCores, User) of
         {ok, UserPid} when is_pid(UserPid) ->
-            %% RFC FR-5: Unwrap for online delivery (wrapper is only for offline storage)
+            %% RFC FR-5: Unwrap for online delivery (wrappers are internal)
             DeliverMsg = case Msg of
                 {sequenced_msg, _S, RealMsg} -> RealMsg;
+                {idempotent_msg, _IdKey, RealMsg} -> RealMsg;
                 _ -> Msg
             end,
             UserPid ! {deliver_msg, DeliverMsg},
@@ -553,9 +564,10 @@ route_to_node(Node, User, Msg, Fallbacks) ->
     case find_user_across_cores(AllCores, User) of
         {ok, UserPid} when is_pid(UserPid) ->
             %% User found ONLINE - deliver directly
-            %% FIX: Unwrap sequenced messages for delivery (wrapper is for offline storage)
+            %% FIX: Unwrap sequenced/idempotent messages for delivery (wrappers are internal)
             DeliverMsg = case Msg of
                 {sequenced_msg, _SeqNo, RealMsg} -> RealMsg;
+                {idempotent_msg, _IdKey, RealMsg} -> RealMsg;
                 _ -> Msg
             end,
             UserPid ! {deliver_msg, DeliverMsg},
@@ -624,9 +636,10 @@ try_route_fallbacks([Node | Rest], User, Msg) ->
     %% Try to lookup and deliver, or store offline
     case rpc:call(Node, iris_core, lookup_user, [User], 5000) of
         {ok, _UserNode, UserPid} when is_pid(UserPid) ->
-            %% RFC FR-5: Unwrap sequenced messages for delivery
+            %% RFC FR-5: Unwrap sequenced/idempotent messages for delivery
             DeliverMsg = case Msg of
                 {sequenced_msg, _SeqNo, RealMsg} -> RealMsg;
+                {idempotent_msg, _IdKey, RealMsg} -> RealMsg;
                 _ -> Msg
             end,
             UserPid ! {deliver_msg, DeliverMsg},
@@ -773,6 +786,52 @@ store_offline_local(User, Msg, MsgId) ->
                         [Class, Reason, User]),
             incr_metric(route_failure),
             {error, local_storage_failed}
+    end.
+
+%% =============================================================================
+%% RFC 1.2: Idempotent message dedup + unwrap for online delivery
+%% =============================================================================
+%% For {idempotent_msg, IdKey, Payload}, check dedup before delivery.
+%% The idempotent wrapper is an internal routing concern — recipients receive
+%% only the inner Payload. Without this, online users bypass dedup entirely
+%% (dedup previously only ran in the offline storage path in iris_core).
+%%
+%% IMPORTANT: This MUST only be called on the confirmed-local-delivery path.
+%% Marking the key before confirming the delivery path would cause the offline
+%% fallback to drop the message as "duplicate" even though it was never delivered.
+
+-spec dedup_and_deliver_local(binary(), term(), pid()) -> delivered | duplicate.
+dedup_and_deliver_local(User, {idempotent_msg, IdKey, Payload}, Pid) ->
+    DedupKey = <<User/binary, ":", IdKey/binary>>,
+    case edge_dedup_check(DedupKey) of
+        duplicate ->
+            logger:debug("Dedup: idempotency_key duplicate for online user ~p", [User]),
+            duplicate;
+        new ->
+            Pid ! {deliver_msg, Payload},
+            delivered
+    end;
+dedup_and_deliver_local(_User, Msg, Pid) ->
+    Pid ! {deliver_msg, Msg},
+    delivered.
+
+%% @doc Atomic check-and-mark for idempotency dedup.
+%% Tries iris_dedup (full 3-tier: ETS + bloom + Mnesia) on core nodes.
+%% Falls back to iris_edge_dedup (ETS-only hot tier) on edge nodes where
+%% iris_dedup is not running.  ets:insert_new/2 is atomic — no TOCTOU race.
+-spec edge_dedup_check(binary()) -> new | duplicate.
+edge_dedup_check(DedupKey) ->
+    case ets:info(iris_dedup_seen, name) of
+        iris_dedup_seen ->
+            %% Core node: use full iris_dedup (3-tier dedup with Mnesia persistence)
+            iris_dedup:check_and_mark(DedupKey);
+        undefined ->
+            %% Edge node: use supervisor-owned iris_edge_dedup (ETS-only)
+            Now = os:system_time(millisecond),
+            case ets:insert_new(iris_edge_dedup, {DedupKey, Now}) of
+                false -> duplicate;
+                true  -> new
+            end
     end.
 
 %% =============================================================================

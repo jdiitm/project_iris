@@ -514,7 +514,10 @@ init_tables() ->
             %% AUDIT MITIGATION P0-2: Check for active replicas before force_load
             lists:foreach(fun(T) ->
                 ActiveReplicas = try mnesia:table_info(T, active_replicas) -- [node()]
-                                catch _:_ -> [] end,
+                                catch C1:R1 ->
+                                    logger:warning("~p: table_info(~p, active_replicas) failed ~p:~p", [?MODULE, T, C1, R1]),
+                                    []
+                                end,
                 case ActiveReplicas of
                     [Peer | _] ->
                         logger:info("Table ~p: peer ~p has active replica, syncing", [T, Peer]),

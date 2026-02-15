@@ -283,6 +283,11 @@ handle_info(replay_wal, State) ->
     NewState = replay_uncommitted(State),
     {noreply, NewState};
 
+%% B-7 AUDIT MITIGATION: Handle EXIT signals from linked processes.
+handle_info({'EXIT', Pid, Reason}, State) ->
+    logger:warning("~p received EXIT from ~p: ~p", [?MODULE, Pid, Reason]),
+    {noreply, State};
+
 handle_info(_Info, State) ->
     {noreply, State}.
 

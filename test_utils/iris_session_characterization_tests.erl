@@ -56,7 +56,11 @@ check_block_status_unblocked_test_() ->
      end,
      fun(_) -> ok end,
      fun(_) ->
-         ?_assertEqual(ok, iris_session:check_block_status(<<"unknown_sender">>, <<"unknown_recipient">>))
+         %% When user_blocks Mnesia table is absent (feature not deployed),
+         %% check_block_status returns ok (no blocks to enforce).
+         %% Fail-closed only applies when the feature IS deployed but
+         %% encounters a transient runtime failure.
+        ?_assertEqual(ok, iris_session:check_block_status(<<"unknown_sender">>, <<"unknown_recipient">>))
      end}.
 
 %% Module exports exist (canary tests for future refactoring)

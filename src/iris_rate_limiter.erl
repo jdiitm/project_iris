@@ -266,12 +266,16 @@ get_or_create_bucket(User, Now) ->
     case ets:lookup(?TABLE, User) of
         [Bucket] -> Bucket;
         [] ->
-            %% Create new bucket with full tokens
+            %% H-1 AUDIT MITIGATION: Initialize with half-burst tokens.
+            %% This prevents burst abuse after process restart where all
+            %% token buckets are empty. A newly-seen user gets half their
+            %% burst capacity; the remaining half refills over time.
             Rate = get_user_rate(User),
             Burst = get_user_burst(User),
+            InitialTokens = float(Burst) / 2.0,
             #bucket{
                 user = User,
-                tokens = float(Burst),
+                tokens = InitialTokens,
                 rate = Rate,
                 burst = Burst,
                 last_refill = Now
@@ -499,11 +503,15 @@ sync_check(User) ->
                     {ok, Used} -> {true, Used};
                     _ -> false
                 end
-            catch _:_ -> false
+            catch C1:R1 ->
+                logger:warning("~p: remote usage query failed ~p:~p", [?MODULE, C1, R1]),
+                false
             end
         end, OtherMembers),
         lists:sum(Replies)
-    catch _:_ -> 0
+    catch C2:R2 ->
+        logger:warning("~p: distributed rate check failed ~p:~p", [?MODULE, C2, R2]),
+        0
     end,
     TotalUsed = LocalUsed + RemoteUsed,
     Burst = get_default_burst(),

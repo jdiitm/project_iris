@@ -284,7 +284,9 @@ enter_diverged_mode(State) ->
     end,
     %% AUDIT V2 P0-1: Emit read-only mode metric for observability
     try iris_metrics:set(partition_guard_read_only_mode, 1)
-    catch _:_ -> ok
+    catch C1:R1 ->
+        logger:warning("~p: metrics set(read_only_mode, 1) failed ~p:~p", [?MODULE, C1, R1]),
+        ok
     end,
     
     State#state{
@@ -312,7 +314,9 @@ maybe_exit_diverged_mode(State = #state{last_quorum_loss = LastLoss}) ->
             logger:info("Reconciliation spawned - entering normal mode"),
             %% AUDIT V2 P0-1: Clear read-only mode metric
             try iris_metrics:set(partition_guard_read_only_mode, 0)
-            catch _:_ -> ok
+            catch C2:R2 ->
+                logger:warning("~p: metrics set(read_only_mode, 0) failed ~p:~p", [?MODULE, C2, R2]),
+                ok
             end,
             State#state{mode = normal};
         false ->
@@ -328,7 +332,8 @@ maybe_exit_diverged_mode(State = #state{last_quorum_loss = LastLoss}) ->
 spawn_reconciliation(State) ->
     VisibleNodes = State#state.visible_nodes,
     Epoch = State#state.epoch,
-    spawn(fun() ->
+    %% B-3 AUDIT MITIGATION: Monitored spawn for reconciliation
+    iris_async:spawn_monitored(partition_reconciliation, fun() ->
         logger:info("Reconciliation process started (epoch=~p, nodes=~p)", 
                     [Epoch, VisibleNodes]),
         try

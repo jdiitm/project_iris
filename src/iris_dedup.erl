@@ -31,6 +31,8 @@
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 %% Exported for testing (bloom filter race verification)
 -export([add_to_bloom/1, check_bloom/1, init_bloom_partition/1]).
+%% H-4 AUDIT: Exported for testing cleanup monitoring
+-export([cleanup_dedup_log/0]).
 
 -define(SERVER, ?MODULE).
 -define(TABLE, iris_dedup_seen).
@@ -157,23 +159,26 @@ get_stats() ->
 %% =============================================================================
 
 init(_Opts) ->
-    %% Create ETS table for hot tier dedup tracking
-    ets:new(?TABLE, [
-        set,
-        named_table,
-        public,
-        {read_concurrency, true},
-        {write_concurrency, true}
-    ]),
+    %% Create ETS table for hot tier dedup tracking (idempotent)
+    case ets:info(?TABLE) of
+        undefined ->
+            ets:new(?TABLE, [
+                set, named_table, public,
+                {read_concurrency, true}, {write_concurrency, true}
+            ]);
+        _ -> ?TABLE
+    end,
     
     %% P0-C3: Create bloom filter table for warm tier (7-day window)
-    %% Each partition is a bitarray stored as binary
-    ets:new(?BLOOM_TABLE, [
-        set,
-        named_table,
-        public,
-        {read_concurrency, true}
-    ]),
+    %% Each partition is a bitarray stored as binary (idempotent)
+    case ets:info(?BLOOM_TABLE) of
+        undefined ->
+            ets:new(?BLOOM_TABLE, [
+                set, named_table, public,
+                {read_concurrency, true}
+            ]);
+        _ -> ?BLOOM_TABLE
+    end,
     
     %% Initialize current bloom partition (hour of week 0-167)
     CurrentPartition = get_current_partition(),
@@ -489,16 +494,20 @@ write_dedup_log(MsgId, Timestamp) ->
 cleanup_dedup_log() ->
     Now = os:system_time(millisecond),
     CutoffMs = Now - (?WARM_TTL_HOURS * 3600 * 1000),  %% 7 days in ms
-    %% Async cleanup to avoid blocking
-    spawn(fun() ->
+    %% H-4 AUDIT FIX: Use iris_async:spawn_monitored instead of bare spawn
+    %% so failures are logged and observable (not silently swallowed).
+    iris_async:spawn_monitored(dedup_log_cleanup, fun() ->
         try
             %% Use dirty_select for efficiency (no transaction overhead)
+            %% B-4 AUDIT MITIGATION: dirty_select for read, transaction for delete
             OldEntries = mnesia:dirty_select(dedup_log, [
                 {{'dedup_log', '$1', '$2'}, [{'<', '$2', CutoffMs}], ['$1']}
             ]),
-            lists:foreach(fun(MsgId) ->
-                mnesia:dirty_delete(dedup_log, MsgId)
-            end, OldEntries),
+            mnesia:sync_transaction(fun() ->
+                lists:foreach(fun(MsgId) ->
+                    mnesia:delete({dedup_log, MsgId})
+                end, OldEntries)
+            end),
             case length(OldEntries) of
                 0 -> ok;
                 N -> logger:info("Dedup log cleanup: removed ~p old entries", [N])

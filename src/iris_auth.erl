@@ -49,6 +49,7 @@
 -export([get_auth_mode/0]).
 %% RFC Section 10.1: Failed login rate limiting
 -export([check_login_rate/1, record_failed_login/1]).
+-export([revoke_refresh_family/1]).  %% B-7/H-6: Exported for testability
 
 %% =============================================================================
 %% API
@@ -196,18 +197,25 @@ init([]) ->
         undefined -> <<"iris">>
     end,
     
-    %% Create revocation table
-    ets:new(?REVOCATION_TABLE, [set, named_table, public, {read_concurrency, true}]),
+    %% Create revocation table (idempotent for test isolation)
+    case ets:info(?REVOCATION_TABLE) of
+        undefined -> ets:new(?REVOCATION_TABLE, [set, named_table, public, {read_concurrency, true}]);
+        _ -> ?REVOCATION_TABLE
+    end,
     
-    %% RFC Section 10.1: Failed login tracking table
+    %% RFC Section 10.1: Failed login tracking table (idempotent)
     %% Format: {UserId, FailedCount, WindowStartTimestamp}
-    ets:new(?FAILED_LOGIN_TABLE, [set, named_table, public,
-                                   {read_concurrency, true},
-                                   {write_concurrency, true}]),
+    case ets:info(?FAILED_LOGIN_TABLE) of
+        undefined -> ets:new(?FAILED_LOGIN_TABLE, [set, named_table, public,
+                                   {read_concurrency, true}, {write_concurrency, true}]);
+        _ -> ?FAILED_LOGIN_TABLE
+    end,
     
-    %% AUDIT M7: Create JTI replay table eagerly to prevent race on first use
-    ets:new(?JTI_SEEN_TABLE, [named_table, public, set,
-                              {read_concurrency, true}]),
+    %% AUDIT M7: Create JTI replay table eagerly to prevent race on first use (idempotent)
+    case ets:info(?JTI_SEEN_TABLE) of
+        undefined -> ets:new(?JTI_SEEN_TABLE, [named_table, public, set, {read_concurrency, true}]);
+        _ -> ?JTI_SEEN_TABLE
+    end,
     
     %% Schedule cleanup of expired revocations
     erlang:send_after(3600000, self(), cleanup_revocations),
@@ -360,8 +368,12 @@ check_login_rate(UserId) ->
         end
     catch
         error:badarg ->
-            %% ETS table doesn't exist (iris_auth not started yet)
-            ok
+            %% B-4 AUDIT FIX: ETS table doesn't exist (iris_auth not started yet).
+            %% FAIL-CLOSED: If we can't track failed logins, we MUST NOT allow
+            %% unlimited attempts. An attacker can crash iris_auth to reset the
+            %% counter and brute-force. RFC Section 10.1 mandates 10/hour.
+            logger:warning("check_login_rate: ETS table missing, fail-closed"),
+            {error, rate_limited}
     end.
 
 %% @doc Record a failed login attempt for a user.
@@ -441,6 +453,8 @@ do_validate(Token, Opts, State = #state{secret = Secret, issuer = ExpectedIssuer
             case get_header_alg(Header) of
                 {error, invalid_header} ->
                     {error, invalid_header};
+                {error, missing_algorithm} ->
+                    {error, missing_algorithm};
                 Alg ->
             
             %% AUDIT: Algorithm whitelist — reject before signature verification
@@ -542,13 +556,21 @@ is_revoked(TokenId) ->
     case ets:member(?REVOCATION_TABLE, TokenId) of
         true -> true;
         false ->
-            %% Check Mnesia for revocations from other nodes
-            case mnesia:dirty_read(revoked_tokens, TokenId) of
-                [] -> false;
-                [_|_] -> 
+            %% B-4 AUDIT MITIGATION: Transactional read for revocation check
+            %% (was dirty_read -- could miss concurrent revocations)
+            case mnesia:sync_transaction(fun() ->
+                mnesia:read(revoked_tokens, TokenId)
+            end) of
+                {atomic, []} -> false;
+                {atomic, [_|_]} -> 
                     %% Cache locally for fast subsequent checks
                     Now = os:system_time(second),
                     ets:insert(?REVOCATION_TABLE, {TokenId, Now}),
+                    true;
+                {aborted, Reason} ->
+                    %% B-6 AUDIT MITIGATION: Fail-CLOSED on Mnesia failure.
+                    %% A revoked token must not be accepted because Mnesia is down.
+                    logger:warning("Revocation check failed (fail-closed): ~p", [Reason]),
                     true
             end
     end.
@@ -580,7 +602,8 @@ propagate_revocation(TokenId, Timestamp) ->
     case Nodes of
         [] -> ok;  %% Single node deployment
         _ ->
-            spawn(fun() ->
+            %% B-3 AUDIT MITIGATION: Monitored spawn for revocation propagation
+            iris_async:spawn_monitored(revocation_propagation, fun() ->
                 lists:foreach(fun(Node) ->
                     case rpc:call(Node, ?MODULE, receive_revocation,
                                   [TokenId, Timestamp], 2000) of
@@ -664,12 +687,17 @@ compute_signature(Input, Secret) ->
 
 %% P1-4: Extract algorithm from JWT header
 %% AUDIT M2: Reject on decode failure instead of defaulting to HS256.
-%% A garbage header must not silently bypass algorithm selection.
+%% H-1 AUDIT FIX: Also reject when 'alg' field is absent — a missing
+%% algorithm must not silently default to HS256 (algorithm confusion risk).
 get_header_alg(HeaderB64) ->
     case decode_base64url(HeaderB64) of
         {ok, Json} ->
             case decode_json(Json) of
-                {ok, Map} -> maps:get(<<"alg">>, Map, <<"HS256">>);
+                {ok, Map} ->
+                    case maps:find(<<"alg">>, Map) of
+                        {ok, Alg} -> Alg;
+                        error -> {error, missing_algorithm}
+                    end;
                 _ -> {error, invalid_header}
             end;
         _ -> {error, invalid_header}
@@ -804,30 +832,39 @@ create_refresh_token(UserId, TTL) ->
 -spec exchange_refresh_token(binary()) -> {ok, binary(), binary()} | {error, term()}.
 exchange_refresh_token(TokenId) ->
     Now = os:system_time(second),
-    case mnesia:dirty_read(?REFRESH_TABLE, TokenId) of
-        [] ->
+    %% B-1 AUDIT FIX: Read-then-write inside a single sync_transaction with
+    %% write lock to eliminate TOCTOU race. The write lock ensures only one
+    %% concurrent caller can read the token as Used=false.
+    case mnesia:sync_transaction(fun() ->
+        case mnesia:read(?REFRESH_TABLE, TokenId, write) of
+            [] ->
+                {error, token_reused};
+            [{?REFRESH_TABLE, TokenId, UserId, FamilyId, Used, _CreatedAt, ExpiresAt}] ->
+                case ExpiresAt =< Now of
+                    true ->
+                        {error, refresh_expired};
+                    false ->
+                        case Used of
+                            true ->
+                                {reuse_detected, FamilyId};
+                            false ->
+                                mnesia:write({?REFRESH_TABLE, TokenId, UserId, FamilyId, true, Now, ExpiresAt}),
+                                {ok, UserId, FamilyId}
+                        end
+                end
+        end
+    end) of
+        {atomic, {error, Reason}} ->
+            {error, Reason};
+        {atomic, {reuse_detected, FamilyId}} ->
+            revoke_refresh_family(FamilyId),
             {error, token_reused};
-        [{?REFRESH_TABLE, TokenId, UserId, FamilyId, Used, _CreatedAt, ExpiresAt}] ->
-            case ExpiresAt =< Now of
-                true ->
-                    {error, refresh_expired};
-                false ->
-                    case Used of
-                        true ->
-                            %% Token reuse detected - revoke entire family
-                            revoke_refresh_family(FamilyId),
-                            {error, token_reused};
-                        false ->
-                            %% AUDIT P0-4: Mark as used with transaction
-                            {atomic, ok} = mnesia:sync_transaction(fun() ->
-                                mnesia:write({?REFRESH_TABLE, TokenId, UserId, FamilyId, true, Now, ExpiresAt})
-                            end),
-                            %% Create new tokens
-                            {ok, NewAccess} = create_token(UserId),
-                            {ok, NewRefresh} = create_refresh_token_in_family(UserId, FamilyId),
-                            {ok, NewAccess, NewRefresh}
-                    end
-            end
+        {atomic, {ok, UserId, FamilyId}} ->
+            {ok, NewAccess} = create_token(UserId),
+            {ok, NewRefresh} = create_refresh_token_in_family(UserId, FamilyId),
+            {ok, NewAccess, NewRefresh};
+        {aborted, Reason} ->
+            {error, {transaction_failed, Reason}}
     end.
 
 %% @doc Validate refresh token and rotate (mnesia-only, no gen_server dependency).
@@ -835,27 +872,37 @@ exchange_refresh_token(TokenId) ->
 -spec validate_and_rotate_refresh(binary()) -> {ok, binary(), binary()} | {error, term()}.
 validate_and_rotate_refresh(TokenId) ->
     Now = os:system_time(second),
-    case mnesia:dirty_read(?REFRESH_TABLE, TokenId) of
-        [] ->
+    %% B-1 AUDIT FIX: Same TOCTOU fix as exchange_refresh_token.
+    %% Read with write lock inside sync_transaction.
+    case mnesia:sync_transaction(fun() ->
+        case mnesia:read(?REFRESH_TABLE, TokenId, write) of
+            [] ->
+                {error, token_reused};
+            [{?REFRESH_TABLE, TokenId, UserId, FamilyId, Used, _CreatedAt, ExpiresAt}] ->
+                case ExpiresAt =< Now of
+                    true ->
+                        {error, refresh_expired};
+                    false ->
+                        case Used of
+                            true ->
+                                {reuse_detected, FamilyId};
+                            false ->
+                                mnesia:write({?REFRESH_TABLE, TokenId, UserId, FamilyId, true, Now, ExpiresAt}),
+                                {ok, UserId, FamilyId}
+                        end
+                end
+        end
+    end) of
+        {atomic, {error, Reason}} ->
+            {error, Reason};
+        {atomic, {reuse_detected, FamilyId}} ->
+            revoke_refresh_family(FamilyId),
             {error, token_reused};
-        [{?REFRESH_TABLE, TokenId, UserId, FamilyId, Used, _CreatedAt, ExpiresAt}] ->
-            case ExpiresAt =< Now of
-                true ->
-                    {error, refresh_expired};
-                false ->
-                    case Used of
-                        true ->
-                            revoke_refresh_family(FamilyId),
-                            {error, token_reused};
-                        false ->
-                            %% AUDIT P0-4: Mark as used with transaction
-                            {atomic, ok} = mnesia:sync_transaction(fun() ->
-                                mnesia:write({?REFRESH_TABLE, TokenId, UserId, FamilyId, true, Now, ExpiresAt})
-                            end),
-                            {ok, NewRefresh} = create_refresh_token_in_family(UserId, FamilyId),
-                            {ok, UserId, NewRefresh}
-                    end
-            end
+        {atomic, {ok, UserId, FamilyId}} ->
+            {ok, NewRefresh} = create_refresh_token_in_family(UserId, FamilyId),
+            {ok, UserId, NewRefresh};
+        {aborted, Reason} ->
+            {error, {transaction_failed, Reason}}
     end.
 
 create_refresh_token_in_family(UserId, FamilyId) ->
@@ -871,6 +918,8 @@ create_refresh_token_in_family(UserId, FamilyId) ->
 
 revoke_refresh_family(FamilyId) ->
     %% AUDIT P0-4: Transaction for family revocation durability
+    %% H-6 AUDIT MITIGATION: Do not silently swallow errors.
+    %% A failed revocation means stolen tokens may remain valid.
     try
         {atomic, ok} = mnesia:sync_transaction(fun() ->
             AllTokens = mnesia:match_object(?REFRESH_TABLE,
@@ -878,7 +927,11 @@ revoke_refresh_family(FamilyId) ->
             lists:foreach(fun({?REFRESH_TABLE, TId, UId, FId, _Used, CAt, EAt}) ->
                 mnesia:write({?REFRESH_TABLE, TId, UId, FId, true, CAt, EAt})
             end, AllTokens)
-        end)
+        end),
+        ok
     catch
-        _:_ -> ok
+        Class:Reason ->
+            logger:warning("revoke_refresh_family failed for ~p: ~p:~p",
+                           [FamilyId, Class, Reason]),
+            {error, {revocation_failed, Reason}}
     end.

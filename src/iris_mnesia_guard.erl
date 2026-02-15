@@ -48,14 +48,18 @@ check_memory() ->
     WordSize = erlang:system_info(wordsize),
     Threshold = get_alarm_threshold(),
     Tables = try mnesia:system_info(tables)
-             catch _:_ -> [schema]
+             catch C1:R1 ->
+                 logger:warning("~p: mnesia:system_info(tables) failed ~p:~p", [?MODULE, C1, R1]),
+                 [schema]
              end,
     {MemMap, Alarms} = lists:foldl(fun(Table, {MapAcc, AlarmAcc}) ->
         Bytes = try
             Words = mnesia:table_info(Table, memory),
             Words * WordSize
         catch
-            _:_ -> 0
+            C2:R2 ->
+                logger:warning("~p: table_info(~p, memory) failed ~p:~p", [?MODULE, Table, C2, R2]),
+                0
         end,
         NewMapAcc = maps:put(Table, Bytes, MapAcc),
         NewAlarmAcc = case Bytes > Threshold of
@@ -67,7 +71,9 @@ check_memory() ->
     %% Emit total memory metric
     Total = maps:fold(fun(_T, B, Acc) -> Acc + B end, 0, MemMap),
     try iris_metrics:set(mnesia_total_memory_bytes, Total)
-    catch _:_ -> ok
+    catch C3:R3 ->
+        logger:warning("~p: metrics set failed ~p:~p", [?MODULE, C3, R3]),
+        ok
     end,
     %% Log alarms for tables over threshold
     lists:foreach(fun({Table, Bytes}) ->
@@ -120,10 +126,14 @@ should_evict() ->
         Tables = mnesia:system_info(tables),
         lists:foldl(fun(T, Acc) ->
             try Acc + mnesia:table_info(T, memory) * WordSize
-            catch _:_ -> Acc
+            catch C4:R4 ->
+                logger:warning("~p: should_evict table_info(~p) failed ~p:~p", [?MODULE, T, C4, R4]),
+                Acc
             end
         end, 0, Tables)
-    catch _:_ -> 0
+    catch C5:R5 ->
+        logger:warning("~p: should_evict system_info failed ~p:~p", [?MODULE, C5, R5]),
+        0
     end,
     Total >= EvictThreshold.
 
@@ -146,7 +156,9 @@ handle_cast(_Msg, State) ->
 handle_info(check, State) ->
     %% Run the memory check (updates alarms via cast)
     try check_memory()
-    catch _:_ -> ok
+    catch C6:R6 ->
+        logger:warning("~p: periodic check_memory failed ~p:~p", [?MODULE, C6, R6]),
+        ok
     end,
     erlang:send_after(?CHECK_INTERVAL_MS, self(), check),
     {noreply, State};

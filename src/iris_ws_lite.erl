@@ -4,6 +4,7 @@
 -export([start_link/1, set_socket/2]).
 -export([init/1, callback_mode/0, terminate/3, code_change/4]).
 -export([wait_for_socket/3, handshake/3, connected/3]).
+-export([decode_frame/1, parse_http_upgrade/1]).  %% Exported for TDD (B-4 audit)
 
 -record(data, {
     socket :: gen_tcp:socket() | ssl:sslsocket(),
@@ -13,6 +14,11 @@
 }).
 
 -define(WS_GUID, "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").
+
+%% B-4 AUDIT MITIGATION: Bound frame and header sizes to prevent OOM DoS
+-define(MAX_FRAME_SIZE, 65536).          %% 64KB - RFC Section 8 payload limit
+-define(MAX_HTTP_HEADER_SIZE, 8192).     %% 8KB - standard HTTP header limit
+-define(MAX_FRAME_DEPTH, 100).           %% Max frames processed per read event
 
 %% =============================================================================
 %% Transport-agnostic socket helpers (TLS + plain TCP)
@@ -125,23 +131,27 @@ connected(info, session_overload, Data = #data{socket = Socket}) ->
 connected(info, _Other, _Data) ->
     keep_state_and_data.
 
-%% Frame Processing Loop
-process_ws_frames(Buff, Data = #data{socket = Socket, user = User}) ->
+%% Frame Processing Loop (B-4/H-9 AUDIT MITIGATION: depth-limited)
+process_ws_frames(Buff, Data) ->
+    process_ws_frames(Buff, Data, 0).
+
+process_ws_frames(_Buff, Data, Depth) when Depth > ?MAX_FRAME_DEPTH ->
+    logger:warning("WS: Max frame depth ~p exceeded, closing connection", [?MAX_FRAME_DEPTH]),
+    {stop, {shutdown, frame_depth_exceeded}, Data};
+process_ws_frames(Buff, Data = #data{socket = Socket, user = User}, Depth) ->
     case decode_frame(Buff) of
         {ok, Opcode, Payload, Rest} ->
             %% Handle Frame
             case handle_frame_op(Opcode, Payload, Data) of
-                {ok, NewData} -> process_ws_frames(Rest, NewData);
+                {ok, NewData} -> process_ws_frames(Rest, NewData, Depth + 1);
                 {packet, Packet, NewData} ->
                     %% Delegate Protocol Logic
                     {ok, NewUser, Actions} = iris_session:handle_packet(Packet, User, self(), ?MODULE),
                     handle_actions(Actions, Socket),
                     %% AUDIT 2.3a FIX: Check heap_size after packet processing.
-                    %% If approaching the max_heap_size limit (80% of 1M words),
-                    %% send SERVER_OVERLOAD and stop gracefully instead of abrupt kill.
                     case check_heap_size() of
                         ok ->
-                            process_ws_frames(Rest, NewData#data{user = NewUser});
+                            process_ws_frames(Rest, NewData#data{user = NewUser}, Depth + 1);
                         overload ->
                             logger:warning("Session ~p: heap_size exceeded soft limit, closing gracefully",
                                            [NewUser]),
@@ -150,6 +160,10 @@ process_ws_frames(Buff, Data = #data{socket = Socket, user = User}) ->
                     end;
                 close -> {stop, normal, Data}
             end;
+        {error, Reason} ->
+            %% B-4 AUDIT MITIGATION: Reject oversized or malformed frames
+            logger:warning("WS frame rejected: ~p", [Reason]),
+            {stop, {shutdown, Reason}, Data};
         more ->
             sock_setopts(Socket, [{active, once}]),
             {keep_state, Data#data{buffer = Buff}}
@@ -202,6 +216,9 @@ parse_len(_, 126, _) -> more;
 parse_len(_, 127, _) -> more;
 parse_len(Op, Len, Rest) -> parse_mask(Op, Len, Rest).
 
+%% B-4 AUDIT MITIGATION: Reject frames exceeding MAX_FRAME_SIZE before allocation
+parse_mask(_Op, Len, _Rest) when Len > ?MAX_FRAME_SIZE ->
+    {error, frame_too_large};
 parse_mask(Op, Len, <<MaskKey:32, Rest/binary>>) ->
     case Rest of
         <<MaskedPayload:Len/binary, Rem/binary>> ->
@@ -243,6 +260,9 @@ opcode(9) -> ping;
 opcode(10) -> pong;
 opcode(_) -> unknown.
 
+%% B-4 AUDIT MITIGATION: Reject oversized HTTP headers
+parse_http_upgrade(Bin) when byte_size(Bin) > ?MAX_HTTP_HEADER_SIZE ->
+    error;
 parse_http_upgrade(Bin) ->
     case binary:match(Bin, <<"\r\n\r\n">>) of
         {Pos, _} ->

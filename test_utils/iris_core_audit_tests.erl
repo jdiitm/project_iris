@@ -292,3 +292,49 @@ nuke_guard_test_() ->
           end
       end}
     ].
+
+%% =============================================================================
+%% B-6 AUDIT: e2ee_key_bundle reconciliation must keep newer record
+%% =============================================================================
+%% RFC 7.1.1: "Key bundles: Union (all bundles are valid)"
+%% Since the table is type=set (one record per user_id), union semantics
+%% means "keep the record with the most recent updated_at."
+%% The bug: should_overwrite defaulted to false (always keep local),
+%% which could overwrite a newer key bundle with an older one during healing.
+
+key_bundle_reconcile_test_() ->
+    [
+     {"B-6: Remote key bundle with newer updated_at overwrites local", fun() ->
+          %% Record shape: {key_bundle, UserId, IdentityKey, SignedPreKey,
+          %%   SignedPreKeySig, SignedPreKeyTimestamp, OneTimePrekeys, CreatedAt, UpdatedAt}
+          LocalRec = {key_bundle, <<"alice">>, <<"ik_local">>, <<"spk_local">>,
+                      <<"spk_sig">>, 1000, [<<"opk1">>], 1000, 1000},
+          RemoteRec = {key_bundle, <<"alice">>, <<"ik_remote">>, <<"spk_remote">>,
+                       <<"spk_sig2">>, 2000, [<<"opk2">>], 1000, 2000},
+          %% Remote has updated_at=2000, local has updated_at=1000
+          %% should_overwrite must return true (take remote's newer bundle)
+          ?assertEqual(true,
+                       iris_core:should_overwrite(e2ee_key_bundle, RemoteRec, LocalRec))
+      end},
+
+     {"B-6: Remote key bundle with older updated_at does not overwrite local", fun() ->
+          LocalRec = {key_bundle, <<"bob">>, <<"ik_local">>, <<"spk_local">>,
+                      <<"spk_sig">>, 2000, [<<"opk1">>], 1000, 2000},
+          RemoteRec = {key_bundle, <<"bob">>, <<"ik_remote">>, <<"spk_remote">>,
+                       <<"spk_sig2">>, 1000, [<<"opk2">>], 1000, 1000},
+          %% Remote has updated_at=1000, local has updated_at=2000
+          %% should_overwrite must return false (keep local's newer bundle)
+          ?assertEqual(false,
+                       iris_core:should_overwrite(e2ee_key_bundle, RemoteRec, LocalRec))
+      end},
+
+     {"B-6: Equal updated_at keeps local (deterministic tiebreak)", fun() ->
+          LocalRec = {key_bundle, <<"carol">>, <<"ik_local">>, <<"spk_local">>,
+                      <<"spk_sig">>, 1500, [<<"opk1">>], 1000, 1500},
+          RemoteRec = {key_bundle, <<"carol">>, <<"ik_remote">>, <<"spk_remote">>,
+                       <<"spk_sig2">>, 1500, [<<"opk2">>], 1000, 1500},
+          %% Same timestamp: keep local (conservative)
+          ?assertEqual(false,
+                       iris_core:should_overwrite(e2ee_key_bundle, RemoteRec, LocalRec))
+      end}
+    ].

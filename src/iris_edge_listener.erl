@@ -14,6 +14,8 @@
 -export([start_link/1, start_link/2]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 -export([days_until_cert_expiry/1]).
+-export([check_tls_policy/1]).  %% Exported for testability (B-2 audit mitigation)
+-export([check_conn_rate_tcp/1]).  %% Exported for TDD (B-6 audit mitigation)
 
 -record(state, {
     lsock :: gen_tcp:socket() | ssl:sslsocket(),
@@ -46,17 +48,26 @@ init([Port, HandlerMod]) ->
     end.
 
 %% Check TLS policy compliance
+%% B-2 AUDIT MITIGATION: In production mode, TLS is unconditionally required.
+%% allow_insecure is only honored in development/test mode.
 check_tls_policy(true) -> ok;
 check_tls_policy(false) ->
-    logger:warning("=== RFC VIOLATION: TLS DISABLED (NFR-14) ==="),
-    logger:warning("TLS is MANDATORY per RFC-001. Set {tls_enabled, true}"),
-    case application:get_env(iris_edge, allow_insecure, false) of
-        true ->
-            logger:warning("Running in INSECURE mode (allow_insecure=true)"),
-            ok;
-        false ->
-            logger:error("Refusing to start without TLS. Set {allow_insecure, true} to override."),
-            {error, tls_required}
+    case application:get_env(iris_edge, deployment_mode, development) of
+        production ->
+            logger:error("FATAL: TLS is DISABLED in production mode (NFR-14 violation). "
+                         "Set {tls_enabled, true}. allow_insecure is ignored in production."),
+            {error, tls_required_in_production};
+        _ ->
+            logger:warning("=== RFC VIOLATION: TLS DISABLED (NFR-14) ==="),
+            logger:warning("TLS is MANDATORY per RFC-001. Set {tls_enabled, true}"),
+            case application:get_env(iris_edge, allow_insecure, false) of
+                true ->
+                    logger:warning("Running in INSECURE mode (allow_insecure=true)"),
+                    ok;
+                false ->
+                    logger:error("Refusing to start without TLS. Set {allow_insecure, true} to override."),
+                    {error, tls_required}
+            end
     end.
 
 %% Start the actual listener
@@ -402,8 +413,10 @@ check_conn_rate_tcp(Sock) ->
             {error, _} -> allow
         end
     catch Class:Reason ->
-        logger:warning("iris_edge_listener:check_conn_rate_tcp catch-all: ~p:~p", [Class, Reason]),
-        allow
+        %% B-6 AUDIT MITIGATION: Fail-CLOSED on rate check exception.
+        %% Attackers must not bypass rate limiting by triggering errors.
+        logger:warning("iris_edge_listener:check_conn_rate_tcp catch-all (fail-closed): ~p:~p", [Class, Reason]),
+        deny
     end.
 
 check_ip_rate(IP) ->

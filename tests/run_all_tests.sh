@@ -135,11 +135,15 @@ echo ""
 cleanup_standalone() {
     echo -e "${YELLOW}[CLEANUP]${NC} Stopping local processes..."
     pkill -u "$USER" -9 beam.smp 2>/dev/null || true
-    pkill -u "$USER" -9 epmd 2>/dev/null || true
+    # NOTE: Do NOT kill epmd here.  Killing epmd causes subsequent 'make start'
+    # and 'erl -eval' invocations to fail with "no alive nodes" errors because
+    # the port mapper is unavailable.  epmd is lightweight and shared; leave it.
     rm -rf Mnesia.* MnesiaCore.* data/ 2>/dev/null || true
     find /tmp -maxdepth 1 -name "iris_*" -exec rm -rf {} \; 2>/dev/null || true
     rm -f erl_crash.dump core.log edge1.log edge2.log 2>/dev/null || true
     sleep 2
+    # Ensure epmd is running (needed by all Erlang nodes)
+    epmd -daemon 2>/dev/null || true
 }
 
 # ============================================================================
@@ -297,6 +301,7 @@ restart_server_quick() {
         sleep 1
     done
     rm -rf Mnesia.* MnesiaCore.* 2>/dev/null || true
+    epmd -daemon 2>/dev/null || true
     make start CONFIG="$restart_config" > "$LOG_DIR/server_restart.log" 2>&1
     sleep 5
     # Wait for server port to be accepting connections

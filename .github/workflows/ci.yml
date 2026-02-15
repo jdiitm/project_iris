@@ -142,6 +142,11 @@ jobs:
             xref:stop(iris_xref),
             init:stop().'
 
+      - name: Validate Security Config (B-3 Audit)
+        run: |
+          # B-3 AUDIT MITIGATION: Verify production config enforces TLS + auth
+          python3 tests/suites/contract/test_ci_security_config.py
+
       - name: Run Quick Tests (non-Docker)
         run: |
           chmod +x tests/run_all_tests.sh

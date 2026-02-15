@@ -421,3 +421,66 @@ integration_placeholder_test_() ->
            ?assert(true)
        end}
      ]}.
+
+%% =============================================================================
+%% H-4 Mitigation: Quorum repair retry with backoff
+%% =============================================================================
+
+repair_retries_on_failure_test() ->
+    %% repair_failed_replicas should retry up to 3 times with backoff
+    %% when rpc:call fails.
+    %% Since we can't easily mock rpc:call, we test with a known-bad node.
+    %% The function should retry 3 times and log each attempt.
+    
+    %% Call with a fake node that doesn't exist
+    FakeFailures = [{nonode@nowhere, {badrpc, nodedown}}],
+    
+    %% Before the fix: repair calls rpc:call once and gives up
+    %% After the fix: repair retries MAX_REPAIR_RETRIES times with backoff
+    %%
+    %% We measure timing: if retry is working, this should take at least
+    %% the sum of backoff delays (100ms + 500ms = 600ms minimum for 3 attempts)
+    Start = erlang:monotonic_time(millisecond),
+    iris_quorum_write:repair_failed_replicas(FakeFailures, test_table, <<"key">>, <<"value">>),
+    Elapsed = erlang:monotonic_time(millisecond) - Start,
+    
+    %% After fix: should take >= 600ms due to backoff (100ms + 500ms between 3 attempts)
+    ?assert(Elapsed >= 500).
+
+%% =============================================================================
+%% B-3 AUDIT: pg group empty with iris_shard registered must NOT include
+%% all connected nodes (edge nodes don't run Mnesia).
+%% =============================================================================
+
+pg_empty_fallback_test_() ->
+    {"B-3: pg empty fallback returns [node()] not [node()|nodes()]",
+     {setup, fun setup/0, fun cleanup/1,
+      [
+       {"iris_shard registered but pg group empty returns local only", fun() ->
+            %% Start pg scope if not running
+            case whereis(iris_shards) of
+                undefined ->
+                    try pg:start(iris_shards) catch _:_ -> ok end;
+                _ -> ok
+            end,
+            %% Register a dummy iris_shard process
+            DummyPid = spawn(fun() -> receive stop -> ok end end),
+            register(iris_shard, DummyPid),
+            try
+                %% pg group iris_shards should be empty (no members joined)
+                ?assertEqual([], pg:get_members(iris_shards)),
+                %% get_replicas calls get_available_nodes internally
+                %% With the bug: returns [node()|nodes()] which may include edge nodes
+                %% Fixed: returns [node()] only
+                Replicas = iris_quorum_write:get_replicas(<<"test_key">>),
+                %% All replicas must be the local node (no remote nodes from nodes())
+                lists:foreach(fun(N) ->
+                    ?assertEqual(node(), N)
+                end, Replicas)
+            after
+                unregister(iris_shard),
+                DummyPid ! stop
+            end
+        end}
+      ]}}.
+
