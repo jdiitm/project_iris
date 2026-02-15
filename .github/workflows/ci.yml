@@ -121,7 +121,8 @@ jobs:
       - name: Run coverage analysis
         if: always()
         run: |
-          make test-cover || true
+          mkdir -p coverage
+          make test-cover 2>&1 | tee coverage/test-cover.log || true
           echo "Coverage report generated in coverage/"
 
       - name: Upload coverage report
@@ -131,6 +132,7 @@ jobs:
           name: erlang-coverage
           path: coverage/
           retention-days: 14
+          if-no-files-found: ignore
 
   # ===========================================================================
   # PYTHON QUICK: All non-Docker Python tests (12 suites)
@@ -221,8 +223,21 @@ jobs:
         run: |
           if [ ! -f .iris_dialyzer.plt ]; then
             echo "Building Dialyzer PLT (first run, ~2 min)..."
-            dialyzer --build_plt --apps erts kernel stdlib mnesia crypto ssl public_key \
-              --output_plt .iris_dialyzer.plt
+            # Exit 2 = warnings about functions in OTP apps not in PLT (expected).
+            # Include common OTP apps to minimize warnings.
+            dialyzer --build_plt \
+              --apps erts kernel stdlib mnesia crypto ssl public_key \
+                     compiler syntax_tools inets os_mon runtime_tools \
+                     sasl tools \
+              --output_plt .iris_dialyzer.plt || {
+              rc=$?
+              if [ $rc -eq 2 ]; then
+                echo "PLT built with warnings (exit 2) — expected for partial PLT"
+              else
+                echo "PLT build failed with exit code $rc"
+                exit $rc
+              fi
+            }
           fi
 
       - name: Dialyzer type analysis
@@ -384,6 +399,39 @@ jobs:
         with:
           otp-version: ${{ env.ERLANG_VERSION }}
           rebar3-version: '3.23'
+
+      - name: Create umbrella layout for rebar3
+        run: |
+          # rebar3 requires one .app.src per directory. The Makefile build
+          # uses src/ directly; rebar3 needs apps/iris_core/ + apps/iris_edge/.
+          mkdir -p apps/iris_core/src apps/iris_edge/src
+
+          # Extract module lists from .app.src using Erlang (avoids comment false-positives)
+          extract_modules() {
+            erl -noshell -eval "
+              {ok, [{application, _, P}]} = file:consult(\"$1\"),
+              [io:format(\"~s~n\", [M]) || M <- proplists:get_value(modules, P, [])],
+              halt(0)."
+          }
+
+          # Distribute modules to their respective app directories
+          for mod in $(extract_modules src/iris_core.app.src); do
+            [ -f "src/${mod}.erl" ] && cp "src/${mod}.erl" apps/iris_core/src/
+          done
+          cp src/iris_core.app.src apps/iris_core/src/
+
+          for mod in $(extract_modules src/iris_edge.app.src); do
+            [ -f "src/${mod}.erl" ] && cp "src/${mod}.erl" apps/iris_edge/src/
+          done
+          cp src/iris_edge.app.src apps/iris_edge/src/
+
+          # NIF support (zstd)
+          [ -d c_src ] && cp -r c_src apps/iris_core/
+          [ -d priv ] && cp -r priv apps/iris_core/
+
+          echo "Umbrella layout created:"
+          echo "  iris_core: $(ls apps/iris_core/src/*.erl 2>/dev/null | wc -l) modules"
+          echo "  iris_edge: $(ls apps/iris_edge/src/*.erl 2>/dev/null | wc -l) modules"
 
       - name: Build OTP release
         run: rebar3 release
