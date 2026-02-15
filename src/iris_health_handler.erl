@@ -193,7 +193,7 @@ health() ->
 %% --- /ready ---
 ready() ->
     MnesiaOk = try
-        running = mnesia:system_info(is_running),
+        yes = mnesia:system_info(is_running),
         true
     catch C:R ->
         logger:debug("Health check: Mnesia not ready (~p:~p)", [C, R]),
