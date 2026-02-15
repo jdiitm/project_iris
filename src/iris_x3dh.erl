@@ -156,7 +156,7 @@ respond_to_exchange(BobKeys, AliceMessage) ->
     try
         %% Extract Bob's keys
         IK_B_Priv = maps:get(identity_key_private, BobKeys),
-        IK_B_Pub = maps:get(identity_key_public, BobKeys),
+        _IK_B_Pub = maps:get(identity_key_public, BobKeys),
         SPK_B_Priv = maps:get(signed_prekey_private, BobKeys),
         
         %% Extract Alice's message
