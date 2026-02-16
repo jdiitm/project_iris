@@ -312,9 +312,10 @@ def fetch_offline_messages_robust(username: str, expected_msgs: list,
         messages = fetch_offline_messages(username)
         if messages:
             all_data = messages
-            # Check if all expected messages are present
+            # Join chunks to avoid false negatives from TCP recv boundaries
+            joined = b''.join(all_data)
             found = sum(1 for msg in expected_msgs
-                       if any(msg.encode() in m for m in all_data))
+                       if msg.encode() in joined)
             if found >= len(expected_msgs):
                 return all_data
         if attempt < max_attempts - 1:
@@ -523,18 +524,19 @@ def test_rapid_ack_disconnect_cycles():
         
         # Give server time to durably write all messages
         # NFR-8 (RPO=0) requires messages to survive crash AFTER they're accepted
-        # With 10 messages and sync Mnesia transactions (~100ms each in CI),
-        # 2s provides sufficient margin for all writes to complete durably.
-        time.sleep(2.0)
+        # With 10 messages and sync Mnesia transactions (~100-300ms each in CI),
+        # scale the wait by CI_TIMEOUT_FACTOR to account for slower shared VMs.
+        durability_wait = 2.0 * CI_TIMEOUT_FACTOR
+        time.sleep(durability_wait)
         sock.close()
         
     except Exception as e:
         log_test("Rapid ACK-disconnect", False, f"Error: {e}")
         return False
     
-    log(f"  2. Sent {len(sent_messages)} messages")
+    log(f"  2. Sent {len(sent_messages)} messages (waited {durability_wait}s for durability)")
     
-    # Kill server - messages should already be durable from the 500ms wait above
+    # Kill server - messages should already be durable from the wait above
     log(f"  3. SIGKILL server...")
     time.sleep(0.1)  # 100ms additional buffer
     sigkill_container(CONTAINER_NAME)
@@ -559,12 +561,13 @@ def test_rapid_ack_disconnect_cycles():
     messages = fetch_offline_messages_robust(receiver, sent_messages,
                                              max_attempts=3, delay=3.0)
     
+    # Join all received chunks before matching to avoid false negatives
+    # from message bytes spanning TCP recv boundaries
+    all_data = b''.join(messages)
     messages_found = 0
     for msg in sent_messages:
-        for msg_data in messages:
-            if msg.encode() in msg_data:
-                messages_found += 1
-                break
+        if msg.encode() in all_data:
+            messages_found += 1
     
     log(f"     Found {messages_found}/{len(sent_messages)} messages")
     
