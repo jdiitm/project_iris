@@ -283,7 +283,7 @@ enter_diverged_mode(State) ->
     logger:warning("Partition count: ~p", [NewCount]),
     
     %% Log to metrics if available
-    try iris_metrics:increment(partition_detected)
+    try iris_metrics:inc(partition_detected)
     catch Class:Reason ->
         logger:warning("iris_partition_guard: metrics increment failed: ~p:~p", [Class, Reason])
     end,

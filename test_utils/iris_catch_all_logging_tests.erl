@@ -49,10 +49,9 @@ storage_tier_logs_on_metric_error_test() ->
     install_log_handler(),
     try
         %% Calling with invalid args to trigger error paths
-        %% The metrics catch-all should log on failure
-        %% We can trigger this by calling evict when metrics module 
-        %% doesn't have the counter registered
-        case catch iris_storage_tier:check_memory_pressure() of
+        %% Trigger an error path by calling evict_cold with invalid args
+        %% to exercise the catch-all logging paths
+        case catch iris_storage_tier:evict_cold(undefined, undefined, undefined) of
             _ -> ok
         end,
         

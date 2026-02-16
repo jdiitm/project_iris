@@ -416,10 +416,7 @@ integration_behavioral_test_() ->
           mnesia:create_table(quorum_integration_test,
               [{attributes, [key, value]}, {ram_copies, [node()]}]),
           mnesia:wait_for_tables([quorum_integration_test], 5000),
-          case whereis(iris_quorum_write) of
-              undefined -> {ok, Pid} = iris_quorum_write:start_link(), Pid;
-              Pid -> Pid
-          end
+          ok
       end,
       fun(_) ->
           catch mnesia:delete_table(quorum_integration_test),
