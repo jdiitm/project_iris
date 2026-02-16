@@ -8,7 +8,7 @@
     iris_edge_conn,
     iris_edge_dedup_cleaner,
     iris_edge_fallback_drain,
-    iris_health_handler,
+    %% iris_health_handler provided by iris_core (shared module)
     iris_session,
     iris_ws_lite,
     iris_compression,
