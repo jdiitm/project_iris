@@ -37,7 +37,7 @@ import base64
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 sys.path.insert(0, PROJECT_ROOT)
-from utilities.helpers import wait_until
+from tests.utilities.helpers import wait_until
 
 SERVER_HOST = os.environ.get("IRIS_HOST", "localhost")
 SERVER_PORT = int(os.environ.get("IRIS_PORT", "8085"))
