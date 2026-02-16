@@ -80,10 +80,10 @@ def test_key_bundle_upload():
     # Create and upload a key bundle
     code = f'''
         UserId = <<"{user_id}">>,
-        IK = crypto:strong_rand_bytes(32),
-        SPK = crypto:strong_rand_bytes(32),
-        Sig = crypto:strong_rand_bytes(64),
-        OPKs = [crypto:strong_rand_bytes(32) || _ <- lists:seq(1, 10)],
+        {{IK, IKPriv}} = crypto:generate_key(ecdh, x25519),
+        {{SPK, _SPKPriv}} = crypto:generate_key(ecdh, x25519),
+        Sig = iris_x3dh:sign_prekey(SPK, IKPriv),
+        OPKs = [element(1, crypto:generate_key(ecdh, x25519)) || _ <- lists:seq(1, 10)],
 
         Bundle = #{{
             identity_key => IK,
@@ -134,10 +134,10 @@ def test_opk_consumption():
 
     code = f'''
         UserId = <<"{user_id}">>,
-        IK = crypto:strong_rand_bytes(32),
-        SPK = crypto:strong_rand_bytes(32),
-        Sig = crypto:strong_rand_bytes(64),
-        OPKs = [crypto:strong_rand_bytes(32) || _ <- lists:seq(1, 5)],
+        {{IK, IKPriv}} = crypto:generate_key(ecdh, x25519),
+        {{SPK, _SPKPriv}} = crypto:generate_key(ecdh, x25519),
+        Sig = iris_x3dh:sign_prekey(SPK, IKPriv),
+        OPKs = [element(1, crypto:generate_key(ecdh, x25519)) || _ <- lists:seq(1, 5)],
 
         Bundle = #{{
             identity_key => IK,
@@ -190,10 +190,10 @@ def test_opk_exhaustion_fallback():
 
     code = f'''
         UserId = <<"{user_id}">>,
-        IK = crypto:strong_rand_bytes(32),
-        SPK = crypto:strong_rand_bytes(32),
-        Sig = crypto:strong_rand_bytes(64),
-        OPKs = [crypto:strong_rand_bytes(32)],  %% Only 1 OPK
+        {{IK, IKPriv}} = crypto:generate_key(ecdh, x25519),
+        {{SPK, _SPKPriv}} = crypto:generate_key(ecdh, x25519),
+        Sig = iris_x3dh:sign_prekey(SPK, IKPriv),
+        OPKs = [element(1, crypto:generate_key(ecdh, x25519))],  %% Only 1 OPK
 
         Bundle = #{{
             identity_key => IK,

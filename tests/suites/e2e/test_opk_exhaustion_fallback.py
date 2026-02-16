@@ -67,9 +67,9 @@ def test_3dh_fallback_with_zero_opks():
             _ -> ok
         end,
 
-        IK = crypto:strong_rand_bytes(32),
-        SPK = crypto:strong_rand_bytes(32),
-        Sig = crypto:strong_rand_bytes(64),
+        {IK, IKPriv} = crypto:generate_key(ecdh, x25519),
+        {SPK, _SPKPriv} = crypto:generate_key(ecdh, x25519),
+        Sig = iris_x3dh:sign_prekey(SPK, IKPriv),
         %% Zero OPKs — forces 3-DH
         OPKs = [],
 
@@ -168,11 +168,11 @@ def test_degraded_security_flag():
             _ -> ok
         end,
 
-        IK = crypto:strong_rand_bytes(32),
-        SPK = crypto:strong_rand_bytes(32),
-        Sig = crypto:strong_rand_bytes(64),
+        {IK, IKPriv} = crypto:generate_key(ecdh, x25519),
+        {SPK, _SPKPriv} = crypto:generate_key(ecdh, x25519),
+        Sig = iris_x3dh:sign_prekey(SPK, IKPriv),
         %% 1 OPK — will be consumed on first fetch
-        OPKs = [crypto:strong_rand_bytes(32)],
+        OPKs = [element(1, crypto:generate_key(ecdh, x25519))],
 
         Bundle = #{
             identity_key => IK,
@@ -253,10 +253,10 @@ def test_replenishment_trigger():
             _ -> ok
         end,
 
-        IK = crypto:strong_rand_bytes(32),
-        SPK = crypto:strong_rand_bytes(32),
-        Sig = crypto:strong_rand_bytes(64),
-        OPKs = [crypto:strong_rand_bytes(32), crypto:strong_rand_bytes(32)],
+        {IK, IKPriv} = crypto:generate_key(ecdh, x25519),
+        {SPK, _SPKPriv} = crypto:generate_key(ecdh, x25519),
+        Sig = iris_x3dh:sign_prekey(SPK, IKPriv),
+        OPKs = [element(1, crypto:generate_key(ecdh, x25519)), element(1, crypto:generate_key(ecdh, x25519))],
 
         Bundle = #{
             identity_key => IK,

@@ -81,10 +81,10 @@ def test_spk_rotation_mechanism():
         catch iris_keys:delete_user_keys(UserId),
         
         %% Upload initial bundle
-        IK = crypto:strong_rand_bytes(32),
-        SPK1 = crypto:strong_rand_bytes(32),
-        Sig1 = crypto:strong_rand_bytes(64),
-        OPKs = [crypto:strong_rand_bytes(32) || _ <- lists:seq(1, 10)],
+        {IK, IKPriv} = crypto:generate_key(ecdh, x25519),
+        {SPK1, _SPK1Priv} = crypto:generate_key(ecdh, x25519),
+        Sig1 = iris_x3dh:sign_prekey(SPK1, IKPriv),
+        OPKs = [element(1, crypto:generate_key(ecdh, x25519)) || _ <- lists:seq(1, 10)],
         
         Bundle1 = #{
             identity_key => IK,
@@ -101,8 +101,8 @@ def test_spk_rotation_mechanism():
         io:format("Original SPK: ~p...~n", [binary:part(OriginalSPK, 0, 8)]),
         
         %% Rotate SPK via bundle re-upload (primary mechanism)
-        NewSPK = crypto:strong_rand_bytes(32),
-        NewSig = crypto:strong_rand_bytes(64),
+        {NewSPK, _NewSPKPriv} = crypto:generate_key(ecdh, x25519),
+        NewSig = iris_x3dh:sign_prekey(NewSPK, IKPriv),
         
         io:format("Testing SPK rotation via bundle re-upload...~n"),
         
@@ -156,7 +156,7 @@ def test_spk_rotation_invalidates_old():
         %% Generate keys
         {IKPub, IKPriv} = crypto:generate_key(ecdh, x25519),
         {SPK1Pub, SPK1Priv} = crypto:generate_key(ecdh, x25519),
-        Sig1 = crypto:strong_rand_bytes(64),
+        Sig1 = iris_x3dh:sign_prekey(SPK1Pub, IKPriv),
         
         Bundle1 = #{
             identity_key => IKPub,
@@ -181,7 +181,7 @@ def test_spk_rotation_invalidates_old():
         
         %% Rotate to SPK2
         {SPK2Pub, SPK2Priv} = crypto:generate_key(ecdh, x25519),
-        Sig2 = crypto:strong_rand_bytes(64),
+        Sig2 = iris_x3dh:sign_prekey(SPK2Pub, IKPriv),
         
         Bundle2 = #{
             identity_key => IKPub,
@@ -254,11 +254,12 @@ def test_spk_grace_period():
         %% User uploads bundle with SPK1
         {IKPub, IKPriv} = crypto:generate_key(ecdh, x25519),
         {SPK1Pub, SPK1Priv} = crypto:generate_key(ecdh, x25519),
+        GraceSig = iris_x3dh:sign_prekey(SPK1Pub, IKPriv),
         
         Bundle = #{
             identity_key => IKPub,
             signed_prekey => SPK1Pub,
-            signed_prekey_signature => crypto:strong_rand_bytes(64),
+            signed_prekey_signature => GraceSig,
             one_time_prekeys => []
         },
         ok = iris_keys:upload_bundle(UserId, Bundle),
@@ -288,7 +289,8 @@ def test_spk_grace_period():
         
         %% SPK ROTATION HAPPENS
         {SPK2Pub, _SPK2Priv} = crypto:generate_key(ecdh, x25519),
-        Bundle2 = Bundle#{signed_prekey => SPK2Pub},
+        GraceSig2 = iris_x3dh:sign_prekey(SPK2Pub, IKPriv),
+        Bundle2 = Bundle#{signed_prekey => SPK2Pub, signed_prekey_signature => GraceSig2},
         ok = iris_keys:upload_bundle(UserId, Bundle2),
         io:format("SPK rotated to new key~n"),
         
@@ -342,9 +344,9 @@ def test_spk_rotation_schedule():
         catch iris_keys:delete_user_keys(UserId),
         
         %% Upload bundle with timestamp
-        IK = crypto:strong_rand_bytes(32),
-        SPK = crypto:strong_rand_bytes(32),
-        Sig = crypto:strong_rand_bytes(64),
+        {IK, IKPriv} = crypto:generate_key(ecdh, x25519),
+        {SPK, _SPKPriv} = crypto:generate_key(ecdh, x25519),
+        Sig = iris_x3dh:sign_prekey(SPK, IKPriv),
         
         Bundle = #{
             identity_key => IK,
