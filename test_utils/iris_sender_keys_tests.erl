@@ -57,8 +57,8 @@ test_serialization() ->
     %% Verify it's binary
     ?assert(is_binary(Serialized)),
     
-    %% Expected size: 1 (version) + 8 (key_id) + 32 (chain_key) + 32 (sign_priv) + 32 (sign_pub) + 4 (chain_index)
-    ?assertEqual(109, byte_size(Serialized)),
+    %% Expected size: 1 (version) + 8 (key_id) + 32 (chain_key) + 32 (sign_priv) + 32 (sign_pub) + 4 (chain_index) + 4 (min_chain_index)
+    ?assertEqual(113, byte_size(Serialized)),
     
     %% Deserialize and compare
     Restored = iris_sender_keys:deserialize_sender_key(Serialized),

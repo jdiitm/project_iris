@@ -49,12 +49,22 @@ check() ->
     end.
 
 %% @doc Decrement active connection count.
+%% HR-3 FIX: Clamp at zero to prevent counter underflow.
+%% Previously, double-close could make the counter negative,
+%% permanently bypassing the MAX_CONNECTIONS check.
 -spec close() -> ok.
 close() ->
     case get_atomics_ref() of
         undefined -> ok;
         Ref ->
-            atomics:sub(Ref, ?ATOMIC_INDEX, 1),
+            Current = atomics:sub_get(Ref, ?ATOMIC_INDEX, 1),
+            case Current < 0 of
+                true ->
+                    %% Counter went negative — clamp to zero
+                    atomics:put(Ref, ?ATOMIC_INDEX, 0);
+                false ->
+                    ok
+            end,
             ok
     end.
 

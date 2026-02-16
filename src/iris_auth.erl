@@ -17,7 +17,9 @@
 -export([create_token/1, create_token/2, create_token/3]).
 -export([create_eddsa_token/1, create_eddsa_token/2, create_eddsa_token/3]).
 -export([revoke_token/1]).
--export([get_user_from_token/1]).
+%% B-8 FIX: get_user_from_token/1 removed from exports.
+%% It extracts user ID WITHOUT signature verification, enabling JWT forgery.
+%% Use validate_token/1 instead, which performs full signature verification.
 -export([is_auth_enabled/0]).
 -export([get_eddsa_public_key/0]).
 -export([receive_revocation/2]).
@@ -141,9 +143,14 @@ get_jti_from_token(Token) ->
         Error -> Error
     end.
 
-%% @doc Extract user ID from a validated token (without full validation).
--spec get_user_from_token(binary()) -> {ok, binary()} | {error, term()}.
-get_user_from_token(Token) ->
+%% @doc INTERNAL ONLY: Extract user ID from token WITHOUT signature verification.
+%% WARNING: This function MUST NOT be used for authorization decisions.
+%% It decodes the JWT payload (base64) without verifying the signature.
+%% An attacker can forge a JWT with any 'sub' claim.
+%% Use validate_token/1 for all security-sensitive operations.
+%% B-8 FIX: Removed from module exports to prevent misuse.
+-spec get_user_from_token_UNSAFE(binary()) -> {ok, binary()} | {error, term()}.
+get_user_from_token_UNSAFE(Token) ->
     case decode_payload(Token) of
         {ok, Claims} ->
             case maps:get(<<"sub">>, Claims, undefined) of
@@ -209,6 +216,10 @@ init([]) ->
     end,
     
     %% Create revocation table (idempotent for test isolation)
+    %% SECURITY NOTE: 'public' is required because writes happen from calling processes
+    %% (not only the gen_server owner). In a compromised-process scenario, any process
+    %% could un-revoke tokens. A future hardening step would route all writes through
+    %% the gen_server to allow 'protected' access.
     case ets:info(?REVOCATION_TABLE) of
         undefined -> ets:new(?REVOCATION_TABLE, [set, named_table, public, {read_concurrency, true}]);
         _ -> ?REVOCATION_TABLE
@@ -326,6 +337,9 @@ handle_call({rotate_signing_key, NewSecret}, _From, State = #state{signing_keys 
     %% Prepend new key, trim to MAX_ACTIVE_KEYS
     NewKeys = lists:sublist([{NewKid, NewSecret} | OldKeys], ?MAX_ACTIVE_KEYS),
     logger:info("JWT key rotated: new kid=~s, active_keys=~p", [NewKid, length(NewKeys)]),
+    %% Audit log: security-relevant key rotation
+    logger:notice("AUDIT: jwt_key_rotated kid=~s active_keys=~p node=~p",
+                  [NewKid, length(NewKeys), node()]),
     {reply, ok, State#state{secret = NewSecret, signing_keys = NewKeys}};
 
 handle_call(_Request, _From, State) ->
@@ -555,14 +569,18 @@ validate_claims(Claims, ExpectedIssuer, Opts) ->
 %% Tracks seen jti values in ETS with TTL = token expiry time.
 %% Table is now created eagerly in init/1, no lazy creation needed.
 check_jti_replay(Jti, Exp) ->
-    case ets:lookup(?JTI_SEEN_TABLE, Jti) of
-        [{Jti, _}] ->
+    %% HR-1 FIX: Use insert_new for atomic check-and-mark.
+    %% Previously used lookup+insert which has a TOCTOU race:
+    %% two concurrent requests with the same JTI could both see []
+    %% and both return false (not replayed).
+    %% insert_new returns true if inserted (first use), false if already exists (replay).
+    case ets:insert_new(?JTI_SEEN_TABLE, {Jti, Exp}) of
+        true ->
+            %% First use -- successfully marked as seen
+            false;
+        false ->
             %% Already seen -- this is a replay
-            true;
-        [] ->
-            %% First use -- mark as seen with expiry for cleanup
-            ets:insert(?JTI_SEEN_TABLE, {Jti, Exp}),
-            false
+            true
     end.
 
 is_revoked(TokenId) ->

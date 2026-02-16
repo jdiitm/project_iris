@@ -104,9 +104,36 @@ wait_for_socket(cast, {socket_ready, Socket}, Data) ->
         {sslsocket, _, _} -> ssl;
         _ -> tcp
     end,
-    %% Now we own the socket, set active once + send_timeout (2s)
-    setopts(Socket, Transport, [{active, once}, {send_timeout, 2000}]),
-    {next_state, connected, Data#data{socket = Socket, transport = Transport}}.
+    %% B-4 FIX: Reject plaintext TCP connections in production mode (NFR-14).
+    %% TLS is mandatory for all client connections per RFC-001 v4.0.
+    case Transport of
+        tcp ->
+            Mode = application:get_env(iris_edge, deployment_mode,
+                       application:get_env(iris_core, deployment_mode, development)),
+            AllowInsecure = application:get_env(iris_edge, allow_insecure, false),
+            case {Mode, AllowInsecure} of
+                {production, _} ->
+                    logger:warning("Rejected plaintext TCP connection in production mode (NFR-14)"),
+                    iris_metrics:inc(tls_enforcement_rejections),
+                    gen_tcp:close(Socket),
+                    iris_ingress_guard:close(),
+                    {stop, normal};
+                {_, false} ->
+                    logger:warning("Rejected plaintext TCP connection (allow_insecure=false)"),
+                    iris_metrics:inc(tls_enforcement_rejections),
+                    gen_tcp:close(Socket),
+                    iris_ingress_guard:close(),
+                    {stop, normal};
+                _ ->
+                    %% Development/test mode with allow_insecure=true
+                    setopts(Socket, Transport, [{active, once}, {send_timeout, 2000}]),
+                    {next_state, connected, Data#data{socket = Socket, transport = Transport}}
+            end;
+        ssl ->
+            %% TLS connection — always allowed
+            setopts(Socket, Transport, [{active, once}, {send_timeout, 2000}]),
+            {next_state, connected, Data#data{socket = Socket, transport = Transport}}
+    end.
 
 %% STATE: connected
 connected(enter, _OldState, _Data) ->

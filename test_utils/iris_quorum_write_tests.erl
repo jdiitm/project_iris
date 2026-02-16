@@ -401,26 +401,75 @@ reconcile_reads_test_() ->
 %% Integration Test Placeholder
 %% =============================================================================
 
-integration_placeholder_test_() ->
-    {"Integration test markers",
-     [
-      {"Multi-node quorum writes require integration test", fun() ->
-           %% This is a marker - actual test is in Python integration suite
-           ?assert(true)
-       end},
-      
-      {"Failover scenarios require integration test", fun() ->
-           %% This is a marker - actual test is in Python integration suite
-           ?assert(true)
-       end},
-       
-      {"Partition guard enforcement requires integration test", fun() ->
-           %% Full partition guard test requires starting the guard process
-           %% in safe_mode and verifying write_durable returns error
-           %% This is tested in Python integration suite
-           ?assert(true)
-       end}
-     ]}.
+%% B-6 FIX: Replaced ?assert(true) placeholders with real behavioral tests.
+%% Full multi-node quorum tests are in the Python integration suite.
+%% These single-node tests verify quorum write API contracts and error handling.
+
+integration_behavioral_test_() ->
+    {"Quorum write behavioral tests (single-node)",
+     {setup,
+      fun() ->
+          mnesia:stop(),
+          mnesia:delete_schema([node()]),
+          mnesia:create_schema([node()]),
+          mnesia:start(),
+          mnesia:create_table(quorum_integration_test,
+              [{attributes, [key, value]}, {ram_copies, [node()]}]),
+          mnesia:wait_for_tables([quorum_integration_test], 5000),
+          case whereis(iris_quorum_write) of
+              undefined -> {ok, Pid} = iris_quorum_write:start_link(), Pid;
+              Pid -> Pid
+          end
+      end,
+      fun(_) ->
+          catch mnesia:delete_table(quorum_integration_test),
+          ok
+      end,
+      [
+       {"write_durable returns ok or quorum error on single node", fun() ->
+            Record = {quorum_integration_test, write_durable_key, <<"test_value">>},
+            Result = iris_quorum_write:write_durable(quorum_integration_test,
+                         write_durable_key, Record),
+            %% On single node: either succeeds locally or returns quorum error
+            ?assert(Result =:= ok orelse Result =:= {error, quorum_not_reached}),
+            %% If succeeded, verify data persisted
+            case Result of
+                ok ->
+                    [{_, _, Val}] = mnesia:dirty_read(quorum_integration_test, write_durable_key),
+                    ?assertEqual(<<"test_value">>, Val);
+                _ -> ok
+            end
+        end},
+
+       {"read_quorum returns data or not_found", fun() ->
+            %% Write a known value first
+            ok = mnesia:dirty_write({quorum_integration_test, read_quorum_key, <<"read_val">>}),
+            Result = iris_quorum_write:read_quorum(quorum_integration_test, read_quorum_key),
+            case Result of
+                {ok, Records} when is_list(Records) ->
+                    %% Verify the read contains our data
+                    Values = [V || {_, _, V} <- Records],
+                    ?assert(lists:member(<<"read_val">>, Values));
+                {ok, _} ->
+                    ok; %% Single record result
+                {error, _} ->
+                    ok %% Quorum not reachable on single node
+            end
+        end},
+
+       {"repair_async does not crash on single node", fun() ->
+            Record = {quorum_integration_test, repair_key, <<"repair_val">>},
+            %% Should not crash even though no other nodes exist
+            Result = try
+                iris_quorum_write:repair_async(quorum_integration_test,
+                    repair_key, Record, [node()]),
+                ok
+            catch
+                _:_ -> {error, crashed}
+            end,
+            ?assertEqual(ok, Result)
+        end}
+      ]}}.
 
 %% =============================================================================
 %% Mitigation: Quorum repair retry with backoff

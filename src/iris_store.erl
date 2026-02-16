@@ -240,6 +240,10 @@ do_delete(guaranteed, Table, Key) ->
         {aborted, Reason} -> {error, Reason}
     end;
 
+%% B-6 FIX: Handle quorum durability for delete (same as guaranteed on single node)
+do_delete(quorum, Table, Key) ->
+    do_delete(guaranteed, Table, Key);
+
 do_delete(best_effort, Table, Key) ->
     spawn(fun() ->
         try

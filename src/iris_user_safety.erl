@@ -27,6 +27,8 @@ block_user(Blocker, Blocked) when is_binary(Blocker), byte_size(Blocker) =< ?MAX
     {atomic, ok} = mnesia:transaction(fun() ->
         mnesia:write({?BLOCKS_TABLE, Key, Blocker, Blocked, Now})
     end),
+    %% Audit log: security-relevant user action
+    logger:notice("AUDIT: user_blocked ~s blocked ~s", [Blocker, Blocked]),
     ok;
 block_user(_, _) ->
     {error, invalid_user_id}.
@@ -39,6 +41,8 @@ unblock_user(Blocker, Blocked) when is_binary(Blocker), byte_size(Blocker) =< ?M
     {atomic, ok} = mnesia:transaction(fun() ->
         mnesia:delete({?BLOCKS_TABLE, Key})
     end),
+    %% Audit log: security-relevant user action
+    logger:notice("AUDIT: user_unblocked ~s unblocked ~s", [Blocker, Blocked]),
     ok;
 unblock_user(_, _) ->
     {error, invalid_user_id}.

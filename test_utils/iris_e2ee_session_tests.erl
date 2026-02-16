@@ -249,9 +249,12 @@ session_e2ee_unauthenticated_test_() ->
      fun cleanup/1,
      fun(_) ->
          %% Test upload_prekeys
-         Bundle = #{identity_key => crypto:strong_rand_bytes(32),
-                    signed_prekey => crypto:strong_rand_bytes(32),
-                    signed_prekey_signature => crypto:strong_rand_bytes(64)},
+         {IKPub, IKPriv} = iris_x3dh:generate_identity_key(),
+         SPK = crypto:strong_rand_bytes(32),
+         Sig = iris_x3dh:sign_prekey(SPK, IKPriv),
+         Bundle = #{identity_key => IKPub,
+                    signed_prekey => SPK,
+                    signed_prekey_signature => Sig},
          {ok, User1, Actions1} = iris_session:handle_packet({upload_prekeys, Bundle}, undefined, self(), ?MODULE),
          
          %% Test fetch_prekeys

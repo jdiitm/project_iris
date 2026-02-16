@@ -39,10 +39,13 @@ teardown(Pid) ->
 expired_spk_increments_metric() ->
     %% Upload a bundle with SPK timestamp 8 days ago (expired > 7 days)
     OldTs = os:system_time(second) - (8 * 86400),
+    {IKPub, IKPriv} = iris_x3dh:generate_identity_key(),
+    SPK = crypto:strong_rand_bytes(32),
+    Sig = iris_x3dh:sign_prekey(SPK, IKPriv),
     Bundle = #{
-        identity_key => crypto:strong_rand_bytes(32),
-        signed_prekey => crypto:strong_rand_bytes(32),
-        signed_prekey_signature => crypto:strong_rand_bytes(64),
+        identity_key => IKPub,
+        signed_prekey => SPK,
+        signed_prekey_signature => Sig,
         signed_prekey_timestamp => OldTs,
         one_time_prekeys => [crypto:strong_rand_bytes(32) || _ <- lists:seq(1, 10)]
     },

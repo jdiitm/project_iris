@@ -32,12 +32,15 @@ cleanup({Pid, Dir}) ->
     %% Clean up temp directory
     os:cmd("rm -rf " ++ Dir).
 
-%% Generate test keys (32 bytes each for Curve25519)
+%% Generate test keys with real X3DH signatures (B-2 fix requires valid signatures)
 generate_test_keys() ->
+    {IKPub, IKPriv} = iris_x3dh:generate_identity_key(),
+    SPK = crypto:strong_rand_bytes(32),
+    Sig = iris_x3dh:sign_prekey(SPK, IKPriv),
     #{
-        identity_key => crypto:strong_rand_bytes(32),
-        signed_prekey => crypto:strong_rand_bytes(32),
-        signed_prekey_signature => crypto:strong_rand_bytes(64),  %% Ed25519 signature
+        identity_key => IKPub,
+        signed_prekey => SPK,
+        signed_prekey_signature => Sig,  %% 96 bytes: Ed25519 sig (64) + Ed25519 pub (32)
         one_time_prekeys => [crypto:strong_rand_bytes(32) || _ <- lists:seq(1, 10)]
     }.
 
@@ -134,10 +137,13 @@ pop_one_time_prekey() ->
 
 exhaust_prekeys() ->
     UserId = <<"opk_test_user_3">>,
+    {IKPub, IKPriv} = iris_x3dh:generate_identity_key(),
+    SPK = crypto:strong_rand_bytes(32),
+    Sig = iris_x3dh:sign_prekey(SPK, IKPriv),
     Bundle = #{
-        identity_key => crypto:strong_rand_bytes(32),
-        signed_prekey => crypto:strong_rand_bytes(32),
-        signed_prekey_signature => crypto:strong_rand_bytes(64),
+        identity_key => IKPub,
+        signed_prekey => SPK,
+        signed_prekey_signature => Sig,
         one_time_prekeys => [crypto:strong_rand_bytes(32)]  %% Only 1 prekey
     },
     
@@ -166,10 +172,13 @@ prekey_refill_test_() ->
 
 refill_prekeys() ->
     UserId = <<"refill_user">>,
+    {IKPub, IKPriv} = iris_x3dh:generate_identity_key(),
+    SPK = crypto:strong_rand_bytes(32),
+    Sig = iris_x3dh:sign_prekey(SPK, IKPriv),
     Bundle = #{
-        identity_key => crypto:strong_rand_bytes(32),
-        signed_prekey => crypto:strong_rand_bytes(32),
-        signed_prekey_signature => crypto:strong_rand_bytes(64),
+        identity_key => IKPub,
+        signed_prekey => SPK,
+        signed_prekey_signature => Sig,
         one_time_prekeys => [crypto:strong_rand_bytes(32)]  %% Start with 1
     },
     

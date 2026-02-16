@@ -71,9 +71,16 @@ start_link(NodeId) ->
     gen_server:start_link({local, ?SERVER}, ?MODULE, [NodeId], []).
 
 %% @doc Get current HLC timestamp for this node.
+%% Lock-free read from atomics (no gen_server call).
 -spec now() -> hlc().
 now() ->
-    gen_server:call(?SERVER, now).
+    case get_hlc_atomics() of
+        undefined -> gen_server:call(?SERVER, now);
+        {Ref, NodeId} ->
+            Packed = atomics:get(Ref, 1),
+            {PT, L} = unpack_hlc(Packed),
+            #hlc{physical = PT, logical = L, node_id = NodeId}
+    end.
 
 %% @doc Get current HLC timestamp for a specific node (testing).
 -spec now_for_node(non_neg_integer()) -> hlc().
@@ -82,10 +89,16 @@ now_for_node(NodeId) ->
     #hlc{physical = PT, logical = 0, node_id = NodeId band 16#FFFF}.
 
 %% @doc Generate a new HLC for sending a message.
-%% Advances the local clock and returns the new timestamp.
+%% HLC-BOTTLENECK FIX: Lock-free CAS loop on atomics instead of gen_server:call.
+%% This removes the single gen_server serialization point for the hot path.
+%% At 10M msg/sec, the gen_server mailbox would become the bottleneck;
+%% the atomic CAS loop scales with the number of schedulers.
 -spec send() -> hlc().
 send() ->
-    gen_server:call(?SERVER, send).
+    case get_hlc_atomics() of
+        undefined -> gen_server:call(?SERVER, send);
+        {Ref, NodeId} -> send_cas(Ref, NodeId, 0)
+    end.
 
 %% @doc Generate a new HLC for sending with specified event context.
 -spec send(term()) -> hlc().
@@ -190,11 +203,18 @@ init([NodeIdArg]) ->
         N when is_integer(N), N >= 0, N =< 65535 -> N;
         _ -> compute_node_id()
     end,
+    PT = erlang:system_time(millisecond),
     InitialHLC = #hlc{
-        physical = erlang:system_time(millisecond),
+        physical = PT,
         logical = 0,
         node_id = NodeId
     },
+    %% HLC-BOTTLENECK FIX: Set up atomics for lock-free send/0 path.
+    %% Packs physical(48) + logical(16) into a single 64-bit atomic.
+    Ref = atomics:new(1, [{signed, true}]),
+    atomics:put(Ref, 1, pack_hlc(PT, 0)),
+    persistent_term:put({?MODULE, atomics_ref}, Ref),
+    persistent_term:put({?MODULE, atomics_node_id}, NodeId),
     {ok, #state{node_id = NodeId, last_hlc = InitialHLC}}.
 
 handle_call(now, _From, State = #state{last_hlc = LastHLC, node_id = NodeId}) ->
@@ -210,8 +230,10 @@ handle_call(now, _From, State = #state{last_hlc = LastHLC, node_id = NodeId}) ->
     {reply, NewHLC, State#state{last_hlc = NewHLC}};
 
 handle_call(send, _From, State = #state{last_hlc = LastHLC, node_id = NodeId}) ->
-    %% HLC send event: advance clock
+    %% HLC send event: advance clock (gen_server fallback path)
     {NewHLC, NewState} = do_send(LastHLC, NodeId, State),
+    %% Sync atomics with gen_server state
+    sync_atomics(NewHLC),
     {reply, NewHLC, NewState};
 
 handle_call({recv, RemoteHLC}, _From, State = #state{last_hlc = LastHLC, node_id = NodeId}) ->
@@ -238,6 +260,7 @@ handle_call(get_node_id, _From, State = #state{node_id = NodeId}) ->
 
 handle_call({set_node_id, NewNodeId}, _From, State = #state{last_hlc = LastHLC}) ->
     NewHLC = LastHLC#hlc{node_id = NewNodeId},
+    persistent_term:put({?MODULE, atomics_node_id}, NewNodeId),
     {reply, ok, State#state{node_id = NewNodeId, last_hlc = NewHLC}};
 
 handle_call(_Request, _From, State) ->
@@ -250,14 +273,103 @@ handle_info(_Info, State) ->
     {noreply, State}.
 
 terminate(_Reason, _State) ->
+    catch persistent_term:erase({?MODULE, atomics_ref}),
+    catch persistent_term:erase({?MODULE, atomics_node_id}),
     ok.
 
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
 %%====================================================================
+%% Lock-free HLC (atomics-based hot path)
+%%====================================================================
+
+%% @private Pack physical time (48 bits) and logical counter (16 bits)
+%% into a signed 64-bit integer for atomic operations.
+-spec pack_hlc(non_neg_integer(), non_neg_integer()) -> integer().
+pack_hlc(Physical, Logical) ->
+    (Physical bsl 16) bor Logical.
+
+%% @private Unpack a 64-bit packed HLC value.
+-spec unpack_hlc(integer()) -> {non_neg_integer(), non_neg_integer()}.
+unpack_hlc(Packed) ->
+    Logical = Packed band 16#FFFF,
+    Physical = Packed bsr 16,
+    {Physical, Logical}.
+
+%% @private Get the atomics ref and node ID from persistent_term.
+get_hlc_atomics() ->
+    try
+        Ref = persistent_term:get({?MODULE, atomics_ref}),
+        NodeId = persistent_term:get({?MODULE, atomics_node_id}),
+        {Ref, NodeId}
+    catch error:badarg -> undefined
+    end.
+
+%% @private CAS loop for send/0 (lock-free HLC advance).
+send_cas(_Ref, _NodeId, Attempts) when Attempts > 50 ->
+    %% Safety valve: fall back to gen_server after excessive CAS failures
+    gen_server:call(?SERVER, send);
+send_cas(Ref, NodeId, Attempts) ->
+    Current = atomics:get(Ref, 1),
+    {CurPhys, CurLogical} = unpack_hlc(Current),
+    PT = erlang:system_time(millisecond),
+    NewPhys = max(PT, CurPhys),
+    case NewPhys =:= CurPhys of
+        true ->
+            NextLogical = CurLogical + 1,
+            case NextLogical > ?MAX_LOGICAL of
+                true ->
+                    %% Counter overflow: spin-wait for wall clock to advance
+                    timer:sleep(1),
+                    send_cas(Ref, NodeId, Attempts + 1);
+                false ->
+                    NewPacked = pack_hlc(NewPhys, NextLogical),
+                    case atomics:compare_exchange(Ref, 1, Current, NewPacked) of
+                        ok ->
+                            #hlc{physical = NewPhys, logical = NextLogical, node_id = NodeId};
+                        _CurrentVal ->
+                            %% CAS failed (concurrent update), retry
+                            send_cas(Ref, NodeId, Attempts + 1)
+                    end
+            end;
+        false ->
+            %% Wall clock advanced, reset logical counter
+            NewPacked = pack_hlc(NewPhys, 0),
+            case atomics:compare_exchange(Ref, 1, Current, NewPacked) of
+                ok ->
+                    #hlc{physical = NewPhys, logical = 0, node_id = NodeId};
+                _CurrentVal ->
+                    send_cas(Ref, NodeId, Attempts + 1)
+            end
+    end.
+
+%%====================================================================
 %% Internal functions
 %%====================================================================
+
+%% @private Sync the atomics value to be at least as high as the given HLC.
+%% Used by gen_server handlers (recv, send fallback) to keep the atomic
+%% in sync with gen_server state.
+sync_atomics(#hlc{physical = PT, logical = L}) ->
+    try
+        Ref = persistent_term:get({?MODULE, atomics_ref}),
+        NewPacked = pack_hlc(PT, L),
+        sync_atomics_cas(Ref, NewPacked)
+    catch error:badarg -> ok
+    end.
+
+sync_atomics_cas(Ref, NewPacked) ->
+    Current = atomics:get(Ref, 1),
+    case NewPacked > Current of
+        true ->
+            case atomics:compare_exchange(Ref, 1, Current, NewPacked) of
+                ok -> ok;
+                _  -> sync_atomics_cas(Ref, NewPacked)
+            end;
+        false ->
+            ok
+    end.
 
 %% @private Send event with counter overflow handling.
 %% When logical counter hits MAX_LOGICAL and wall clock hasn't advanced,
@@ -318,4 +430,6 @@ do_recv_merge(PT, LastPT, RemotePT, LastHLC, RemoteHLC, NodeId, State) ->
             0
     end,
     NewHLC = #hlc{physical = NewPhysical, logical = NewLogical, node_id = NodeId},
+    %% Sync atomics so lock-free send/0 sees the merged state
+    sync_atomics(NewHLC),
     {reply, NewHLC, State#state{last_hlc = NewHLC}}.

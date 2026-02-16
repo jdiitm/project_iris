@@ -50,10 +50,12 @@
 -define(RATE_CRITICAL, 5000).  %% 5K req/s - critical overload
 
 %% RFC 7.4 FIX: Connection count thresholds
-%% Triggers degradation based on active connection count
--define(CONN_WARNING, 50).     %% 50 connections - start throttling
--define(CONN_SHED, 100).       %% 100 connections - shed non-critical
--define(CONN_CRITICAL, 200).   %% 200 connections - critical
+%% HR-6 FIX: Production-appropriate defaults (previously 50/100/200 — 1000x too low).
+%% These values match ingress guard capacity (~100K connections per node).
+%% Override via iris_edge app env: conn_warning, conn_shed, conn_critical.
+-define(CONN_WARNING, 25000).  %% 25K connections - start throttling
+-define(CONN_SHED,    50000).  %% 50K connections - shed non-critical
+-define(CONN_CRITICAL, 90000). %% 90K connections - critical
 
 %% Intervals
 %% RFC 7.4 FIX: Faster check interval for quicker reaction to load spikes
