@@ -299,6 +299,29 @@ def fetch_offline_messages(username: str) -> list:
         return []
 
 
+def fetch_offline_messages_robust(username: str, expected_msgs: list,
+                                   max_attempts: int = 3, delay: float = 3.0) -> list:
+    """Fetch offline messages with retries to handle WAL replay delays.
+    
+    After a SIGKILL + restart, the durable batcher needs time to replay
+    its WAL into Mnesia. This function retries the fetch until all expected
+    messages are found or attempts are exhausted.
+    """
+    all_data = []
+    for attempt in range(max_attempts):
+        messages = fetch_offline_messages(username)
+        if messages:
+            all_data = messages
+            # Check if all expected messages are present
+            found = sum(1 for msg in expected_msgs
+                       if any(msg.encode() in m for m in all_data))
+            if found >= len(expected_msgs):
+                return all_data
+        if attempt < max_attempts - 1:
+            time.sleep(delay)
+    return all_data
+
+
 # =============================================================================
 # Test: ACK-Disconnect Race Condition
 # =============================================================================
@@ -469,6 +492,11 @@ def test_rapid_ack_disconnect_cycles():
         log_test("Rapid ACK-disconnect", False, f"Container {CONTAINER_NAME} not running")
         return False
     
+    # Ensure server is fully healthy after previous subtest's crash/restart
+    if not check_server_health(max_retries=5, retry_delay=5):
+        log_test("Rapid ACK-disconnect", False, "Server not healthy after previous restart")
+        return False
+    
     NUM_MESSAGES = 10
     test_id = int(time.time() * 1000)
     sender = f"rapid_sender_{test_id}"
@@ -525,9 +553,10 @@ def test_rapid_ack_disconnect_cycles():
         log_test("Rapid ACK-disconnect", False, "Server did not become ready")
         return False
     
-    # Verify all messages
+    # Verify all messages (with retries for WAL replay)
     log(f"  5. Verifying messages...")
-    messages = fetch_offline_messages(receiver)
+    messages = fetch_offline_messages_robust(receiver, sent_messages,
+                                             max_attempts=3, delay=3.0)
     
     messages_found = 0
     for msg in sent_messages:
@@ -569,6 +598,11 @@ def test_zero_delay_disconnect():
     
     if not check_container_running(CONTAINER_NAME):
         log_test("Zero-delay disconnect", False, f"Container {CONTAINER_NAME} not running")
+        return False
+    
+    # Ensure server is fully healthy after previous subtest's crash/restart
+    if not check_server_health(max_retries=5, retry_delay=5):
+        log_test("Zero-delay disconnect", False, "Server not healthy after previous restart")
         return False
     
     test_id = int(time.time() * 1000)

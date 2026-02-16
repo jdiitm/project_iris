@@ -1254,40 +1254,54 @@ def test_outbox_queue_overflow_backpressure():
         
         # Step 5: Verify message delivery
         # Connect to EAST edge where the messages were originally stored.
-        # Use the same robust multi-timeout receive loop as the FIFO test.
+        # Use retry loop: messages may still be routing through fallback paths
+        # after partition heal. Offline messages are NOT deleted on retrieval,
+        # so re-connecting returns previous + newly stored messages.
         log("\n  Step 5: Verifying message delivery after heal...")
         
-        receiver = connect_and_login_with_retry(EDGE_EAST["port"], target, max_retries=5)
         received_count = 0
+        best_data = b""
         
-        if receiver:
-            # Robust multi-timeout receive (same as FIFO test)
-            receiver.settimeout(5.0)
-            all_data = b""
-            start_time = time.time()
-            consecutive_timeouts = 0
-            MAX_CONSECUTIVE_TIMEOUTS = 3
-            while time.time() - start_time < 30:
-                try:
-                    chunk = receiver.recv(4096)
-                    if not chunk:
-                        break
-                    all_data += chunk
-                    consecutive_timeouts = 0
-                except socket.timeout:
-                    consecutive_timeouts += 1
-                    if consecutive_timeouts >= MAX_CONSECUTIVE_TIMEOUTS:
-                        break
+        for fetch_attempt in range(3):
+            receiver = connect_and_login_with_retry(EDGE_EAST["port"], target, max_retries=5)
             
-            log(f"    Received {len(all_data)} bytes of data")
+            if receiver:
+                receiver.settimeout(5.0)
+                all_data = b""
+                start_time = time.time()
+                consecutive_timeouts = 0
+                MAX_CONSECUTIVE_TIMEOUTS = 3
+                while time.time() - start_time < 30:
+                    try:
+                        chunk = receiver.recv(4096)
+                        if not chunk:
+                            break
+                        all_data += chunk
+                        consecutive_timeouts = 0
+                    except socket.timeout:
+                        consecutive_timeouts += 1
+                        if consecutive_timeouts >= MAX_CONSECUTIVE_TIMEOUTS:
+                            break
+                
+                receiver.close()
+                
+                # Count received messages
+                attempt_count = 0
+                for i in range(NUM_MSGS):
+                    if f"OVERFLOW_MSG_{test_id}_{i:04d}".encode() in all_data:
+                        attempt_count += 1
+                
+                if attempt_count > received_count:
+                    received_count = attempt_count
+                    best_data = all_data
+                
+                if received_count >= sent_count * 0.1:
+                    break
             
-            # Count received messages
-            for i in range(NUM_MSGS):
-                if f"OVERFLOW_MSG_{test_id}_{i:04d}".encode() in all_data:
-                    received_count += 1
-            
-            receiver.close()
+            if fetch_attempt < 2:
+                time.sleep(5)
         
+        log(f"    Received {len(best_data)} bytes of data")
         log(f"    Received after heal: {received_count}/{sent_count}")
         
         # Backpressure test passes if:

@@ -276,10 +276,10 @@ jobs:
             WARN_COUNT=$(grep -c "Expression produces a value of type\|will never be called\|can never match\|has no local return\|The pattern" /tmp/dialyzer_out.txt || echo "0")
             echo "::warning::Dialyzer found $WARN_COUNT warnings (pre-existing). Fix with -dialyzer() attributes."
             # Fail if warning count increases beyond known baseline.
-            # Baseline measured 2026-02-16: 779 warnings. Threshold set at 800
+            # Baseline measured 2026-02-16: 779 warnings. Threshold set at 785
             # to catch new warnings while tolerating existing ones.
-            if [ "$WARN_COUNT" -gt 800 ]; then
-              echo "::error::Dialyzer warnings ($WARN_COUNT) exceed baseline threshold (800). New warnings introduced."
+            if [ "$WARN_COUNT" -gt 785 ]; then
+              echo "::error::Dialyzer warnings ($WARN_COUNT) exceed baseline threshold (785). New warnings introduced."
               exit 1
             fi
           else
@@ -335,8 +335,9 @@ jobs:
             echo "Total violations: $COUNT"
             # Hard-fail threshold: fail CI if violations exceed baseline.
             # Decrease this threshold as violations are fixed.
-            if [ "$COUNT" -gt 700 ]; then
-              echo "::error::time.sleep() violations ($COUNT) exceed threshold (700). Fix before merging."
+            # Baseline measured 2026-02-16: 649 violations. Threshold set at 650.
+            if [ "$COUNT" -gt 650 ]; then
+              echo "::error::time.sleep() violations ($COUNT) exceed threshold (650). Fix before merging."
               exit 1
             fi
           else
