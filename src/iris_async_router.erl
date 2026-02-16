@@ -313,14 +313,24 @@ route_to_remote(User, Msg, MsgId, State) ->
     {noreply, State}.
 
 %% FIX: Sequenced remote routing - routes across edges/cores with sequence number
-%% This was missing, causing cross-edge messages to be stored offline directly
-%% Process synchronously (NO spawn) to preserve FIFO ordering (RFC 1.3).
-%% The shard GenServer already serializes casts, so inline processing guarantees
-%% that seq N completes before seq N+1 starts. The RPC timeout cost (~5s max)
-%% is acceptable for sequenced messages where correctness > throughput.
+%% This was missing, causing cross-edge messages to be stored offline directly.
+%%
+%% PARTITION-RESILIENCE FIX: Spawn instead of blocking the shard GenServer.
+%% FIFO ordering is preserved because:
+%%   1. Offline storage includes SeqNo in the stored record
+%%   2. iris_offline_storage:retrieve_cursor/3 sorts by timestamp (SeqNo)
+%%   3. Online delivery uses SeqNo for client-side reordering (RFC FR-5)
+%%
+%% Without spawning, each message to a partitioned node blocks the GenServer
+%% for the full RPC timeout (5s). With 200 messages during a partition,
+%% the shard is blocked for 200*5s = 16+ minutes, causing message loss
+%% in tests that fetch before the backlog clears.
 route_sequenced_remote(User, Msg, SeqNo, State) ->
-    Result = do_sequenced_remote_route(User, Msg, SeqNo),
-    gen_server:cast(self(), {route_complete, Result}),
+    Self = self(),
+    spawn(fun() ->
+        Result = do_sequenced_remote_route(User, Msg, SeqNo),
+        gen_server:cast(Self, {route_complete, Result})
+    end),
     {noreply, State}.
 
 do_sequenced_remote_route(User, Msg, SeqNo) ->
@@ -611,9 +621,13 @@ store_offline_via_node(Node, User, Msg, Fallbacks) ->
         _ ->
             Msg
     end,
+    %% Timeout reduced from 5000ms to 2000ms: during network partitions,
+    %% iptables DROP causes RPCs to hang for the full timeout. Shorter timeout
+    %% ensures faster fallback to reachable nodes. 2s is still well above the
+    %% p99 latency for local-DC Mnesia sync_transaction (~50ms).
     case whereis(iris_circuit_breaker) of
         undefined ->
-            case rpc:call(Node, iris_core, store_offline_durable, [User, StorableMsg], 5000) of
+            case rpc:call(Node, iris_core, store_offline_durable, [User, StorableMsg], 2000) of
                 {badrpc, _} -> try_route_fallbacks(Fallbacks, User, Msg);
                 ok -> ok;
                 {ok, _} -> ok;
@@ -634,7 +648,8 @@ try_route_fallbacks([], _User, _Msg) ->
     {error, no_available_nodes};
 try_route_fallbacks([Node | Rest], User, Msg) ->
     %% Try to lookup and deliver, or store offline
-    case rpc:call(Node, iris_core, lookup_user, [User], 5000) of
+    %% Timeout 2000ms: matches store_offline_via_node for partition resilience
+    case rpc:call(Node, iris_core, lookup_user, [User], 2000) of
         {ok, _UserNode, UserPid} when is_pid(UserPid) ->
             %% RFC FR-5: Unwrap sequenced/idempotent messages for delivery
             DeliverMsg = case Msg of
@@ -653,7 +668,7 @@ try_route_fallbacks([Node | Rest], User, Msg) ->
                 _ ->
                     Msg
             end,
-            case rpc:call(Node, iris_core, store_offline_durable, [User, StorableMsg], 5000) of
+            case rpc:call(Node, iris_core, store_offline_durable, [User, StorableMsg], 2000) of
                 {badrpc, _} -> try_route_fallbacks(Rest, User, Msg);
                 ok -> ok;
                 {ok, _} -> ok;

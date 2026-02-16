@@ -266,18 +266,18 @@ def run_on_node(container, node, erlang_code, timeout=30):
 def upload_key_bundle(container, node, user_id):
     """Upload a key bundle to a specific node. Returns (success, ik_hex).
 
-    The identity key (IK) is generated deterministically from the user_id
-    so we can verify it after crash recovery.
+    Generates proper X25519 key pairs and Ed25519 signatures via iris_x3dh.
+    The IK hex is captured from the upload output for post-crash comparison.
     """
-    # Use a deterministic key derived from user_id for verifiable comparison
+    # Generate proper X25519 key pairs and Ed25519 signature via iris_x3dh
+    # (B-2 FIX: iris_keys:upload_bundle now requires valid Ed25519 signatures)
     code = (
         f"UserId = <<\\\"{user_id}\\\">>, "
-        "IK = crypto:hash(sha256, UserId), "
-        "SPK = crypto:hash(sha256, <<UserId/binary, \\\"spk\\\">>), "
-        "Sig = <<(crypto:hash(sha256, <<UserId/binary, \\\"sig\\\">>))/binary, "
-        "(crypto:hash(sha256, <<UserId/binary, \\\"sig2\\\">>))/binary>>, "
-        "OPKs = [crypto:hash(sha256, <<UserId/binary, (integer_to_binary(I))/binary>>) "
-        "|| I <- lists:seq(1, 5)], "
+        "{IK, IKPriv} = crypto:generate_key(ecdh, x25519), "
+        "{SPK, _} = crypto:generate_key(ecdh, x25519), "
+        "Sig = iris_x3dh:sign_prekey(SPK, IKPriv), "
+        "OPKs = [element(1, crypto:generate_key(ecdh, x25519)) "
+        "|| _ <- lists:seq(1, 5)], "
         "Bundle = #{"
         "identity_key => IK, "
         "signed_prekey => SPK, "

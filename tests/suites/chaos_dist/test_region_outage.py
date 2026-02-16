@@ -313,6 +313,35 @@ def fetch_offline_messages(port: int, username: str) -> List[bytes]:
         return []
 
 
+def fetch_offline_messages_robust(port: int, username: str,
+                                   expected_msgs: List[str],
+                                   max_attempts: int = 5,
+                                   delay: float = 3.0) -> List[bytes]:
+    """Fetch offline messages with retries for async storage completion.
+    
+    During region outages, messages are routed through fallback paths
+    (RPC to alternative cores) which may take time. This function retries
+    until all expected messages are found or attempts are exhausted.
+    Offline messages are NOT deleted on retrieval, so re-connecting
+    returns previous messages plus any newly stored ones.
+    """
+    best_messages = []
+    best_count = 0
+    for attempt in range(max_attempts):
+        messages = fetch_offline_messages(port, username)
+        if messages:
+            found = sum(1 for msg in expected_msgs
+                       if any(msg.encode() in m for m in messages))
+            if found > best_count:
+                best_messages = messages
+                best_count = found
+            if found >= len(expected_msgs):
+                return best_messages
+        if attempt < max_attempts - 1:
+            time.sleep(delay)
+    return best_messages
+
+
 def wait_for_region_ready(region: str, timeout: int = RECOVERY_TIMEOUT) -> bool:
     """Wait for region to be fully operational."""
     start = time.time()
@@ -421,17 +450,19 @@ def test_region_isolation_queuing():
     # Additional wait for message delivery
     time.sleep(5)
     
-    # Step 4: Fetch messages as receiver
+    # Step 4: Fetch messages as receiver (with retries for async storage)
     log(f"  5. Fetching messages as receiver...")
     
     # Try source region first (where messages were queued)
-    target_port = REGIONS[source_region]["edge_port"]
-    messages = fetch_offline_messages(target_port, receiver)
+    source_port = REGIONS[source_region]["edge_port"]
+    messages = fetch_offline_messages_robust(source_port, receiver, sent_messages,
+                                             max_attempts=5, delay=3.0)
     
     if not messages:
         # Try target region
         target_port = REGIONS[target_region]["edge_port"]
-        messages = fetch_offline_messages(target_port, receiver)
+        messages = fetch_offline_messages_robust(target_port, receiver, sent_messages,
+                                                 max_attempts=3, delay=3.0)
     
     # Check for our messages
     received_count = 0
@@ -539,11 +570,12 @@ def test_catastrophic_region_failure():
     # AUDIT P4 FIX: Reduced from 15s
     time.sleep(8)
     
-    # Step 4: Verify messages
+    # Step 4: Verify messages (with retries for async storage + WAL replay)
     log(f"  5. Verifying message delivery...")
     
     source_port = REGIONS[source_region]["edge_port"]
-    messages = fetch_offline_messages(source_port, receiver)
+    messages = fetch_offline_messages_robust(source_port, receiver, sent_messages,
+                                             max_attempts=5, delay=3.0)
     
     received_count = 0
     for sent_msg in sent_messages:
@@ -640,10 +672,13 @@ def test_multi_region_cross_queuing():
     
     time.sleep(5)  # AUDIT P4: Reduced from 10s
     
-    # Fetch messages
+    # Fetch messages (with retries for async storage)
     log(f"  5. Verifying messages...")
     
-    messages = fetch_offline_messages(REGIONS["east"]["edge_port"], f"eu_receiver_{test_id}")
+    all_expected = east_msgs + west_msgs
+    messages = fetch_offline_messages_robust(
+        REGIONS["east"]["edge_port"], f"eu_receiver_{test_id}",
+        all_expected, max_attempts=5, delay=3.0)
     
     east_received = sum(1 for m in east_msgs if any(m.encode() in d for d in messages))
     west_received = sum(1 for m in west_msgs if any(m.encode() in d for d in messages))
