@@ -428,7 +428,11 @@ integration_behavioral_test_() ->
             Result = iris_quorum_write:write_durable(quorum_integration_test,
                          write_durable_key, Record),
             %% On single node: either succeeds locally or returns quorum error
-            ?assert(Result =:= ok orelse Result =:= {error, quorum_not_reached}),
+            %% Error format: {error, {quorum_not_reached, SuccessCount, WriteQuorum}}
+            ?assert(Result =:= ok orelse
+                    (is_tuple(Result) andalso element(1, Result) =:= error andalso
+                     is_tuple(element(2, Result)) andalso
+                     element(1, element(2, Result)) =:= quorum_not_reached)),
             %% If succeeded, verify data persisted
             case Result of
                 ok ->
