@@ -24,8 +24,8 @@
 %%    - Use for: presence updates, typing indicators, fire-and-forget
 %%
 %% 2. SEQUENCED (handle_cast {route_sequenced, User, Msg, SeqNo}):
-%%    - route_sequenced_remote/4 processes INLINE (no spawn)
-%%    - FIFO ordering IS guaranteed (RFC FR-5)
+%%    - route_sequenced_remote/4 spawns to avoid HOL blocking during partitions
+%%    - FIFO ordering IS guaranteed via SeqNo in stored records + retrieval sort
 %%    - Use for: chat messages, state mutations, anything order-sensitive
 %%
 %% INVARIANT: Never route order-sensitive messages through path (1).

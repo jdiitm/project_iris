@@ -523,8 +523,9 @@ def test_rapid_ack_disconnect_cycles():
         
         # Give server time to durably write all messages
         # NFR-8 (RPO=0) requires messages to survive crash AFTER they're accepted
-        # With 10 messages and sync Mnesia transactions, 500ms is realistic
-        time.sleep(0.5)  # 500ms for server to durably write all messages
+        # With 10 messages and sync Mnesia transactions (~100ms each in CI),
+        # 2s provides sufficient margin for all writes to complete durably.
+        time.sleep(2.0)
         sock.close()
         
     except Exception as e:

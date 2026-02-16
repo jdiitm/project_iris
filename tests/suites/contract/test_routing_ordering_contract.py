@@ -11,8 +11,8 @@ specification of that contract.
    - Delivery is guaranteed but ORDER IS NOT
 
 2. SEQUENCED ({route_sequenced, User, Msg, SeqNo}):
-   - route_sequenced_remote/4 processes INLINE (no spawn)
-   - FIFO ordering IS guaranteed (RFC FR-5)
+   - route_sequenced_remote/4 spawns to avoid HOL blocking during partitions
+   - FIFO ordering IS guaranteed via SeqNo in stored records + retrieval sort
 
 The module header MUST document this contract explicitly.
 
@@ -91,16 +91,16 @@ def test_ordering_contract_documented():
         "Must document that route_to_remote spawns per-message, so order is not guaranteed"
     )
 
-    # Must mention SEQUENCED path and its inline/FIFO behavior
+    # Must mention SEQUENCED path and its FIFO behavior
     has_sequenced_doc = bool(re.search(
-        r'SEQUENCED.*FIFO|SEQUENCED.*INLINE|sequenced.*ordering.*guaranteed',
+        r'SEQUENCED.*FIFO|SEQUENCED.*ordering.*guaranteed|sequenced.*SeqNo',
         source, re.DOTALL | re.IGNORECASE
     ))
 
     check(
         "Documents SEQUENCED path (FIFO guaranteed)",
         has_sequenced_doc,
-        "Must document that route_sequenced_remote processes inline for FIFO ordering"
+        "Must document that route_sequenced_remote preserves FIFO via SeqNo"
     )
 
 
@@ -129,7 +129,7 @@ def test_code_matches_contract():
     """
     Verify that the code structure matches the documented contract:
     - route_to_remote uses spawn (unsequenced, no order)
-    - route_sequenced_remote does NOT use spawn (sequenced, FIFO)
+    - route_sequenced_remote spawns to avoid HOL blocking; FIFO via SeqNo
     """
     log("\n=== Test: Code Structure Matches Contract ===")
 
@@ -145,13 +145,16 @@ def test_code_matches_contract():
         "Unsequenced path must spawn to avoid blocking the GenServer"
     )
 
-    # Extract and check route_sequenced_remote
+    # Extract and check route_sequenced_remote spawns to avoid HOL blocking.
+    # FIFO ordering is maintained by SeqNo in stored records + retrieval sort,
+    # not by inline processing. This was changed to prevent GenServer blocking
+    # during network partitions (5s RPC timeout * N messages = massive backlog).
     route_sequenced_src = extract_erlang_function(source, "route_sequenced_remote")
     has_spawn_in_sequenced = bool(re.search(r'spawn\(', route_sequenced_src))
     check(
-        "route_sequenced_remote does NOT use spawn (FIFO path)",
-        not has_spawn_in_sequenced,
-        "Sequenced path must process inline to preserve FIFO ordering"
+        "route_sequenced_remote uses spawn (avoids HOL blocking)",
+        has_spawn_in_sequenced,
+        "Sequenced path must spawn; FIFO preserved via SeqNo in stored records"
     )
 
 
