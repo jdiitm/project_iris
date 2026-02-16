@@ -254,22 +254,13 @@ test_replay_attack() ->
     {ok, Decrypted, BobState1} = iris_ratchet:decrypt(Ciphertext, Header, BobState0),
     ?assertEqual(Plaintext, Decrypted),
     
-    %% Bob tries to decrypt same message again - should fail (replay)
+    %% Bob tries to decrypt same message again - MUST fail (replay)
+    %% After first decryption, the message key is consumed (removed from
+    %% skipped_keys or chain advanced past it). Replaying the same
+    %% ciphertext+header MUST fail with a decryption error.
+    %% B-5 FIX: Previously this test passed in both branches (assert(true)).
     Result = iris_ratchet:decrypt(Ciphertext, Header, BobState1),
-    
-    %% Implementation may either:
-    %% 1. Return {error, replay} or {error, duplicate} or {error, old_counter}
-    %% 2. Track seen message numbers and reject
-    %% 3. Key advancement makes old messages undecryptable
-    case Result of
-        {error, _} -> 
-            %% Expected - replay rejected
-            ?assert(true);
-        {ok, _, _} ->
-            %% If decryption succeeds, verify it's the same message
-            %% (some implementations may allow this but track separately)
-            ?assert(true)
-    end.
+    ?assertMatch({error, _}, Result).
 
 test_drop_attack_recovery() ->
     %% Test: Skip 5 messages and verify system recovers
@@ -290,20 +281,11 @@ test_drop_attack_recovery() ->
     {ok, Ct6, Hdr6, _AliceState6} = iris_ratchet:encrypt(<<"msg6">>, AliceState5),
     
     %% Bob only receives message 6 (messages 1-5 dropped)
-    %% The Double Ratchet should be able to decrypt message 6
-    %% even without seeing messages 1-5 (with skipped message keys)
-    
+    %% The Double Ratchet MUST handle message gaps via skipped message keys.
+    %% With MAX_SKIP=1000, skipping 5 messages is well within bounds.
+    %% B-5 FIX: Previously this test passed in both branches (assert(true)).
     Result = iris_ratchet:decrypt(Ct6, Hdr6, BobState0),
-    
-    case Result of
-        {ok, <<"msg6">>, _BobState1} ->
-            %% Success - system recovered from drop attack
-            ?assert(true);
-        {error, _Reason} ->
-            %% Some implementations may require sequential delivery
-            %% This is acceptable but documented behavior
-            ?assert(true)
-    end.
+    ?assertMatch({ok, <<"msg6">>, _}, Result).
 
 test_large_gap_recovery() ->
     %% Test: Skip 50 messages - verify behavior is defined
@@ -328,14 +310,11 @@ test_large_gap_recovery() ->
     %% Encrypt one more message after the gap
     {ok, FinalCt, FinalHdr, _} = iris_ratchet:encrypt(<<"final_msg">>, FinalAliceState),
     
-    %% Bob tries to decrypt the final message
+    %% Bob tries to decrypt the final message (52nd, after skipping 51)
+    %% With MAX_SKIP=1000, 52 skipped messages is within bounds and MUST succeed.
+    %% B-5 FIX: Previously this test passed in both branches (assert(true)).
     Result = iris_ratchet:decrypt(FinalCt, FinalHdr, BobState0),
-    
-    %% Result should be defined (either success or explicit error)
-    case Result of
-        {ok, _, _} -> ?assert(true);
-        {error, _} -> ?assert(true)  %% Gap too large is acceptable error
-    end.
+    ?assertMatch({ok, <<"final_msg">>, _}, Result).
 
 test_mangled_mac() ->
     %% Test: Tamper with authentication tag (MAC)
@@ -431,25 +410,17 @@ test_header_manipulation() ->
             [{modified, Header}]
     end,
     
+    %% B-5 FIX: Header manipulation MUST cause decryption failure.
+    %% The header (DH public key, chain length, message number) is used as
+    %% AAD in AEAD encryption and for key derivation. Any modification MUST
+    %% result in {error, _} or an exception (caught as {error, exception}).
     lists:foreach(fun(MangledHeader) ->
         Result = try
             iris_ratchet:decrypt(Ciphertext, MangledHeader, BobState)
         catch
             _:_ -> {error, exception}
         end,
-        %% Should fail (either error return or exception caught)
-        case Result of
-            {ok, Plaintext, _} ->
-                %% If decryption succeeds with wrong header, it's a problem
-                %% But some header fields may not affect decryption
-                ?assert(true);
-            {ok, _, _} ->
-                %% Decrypted to different value - also suspicious
-                ?assert(true);
-            {error, _} ->
-                %% Expected - manipulation detected
-                ?assert(true)
-        end
+        ?assertMatch({error, _}, Result)
     end, ManipulatedHeaders).
 
 test_wrong_sender_key() ->
@@ -492,29 +463,18 @@ test_out_of_order_delivery() ->
     {ok, Ct3, Hdr3, _AliceState3} = iris_ratchet:encrypt(<<"msg3">>, AliceState2),
     
     %% Bob receives in order: 3, 1, 2 (out of order)
-    case iris_ratchet:decrypt(Ct3, Hdr3, BobState0) of
-        {ok, <<"msg3">>, BobState1} ->
-            %% Message 3 decrypted first
-            case iris_ratchet:decrypt(Ct1, Hdr1, BobState1) of
-                {ok, <<"msg1">>, BobState2} ->
-                    %% Message 1 decrypted (skipped key retrieved)
-                    case iris_ratchet:decrypt(Ct2, Hdr2, BobState2) of
-                        {ok, <<"msg2">>, _BobState3} ->
-                            ?assert(true);  %% All messages decrypted
-                        {error, _} ->
-                            ?assert(true)  %% May fail if keys expired
-                    end;
-                {error, _} ->
-                    ?assert(true)  %% May not support out-of-order
-            end;
-        {error, _} ->
-            %% May require sequential delivery
-            %% Try sequential delivery instead
-            {ok, _, BobState1} = iris_ratchet:decrypt(Ct1, Hdr1, BobState0),
-            {ok, _, BobState2} = iris_ratchet:decrypt(Ct2, Hdr2, BobState1),
-            {ok, _, _} = iris_ratchet:decrypt(Ct3, Hdr3, BobState2),
-            ?assert(true)
-    end.
+    %% The Double Ratchet MUST support out-of-order delivery within the same
+    %% chain via skipped message keys (MAX_SKIP=1000).
+    %% B-5 FIX: Previously all branches passed unconditionally.
+    
+    %% Message 3 first - forces storing skipped keys for msgs 1 and 2
+    {ok, <<"msg3">>, BobState1} = iris_ratchet:decrypt(Ct3, Hdr3, BobState0),
+    
+    %% Message 1 - should be decryptable from stored skipped keys
+    {ok, <<"msg1">>, BobState2} = iris_ratchet:decrypt(Ct1, Hdr1, BobState1),
+    
+    %% Message 2 - should be decryptable from stored skipped keys
+    {ok, <<"msg2">>, _BobState3} = iris_ratchet:decrypt(Ct2, Hdr2, BobState2).
 
 %% =============================================================================
 %% Cryptographic Property Tests

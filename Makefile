@@ -3,6 +3,15 @@ ERL ?= $(shell which erl 2>/dev/null || echo erl)
 ERLC ?= $(shell which erlc 2>/dev/null || echo erlc)
 HOSTNAME := $(shell hostname -s)
 
+.PHONY: all nif check_deps test test-standalone test-verbose test-cover \
+        test-all test-quick test-docker-chaos test-proper clean \
+        dialyzer-plt dialyzer \
+        start start_core start_edge1 start_edge2 start_edge3 start_edge4 start_edge5 \
+        start_core_dist start_edge_dist stop stop-force \
+        cluster-up cluster-mtls cluster-chaos cluster-chaos-mtls \
+        cluster-down cluster-down-mtls cluster-verify-mtls cluster-status cluster-clean \
+        certs certs-clean release release-prod
+
 SRC_FILES = $(filter-out %_tests.erl, $(wildcard src/*.erl))
 UTIL_FILES = $(wildcard test_utils/*.erl)
 BEAM_FILES = $(patsubst src/%.erl,ebin/%.beam,$(SRC_FILES)) $(patsubst test_utils/%.erl,ebin/%.beam,$(UTIL_FILES))
@@ -145,7 +154,11 @@ test-proper: $(BEAM_FILES)
 	@$(ERL) -pa ebin -noshell -eval "case iris_proto_props:test_all() of ok -> init:stop(0); error -> init:stop(1) end."
 
 clean:
-	rm -f ebin/*.beam
+	rm -f ebin/*.beam ebin/*.app ebin/*.appup
+	rm -f priv/iris_zstd_nif.so
+	rm -rf coverage/
+	rm -f core.log edge*.log erl_crash.dump
+	rm -rf Mnesia.* MnesiaCore.*
 
 
 # Auto-tune: Calculate optimal flags

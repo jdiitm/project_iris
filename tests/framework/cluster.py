@@ -149,16 +149,14 @@ class ClusterManager:
     def kill_port_holder(self, port: int) -> bool:
         """Kill any process holding the specified port."""
         try:
-            # Find PID holding the port using fuser
             result = subprocess.run(
                 ["fuser", "-k", f"{port}/tcp"],
                 capture_output=True,
                 timeout=5
             )
-            time.sleep(0.5)  # Give process time to die
+            self.wait_for_port_free(port, timeout=5)
             return True
         except Exception:
-            # Try lsof as fallback
             try:
                 result = subprocess.run(
                     ["lsof", "-ti", f"tcp:{port}"],
@@ -173,7 +171,7 @@ class ClusterManager:
                             subprocess.run(["kill", "-9", pid.strip()], timeout=2)
                         except Exception:
                             pass
-                time.sleep(0.5)
+                self.wait_for_port_free(port, timeout=5)
                 return True
             except Exception:
                 return False
@@ -325,7 +323,7 @@ class ClusterManager:
         success = self._run_make("start_core", timeout=30)
         
         if wait and success:
-            time.sleep(2)  # Give Mnesia time to initialize
+            self.wait_for_port(4369, timeout=10)
         
         return success
     
@@ -354,9 +352,8 @@ class ClusterManager:
             
             if attempt < self.max_retries:
                 print(f"[Cluster] Edge {edge_id} attempt {attempt} failed, cleaning up and retrying...")
-                # Kill any partial startup
                 self.kill_port_holder(port)
-                time.sleep(2)
+                self.wait_for_port_free(port, timeout=10)
             
         print(f"[Cluster] Edge {edge_id} failed to start after {self.max_retries} attempts")
         return False
@@ -377,18 +374,12 @@ class ClusterManager:
             # Build
             if not self.build():
                 print("[Cluster] Build failed")
-                if cluster_attempt < self.max_retries:
-                    time.sleep(2)
-                    continue
-                return False
+                continue
             
             # Start core
             if not self.start_core():
                 print("[Cluster] Core node failed to start")
-                if cluster_attempt < self.max_retries:
-                    time.sleep(2)
-                    continue
-                return False
+                continue
             
             # Start edges
             all_edges_started = True
@@ -412,12 +403,10 @@ class ClusterManager:
                     print(f"[Cluster] Edge {i} failed to start")
                     all_edges_started = False
                     break
-                time.sleep(1)
             
             if not all_edges_started:
                 if cluster_attempt < self.max_retries:
                     print(f"[Cluster] Edge startup failed, retrying cluster...")
-                    time.sleep(2)
                     continue
                 return False
             
@@ -512,12 +501,10 @@ class ClusterManager:
             for log_file in self.project_root.glob("*.log"):
                 try:
                     os.remove(log_file)
-                except:
+                except Exception:
                     pass
         except Exception:
             pass
-        
-        time.sleep(1)
     
     def health_check(self) -> Dict[str, bool]:
         """Check health of cluster components."""

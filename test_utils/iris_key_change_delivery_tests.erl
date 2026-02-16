@@ -59,11 +59,13 @@ teardown({KeysPid, _MetricsPid, _DedupPid}) ->
 
 online_contact_receives_key_change_alert() ->
     %% Step 1: Alice uploads an initial key bundle
-    AliceIK1 = crypto:strong_rand_bytes(32),
+    {AliceIK1, AlicePriv1} = iris_x3dh:generate_identity_key(),
+    SPK1 = crypto:strong_rand_bytes(32),
+    Sig1 = iris_x3dh:sign_prekey(SPK1, AlicePriv1),
     Bundle1 = #{
         identity_key => AliceIK1,
-        signed_prekey => crypto:strong_rand_bytes(32),
-        signed_prekey_signature => crypto:strong_rand_bytes(64),
+        signed_prekey => SPK1,
+        signed_prekey_signature => Sig1,
         one_time_prekeys => [crypto:strong_rand_bytes(32)]
     },
     ok = iris_keys:upload_bundle(<<"alice">>, Bundle1),
@@ -77,11 +79,13 @@ online_contact_receives_key_change_alert() ->
     ets:insert(presence_local, {<<"bob">>, Entry}),
 
     %% Step 4: Alice uploads a NEW bundle with a DIFFERENT identity key
-    AliceIK2 = crypto:strong_rand_bytes(32),
+    {AliceIK2, AlicePriv2} = iris_x3dh:generate_identity_key(),
+    SPK2 = crypto:strong_rand_bytes(32),
+    Sig2 = iris_x3dh:sign_prekey(SPK2, AlicePriv2),
     Bundle2 = #{
         identity_key => AliceIK2,
-        signed_prekey => crypto:strong_rand_bytes(32),
-        signed_prekey_signature => crypto:strong_rand_bytes(64),
+        signed_prekey => SPK2,
+        signed_prekey_signature => Sig2,
         one_time_prekeys => [crypto:strong_rand_bytes(32)]
     },
     ok = iris_keys:upload_bundle(<<"alice">>, Bundle2),
@@ -99,11 +103,13 @@ online_contact_receives_key_change_alert() ->
 %% =============================================================================
 offline_contact_gets_alert_stored_for_later_delivery() ->
     %% Step 1: Alice uploads an initial key bundle
-    AliceIK1 = crypto:strong_rand_bytes(32),
+    {AliceIK1, AlicePriv1} = iris_x3dh:generate_identity_key(),
+    SPK1 = crypto:strong_rand_bytes(32),
+    Sig1 = iris_x3dh:sign_prekey(SPK1, AlicePriv1),
     Bundle1 = #{
         identity_key => AliceIK1,
-        signed_prekey => crypto:strong_rand_bytes(32),
-        signed_prekey_signature => crypto:strong_rand_bytes(64),
+        signed_prekey => SPK1,
+        signed_prekey_signature => Sig1,
         one_time_prekeys => [crypto:strong_rand_bytes(32)]
     },
     ok = iris_keys:upload_bundle(<<"alice_offline">>, Bundle1),
@@ -115,11 +121,13 @@ offline_contact_gets_alert_stored_for_later_delivery() ->
     %% Do NOT insert carol into presence_local ETS.
 
     %% Step 4: Alice uploads a NEW bundle with a DIFFERENT identity key
-    AliceIK2 = crypto:strong_rand_bytes(32),
+    {AliceIK2, AlicePriv2} = iris_x3dh:generate_identity_key(),
+    SPK2 = crypto:strong_rand_bytes(32),
+    Sig2 = iris_x3dh:sign_prekey(SPK2, AlicePriv2),
     Bundle2 = #{
         identity_key => AliceIK2,
-        signed_prekey => crypto:strong_rand_bytes(32),
-        signed_prekey_signature => crypto:strong_rand_bytes(64),
+        signed_prekey => SPK2,
+        signed_prekey_signature => Sig2,
         one_time_prekeys => [crypto:strong_rand_bytes(32)]
     },
     ok = iris_keys:upload_bundle(<<"alice_offline">>, Bundle2),

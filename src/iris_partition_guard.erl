@@ -181,10 +181,15 @@ handle_call(get_status, _From, State) ->
 handle_call({force_unsafe_mode, true}, _From, State) ->
     logger:warning("=== PARTITION GUARD: FORCED UNSAFE MODE ENABLED ==="),
     logger:warning("Writes are now allowed regardless of partition status"),
+    %% Audit log: critical safety override
+    logger:notice("AUDIT: partition_guard_override enabled=true node=~p caller=~p",
+                  [node(), self()]),
     {reply, ok, State#state{mode = forced_unsafe}};
 
 handle_call({force_unsafe_mode, false}, _From, State) ->
     logger:info("Partition Guard: Forced unsafe mode disabled, resuming normal checks"),
+    logger:notice("AUDIT: partition_guard_override enabled=false node=~p caller=~p",
+                  [node(), self()]),
     {reply, ok, State#state{mode = normal}};
 
 handle_call(_Request, _From, State) ->
@@ -278,7 +283,7 @@ enter_diverged_mode(State) ->
     logger:warning("Partition count: ~p", [NewCount]),
     
     %% Log to metrics if available
-    try iris_metrics:increment(partition_detected)
+    try iris_metrics:inc(partition_detected)
     catch Class:Reason ->
         logger:warning("iris_partition_guard: metrics increment failed: ~p:~p", [Class, Reason])
     end,

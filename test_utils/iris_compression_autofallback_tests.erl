@@ -49,7 +49,12 @@ zstd_nif_loadable() ->
 compress_zstd_always_returns_ok_test() ->
     TestData = <<"This is test data that should always be compressible by zlib or zstd">>,
     Result = iris_compression:compress(zstd, TestData),
-    ?assertMatch({ok, _}, Result).
+    %% B-7 FIX: compress(zstd) returns error when NIF unavailable.
+    %% Callers should use maybe_compress/2 for graceful fallback.
+    case zstd_nif_loadable() of
+        true  -> ?assertMatch({ok, _}, Result);
+        false -> ?assertMatch({error, {zstd_nif_unavailable, _}}, Result)
+    end.
 
 %% =============================================================================
 %% Test: Roundtrip — compress(zstd) then decompress(zstd) recovers data
@@ -58,9 +63,16 @@ compress_zstd_always_returns_ok_test() ->
 
 compress_decompress_zstd_roundtrip_test() ->
     TestData = <<"Roundtrip test data for zstd with auto-fallback to zlib">>,
-    {ok, Compressed} = iris_compression:compress(zstd, TestData),
-    {ok, Decompressed} = iris_compression:decompress(zstd, Compressed),
-    ?assertEqual(TestData, Decompressed).
+    %% B-7 FIX: When zstd NIF is unavailable, both compress and decompress
+    %% return errors instead of silently falling back to zlib.
+    %% Roundtrip only succeeds when the NIF is actually loaded.
+    case iris_compression:compress(zstd, TestData) of
+        {ok, Compressed} ->
+            {ok, Decompressed} = iris_compression:decompress(zstd, Compressed),
+            ?assertEqual(TestData, Decompressed);
+        {error, {zstd_nif_unavailable, _}} ->
+            ok
+    end.
 
 %% =============================================================================
 %% Test: Fallback still emits metric when NIF is absent
@@ -71,7 +83,8 @@ fallback_emits_metric_test() ->
     catch ets:insert(?METRICS_TABLE, {iris_compression_fallback_count, 0}),
     Before = get_metric(iris_compression_fallback_count),
     TestData = <<"Metric test data for zstd compression fallback">>,
-    {ok, _} = iris_compression:compress(zstd, TestData),
+    %% B-7 FIX: compress(zstd) now returns error when NIF is unavailable
+    _Result = iris_compression:compress(zstd, TestData),
     After = get_metric(iris_compression_fallback_count),
     case zstd_nif_loadable() of
         true ->

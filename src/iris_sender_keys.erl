@@ -49,7 +49,11 @@
     chain_key   :: binary(),           %% 32-byte chain key for symmetric ratchet
     sign_priv   :: binary(),           %% 32-byte Ed25519 private key
     sign_pub    :: binary(),           %% 32-byte Ed25519 public key
-    chain_index :: non_neg_integer()   %% Current message number in chain
+    chain_index :: non_neg_integer(),  %% Current message number in chain
+    %% HR-10 FIX: Track last seen chain index for replay protection.
+    %% Recipients reject messages with ChainIndex < min_chain_index.
+    %% Initialized to 0 (first valid message has ChainIndex=0).
+    min_chain_index = 0 :: non_neg_integer()
 }).
 
 -define(KEY_ID_LEN, 8).
@@ -162,7 +166,8 @@ encrypt_group_msg(Plaintext, SenderKey, _KeyId) ->
     
     %% Sign the ciphertext for authentication
     DataToSign = <<KeyId/binary, ChainIndex:32, Nonce/binary, Ciphertext/binary, Tag/binary>>,
-    Signature = crypto:sign(eddsa, sha512, DataToSign, [SignPriv, ed25519]),
+    %% Per RFC 8032: Ed25519 handles its own internal SHA-512; digest type MUST be 'none'.
+    Signature = crypto:sign(eddsa, none, DataToSign, [SignPriv, ed25519]),
     
     %% Assemble encrypted message
     EncryptedMsg = <<
@@ -181,6 +186,7 @@ encrypt_group_msg(Plaintext, SenderKey, _KeyId) ->
     {EncryptedMsg, NewSenderKey}.
 
 %% @doc Decrypt a message from a group member using their sender key.
+%% HR-10: Returns updated sender key with advanced min_chain_index for replay protection.
 -spec decrypt_group_msg(binary(), #sender_key{}, binary()) -> 
     {ok, binary()} | {error, term()}.
 decrypt_group_msg(EncryptedMsg, SenderKey, ExpectedKeyId) ->
@@ -196,36 +202,46 @@ decrypt_group_msg(EncryptedMsg, SenderKey, ExpectedKeyId) ->
                     %% Get stored chain key for this sender
                     #sender_key{
                         chain_key = ChainKey,
-                        sign_pub = SignPub
+                        sign_pub = SignPub,
+                        min_chain_index = MinIndex
                     } = SenderKey,
                     
-                    %% Verify signature
-                    DataToSign = <<KeyId/binary, ChainIndex:32, Nonce/binary, 
-                                   Ciphertext/binary, Tag/binary>>,
-                    case crypto:verify(eddsa, sha512, DataToSign, Signature, 
-                                      [SignPub, ed25519]) of
+                    %% HR-10 FIX: Reject replayed messages.
+                    %% Chain index must be >= min_chain_index (the next expected index).
+                    %% After successful decryption, min_chain_index advances to ChainIndex+1.
+                    case ChainIndex < MinIndex of
                         true ->
-                            %% Derive message key for this chain index
-                            MessageKey = derive_message_key(ChainKey, ChainIndex),
-                            
-                            %% Decrypt with AES-256-GCM
-                            AAD = <<KeyId/binary, ChainIndex:32>>,
-                            case crypto:crypto_one_time_aead(
-                                aes_256_gcm,
-                                MessageKey,
-                                Nonce,
-                                Ciphertext,
-                                AAD,
-                                Tag,
-                                false
-                            ) of
-                                Plaintext when is_binary(Plaintext) ->
-                                    {ok, Plaintext};
-                                error ->
-                                    {error, decryption_failed}
-                            end;
+                            {error, {replay_detected, ChainIndex, MinIndex}};
                         false ->
-                            {error, signature_invalid}
+                            %% Verify signature
+                            DataToSign = <<KeyId/binary, ChainIndex:32, Nonce/binary, 
+                                           Ciphertext/binary, Tag/binary>>,
+                            %% Per RFC 8032: Ed25519 digest type is 'none'.
+                            case crypto:verify(eddsa, none, DataToSign, Signature, 
+                                              [SignPub, ed25519]) of
+                                true ->
+                                    %% Derive message key for this chain index
+                                    MessageKey = derive_message_key(ChainKey, ChainIndex),
+                                    
+                                    %% Decrypt with AES-256-GCM
+                                    AAD = <<KeyId/binary, ChainIndex:32>>,
+                                    case crypto:crypto_one_time_aead(
+                                        aes_256_gcm,
+                                        MessageKey,
+                                        Nonce,
+                                        Ciphertext,
+                                        AAD,
+                                        Tag,
+                                        false
+                                    ) of
+                                        Plaintext when is_binary(Plaintext) ->
+                                            {ok, Plaintext};
+                                        error ->
+                                            {error, decryption_failed}
+                                    end;
+                                false ->
+                                    {error, signature_invalid}
+                            end
                     end;
                 _ ->
                     {error, key_id_mismatch}
@@ -259,19 +275,38 @@ serialize_sender_key(#sender_key{
     chain_key = ChainKey,
     sign_priv = SignPriv,
     sign_pub = SignPub,
-    chain_index = ChainIndex
+    chain_index = ChainIndex,
+    min_chain_index = MinIndex
 }) ->
-    %% Version byte + fields
-    <<1,  %% Version
+    %% Version 2 includes min_chain_index for replay protection (HR-10)
+    <<2,  %% Version
       KeyId:?KEY_ID_LEN/binary,
       ChainKey:?CHAIN_KEY_LEN/binary,
       SignPriv:?SIGN_KEY_LEN/binary,
       SignPub:?SIGN_KEY_LEN/binary,
-      ChainIndex:32>>.
+      ChainIndex:32,
+      MinIndex:32>>.
 
 %% @doc Deserialize a sender key from binary.
 -spec deserialize_sender_key(binary()) -> #sender_key{}.
-deserialize_sender_key(<<1,  %% Version 1
+%% Version 2: includes min_chain_index for replay protection (HR-10)
+deserialize_sender_key(<<2,
+                         KeyId:?KEY_ID_LEN/binary,
+                         ChainKey:?CHAIN_KEY_LEN/binary,
+                         SignPriv:?SIGN_KEY_LEN/binary,
+                         SignPub:?SIGN_KEY_LEN/binary,
+                         ChainIndex:32,
+                         MinIndex:32>>) ->
+    #sender_key{
+        key_id = KeyId,
+        chain_key = ChainKey,
+        sign_priv = SignPriv,
+        sign_pub = SignPub,
+        chain_index = ChainIndex,
+        min_chain_index = MinIndex
+    };
+%% Version 1: backward compatibility (no min_chain_index)
+deserialize_sender_key(<<1,
                          KeyId:?KEY_ID_LEN/binary,
                          ChainKey:?CHAIN_KEY_LEN/binary,
                          SignPriv:?SIGN_KEY_LEN/binary,
@@ -282,7 +317,8 @@ deserialize_sender_key(<<1,  %% Version 1
         chain_key = ChainKey,
         sign_priv = SignPriv,
         sign_pub = SignPub,
-        chain_index = ChainIndex
+        chain_index = ChainIndex,
+        min_chain_index = 0
     };
 deserialize_sender_key(_) ->
     error(invalid_sender_key_format).

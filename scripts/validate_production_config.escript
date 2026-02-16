@@ -55,7 +55,8 @@ validate(Config) ->
     check_non_empty_list(CoreConfig, expected_cluster_nodes, "iris_core.expected_cluster_nodes") ++
     check_non_empty_list(CoreConfig, join_seeds, "iris_core.join_seeds") ++
     check_non_empty_list(EdgeConfig, core_nodes, "iris_edge.core_nodes") ++
-    check_jwt_secret(EdgeConfig).
+    check_jwt_secret(EdgeConfig) ++
+    check_metrics_token(CoreConfig).
 
 check_deployment_mode(AppConfig, AppName) ->
     case proplists:get_value(deployment_mode, AppConfig, undefined) of
@@ -77,5 +78,13 @@ check_jwt_secret(EdgeConfig) ->
         undefined -> [];  %% Not set in config = OK (will use env var)
         <<"REPLACE_WITH_32_BYTE_SECRET_KEY!!">> ->
             ["iris_edge.jwt_secret is the placeholder value (must be replaced or removed)"];
+        _ -> []
+    end.
+
+check_metrics_token(CoreConfig) ->
+    case proplists:get_value(metrics_bearer_token, CoreConfig, undefined) of
+        undefined -> [];  %% Not set = OK
+        <<"REPLACE_WITH_METRICS_TOKEN">> ->
+            ["iris_core.metrics_bearer_token is the placeholder value (must be replaced)"];
         _ -> []
     end.

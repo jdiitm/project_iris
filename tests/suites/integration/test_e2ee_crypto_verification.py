@@ -179,24 +179,15 @@ class TestE2EERoundtrip(unittest.TestCase):
         verify public keys match byte-exact.
         """
         user = generate_user_id()
-        identity_key = X25519KeyPair()
-        signed_prekey = X25519KeyPair()
-        opk1 = X25519KeyPair()
 
-        ik_hex = identity_key.public_bytes().hex()
-        spk_hex = signed_prekey.public_bytes().hex()
-        opk1_hex = opk1.public_bytes().hex()
-        # Generate a 64-byte fake signature for the signed prekey
-        sig_hex = os.urandom(64).hex()
-
-        # Upload and fetch key bundle in a single Erlang VM invocation
+        # Generate keys in Erlang so we have private keys for signing
         roundtrip_code = (
             f'iris_keys:start_link(),'
-            f'IK = <<16#{ik_hex}:256>>,'
-            f'SPK = <<16#{spk_hex}:256>>,'
-            f'Sig = <<16#{sig_hex}:512>>,'
-            f'OPK1 = <<16#{opk1_hex}:256>>,'
-            f'Bundle = #{{identity_key => IK, signed_prekey => SPK,'
+            f'{{GenIK, GenIKPriv}} = crypto:generate_key(ecdh, x25519),'
+            f'{{GenSPK, _}} = crypto:generate_key(ecdh, x25519),'
+            f'Sig = iris_x3dh:sign_prekey(GenSPK, GenIKPriv),'
+            f'OPK1 = element(1, crypto:generate_key(ecdh, x25519)),'
+            f'Bundle = #{{identity_key => GenIK, signed_prekey => GenSPK,'
             f' signed_prekey_signature => Sig,'
             f' one_time_prekeys => [OPK1]}},'
             f'ok = iris_keys:upload_bundle(<<"{user}">>, Bundle),'
@@ -206,7 +197,9 @@ class TestE2EERoundtrip(unittest.TestCase):
             f'    FIK = maps:get(identity_key, FetchedBundle),'
             f'    FSPK = maps:get(signed_prekey, FetchedBundle),'
             f'    io:format("IK:~s~n", [binary:encode_hex(FIK)]),'
-            f'    io:format("SPK:~s~n", [binary:encode_hex(FSPK)]);'
+            f'    io:format("SPK:~s~n", [binary:encode_hex(FSPK)]),'
+            f'    io:format("IK_MATCH:~p~n", [FIK =:= GenIK]),'
+            f'    io:format("SPK_MATCH:~p~n", [FSPK =:= GenSPK]);'
             f'  Error ->'
             f'    io:format("FETCH_ERROR: ~p~n", [Error])'
             f'end'
@@ -217,10 +210,10 @@ class TestE2EERoundtrip(unittest.TestCase):
         self.assertIn("UPLOAD_OK", output,
                        f"Upload failed: {output} {result.stderr}")
 
-        # Verify byte-exact match
-        self.assertIn(f"IK:{ik_hex.upper()}", output,
+        # Verify byte-exact match via Erlang-side comparison
+        self.assertIn("IK_MATCH:true", output,
                        f"Identity key mismatch. Got: {output}")
-        self.assertIn(f"SPK:{spk_hex.upper()}", output,
+        self.assertIn("SPK_MATCH:true", output,
                        f"Signed prekey mismatch. Got: {output}")
 
     def test_tampered_ciphertext_fails(self):

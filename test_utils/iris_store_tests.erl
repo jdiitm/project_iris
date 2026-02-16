@@ -275,24 +275,15 @@ quorum_durability_test_() ->
        
        {"quorum write on single node handles gracefully", fun() ->
             %% Single-node cluster can't achieve quorum (needs majority of 3+)
-            %% But it should handle this gracefully
+            %% But it should handle this gracefully (not crash)
             Key = quorum_single_key,
             Value = <<"quorum_single_value">>,
-            try
-                Result = iris_store:put(test_store_table, Key, Value,
-                                       #{durability => quorum}),
-                %% Either succeeds (degraded mode) or returns quorum error
-                ?assert(Result =:= ok orelse 
-                        Result =:= {error, no_quorum} orelse
-                        is_tuple(Result))
-            catch
-                error:function_clause ->
-                    %% Function doesn't handle quorum - this is a bug
-                    %% but for now we document it passes if it throws
-                    ?assert(true);
-                _:_ ->
-                    ?assert(true)
-            end
+            %% B-6 FIX: Removed catch-all ?assert(true) that masked real failures.
+            %% The function MUST NOT crash — it should return ok or {error, _}.
+            Result = iris_store:put(test_store_table, Key, Value,
+                                   #{durability => quorum}),
+            ?assert(Result =:= ok orelse
+                    (is_tuple(Result) andalso element(1, Result) =:= error))
         end},
        
        {"batch_put with quorum durability", fun() ->
@@ -300,30 +291,21 @@ quorum_durability_test_() ->
                 {quorum_batch_1, <<"v1">>},
                 {quorum_batch_2, <<"v2">>}
             ],
-            try
-                Result = iris_store:batch_put(test_store_table, KVPairs,
-                                              #{durability => quorum}),
-                ?assert(Result =:= ok orelse 
-                        Result =:= {error, no_quorum} orelse
-                        is_tuple(Result))
-            catch
-                _:_ -> ?assert(true)
-            end
+            %% B-6 FIX: MUST NOT crash — returns ok or {error, _}.
+            Result = iris_store:batch_put(test_store_table, KVPairs,
+                                          #{durability => quorum}),
+            ?assert(Result =:= ok orelse
+                    (is_tuple(Result) andalso element(1, Result) =:= error))
         end},
        
        {"delete with quorum durability", fun() ->
             %% First create a key
             ok = iris_store:put(test_store_table, quorum_del_key, <<"value">>),
-            %% Then try to delete with quorum
-            try
-                Result = iris_store:delete(test_store_table, quorum_del_key,
-                                          #{durability => quorum}),
-                ?assert(Result =:= ok orelse 
-                        Result =:= {error, no_quorum} orelse
-                        is_tuple(Result))
-            catch
-                _:_ -> ?assert(true)
-            end
+            %% B-6 FIX: MUST NOT crash — returns ok or {error, _}.
+            Result = iris_store:delete(test_store_table, quorum_del_key,
+                                      #{durability => quorum}),
+            ?assert(Result =:= ok orelse
+                    (is_tuple(Result) andalso element(1, Result) =:= error))
         end}
       ]}}.
 
@@ -682,5 +664,94 @@ inbox_durability_test_() ->
             timer:sleep(100),  %% Wait for async write
             {ok, Msgs} = iris_store:scan_inbox(UserId, 0, 10),
             ?assertEqual(1, length(Msgs))
+        end}
+      ]}}.
+
+%% =============================================================================
+%% Crash Recovery Tests (following iris_dedup_tests pattern)
+%% =============================================================================
+
+crash_recovery_test_() ->
+    {"Store crash recovery",
+     {setup,
+      fun() ->
+          %% Create disc_copies table for persistence testing
+          application:stop(mnesia),
+          MnesiaDir = "mnesia_store_crash_test_" ++ integer_to_list(erlang:unique_integer([positive])),
+          application:set_env(mnesia, dir, MnesiaDir),
+          ok = mnesia:delete_schema([node()]),
+          ok = mnesia:create_schema([node()]),
+          ok = mnesia:start(),
+          {atomic, ok} = mnesia:create_table(crash_test_store, [
+              {disc_copies, [node()]},
+              {attributes, [key, value]}
+          ]),
+          mnesia:wait_for_tables([crash_test_store], 5000),
+          MnesiaDir
+      end,
+      fun(MnesiaDir) ->
+          catch mnesia:delete_table(crash_test_store),
+          application:stop(mnesia),
+          os:cmd("rm -rf " ++ MnesiaDir),
+          ok
+      end,
+      [
+       {"data survives full Mnesia restart (disc_copies)", fun() ->
+            %% Write data
+            Key = crash_test_key_1,
+            Value = <<"crash_test_value_1">>,
+            ok = iris_store:put(crash_test_store, Key, Value),
+            
+            %% Verify it's there
+            ?assertEqual({ok, Value}, iris_store:get(crash_test_store, Key)),
+            
+            %% Full Mnesia stop/restart (simulates node crash)
+            mnesia:stop(),
+            mnesia:start(),
+            mnesia:wait_for_tables([crash_test_store], 5000),
+            
+            %% Data MUST survive
+            ?assertEqual({ok, Value}, iris_store:get(crash_test_store, Key))
+        end},
+
+       {"multiple writes survive restart", fun() ->
+            %% Write multiple values
+            Pairs = [{list_to_atom("cr_key_" ++ integer_to_list(I)),
+                      list_to_binary("cr_val_" ++ integer_to_list(I))}
+                     || I <- lists:seq(1, 10)],
+            lists:foreach(fun({K, V}) ->
+                ok = iris_store:put(crash_test_store, K, V)
+            end, Pairs),
+            
+            %% Full Mnesia stop/restart
+            mnesia:stop(),
+            mnesia:start(),
+            mnesia:wait_for_tables([crash_test_store], 5000),
+            
+            %% ALL values MUST survive
+            lists:foreach(fun({K, V}) ->
+                ?assertEqual({ok, V}, iris_store:get(crash_test_store, K))
+            end, Pairs)
+        end},
+
+       {"deleted key stays deleted after restart", fun() ->
+            %% Ensure table is available (previous test may have restarted Mnesia)
+            mnesia:wait_for_tables([crash_test_store], 5000),
+            Key = crash_del_key,
+            Value = <<"del_value">>,
+            ok = iris_store:put(crash_test_store, Key, Value),
+            ?assertEqual({ok, Value}, iris_store:get(crash_test_store, Key)),
+            
+            %% Delete
+            ok = iris_store:delete(crash_test_store, Key),
+            ?assertEqual(not_found, iris_store:get(crash_test_store, Key)),
+            
+            %% Full Mnesia stop/restart
+            mnesia:stop(),
+            mnesia:start(),
+            mnesia:wait_for_tables([crash_test_store], 5000),
+            
+            %% Deletion MUST persist
+            ?assertEqual(not_found, iris_store:get(crash_test_store, Key))
         end}
       ]}}.

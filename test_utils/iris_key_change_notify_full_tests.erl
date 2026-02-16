@@ -121,10 +121,13 @@ session_cleanup({KeysPid, _RlPid}) ->
 session_fetch_records_contact_test_() ->
     {setup, fun session_setup/0, fun session_cleanup/1, fun() ->
         %% Upload a key bundle for alice
+        {IKPub, IKPriv} = iris_x3dh:generate_identity_key(),
+        SPK = crypto:strong_rand_bytes(32),
+        Sig = iris_x3dh:sign_prekey(SPK, IKPriv),
         AliceBundle = #{
-            identity_key => crypto:strong_rand_bytes(32),
-            signed_prekey => crypto:strong_rand_bytes(32),
-            signed_prekey_signature => crypto:strong_rand_bytes(64),
+            identity_key => IKPub,
+            signed_prekey => SPK,
+            signed_prekey_signature => Sig,
             one_time_prekeys => [crypto:strong_rand_bytes(32)]
         },
         ok = iris_keys:upload_bundle(<<"alice">>, AliceBundle),

@@ -27,6 +27,7 @@
 -export([write_durable/3, write_durable/4]).
 -export([read_quorum/2, read_quorum/3]).
 -export([get_replicas/1, repair_async/4]).
+-export([replicate_async/3]).  %% HR-11 FIX: Was missing; called from iris_keys:do_refill_prekeys
 -export([set_replication_factor/1, get_replication_factor/0]).
 -export([local_sync_write/3]).  %% Called via RPC on remote nodes
 -export([reconcile_reads/1]).   %% Exported for testing (RFC Section 5.3)
@@ -413,6 +414,27 @@ select_n_from_ring(Nodes, Idx, Count, Acc) ->
     WrappedIdx = ((Idx - 1) rem N) + 1,
     Node = lists:nth(WrappedIdx, Nodes),
     select_n_from_ring(Nodes, Idx + 1, Count - 1, [Node | Acc]).
+
+%% =============================================================================
+%% Async Replication (HR-11)
+%% =============================================================================
+
+%% @doc Asynchronously replicate a record to all replicas.
+%% Used by iris_keys for background key bundle replication after refill.
+-spec replicate_async(atom(), term(), tuple()) -> ok.
+replicate_async(Table, Key, Record) ->
+    Replicas = get_replicas(Key),
+    OtherNodes = [N || N <- Replicas, N =/= node()],
+    lists:foreach(fun(Node) ->
+        spawn(fun() ->
+            case rpc:call(Node, ?MODULE, local_sync_write, [Table, Key, Record], 5000) of
+                ok -> ok;
+                {badrpc, Reason} ->
+                    logger:warning("Async replication to ~p failed: ~p", [Node, Reason])
+            end
+        end)
+    end, OtherNodes),
+    ok.
 
 %% =============================================================================
 %% Internal: Async Repair

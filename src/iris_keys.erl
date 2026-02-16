@@ -63,7 +63,7 @@
     user_id :: binary(),                    %% User identifier
     identity_key :: binary(),               %% Public Identity Key (32 bytes)
     signed_prekey :: binary(),              %% Public Signed Pre-Key (32 bytes)
-    signed_prekey_signature :: binary(),    %% Signature over SPK (64 bytes)
+    signed_prekey_signature :: binary(),    %% Signature over SPK (96 bytes: 64-byte sig + 32-byte Ed25519 pub)
     signed_prekey_timestamp :: integer(),   %% When SPK was created
     one_time_prekeys :: [binary()],         %% List of public OPKs (32 bytes each)
     created_at :: integer(),                %% Bundle creation timestamp
@@ -422,9 +422,19 @@ validate_bundle(Bundle) ->
             SPK = maps:get(signed_prekey, Bundle),
             Sig = maps:get(signed_prekey_signature, Bundle),
             
-            %% Validate key sizes (Curve25519 = 32 bytes, Ed25519 sig = 64 bytes)
-            case {byte_size(IK), byte_size(SPK), byte_size(Sig)} of
-                {32, 32, 64} -> ok;
+            %% Validate key sizes
+            %% Curve25519 keys = 32 bytes
+            %% Signature = 96 bytes: Ed25519 sig (64) + Ed25519 pub (32)
+            %% (B-2 FIX: was checking for 64 bytes, which rejected legitimate signatures)
+            case {byte_size(IK), byte_size(SPK)} of
+                {32, 32} when byte_size(Sig) >= 96 ->
+                    %% B-2 FIX: Verify the prekey signature cryptographically.
+                    %% Previously only checked sizes, never verified the signature.
+                    %% This prevents upload of bundles with forged or invalid signatures.
+                    case iris_x3dh:verify_prekey_signature(SPK, Sig, IK) of
+                        true -> ok;
+                        false -> {error, invalid_prekey_signature}
+                    end;
                 _ -> {error, invalid_key_sizes}
             end;
         false ->
@@ -603,6 +613,8 @@ do_get_prekey_count(UserId) ->
 do_delete_user_keys(UserId) ->
     F = fun() -> mnesia:delete({e2ee_key_bundle, UserId}) end,
     {atomic, ok} = mnesia:sync_transaction(F),
+    %% Audit log: security-relevant key deletion
+    logger:notice("AUDIT: user_keys_deleted user_id=~s node=~p", [UserId, node()]),
     ok.
 
 do_list_users() ->

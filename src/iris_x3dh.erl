@@ -203,13 +203,26 @@ sign_prekey(PrekeyPublic, IdentityPrivate) ->
     {Ed25519Pub, Ed25519Priv} = derive_ed25519_from_x25519(IdentityPrivate),
     
     %% Sign the prekey public key using Ed25519
+    %% Per RFC 8032: Ed25519 handles its own internal SHA-512; digest type MUST be 'none'.
     %% Signature format: Ed25519 signature (64 bytes) || Ed25519 public key (32 bytes)
-    Signature = crypto:sign(eddsa, sha512, PrekeyPublic, [Ed25519Priv, ed25519]),
+    Signature = crypto:sign(eddsa, none, PrekeyPublic, [Ed25519Priv, ed25519]),
     <<Signature/binary, Ed25519Pub/binary>>.
 
 %% @doc Verify a prekey signature
 %% P0-C2 FIX: Proper Ed25519 signature verification
-%% Rejects forged signatures to prevent MITM attacks
+%% Rejects forged signatures to prevent MITM attacks.
+%%
+%% Security model: The Ed25519 public key is embedded in the signature
+%% (appended by sign_prekey/2). Binding between the Ed25519 signing key
+%% and the X25519 identity key is enforced at the application level:
+%% - Server validates the signature at bundle upload time (validate_bundle/1)
+%% - Upload is authenticated via JWT, so only the key owner can upload
+%% - Users verify identity keys out-of-band via safety numbers (Section 5.3.1)
+%%
+%% The IdentityPublic parameter (X25519) is retained for API compatibility
+%% and input validation but is not used for cryptographic binding, because
+%% the Ed25519 key is derived from the X25519 *private* key via HKDF,
+%% making public-key-only binding infeasible without a birational map.
 -spec verify_prekey_signature(PrekeyPublic :: binary(), Signature :: binary(), 
                               IdentityPublic :: binary()) -> boolean().
 verify_prekey_signature(PrekeyPublic, Signature, IdentityPublic) ->
@@ -219,17 +232,17 @@ verify_prekey_signature(PrekeyPublic, Signature, IdentityPublic) ->
             %% Extract Ed25519 signature and public key from combined signature
             <<Ed25519Sig:64/binary, Ed25519Pub:32/binary, _Rest/binary>> = Signature,
             
-            %% Verify the Ed25519 public key is derived from the claimed identity key
-            %% This binds the signing key to the X25519 identity key
-            case verify_ed25519_binding(IdentityPublic, Ed25519Pub) of
-                true ->
+            %% Verify Ed25519 public key is well-formed
+            case byte_size(Ed25519Pub) of
+                32 ->
                     %% Verify the signature over the prekey
+                    %% Per RFC 8032: Ed25519 handles its own SHA-512; digest type is 'none'.
                     try
-                        crypto:verify(eddsa, sha512, PrekeyPublic, Ed25519Sig, [Ed25519Pub, ed25519])
+                        crypto:verify(eddsa, none, PrekeyPublic, Ed25519Sig, [Ed25519Pub, ed25519])
                     catch
                         _:_ -> false
                     end;
-                false ->
+                _ ->
                     false
             end;
         _ ->
@@ -247,21 +260,16 @@ derive_ed25519_from_x25519(X25519Private) ->
     {Ed25519Pub, Ed25519Priv} = crypto:generate_key(eddsa, ed25519, Ed25519Seed),
     {Ed25519Pub, Ed25519Priv}.
 
-%% @doc Verify that Ed25519 public key is correctly derived from X25519 public key
-%% This is a binding check - we derive the expected Ed25519 public key from the
-%% X25519 identity public key and compare
--spec verify_ed25519_binding(binary(), binary()) -> boolean().
-verify_ed25519_binding(X25519Public, ClaimedEd25519Pub) ->
-    %% For verification, we need to check that the Ed25519 key was derived
-    %% from the same seed as would be derived from the X25519 private key.
-    %% Since we only have the public key, we use a binding proof approach:
-    %% The signature includes the Ed25519 public key, and we trust that
-    %% the signer used the correct derivation from their X25519 private key.
-    %% 
-    %% A more rigorous approach would require the identity bundle to include
-    %% both X25519 and Ed25519 public keys, which we validate at registration.
-    %% For now, we check that the Ed25519 key is well-formed (32 bytes).
-    byte_size(ClaimedEd25519Pub) =:= 32 andalso byte_size(X25519Public) =:= 32.
+%% NOTE: Ed25519-to-X25519 binding verification.
+%% Cryptographic binding between the Ed25519 signing key and the X25519 identity
+%% key is NOT verifiable from public keys alone when Ed25519 is derived from
+%% X25519 via HKDF (as in derive_ed25519_from_x25519/1). HKDF derivation uses
+%% the private key, so the public key does not carry enough information.
+%%
+%% Binding is instead enforced at the application level:
+%% 1. validate_bundle/1 verifies the prekey signature at upload time
+%% 2. Upload is authenticated (only the key owner can upload their bundle)
+%% 3. Safety numbers provide out-of-band identity verification (Section 5.3.1)
 
 %% =============================================================================
 %% Cryptographic Primitives

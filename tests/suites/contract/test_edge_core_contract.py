@@ -491,10 +491,6 @@ def test_live_message_contract():
         response = sender_sock.recv(1024)
         assert b"LOGIN_OK" in response, "Sender login failed"
         
-        # Small delay to ensure registration completes (same as IrisClient)
-        import time
-        time.sleep(0.05)
-        
         # Login receiver
         raw_recv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         raw_recv.settimeout(TIMEOUT)
@@ -506,9 +502,6 @@ def test_live_message_contract():
         
         response = recv_sock.recv(1024)
         assert b"LOGIN_OK" in response, "Receiver login failed"
-        
-        # Small delay to ensure registration completes
-        time.sleep(0.05)
         
         # Send message using opcode 0x07 (SEND_SEQ) -- the active sequenced message opcode.
         # Protocol: 0x07 | TargetLen(16) | Target | SeqNo(64) | MsgLen(16) | Msg
@@ -525,10 +518,7 @@ def test_live_message_contract():
         
         sender_sock.sendall(msg_data)
         
-        # Give time for delivery and use blocking receive with timeout
-        time.sleep(0.3)
-        
-        # AUDIT FIX: Verify message was actually delivered -- timeout/unexpected format = FAIL
+        # Use blocking receive with timeout for delivery verification
         recv_sock.settimeout(5.0)
         try:
             data = recv_sock.recv(4096)

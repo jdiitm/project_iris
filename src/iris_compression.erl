@@ -26,19 +26,22 @@ compress(zlib, Data) ->
     end;
 compress(zstd, Data) ->
     %% Real zstd via NIF (RFC Section 11.1: "zstd (recommended)")
-    %% Transparent fallback to zlib when NIF unavailable.
-    %% Callers always get {ok, CompressedData} — no error handling needed.
+    %% B-7 FIX: Do NOT silently fall back to zlib for compression.
+    %% If compress falls back but decompress doesn't, cross-node
+    %% roundtrips break. Both sides must behave consistently.
+    %% Callers use maybe_compress/2 which handles the fallback gracefully
+    %% by returning {uncompressed, Data} on error.
     try iris_zstd_nif:compress(Data)
     catch
         error:undef ->
             bump_fallback_metric(),
-            compress(zlib, Data);
+            {error, {zstd_nif_unavailable, <<"zstd NIF not loaded; cannot compress with zstd">>}};
         error:nif_not_loaded ->
             bump_fallback_metric(),
-            compress(zlib, Data);
+            {error, {zstd_nif_unavailable, <<"zstd NIF not loaded; cannot compress with zstd">>}};
         error:{nif_not_loaded, _} ->
             bump_fallback_metric(),
-            compress(zlib, Data)
+            {error, {zstd_nif_unavailable, <<"zstd NIF not loaded; cannot compress with zstd">>}}
     end.
 
 %% @doc Decompress data with the given algorithm.
@@ -52,18 +55,23 @@ decompress(zlib, Compressed) ->
     end;
 decompress(zstd, Data) ->
     %% Real zstd via NIF (RFC Section 11.1)
-    %% Transparent fallback to zlib when NIF unavailable.
+    %% B-7 FIX: Do NOT fallback to zlib for decompression.
+    %% If data was compressed with real zstd on a node WITH the NIF,
+    %% falling back to zlib here produces a decompression error (zlib
+    %% cannot decompress zstd-formatted data). This caused silent message
+    %% loss in heterogeneous clusters during rolling upgrades.
+    %% Instead, return an explicit error so callers can detect and handle it.
     try iris_zstd_nif:decompress(Data)
     catch
         error:undef ->
             bump_fallback_metric(),
-            decompress(zlib, Data);
+            {error, {zstd_nif_unavailable, <<"zstd NIF not loaded; cannot decompress zstd data">>}};
         error:nif_not_loaded ->
             bump_fallback_metric(),
-            decompress(zlib, Data);
+            {error, {zstd_nif_unavailable, <<"zstd NIF not loaded; cannot decompress zstd data">>}};
         error:{nif_not_loaded, _} ->
             bump_fallback_metric(),
-            decompress(zlib, Data)
+            {error, {zstd_nif_unavailable, <<"zstd NIF not loaded; cannot decompress zstd data">>}}
     end.
 
 %% @doc Maybe compress based on payload size. Skips payloads <= 128 bytes.

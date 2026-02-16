@@ -84,11 +84,11 @@ def test_low_opk_alert():
             _ -> ok
         end,
         
-        IK = crypto:strong_rand_bytes(32),
-        SPK = crypto:strong_rand_bytes(32),
-        Sig = crypto:strong_rand_bytes(64),
+        {IK, IKPriv} = crypto:generate_key(ecdh, x25519),
+        {SPK, _SPKPriv} = crypto:generate_key(ecdh, x25519),
+        Sig = iris_x3dh:sign_prekey(SPK, IKPriv),
         %% Only 5 OPKs (below threshold of 20)
-        OPKs = [crypto:strong_rand_bytes(32) || _ <- lists:seq(1, 5)],
+        OPKs = [element(1, crypto:generate_key(ecdh, x25519)) || _ <- lists:seq(1, 5)],
         
         Bundle = #{
             identity_key => IK,
@@ -137,11 +137,11 @@ def test_spk_fallback_mode():
             _ -> ok
         end,
         
-        IK = crypto:strong_rand_bytes(32),
-        SPK = crypto:strong_rand_bytes(32),
-        Sig = crypto:strong_rand_bytes(64),
+        {IK, IKPriv} = crypto:generate_key(ecdh, x25519),
+        {SPK, _SPKPriv} = crypto:generate_key(ecdh, x25519),
+        Sig = iris_x3dh:sign_prekey(SPK, IKPriv),
         %% Only 1 OPK
-        OPKs = [crypto:strong_rand_bytes(32)],
+        OPKs = [element(1, crypto:generate_key(ecdh, x25519))],
         
         Bundle = #{
             identity_key => IK,
@@ -261,10 +261,10 @@ def test_opk_refill():
             _ -> ok
         end,
         
-        IK = crypto:strong_rand_bytes(32),
-        SPK = crypto:strong_rand_bytes(32),
-        Sig = crypto:strong_rand_bytes(64),
-        OPKs = [crypto:strong_rand_bytes(32) || _ <- lists:seq(1, 3)],
+        {IK, IKPriv} = crypto:generate_key(ecdh, x25519),
+        {SPK, _SPKPriv} = crypto:generate_key(ecdh, x25519),
+        Sig = iris_x3dh:sign_prekey(SPK, IKPriv),
+        OPKs = [element(1, crypto:generate_key(ecdh, x25519)) || _ <- lists:seq(1, 3)],
         
         Bundle = #{
             identity_key => IK,
@@ -341,7 +341,7 @@ def test_spk_fallback_full_conversation():
         %% Generate Bob key bundle with ZERO OPKs - degraded mode
         {BobIKPub, BobIKPriv} = crypto:generate_key(ecdh, x25519),
         {BobSPKPub, BobSPKPriv} = crypto:generate_key(ecdh, x25519),
-        BobSig = crypto:strong_rand_bytes(64),
+        BobSig = iris_x3dh:sign_prekey(BobSPKPub, BobIKPriv),
         
         BobBundle = #{
             identity_key => BobIKPub,
