@@ -5,8 +5,8 @@
 # Core test dependencies
 hypothesis==6.92.1          # Property-based testing
 pytest==7.4.3               # Test framework (optional, for future migration)
-cryptography>=46.0.5        # E2EE crypto validation (AES-GCM, X25519); CVE-2024-12797, CVE-2026-26007
-psutil>=5.9.0               # Process monitoring (benchmark_unit_cost)
+cryptography==46.0.5        # E2EE crypto validation (AES-GCM, X25519); CVE-2024-12797, CVE-2026-26007
+psutil==5.9.8               # Process monitoring (benchmark_unit_cost)
 
 # Note: The test suite primarily uses:
 # - unittest (stdlib)

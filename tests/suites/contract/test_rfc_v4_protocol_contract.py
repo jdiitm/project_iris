@@ -28,6 +28,9 @@ import struct
 import time
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+from utilities.helpers import wait_until
+
 PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
@@ -279,8 +282,6 @@ def test_live_deprecated_0x02_rejected():
             sock.close()
             return False
 
-        time.sleep(0.05)
-
         # Send using deprecated 0x02
         target = b"nobody"
         msg = b"test_deprecated"
@@ -289,7 +290,6 @@ def test_live_deprecated_0x02_rejected():
                   struct.pack('>H', len(msg)) + msg)
         sock.sendall(packet)
 
-        time.sleep(0.5)
         sock.settimeout(2.0)
         try:
             resp = sock.recv(4096)
@@ -338,12 +338,9 @@ def test_live_reserved_opcode_handling():
             sock.close()
             return False
 
-        time.sleep(0.05)
-
         # Send reserved opcode 0xFE (should be unknown)
         sock.sendall(bytes([0xFE]) + b'\x00\x04test')
 
-        time.sleep(0.3)
         sock.settimeout(2.0)
         try:
             resp = sock.recv(4096)

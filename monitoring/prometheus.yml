@@ -2,15 +2,50 @@ global:
   scrape_interval: 15s
   evaluation_interval: 15s
 
+rule_files:
+  - alerts.yml
+
 scrape_configs:
   - job_name: 'iris_edge'
     metrics_path: '/metrics'
+    # Development: HTTP with static targets
+    # Production: switch to HTTPS with service discovery (see below)
     scheme: 'http'
     static_configs:
       - targets: ['localhost:9090']
-    # For TLS-enabled production deployments, use:
+        labels:
+          region: 'local'
+    bearer_token_file: /etc/iris/metrics_token
+
+    # --- Production: Uncomment for multi-node TLS scraping ---
     # scheme: 'https'
     # tls_config:
     #   insecure_skip_verify: false
     #   ca_file: /etc/iris/certs/ca.pem
-    bearer_token_file: /etc/iris/metrics_token
+    #
+    # --- Production: Replace static_configs with service discovery ---
+    # For Kubernetes:
+    #   kubernetes_sd_configs:
+    #     - role: pod
+    #       namespaces:
+    #         names: ['iris']
+    #   relabel_configs:
+    #     - source_labels: [__meta_kubernetes_pod_label_app]
+    #       regex: iris-edge
+    #       action: keep
+    #
+    # For Docker Compose (multi-node):
+    #   static_configs:
+    #     - targets:
+    #         - 'edge-east-1:9090'
+    #         - 'edge-west-1:9090'
+    #         - 'edge-eu-1:9090'
+    #         - 'core-east-1:9090'
+    #         - 'core-west-1:9090'
+    #         - 'core-eu-1:9090'
+
+# --- Production: Uncomment for Alertmanager integration ---
+# alerting:
+#   alertmanagers:
+#     - static_configs:
+#         - targets: ['alertmanager:9093']

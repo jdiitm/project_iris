@@ -37,6 +37,7 @@ import base64
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 sys.path.insert(0, PROJECT_ROOT)
+from utilities.helpers import wait_until
 
 SERVER_HOST = os.environ.get("IRIS_HOST", "localhost")
 SERVER_PORT = int(os.environ.get("IRIS_PORT", "8085"))
@@ -126,9 +127,8 @@ def test_ws_upgrade():
     ).encode("utf-8")
 
     resp = send_http_request(TARGET_PORT, request)
-    time.sleep(0.3)
 
-    if not server_alive():
+    if not wait_until(server_alive, timeout=3, description="server alive after WS upgrade"):
         log("  FAIL: Server crashed from WebSocket upgrade request")
         return False
 
@@ -161,9 +161,8 @@ def test_missing_ws_key():
     ).encode("utf-8")
 
     resp = send_http_request(TARGET_PORT, request)
-    time.sleep(0.3)
 
-    if not server_alive():
+    if not wait_until(server_alive, timeout=3, description="server alive after malformed WS"):
         log("  FAIL: Server crashed from malformed WS upgrade")
         return False
 
@@ -190,9 +189,8 @@ def test_wrong_ws_version():
     ).encode("utf-8")
 
     resp = send_http_request(TARGET_PORT, request)
-    time.sleep(0.3)
 
-    if not server_alive():
+    if not wait_until(server_alive, timeout=3, description="server alive after wrong WS version"):
         log("  FAIL: Server crashed from wrong WS version")
         return False
 
@@ -214,9 +212,8 @@ def test_raw_http_get():
     ).encode("utf-8")
 
     resp = send_http_request(TARGET_PORT, request)
-    time.sleep(0.3)
 
-    if not server_alive():
+    if not wait_until(server_alive, timeout=3, description="server alive after HTTP GET"):
         log("  FAIL: Server crashed from plain HTTP GET")
         return False
 
@@ -240,7 +237,6 @@ def test_server_survives():
         c = IrisClient()
         c.login("legit_after_ws_probe")
         c.send_msg("ws_probe_target", "hello after ws probing")
-        time.sleep(0.3)
         c.close()
         log("  PASS: Legitimate client works after HTTP probing")
         return True
@@ -259,13 +255,7 @@ def main():
 
     # Pre-check with retry (server may be recovering from previous heavy tests)
     log("\nPre-check: server availability...")
-    alive = False
-    for attempt in range(5):
-        if server_alive():
-            alive = True
-            break
-        log(f"  Waiting for server (attempt {attempt + 1}/5)...")
-        time.sleep(3)
+    alive = wait_until(server_alive, timeout=15, interval=3, description="server available")
 
     if not alive:
         log("FAIL: Server not running after 5 attempts")
