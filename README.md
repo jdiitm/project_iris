@@ -1,11 +1,11 @@
 # Project Iris: WhatsApp-Class Messaging Engine
 
-[![Tests](https://img.shields.io/badge/tests-354%2B%20passing-brightgreen)](tests/run_all_tests.sh)
+[![Tests](https://img.shields.io/badge/tests-355%2B%20passing-brightgreen)](tests/run_all_tests.sh)
 [![TLS](https://img.shields.io/badge/TLS-enforced-green)](docs/DEPLOYMENT.md)
 [![Erlang](https://img.shields.io/badge/Erlang-OTP%2026%2B-blue)](https://www.erlang.org/)
 
 > **Status**: Development / Pre-alpha. Tested at **10K concurrent connections** locally.
-> Full test suite (169 Python + 185 Erlang tests) passing with TLS enforced. Last verified: 2026-02-15.
+> Full test suite (170 Python + 185 Erlang test files, 342+ Python functions + 1482 EUnit tests) passing with TLS enforced. Last verified: 2026-02-17.
 > Architecture designed for 1M+ users per region. See [Scalability Analysis](docs/SCALABILITY_ANALYSIS.md).
 
 ## What This Is
@@ -34,7 +34,7 @@ See [DEPLOYMENT.md](docs/DEPLOYMENT.md) for architecture diagrams and setup.
 ### Known Limitations
 
 - **Mnesia RAM**: `disc_copies` loads all data into RAM at startup. >32 GB data requires multi-region sharding.
-- **Test sleeps**: `time.sleep()` calls remain in tests (RFC Section 13.2 violation). See [audit](docs/audit/time_sleep_audit.md).
+- **Test sleeps**: `time.sleep()` calls reduced from ~652 to ~426 (35% reduction). Remaining calls are legitimate (rate-throttling, polling intervals, intentional timing). CI ratchet enforces threshold of 430. See [audit](docs/audit/time_sleep_audit.md).
 - **mTLS inter-node**: Enforced in production (`enforce_mtls` defaults to `true` when `env=production`). Cluster manager blocks replication without SSL distribution.
 - **Key change notification**: Implemented -- detection, contact tracking (Mnesia-persisted), online delivery (direct pid), offline delivery (durable storage), opcode 0x1A.
 

@@ -1,6 +1,6 @@
 # RFC-001 Compliance Status
 
-**Status**: 169 Python + 185 Erlang tests pass | **TLS Enforced** | **Last Updated**: 2026-02-15
+**Status**: 170 Python + 185 Erlang test files pass (342+ functions + 1482 EUnit) | **TLS Enforced** | **Last Updated**: 2026-02-17
 
 ## Verification Status Legend
 
@@ -107,6 +107,22 @@ All gap closures from 2026-02-07 and 2026-02-08 in a single table.
 | GAP-2 | Amendment 6.3 | No sender key rotation on member removal | Invalidate all sender keys for remaining members | `iris_group_sender_key_rotation_tests.erl` |
 | GAP-3 | Amendment 5.3.2 | Key contacts in RAM-only ETS | Mnesia-persisted `iris_key_contacts` table | `iris_key_contacts_persistence_tests.erl` |
 | AQM | Roadmap Phase 2 | No CoDel/RED drop policy | CoDel algorithm in `iris_mailbox_guard.erl` | `iris_codel_tests.erl` |
+
+---
+
+## Test Determinism (RFC Section 13.2) — 2026-02-17
+
+| Metric | Before | After | Target |
+|--------|--------|-------|--------|
+| `time.sleep()` violations | ~652 | ~426 | <80 |
+| Bare `except:` patterns | 36+ | 0 | 0 |
+| CI `time.sleep()` ratchet | 655 | 430 | — |
+| Server health fixtures | 2 suites | 5 suites | All |
+| Full suite single-run | Failures after ~150 tests | **342 tests pass** | All pass |
+
+**Changes**: Replaced 215 synchronization `time.sleep()` calls with `wait_until()` polling
+and retry-login patterns. Fixed 36 bare `except:` patterns. Added `conftest.py` server health
+fixtures to integration, E2E, and compatibility suites.
 
 ---
 

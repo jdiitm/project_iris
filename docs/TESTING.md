@@ -1,6 +1,6 @@
 # Testing Guide
 
-**Status**: 169 Python + 185 Erlang tests passing | **Last Verified**: 2026-02-15
+**Status**: 170 Python + 185 Erlang test files passing | **Last Verified**: 2026-02-17
 
 ## Quick Start
 
@@ -26,6 +26,20 @@
 | `docker/global-cluster/cluster.sh` | Docker cluster up/down |
 | `docker/global-cluster/init_cluster.sh` | Mnesia cluster initialization |
 | `docker/global-cluster/run_chaos_tests.sh` | Chaos tests with fresh cluster per test |
+
+### Server Health Fixtures (conftest.py)
+
+Each test suite has a `conftest.py` that ensures the Erlang server is responsive
+before each test. This prevents cascading failures from server resource exhaustion
+during long batch runs:
+
+| Suite | Fixture | Behavior |
+|-------|---------|----------|
+| `integration/conftest.py` | `ensure_server_health` | TLS+login probe → wait → auto-restart if unresponsive |
+| `security/conftest.py` | `wait_for_server_ready` | TLS probe → wait up to 30s for recovery |
+| `e2e/conftest.py` | `wait_for_server_ready` | TLS probe → wait up to 30s for recovery |
+| `compatibility/conftest.py` | `wait_for_server_ready` | TLS probe → wait up to 30s for recovery |
+| `stress/conftest.py` | `wait_for_server_ready` | TLS probe → wait up to 30s for recovery |
 
 ### Single Docker Test
 
@@ -65,7 +79,7 @@ Docker chaos tests (`chaos_dist/`) are **destructive** — they kill containers,
 
 ## Test Suites
 
-### Python Test Suites (169 files)
+### Python Test Suites (170 files)
 
 | Suite | Files | Description |
 |-------|-------|-------------|
@@ -139,11 +153,34 @@ random.seed(TEST_SEED)
 # CI-conditional pass
 if os.environ.get("CI"): sys.exit(0)
 
-# Swallow exceptions
-except: pass
+# Swallow exceptions — use specific types
+except: pass                    # BAD
+except Exception as e: log(e)   # OK (explicit handling)
+except (socket.error, OSError): # BEST (specific types)
 
 # Arbitrary sleeps instead of proper waits
-time.sleep(60)  # Hope it works
+time.sleep(60)  # BAD: Hope it works
+wait_until(lambda: condition(), timeout=10)  # GOOD: poll for condition
+```
+
+### Offline Message Pattern: Retry-Login
+
+When testing offline message delivery, the server needs time to persist messages
+before the receiver reconnects. Do **not** use `time.sleep()` for this. Instead,
+use the retry-login pattern:
+
+```python
+for attempt in range(3):
+    receiver = IrisClient()
+    receiver.login(user_name)
+    try:
+        msg = receiver.recv_msg(timeout=5.0)
+        if msg:
+            break  # Got the offline message
+    except (socket.timeout, TimeoutError):
+        pass
+    receiver.close()
+    time.sleep(1)  # Wait before retry (legitimate inter-attempt delay)
 ```
 
 ---
@@ -185,6 +222,16 @@ tests/
 ├── run_all_tests.sh     # Authoritative test runner
 ├── conftest.py          # Seeded randomness, deterministic IDs
 ├── suites/              # Test suites by category (12 suites)
+│   ├── integration/
+│   │   └── conftest.py  # Server health + auto-restart fixture
+│   ├── security/
+│   │   └── conftest.py  # Server recovery wait fixture
+│   ├── e2e/
+│   │   └── conftest.py  # Server recovery wait fixture
+│   ├── compatibility/
+│   │   └── conftest.py  # Server recovery wait fixture
+│   └── stress/
+│       └── conftest.py  # Server recovery wait fixture
 ├── framework/           # ClusterManager, assertions, wait utilities
 ├── utilities/           # IrisClient (TLS-enabled), TLS helpers
 └── artifacts/           # Test outputs (gitignored)

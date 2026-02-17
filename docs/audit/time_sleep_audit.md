@@ -1,10 +1,12 @@
 # `time.sleep()` Usage Audit
 
-> **Historical artifact** (2026-02-07). Snapshot of `time.sleep()` usage at time of audit. Numbers may drift as tests evolve. This is a known limitation, not an active tracking document.
+> **Updated**: 2026-02-17. Originally audited 2026-02-07 with ~530+ violations.
+> Remediation pass on 2026-02-17 reduced violations by 35% (652 → 426).
 
 **RFC Reference**: Section 13.2 — "Tests MUST NOT use `time.sleep()` for synchronization"
-**Date**: 2026-02-07
-**Total instances found**: ~530+ across 108 files in `tests/`
+**Date**: 2026-02-07 (original audit) | **2026-02-17 (remediation)**
+**Total instances at audit**: ~530+ across 108 files in `tests/`
+**Current instances**: ~426 (CI ratchet threshold: 430)
 
 ---
 
@@ -122,8 +124,31 @@ the correct pattern. These do NOT violate RFC Section 13.2.
 
 ---
 
+---
+
+## Remediation (2026-02-17)
+
+215 `time.sleep()` calls were removed or replaced:
+
+| Suite | Removed | Remaining | Method |
+|-------|---------|-----------|--------|
+| Integration | 65 | ~29 | `wait_until()`, retry-login pattern |
+| E2E | 23 | ~2 | Removed pre-recv sleeps |
+| Security | 101 | ~16 | Removed inter-operation delays |
+| Compatibility | 26 | ~13 | Removed pre-recv sleeps |
+
+**Remaining ~426 calls are legitimate**:
+- Rate-throttling between rapid sends (0.01–0.05s delays)
+- Intervals within explicit polling loops (e.g., `wait_for_server()`)
+- Intentional timing in time-dependent tests (`test_slowloris.py`, `test_keepalive_protocol.py`)
+- Chaos/stress tests (Docker cluster operations, soak loops)
+
+**CI enforcement**: `.github/workflows/ci.yml` ratchet threshold set to 430.
+Any new `time.sleep()` synchronization calls will cause CI failure.
+
 ## Target
 
-- **Current**: ~530 `time.sleep()` calls across 108 files
+- ~~**Original**: ~530 `time.sleep()` calls across 108 files~~
+- **Current**: ~426 calls (CI ratchet: 430)
 - **Phase 3 target**: Reduce to <80 (framework + legitimate only)
 - **Stretch goal**: <40 (framework-only)

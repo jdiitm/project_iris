@@ -4,6 +4,45 @@ All notable changes to Iris Messaging System.
 
 ## [Unreleased]
 
+### Changed
+
+#### Test Determinism & CI Hardening (2026-02-17)
+
+**Systematic production readiness hardening: 56 files changed, 342 Python + 1482 EUnit tests pass in one shot.**
+
+- **Test Determinism (RFC Section 13.2)**:
+  - Replaced ~215 `time.sleep()` synchronization calls with `wait_until()` polling
+    and retry-login patterns across integration, E2E, security, and compatibility suites
+  - CI ratchet threshold tightened from 655 → 430 violations (35% reduction)
+  - Remaining ~426 `time.sleep()` calls are legitimate (rate-throttling, polling intervals,
+    intentional timing tests)
+
+- **Test Quality**:
+  - Fixed 36 bare `except:` patterns with specific exception types across 8 test files
+  - Replaced silent exception swallowing with explicit `except (socket.error, OSError):`
+    and `except Exception as e: log(...)` patterns
+  - Added bare-except CI lint step with ratchet threshold
+
+- **Test Infrastructure**:
+  - Added `tests/suites/integration/conftest.py` — server health monitoring with
+    automatic restart on resource exhaustion (probe-based, not timer-based)
+  - Added `tests/suites/e2e/conftest.py` — server connectivity check before each test
+  - Added `tests/suites/compatibility/conftest.py` — server connectivity check
+  - Introduced retry-login pattern for offline message delivery tests (server needs
+    time to persist before receiver reconnects)
+
+- **CI Hardening**:
+  - EUnit cancelled tests: fail CI if >10 cancelled (was warning-only)
+  - Coverage gate: removed `|| true` masking on `make test-cover`
+  - `time.sleep()` ratchet: 655 → 430
+  - New bare-except lint gate (threshold: 100)
+
+- **Erlang Fixes**:
+  - `iris_session.erl`: Handle unmatched return from `store_sender_key` with error logging
+  - `iris_keys.erl`: Handle unmatched return from `store_offline_durable` with error logging
+
+**Results**: 342 Python tests + 1482 EUnit tests pass in a single pytest invocation (~8 min).
+
 ### Added
 
 #### RFC v4.0 Forensic Audit Fixes (2026-02-09 — 2026-02-10)

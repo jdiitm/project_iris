@@ -1,6 +1,6 @@
 # Test Suite
 
-**169 Python + 185 Erlang tests** | **TLS Enforced** | **Last Verified**: 2026-02-15
+**170 Python + 185 Erlang test files** | **TLS Enforced** | **Last Verified**: 2026-02-17
 
 Full documentation: [docs/TESTING.md](../docs/TESTING.md)
 
@@ -19,5 +19,7 @@ Full documentation: [docs/TESTING.md](../docs/TESTING.md)
 - All clients use TLS by default (`IrisClient`)
 - Seed randomness with `TEST_SEED` for reproducibility
 - No bare `except: pass`, no `time.sleep()` for sync (RFC 13.2)
+- Use `wait_until()` or retry-login pattern for async conditions
+- Each suite has a `conftest.py` that monitors server health between tests
 
 See [docs/TESTING.md](../docs/TESTING.md) for suite details, CI pipeline, and writing tests.
