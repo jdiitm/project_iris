@@ -344,7 +344,7 @@ handle_success(Breaker = #breaker{status = open}, _Timestamp, _Latency) ->
     %% Shouldn't happen, but handle gracefully
     Breaker.
 
-handle_failure(Breaker = #breaker{status = closed, failures = F, reset_timeout = Timeout}, Timestamp) ->
+handle_failure(Breaker = #breaker{status = closed, failures = F, reset_timeout = _Timeout}, Timestamp) ->
     NewFailures = F + 1,
     case NewFailures >= ?FAILURE_THRESHOLD of
         true ->
@@ -378,9 +378,9 @@ handle_failure(Breaker = #breaker{status = open}, Timestamp) ->
 
 update_latency(_AvgLatency, undefined, _Total) ->
     0.0;
-update_latency(AvgLatency, Latency, Total) when Total == 0 ->
+update_latency(_AvgLatency, Latency, Total) when Total == 0 ->
     float(Latency);
-update_latency(AvgLatency, Latency, Total) ->
+update_latency(AvgLatency, Latency, _Total) ->
     %% Exponential moving average
     Alpha = 0.1,
     AvgLatency * (1 - Alpha) + Latency * Alpha.

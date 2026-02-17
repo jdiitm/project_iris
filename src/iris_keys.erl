@@ -310,7 +310,7 @@ init_contacts_table() ->
             ok;
         {aborted, Reason} ->
             logger:error("Failed to create key_contact table: ~p", [Reason]),
-            {error, Reason}
+            _ = {error, Reason}
     end,
     mnesia:wait_for_tables([key_contact], 5000),
     ok.

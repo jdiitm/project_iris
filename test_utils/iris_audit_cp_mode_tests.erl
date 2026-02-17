@@ -26,11 +26,11 @@ ensure_metrics_table() ->
         _ -> ok
     end.
 
-get_metric(Key) ->
-    case ets:lookup(?METRICS_TABLE, Key) of
-        [{_, Val}] -> Val;
-        [] -> 0
-    end.
+%% get_metric(Key) ->
+%%     case ets:lookup(?METRICS_TABLE, Key) of
+%%         [{_, Val}] -> Val;
+%%         [] -> 0
+%%     end.
 
 cleanup() ->
     application:unset_env(iris_core, consistency_mode),

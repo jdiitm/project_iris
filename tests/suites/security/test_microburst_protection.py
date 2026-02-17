@@ -27,6 +27,7 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(_
 sys.path.insert(0, PROJECT_ROOT)
 
 from tests.utilities import IrisClient
+from tests.utilities.tls_connection import get_verified_ssl_context
 
 SERVER_HOST = os.environ.get("IRIS_HOST", "localhost")
 SERVER_PORT = int(os.environ.get("IRIS_PORT", "8085"))
@@ -53,9 +54,7 @@ def server_alive():
 
 def create_tls_socket(host, port, timeout=5):
     """Create a TLS socket to the server."""
-    ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
+    ctx = get_verified_ssl_context()
     raw = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     raw.settimeout(timeout)
     tls_sock = ctx.wrap_socket(raw, server_hostname=host)

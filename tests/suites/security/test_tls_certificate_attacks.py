@@ -30,6 +30,8 @@ from pathlib import Path
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 sys.path.insert(0, PROJECT_ROOT)
 
+from tests.utilities.tls_connection import get_unverified_ssl_context
+
 # Paths
 CA_CERT = os.path.join(PROJECT_ROOT, "certs", "ca.pem")
 EXPIRED_CERT = os.path.join(PROJECT_ROOT, "certs", "expired.pem")
@@ -116,9 +118,7 @@ def test_expired_certificate():
         log(f"  SKIP: {EXPIRED_CERT} not found")
         return True  # Cannot test without cert -- infrastructure gap
 
-    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE  # We don't verify server; server verifies us
+    ctx = get_unverified_ssl_context()  # Unverified: testing rejection/attack scenario
     try:
         ctx.load_cert_chain(EXPIRED_CERT, EXPIRED_KEY)
     except ssl.SSLError as e:
@@ -152,9 +152,7 @@ def test_untrusted_ca_certificate():
         log(f"  SKIP: {UNTRUSTED_CERT} not found")
         return True
 
-    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
+    ctx = get_unverified_ssl_context()  # Unverified: testing rejection/attack scenario
     try:
         ctx.load_cert_chain(UNTRUSTED_CERT, UNTRUSTED_KEY)
     except ssl.SSLError as e:
@@ -185,9 +183,7 @@ def test_self_signed_certificate():
         log(f"  SKIP: {UNTRUSTED_CERT} not found")
         return True
 
-    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
+    ctx = get_unverified_ssl_context()  # Unverified: testing rejection/attack scenario
     try:
         ctx.load_cert_chain(UNTRUSTED_CERT, UNTRUSTED_KEY)
     except ssl.SSLError as e:
@@ -213,9 +209,7 @@ def test_tls_downgrade_attack():
 
     # Try to force TLS 1.2
     try:
-        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
+        ctx = get_unverified_ssl_context()  # Unverified: testing rejection/attack scenario
         # Disable TLS 1.3, force max TLS 1.2
         ctx.maximum_version = ssl.TLSVersion.TLSv1_2
     except AttributeError:
@@ -240,9 +234,7 @@ def test_no_client_certificate():
     """Connect without presenting any client certificate."""
     log("\n=== Test: No Client Certificate ===")
 
-    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
+    ctx = get_unverified_ssl_context()  # Unverified: testing rejection/attack scenario
     # Deliberately do NOT load any client cert
 
     rejected = tls_connect_with_context(ctx, "no client cert")
@@ -268,9 +260,7 @@ def test_server_survives():
 
     # Try a legitimate TLS connection
     try:
-        ctx = ssl.create_default_context()
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
+        ctx = get_unverified_ssl_context()  # Unverified: testing rejection/attack scenario
 
         raw = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         raw.settimeout(TIMEOUT)

@@ -12,6 +12,7 @@ import ssl
 import time
 import pytest
 from pathlib import Path
+from tests.utilities.tls_connection import get_unverified_ssl_context
 
 PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
 SERVER_HOST = os.environ.get("IRIS_HOST", "localhost")
@@ -22,12 +23,7 @@ CA_CERT = PROJECT_ROOT / "certs" / "ca.pem"
 def _try_connect(timeout=3.0):
     """Attempt a single TLS connection. Returns True on success."""
     try:
-        ctx = ssl.create_default_context()
-        if CA_CERT.exists():
-            ctx.load_verify_locations(str(CA_CERT))
-        else:
-            ctx.check_hostname = False
-            ctx.verify_mode = ssl.CERT_NONE
+        ctx = get_unverified_ssl_context()  # Unverified: testing rejection/attack scenario
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.settimeout(timeout)
         tls = ctx.wrap_socket(sock, server_hostname=SERVER_HOST)

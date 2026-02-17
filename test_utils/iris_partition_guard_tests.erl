@@ -195,27 +195,27 @@ test_partition_mode_is_diverged() ->
 
 %% These tests verify behavior with a running partition guard
 
-test_permissive_when_no_config_() ->
-    {setup,
-     fun() ->
-         application:unset_env(iris_core, expected_cluster_nodes),
-         application:unset_env(iris_core, partition_guard_mode),
-         case iris_partition_guard:start_link() of
-             {ok, Pid} -> {started, Pid};
-             {error, {already_started, Pid}} -> {existing, Pid}
-         end
-     end,
-     fun({started, Pid}) -> gen_server:stop(Pid, normal, 1000);
-        ({existing, _}) -> ok
-     end,
-     fun(_) ->
-         [
-          {"Safe for writes when no expected nodes", fun() ->
-              Result = iris_partition_guard:is_safe_for_writes(),
-              ?assertEqual(ok, Result)
-          end}
-         ]
-     end}.
+%% test_permissive_when_no_config_() ->
+%%     {setup,
+%%      fun() ->
+%%          application:unset_env(iris_core, expected_cluster_nodes),
+%%          application:unset_env(iris_core, partition_guard_mode),
+%%          case iris_partition_guard:start_link() of
+%%              {ok, Pid} -> {started, Pid};
+%%              {error, {already_started, Pid}} -> {existing, Pid}
+%%          end
+%%      end,
+%%      fun({started, Pid}) -> gen_server:stop(Pid, normal, 1000);
+%%         ({existing, _}) -> ok
+%%      end,
+%%      fun(_) ->
+%%          [
+%%           {"Safe for writes when no expected nodes", fun() ->
+%%               Result = iris_partition_guard:is_safe_for_writes(),
+%%               ?assertEqual(ok, Result)
+%%           end}
+%%          ]
+%%      end}.
 
 %% =============================================================================
 %% 2.2: resolve_authority/4 — Split-Brain Resolution

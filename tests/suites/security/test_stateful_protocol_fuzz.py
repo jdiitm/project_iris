@@ -37,6 +37,7 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(_
 sys.path.insert(0, PROJECT_ROOT)
 
 from tests.utilities import IrisClient
+from tests.utilities.tls_connection import get_unverified_ssl_context
 
 # Determinism
 TEST_SEED = int(os.environ.get("TEST_SEED", 42))
@@ -68,9 +69,7 @@ def server_alive():
 
 def get_tls_socket(timeout=TIMEOUT):
     """Get a TLS-wrapped socket to the server."""
-    ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
+    ctx = get_unverified_ssl_context()  # Unverified: testing rejection/attack scenario
     raw = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     raw.settimeout(timeout)
     tls_sock = ctx.wrap_socket(raw, server_hostname=SERVER_HOST)

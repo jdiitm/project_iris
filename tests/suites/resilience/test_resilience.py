@@ -44,6 +44,7 @@ if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
 from tests.framework.cluster import ClusterManager, get_cluster
+from tests.utilities.tls_connection import get_verified_ssl_context
 
 # TLS Configuration
 CERTS_DIR = Path(project_root) / "certs"
@@ -57,13 +58,7 @@ def get_tls_cluster_manager():
 
 def create_tls_context():
     """Create TLS context for secure connections."""
-    context = ssl.create_default_context()
-    ca_cert = CERTS_DIR / "ca.pem"
-    if ca_cert.exists():
-        context.load_verify_locations(str(ca_cert))
-    context.check_hostname = False
-    context.verify_mode = ssl.CERT_NONE  # For testing
-    return context
+    return get_verified_ssl_context()
 
 def create_tls_socket(host='localhost', port=8085, timeout=5):
     """Create a TLS-wrapped socket connection."""

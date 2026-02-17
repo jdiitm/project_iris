@@ -42,6 +42,7 @@ PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from tests.framework.wait import wait_for, poll_until, WaitTimeout
+from tests.utilities.tls_connection import get_verified_ssl_context
 
 # Test configuration
 SERVER_HOST = os.environ.get("IRIS_HOST", "localhost")
@@ -58,13 +59,7 @@ def log(msg):
 
 def connect_tls():
     """Create TLS connection to Iris edge."""
-    context = ssl.create_default_context()
-    ca_cert = PROJECT_ROOT / "certs" / "ca.pem"
-    if ca_cert.exists():
-        context.load_verify_locations(str(ca_cert))
-    else:
-        context.check_hostname = False
-        context.verify_mode = ssl.CERT_NONE
+    context = get_verified_ssl_context()
     
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.settimeout(TIMEOUT)

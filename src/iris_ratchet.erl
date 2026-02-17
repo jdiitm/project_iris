@@ -79,11 +79,12 @@
     skipped_keys :: #{binary() => binary()}  %% {DHPub, N} -> MsgKey
 }).
 
--record(message_header, {
-    dh_public :: binary(),        %% Sender's current ratchet public key
-    prev_chain_len :: non_neg_integer(),  %% Previous chain message count
-    msg_number :: non_neg_integer()       %% Message number in current chain
-}).
+%% Commented out: unused record (kept for documentation).
+%% -record(message_header, {
+%%     dh_public :: binary(),        %% Sender's current ratchet public key
+%%     prev_chain_len :: non_neg_integer(),  %% Previous chain message count
+%%     msg_number :: non_neg_integer()       %% Message number in current chain
+%% }).
 
 %% =============================================================================
 %% Session Initialization
@@ -195,7 +196,7 @@ encrypt(Plaintext, State) ->
 decrypt(Ciphertext, Header, State) ->
     DHRemote = maps:get(dh_public, Header),
     MsgNum = maps:get(msg_number, Header),
-    PrevChainLen = maps:get(prev_chain_len, Header),
+    _ = maps:get(prev_chain_len, Header),
     
     %% Try skipped keys first
     case try_skipped_keys(DHRemote, MsgNum, Ciphertext, Header, State) of
@@ -203,7 +204,7 @@ decrypt(Ciphertext, Header, State) ->
             {ok, Plaintext, NewState};
         not_found ->
             %% Check if this is a new ratchet
-            {DHPub, _} = State#ratchet_state.dh_pair,
+            {_DHPub, _} = State#ratchet_state.dh_pair,
             case DHRemote =:= State#ratchet_state.dh_remote of
                 true ->
                     %% Same ratchet - skip ahead in current chain
@@ -447,7 +448,7 @@ skip_messages(_DHRemote, TargetNum, _ChainKey, CurrentNum, State)
 skip_messages(_DHRemote, TargetNum, _ChainKey, CurrentNum, _State) 
   when TargetNum - CurrentNum > ?MAX_SKIP ->
     throw({error, too_many_skipped_messages});
-skip_messages(DHRemote, TargetNum, ChainKey, CurrentNum, State) 
+skip_messages(_DHRemote, _TargetNum, ChainKey, _CurrentNum, State) 
   when ChainKey =:= undefined ->
     State;  %% No chain to skip from
 skip_messages(DHRemote, TargetNum, ChainKey, CurrentNum, State) ->

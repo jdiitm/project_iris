@@ -128,7 +128,7 @@ decode(<<2, TargetLen:16, _/binary>>) when TargetLen > ?MAX_TARGET_LEN ->
 
 decode(<<2, TargetLen:16, Rest/binary>>) ->
     case Rest of
-        <<Target:TargetLen/binary, MsgLen:16, _/binary>> when MsgLen > ?MAX_MSG_LEN ->
+        <<_Target:TargetLen/binary, MsgLen:16, _/binary>> when MsgLen > ?MAX_MSG_LEN ->
             %% Message too long - reject
             { {error, message_too_long}, <<>> };
         <<Target:TargetLen/binary, MsgLen:16, Msg:MsgLen/binary, Rem/binary>> ->
@@ -178,7 +178,7 @@ decode(<<7, TargetLen:16, _/binary>>) when TargetLen > ?MAX_TARGET_LEN ->
     
 decode(<<7, TargetLen:16, Rest/binary>>) ->
     case Rest of
-        <<Target:TargetLen/binary, SeqNo:64, MsgLen:16, _/binary>> when MsgLen > ?MAX_MSG_LEN ->
+        <<_Target:TargetLen/binary, _SeqNo:64, MsgLen:16, _/binary>> when MsgLen > ?MAX_MSG_LEN ->
             { {error, message_too_long}, <<>> };
         <<Target:TargetLen/binary, SeqNo:64, MsgLen:16, Msg:MsgLen/binary, Rem/binary>> ->
             { {send_seq, Target, SeqNo, Msg}, Rem };
@@ -196,7 +196,7 @@ decode(<<16#0D, TargetLen:16, _/binary>>) when TargetLen > ?MAX_TARGET_LEN ->
 
 decode(<<16#0D, TargetLen:16, Rest/binary>>) ->
     case Rest of
-        <<Target:TargetLen/binary, IdKey:16/binary, SeqNo:64, MsgLen:16, _/binary>> when MsgLen > ?MAX_MSG_LEN ->
+        <<_Target:TargetLen/binary, _IdKey:16/binary, _SeqNo:64, MsgLen:16, _/binary>> when MsgLen > ?MAX_MSG_LEN ->
             { {error, message_too_long}, <<>> };
         <<Target:TargetLen/binary, IdKey:16/binary, SeqNo:64, MsgLen:16, Msg:MsgLen/binary, Rem/binary>> ->
             { {send_seq_v2, Target, IdKey, SeqNo, Msg}, Rem };
@@ -376,10 +376,10 @@ decode(<<16#23, RecipientLen:16, _/binary>>) when RecipientLen > ?MAX_TARGET_LEN
 
 decode(<<16#23, RecipientLen:16, Rest/binary>>) ->
     case Rest of
-        <<Recipient:RecipientLen/binary, HeaderLen:16, _/binary>> 
+        <<_Recipient:RecipientLen/binary, HeaderLen:16, _/binary>> 
           when HeaderLen > ?MAX_E2EE_HEADER_LEN ->
             { {error, e2ee_header_too_large}, <<>> };
-        <<Recipient:RecipientLen/binary, HeaderLen:16, Header:HeaderLen/binary,
+        <<_Recipient:RecipientLen/binary, HeaderLen:16, _Header:HeaderLen/binary,
           CipherLen:32, _/binary>> when CipherLen > ?MAX_E2EE_CIPHER_LEN ->
             { {error, e2ee_ciphertext_too_large}, <<>> };
         <<Recipient:RecipientLen/binary, HeaderLen:16, HeaderBytes:HeaderLen/binary,
@@ -400,7 +400,7 @@ decode(<<16#24, _/binary>> = Bin) when byte_size(Bin) < 9 ->
 
 decode(<<16#24, SenderLen:16, Rest/binary>>) ->
     case Rest of
-        <<Sender:SenderLen/binary, HeaderLen:16, _/binary>> 
+        <<_Sender:SenderLen/binary, HeaderLen:16, _/binary>> 
           when HeaderLen > ?MAX_E2EE_HEADER_LEN ->
             { {error, e2ee_header_too_large}, <<>> };
         <<Sender:SenderLen/binary, HeaderLen:16, HeaderBytes:HeaderLen/binary,
@@ -471,10 +471,10 @@ decode(<<16#32, GroupIdLen:16, _/binary>>) when GroupIdLen > ?MAX_TARGET_LEN ->
 %% 0x33: Group Message (Encrypted)
 decode(<<16#33, GroupIdLen:16, Rest/binary>>) when GroupIdLen =< ?MAX_TARGET_LEN ->
     case Rest of
-        <<GroupId:GroupIdLen/binary, HeaderLen:16, _/binary>> 
+        <<_GroupId:GroupIdLen/binary, HeaderLen:16, _/binary>> 
           when HeaderLen > ?MAX_E2EE_HEADER_LEN ->
             { {error, group_header_too_large}, <<>> };
-        <<GroupId:GroupIdLen/binary, HeaderLen:16, HeaderBytes:HeaderLen/binary,
+        <<_GroupId:GroupIdLen/binary, HeaderLen:16, _HeaderBytes:HeaderLen/binary,
           CipherLen:32, _/binary>> when CipherLen > ?MAX_E2EE_CIPHER_LEN ->
             { {error, group_ciphertext_too_large}, <<>> };
         <<GroupId:GroupIdLen/binary, HeaderLen:16, HeaderBytes:HeaderLen/binary,
@@ -507,7 +507,7 @@ decode(<<16#35, GroupIdLen:16, _/binary>>) when GroupIdLen > ?MAX_TARGET_LEN ->
 %% 0x36: Sender Key Distribution
 decode(<<16#36, GroupIdLen:16, Rest/binary>>) when GroupIdLen =< ?MAX_TARGET_LEN ->
     case Rest of
-        <<GroupId:GroupIdLen/binary, KeyDataLen:32, _/binary>> 
+        <<_GroupId:GroupIdLen/binary, KeyDataLen:32, _/binary>> 
           when KeyDataLen > ?MAX_KEYBUNDLE_LEN ->
             { {error, sender_key_too_large}, <<>> };
         <<GroupId:GroupIdLen/binary, KeyDataLen:32, KeyData:KeyDataLen/binary, Rem/binary>> ->

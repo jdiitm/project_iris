@@ -64,11 +64,11 @@ ebin/%.appup: src/%.appup.src
 
 ebin/%.beam: src/%.erl
 	@mkdir -p ebin
-	$(ERLC) +debug_info -o ebin $<
+	$(ERLC) +debug_info +warnings_as_errors -o ebin $<
 
 ebin/%.beam: test_utils/%.erl
 	@mkdir -p ebin
-	$(ERLC) +debug_info -o ebin $<
+	$(ERLC) +debug_info +warnings_as_errors -o ebin $<
 
 check_deps:
 	@$(ERL) -noshell -eval 'case code:lib_dir(mnesia) of {error, _} -> io:format("Error: mnesia application not found in Erlang lib (~s).~n", [code:root_dir()]), init:stop(1); _ -> init:stop(0) end.' || (echo "FAILED: Valid Erlang with Mnesia not found. Please set ERL variable." && exit 1)

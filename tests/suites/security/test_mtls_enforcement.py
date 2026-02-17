@@ -29,6 +29,8 @@ import subprocess
 import time
 from pathlib import Path
 
+from tests.utilities.tls_connection import get_unverified_ssl_context
+
 # Configuration
 PROJECT_ROOT = Path(os.environ.get("IRIS_PROJECT_ROOT", Path(__file__).parent.parent.parent.parent))
 CERTS_DIR = PROJECT_ROOT / "certs"
@@ -89,9 +91,7 @@ def check_prerequisites():
     # cert. The server sends certificate_required AFTER the handshake, so we
     # must attempt to send/recv data to trigger the server's cert validation.
     try:
-        context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-        context.check_hostname = False
-        context.verify_mode = ssl.CERT_NONE  # Don't verify server cert for this check
+        context = get_unverified_ssl_context()  # Unverified: testing rejection/attack scenario
         
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.settimeout(5)

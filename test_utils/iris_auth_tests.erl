@@ -204,12 +204,12 @@ test_constant_time_equal() ->
 test_constant_time_unequal() ->
     A = <<"value_a">>,
     B = <<"value_b">>,
-    ?assertNotEqual(A, B).
+    ?assert(A =/= B).
 
 test_constant_time_length() ->
     A = <<"short">>,
     B = <<"very_long_value">>,
-    ?assertNotEqual(byte_size(A), byte_size(B)).
+    ?assert(byte_size(A) =/= byte_size(B)).
 
 %% =============================================================================
 %% Helper Functions

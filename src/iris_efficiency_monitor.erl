@@ -250,7 +250,7 @@ get_scheduler_utilization() ->
 %% Internal: Efficiency Score
 %% =============================================================================
 
-calculate_efficiency_score(State) ->
+calculate_efficiency_score(_State) ->
     %% Score components (each 0-100)
     MemScore = memory_efficiency_score(),
     SchedScore = scheduler_efficiency_score(),
@@ -308,7 +308,7 @@ process_efficiency_score() ->
 %% Internal: Recommendations
 %% =============================================================================
 
-generate_recommendations(State) ->
+generate_recommendations(_State) ->
     Recommendations = [],
     
     %% Memory recommendations

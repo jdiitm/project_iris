@@ -115,7 +115,7 @@ connected(info, {Error, _, _}, Data)
     {stop, normal, Data};
 
 %% Route msg from router
-connected(info, {deliver_msg, Msg}, Data = #data{socket = Socket}) ->
+connected(info, {deliver_msg, Msg}, _Data = #data{socket = Socket}) ->
     %% Wrap in Binary Frame (Opcode 2)
     Frame = encode_frame(binary, Msg),
     sock_send(Socket, Frame),

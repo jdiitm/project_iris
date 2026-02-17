@@ -35,6 +35,8 @@ import sys
 import os
 from pathlib import Path
 
+from tests.utilities.tls_connection import get_verified_ssl_context
+
 # Project root for locating scripts
 PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
 
@@ -56,13 +58,7 @@ RECOVERY_TIMEOUT = 60 * CI_TIMEOUT_FACTOR
 
 def connect_tls(max_retries=5, retry_delay=2.0):
     """Create TLS connection to Iris edge with retry logic."""
-    context = ssl.create_default_context()
-    ca_cert = PROJECT_ROOT / "certs" / "ca.pem"
-    if ca_cert.exists():
-        context.load_verify_locations(str(ca_cert))
-    else:
-        context.check_hostname = False
-        context.verify_mode = ssl.CERT_NONE
+    context = get_verified_ssl_context()
     
     last_err = None
     for attempt in range(max_retries):

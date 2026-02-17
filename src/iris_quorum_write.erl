@@ -209,7 +209,7 @@ repair_async(Table, Key, Value, FailedNodes) ->
 %% Internal: Replica Write
 %% =============================================================================
 
-do_replica_write(Node, Table, Key, Value, Timeout) when Node == node() ->
+do_replica_write(Node, Table, Key, Value, _Timeout) when Node == node() ->
     %% Local write - use Mnesia directly
     F = fun() -> mnesia:write({Table, Key, Value}) end,
     try mnesia:activity(sync_transaction, F) of
@@ -239,7 +239,7 @@ local_sync_write(Table, Key, Value) ->
 %% Internal: Replica Read
 %% =============================================================================
 
-do_replica_read(Node, Table, Key, Timeout) when Node == node() ->
+do_replica_read(Node, Table, Key, _Timeout) when Node == node() ->
     %% Local read
     case mnesia:dirty_read(Table, Key) of
         [] -> {not_found, Node};

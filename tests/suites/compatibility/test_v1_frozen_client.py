@@ -32,6 +32,8 @@ from pathlib import Path
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 sys.path.insert(0, PROJECT_ROOT)
 
+from tests.utilities.tls_connection import get_verified_ssl_context
+
 CA_CERT = os.path.join(PROJECT_ROOT, "certs", "ca.pem")
 SERVER_HOST = os.environ.get("IRIS_HOST", "localhost")
 SERVER_PORT = int(os.environ.get("IRIS_PORT", "8085"))
@@ -67,9 +69,7 @@ class V1FrozenClient:
     V1_GET_STATUS = 0x06
 
     def __init__(self):
-        ctx = ssl.create_default_context()
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
+        ctx = get_verified_ssl_context()
         raw = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         raw.settimeout(TIMEOUT)
         self.sock = ctx.wrap_socket(raw, server_hostname=SERVER_HOST)

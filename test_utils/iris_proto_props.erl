@@ -96,10 +96,10 @@ random_binary(MaxSize) ->
     list_to_binary([rand:uniform(256) - 1 || _ <- lists:seq(1, Size)]).
 
 %% Generate random username (alphanumeric)
-random_username() ->
-    Len = rand:uniform(?MAX_USERNAME_LEN),
-    Chars = "abcdefghijklmnopqrstuvwxyz0123456789_",
-    [lists:nth(rand:uniform(length(Chars)), Chars) || _ <- lists:seq(1, Len)].
+%% random_username() ->
+%%     Len = rand:uniform(?MAX_USERNAME_LEN),
+%%     Chars = "abcdefghijklmnopqrstuvwxyz0123456789_",
+%%     [lists:nth(rand:uniform(length(Chars)), Chars) || _ <- lists:seq(1, Len)].
 
 %% Generate random message content
 random_message() ->
@@ -107,8 +107,8 @@ random_message() ->
     list_to_binary([rand:uniform(256) - 1 || _ <- lists:seq(1, Len)]).
 
 %% Generate random sequence number (32-bit)
-random_sequence() ->
-    rand:uniform(4294967296) - 1.  % 0 to 2^32-1
+%% random_sequence() ->
+%%     rand:uniform(4294967296) - 1.  % 0 to 2^32-1
 
 %% =============================================================================
 %% Property 1: Encode/Decode Roundtrip

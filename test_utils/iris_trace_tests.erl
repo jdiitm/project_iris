@@ -414,7 +414,7 @@ test_rpc_propagation() ->
     
     %% Client creates span and prepares RPC
     iris_trace:new_span(<<"client_request">>),
-    ClientSpan = iris_trace:get_span_id(),
+    _ClientSpan = iris_trace:get_span_id(),
     
     %% Client injects context into RPC
     RpcPayload = iris_trace:inject(#{message => <<"hello">>}),

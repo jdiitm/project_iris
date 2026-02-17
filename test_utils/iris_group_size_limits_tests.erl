@@ -19,13 +19,13 @@
     member_count :: integer()
 }).
 
--record(group_member, {
-    key         :: {binary(), binary()},
-    role        :: admin | member,
-    joined_at   :: integer(),
-    added_by    :: binary(),
-    last_seen   :: integer()
-}).
+%% -record(group_member, {
+%%     key         :: {binary(), binary()},
+%%     role        :: admin | member,
+%%     joined_at   :: integer(),
+%%     added_by    :: binary(),
+%%     last_seen   :: integer()
+%% }).
 
 iris_group_size_limits_test_() ->
     {setup,

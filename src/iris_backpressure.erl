@@ -67,7 +67,7 @@ should_accept_connection() ->
 
 %% @doc Get delay to impose on client (for slow-down backpressure)
 -spec get_client_delay(binary()) -> integer().
-get_client_delay(User) ->
+get_client_delay(_User) ->
     case whereis(iris_flow_controller) of
         undefined -> 0;
         _ ->

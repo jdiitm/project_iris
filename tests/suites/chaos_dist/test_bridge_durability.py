@@ -34,6 +34,8 @@ import threading
 from typing import Optional, Dict, Set, Tuple
 from pathlib import Path
 
+from tests.utilities.tls_connection import get_verified_ssl_context
+
 # Project root
 PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
 
@@ -44,12 +46,7 @@ CA_CERT = PROJECT_ROOT / "certs" / "ca.pem"
 def create_tls_socket(host: str, port: int, timeout: int = 10,
                       max_retries: int = 3, retry_delay: float = 2.0) -> socket.socket:
     """Create a TLS-wrapped socket connection with retry."""
-    context = ssl.create_default_context()
-    if CA_CERT.exists():
-        context.load_verify_locations(str(CA_CERT))
-    else:
-        context.check_hostname = False
-        context.verify_mode = ssl.CERT_NONE
+    context = get_verified_ssl_context()
     
     last_err = None
     for attempt in range(max_retries):

@@ -112,16 +112,23 @@ jobs:
 
       - name: Run EUnit tests
         run: |
-          # EUnit returns error when tests are cancelled (even with 0 failures).
-          # Capture output and check for actual failures vs benign cancellations.
+          # EUnit output: "All N tests passed." on success,
+          # or "Failed: X. Skipped: Y. Cancelled: Z." on non-zero exit.
+          # We reject ANY cancelled tests — they indicate modules that never ran.
           make test 2>&1 | tee /tmp/eunit_out.txt; rc=${PIPESTATUS[0]}
           if [ $rc -eq 0 ]; then
             echo "EUnit: all tests passed"
           else
-            if grep -q "Failed: 0" /tmp/eunit_out.txt; then
-              echo "::warning::EUnit reported cancelled tests but 0 failures. Investigate cancelled tests."
+            CANCELLED=$(grep -oP 'Cancelled: \K[0-9]+' /tmp/eunit_out.txt || echo "0")
+            FAILED=$(grep -oP 'Failed: \K[0-9]+' /tmp/eunit_out.txt || echo "unknown")
+            if [ "$FAILED" = "0" ] && [ "$CANCELLED" = "0" ]; then
+              echo "EUnit: 0 failures, 0 cancellations (non-zero exit is benign)"
+            elif [ "$FAILED" = "0" ] && [ "$CANCELLED" != "0" ]; then
+              echo "::error::EUnit: $CANCELLED test(s) CANCELLED. Cancelled tests never ran — this is a BLOCKER."
+              echo "Review /tmp/eunit_out.txt for cancelled module details."
+              exit 1
             else
-              echo "::error::EUnit tests failed"
+              echo "::error::EUnit tests failed (Failed: $FAILED, Cancelled: $CANCELLED)"
               exit 1
             fi
           fi
@@ -131,20 +138,23 @@ jobs:
           erl -pa ebin -noshell -eval \
             "case iris_proto_props:test_all() of ok -> halt(0); error -> halt(1) end."
 
-      - name: Run coverage analysis (minimum 70%)
+      - name: Run coverage analysis (minimum 75%)
         if: always()
         run: |
           mkdir -p coverage
-          # test-cover may exit non-zero due to EUnit cancellations; capture output
-          make test-cover 2>&1 | tee coverage/test-cover.log || true
-          # Extract coverage percentage and enforce minimum threshold
-          COV_PCT=$(grep -oP 'Coverage: .* \(\K[0-9]+' coverage/test-cover.log || echo "0")
-          echo "Coverage: ${COV_PCT}%"
-          if [ "$COV_PCT" -lt 70 ]; then
-            echo "::error::Coverage ${COV_PCT}% is below minimum threshold of 70%"
+          make test-cover 2>&1 | tee coverage/test-cover.log; cover_rc=${PIPESTATUS[0]}
+          # Extract coverage percentage robustly
+          COV_PCT=$(grep -oP 'Coverage: .* \(\K[0-9]+' coverage/test-cover.log 2>/dev/null || echo "")
+          if [ -z "$COV_PCT" ]; then
+            echo "::error::Coverage percentage not found in test-cover output. Check coverage/test-cover.log."
             exit 1
           fi
-          echo "Coverage ${COV_PCT}% meets minimum threshold of 70%"
+          echo "Coverage: ${COV_PCT}%"
+          if [ "$COV_PCT" -lt 75 ]; then
+            echo "::error::Coverage ${COV_PCT}% is below minimum threshold of 75%"
+            exit 1
+          fi
+          echo "Coverage ${COV_PCT}% meets minimum threshold of 75%"
 
       - name: Upload coverage report
         if: always()
@@ -264,9 +274,14 @@ jobs:
       - name: Dialyzer type analysis (tracked gate)
         run: |
           # Run Dialyzer with strict warnings. Exit 2 = warnings found.
-          # Pre-existing unmatched_returns/error_handling warnings are tracked.
-          # Exit code 2 (warnings) is reported but tolerated until suppressions
-          # are added per-module. Any other exit code (crash) fails CI.
+          # Threshold is read from scripts/dialyzer_baseline.txt (single source of truth).
+          # Ratchet down only — never increase the baseline.
+          BASELINE=$(grep -v '^#' scripts/dialyzer_baseline.txt | grep -E '^[0-9]+$' | head -1)
+          if [ -z "$BASELINE" ]; then
+            echo "::error::Cannot read Dialyzer baseline from scripts/dialyzer_baseline.txt"
+            exit 1
+          fi
+          echo "Dialyzer baseline: $BASELINE warnings"
           dialyzer --plt .iris_dialyzer.plt -r ebin/ \
             --no_check_plt \
             -Wunmatched_returns -Werror_handling 2>&1 | tee /tmp/dialyzer_out.txt; rc=${PIPESTATUS[0]}
@@ -274,12 +289,9 @@ jobs:
             echo "Dialyzer: CLEAN (no warnings)"
           elif [ $rc -eq 2 ]; then
             WARN_COUNT=$(grep -c "Expression produces a value of type\|will never be called\|can never match\|has no local return\|The pattern" /tmp/dialyzer_out.txt || echo "0")
-            echo "::warning::Dialyzer found $WARN_COUNT warnings (pre-existing). Fix with -dialyzer() attributes."
-            # Fail if warning count increases beyond known baseline.
-            # Baseline measured 2026-02-16: 779 warnings. Threshold set at 785
-            # to catch new warnings while tolerating existing ones.
-            if [ "$WARN_COUNT" -gt 785 ]; then
-              echo "::error::Dialyzer warnings ($WARN_COUNT) exceed baseline threshold (785). New warnings introduced."
+            echo "::warning::Dialyzer found $WARN_COUNT warnings (baseline: $BASELINE). Fix with -dialyzer() attributes."
+            if [ "$WARN_COUNT" -gt "$BASELINE" ]; then
+              echo "::error::Dialyzer warnings ($WARN_COUNT) exceed baseline ($BASELINE). New warnings introduced."
               exit 1
             fi
           else
@@ -343,6 +355,16 @@ jobs:
           else
             echo "OK: No time.sleep() violations in test files"
           fi
+
+      # --- Python lint (ruff) ---
+      - name: "Lint: Python code quality (ruff)"
+        run: |
+          pip install ruff --quiet
+          RUFF_ERRORS=$(ruff check tests/ scripts/ --config pyproject.toml 2>&1 | tail -1 || true)
+          echo "$RUFF_ERRORS"
+          ruff check tests/ scripts/ --config pyproject.toml --statistics || {
+            echo "::warning::Ruff found lint issues. Fix with: ruff check tests/ scripts/ --fix"
+          }
 
       # --- Dependency vulnerability scan ---
       - name: Dependency vulnerability scan (pip-audit)
@@ -525,21 +547,35 @@ jobs:
       - name: Smoke test release
         timeout-minutes: 2
         run: |
-          # Verify release tarball was produced
+          # Verify release binary was produced
           ls -lh _build/default/rel/iris/bin/iris
           echo "Release binary exists — build successful"
 
-          # Try to start the release (best-effort; will fail without certs/config)
+          # Copy test certificates for TLS
+          cp -r certs _build/default/rel/iris/ 2>/dev/null || true
+
+          # Start release with development config (TLS enabled, test certs)
           timeout 30 _build/default/rel/iris/bin/iris daemon 2>&1 || \
-            echo "Daemon start returned non-zero (expected without TLS certs)"
+            echo "Daemon start returned non-zero (may need TLS certs)"
 
           sleep 5
 
-          # Check if the BEAM is running
+          # Functional smoke test: check if health endpoint responds
+          SMOKE_OK=false
           if pgrep -f "beam.*iris" > /dev/null 2>&1; then
-            echo "OK: Release is running"
+            echo "Release is running — checking health endpoint..."
+            for port in 8086 8085; do
+              if curl -sf "http://localhost:$port/health" -o /dev/null 2>/dev/null; then
+                echo "OK: Health endpoint responds on port $port"
+                SMOKE_OK=true
+                break
+              fi
+            done
+            if [ "$SMOKE_OK" = false ]; then
+              echo "::warning::Release is running but health endpoint not reachable (may need config)"
+            fi
           else
-            echo "INFO: Release process not found (expected without prod config)"
+            echo "::warning::Release process not found (expected without full prod config)"
           fi
 
           # Cleanup
@@ -572,10 +608,15 @@ jobs:
           if [ $rc -eq 0 ]; then
             echo "EUnit: all tests passed"
           else
-            if grep -q "Failed: 0" /tmp/eunit_out.txt; then
-              echo "::warning::EUnit reported cancelled tests but 0 failures."
+            CANCELLED=$(grep -oP 'Cancelled: \K[0-9]+' /tmp/eunit_out.txt || echo "0")
+            FAILED=$(grep -oP 'Failed: \K[0-9]+' /tmp/eunit_out.txt || echo "unknown")
+            if [ "$FAILED" = "0" ] && [ "$CANCELLED" = "0" ]; then
+              echo "EUnit: 0 failures, 0 cancellations (non-zero exit is benign)"
+            elif [ "$FAILED" = "0" ] && [ "$CANCELLED" != "0" ]; then
+              echo "::error::EUnit: $CANCELLED test(s) CANCELLED — BLOCKER"
+              exit 1
             else
-              echo "::error::EUnit tests failed"
+              echo "::error::EUnit tests failed (Failed: $FAILED, Cancelled: $CANCELLED)"
               exit 1
             fi
           fi

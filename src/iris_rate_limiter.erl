@@ -208,7 +208,7 @@ handle_cast(rejected, State) ->
     {noreply, State#state{total_rejected = State#state.total_rejected + 1}};
 
 %% RFC NFR-17: Receive remote counters from another edge node
-handle_cast({remote_counters, RemoteNode, RemoteCounters}, State) ->
+handle_cast({remote_counters, _RemoteNode, RemoteCounters}, State) ->
     %% Merge remote counters: for each user, subtract remote usage from local bucket
     %% This implements eventual-consistency distributed rate limiting
     NewRemote = maps:merge(State#state.remote_counters,

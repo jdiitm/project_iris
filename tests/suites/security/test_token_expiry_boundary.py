@@ -35,6 +35,7 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(_
 sys.path.insert(0, PROJECT_ROOT)
 
 from tests.utilities import IrisClient, unique_user
+from tests.utilities.tls_connection import get_verified_ssl_context
 
 SERVER_HOST = os.environ.get("IRIS_HOST", "localhost")
 SERVER_PORT = int(os.environ.get("IRIS_PORT", "8085"))
@@ -117,9 +118,7 @@ def test_forged_token_header():
     log("\n=== Test 3: Forged Token Header ===")
 
     try:
-        ctx = ssl.create_default_context()
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
+        ctx = get_verified_ssl_context()
         raw = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         raw.settimeout(TIMEOUT)
         sock = ctx.wrap_socket(raw, server_hostname=SERVER_HOST)
@@ -165,9 +164,7 @@ def test_empty_token():
     log("\n=== Test 4: Empty Token ===")
 
     try:
-        ctx = ssl.create_default_context()
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
+        ctx = get_verified_ssl_context()
         raw = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         raw.settimeout(TIMEOUT)
         sock = ctx.wrap_socket(raw, server_hostname=SERVER_HOST)

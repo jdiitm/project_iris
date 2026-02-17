@@ -314,8 +314,9 @@ code_change(_OldVsn, State, _Extra) ->
 %% =============================================================================
 
 %% Backward compatibility: 4-arity delegates to 5-arity with undefined SeqNo
-do_wal_write(User, Msg, BucketCount, State) ->
-    do_wal_write(User, Msg, BucketCount, State, undefined).
+%% Commented out: unused local function (kept for potential future use).
+%% do_wal_write(User, Msg, BucketCount, State) ->
+%%     do_wal_write(User, Msg, BucketCount, State, undefined).
 
 %% RFC FR-5: WAL write with optional client sequence number for FIFO ordering
 do_wal_write(User, Msg, BucketCount, State = #state{wal_log = undefined}, MaybeSeqNo) ->

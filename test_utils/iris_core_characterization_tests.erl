@@ -7,17 +7,17 @@
 %% Each test exercises an exported function and asserts the output shape.
 %% =============================================================================
 
-setup() ->
-    case mnesia:system_info(is_running) of
-        yes -> ok;
-        _ ->
-            mnesia:start(),
-            timer:sleep(100)
-    end,
-    ok.
+%% setup() ->
+%%     case mnesia:system_info(is_running) of
+%%         yes -> ok;
+%%         _ ->
+%%             mnesia:start(),
+%%             timer:sleep(100)
+%%     end,
+%%     ok.
 
-cleanup(_) ->
-    ok.
+%% cleanup(_) ->
+%%     ok.
 
 %% make_dedup_key/2: Returns a binary key
 make_dedup_key_binary_test() ->
