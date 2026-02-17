@@ -1229,7 +1229,11 @@ parse_login_data(Data) ->
 rate_limit_check(User) ->
     case whereis(iris_rate_limiter) of
         undefined -> allow;
-        _ -> iris_rate_limiter:check(User)
+        %% Use typed bucket for login so it does not consume message-rate tokens.
+        %% Without this, the login check depletes the same token bucket that
+        %% check_message_rate/1 uses, silently dropping the Nth message when
+        %% N equals the initial token count (Burst / 2).
+        _ -> iris_rate_limiter:check_typed(User, login)
     end.
 
 authenticate(_User, undefined) ->
