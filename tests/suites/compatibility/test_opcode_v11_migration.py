@@ -336,7 +336,6 @@ def test_0x10_is_cbor_not_reliable():
 
         # Server should handle this as CBOR_MSG (may route, may error on unknown target).
         # The key assertion: server does NOT crash, connection stays alive.
-        time.sleep(0.3)
 
         # Verify connection is still alive by attempting a status query
         sock.sendall(b'\x05' + struct.pack('>H', len(target)) + target)

@@ -251,7 +251,6 @@ def test_group_create_via_protocol():
         log("  Sent GROUP_CREATE packet")
         
         # Wait for GROUP_JOIN response (0x31)
-        time.sleep(0.5)
         response = recv_with_timeout(client.sock, 3.0)
         
         if len(response) == 0:
@@ -309,7 +308,6 @@ def test_group_message_delivery():
         packet = encode_group_create(group_name)
         admin.sock.sendall(packet)
         
-        time.sleep(0.5)
         response = recv_with_timeout(admin.sock, 3.0)
         
         # Check response
@@ -332,7 +330,6 @@ def test_group_message_delivery():
         
         # Since admin is the only member, they won't receive their own message
         # But the server should accept the message without error
-        time.sleep(0.3)
         
         # Check for any error response
         admin.sock.settimeout(0.5)
@@ -369,7 +366,6 @@ def test_sender_key_distribution():
         packet = encode_group_create(b"Sender Key Test Group")
         client.sock.sendall(packet)
         
-        time.sleep(0.5)
         response = recv_with_timeout(client.sock, 3.0)
         
         # Check response
@@ -386,8 +382,6 @@ def test_sender_key_distribution():
         dist_packet = encode_sender_key_dist(group_id, sender_key_data)
         client.sock.sendall(dist_packet)
         log("  Sent SENDER_KEY_DIST packet")
-        
-        time.sleep(0.3)
         
         # Check for error response
         client.sock.settimeout(0.5)
@@ -424,7 +418,6 @@ def test_group_roster_request():
         packet = encode_group_create(b"Roster Test Group")
         client.sock.sendall(packet)
         
-        time.sleep(0.5)
         response = recv_with_timeout(client.sock, 3.0)
         
         # Check response
@@ -439,7 +432,6 @@ def test_group_roster_request():
         client.sock.sendall(roster_packet)
         log("  Sent GROUP_ROSTER request")
         
-        time.sleep(0.5)
         response = recv_with_timeout(client.sock, 3.0)
         
         if len(response) == 0:
@@ -482,7 +474,6 @@ def test_group_leave():
         packet = encode_group_create(b"Leave Test Group")
         client.sock.sendall(packet)
         
-        time.sleep(0.5)
         response = recv_with_timeout(client.sock, 3.0)
         
         # Check response
@@ -497,8 +488,7 @@ def test_group_leave():
         client.sock.sendall(leave_packet)
         log("  Sent GROUP_LEAVE request")
         
-        time.sleep(0.3)
-        response = recv_with_timeout(client.sock, 2.0)
+        response = recv_with_timeout(client.sock, 3.0)
         
         # Check for success (0x32 OK) or error
         if len(response) > 0:
@@ -549,7 +539,6 @@ def test_multi_member_message_flow():
         packet = encode_group_create(b"Multi-Member Group")
         admin.sock.sendall(packet)
         
-        time.sleep(0.5)
         response = recv_with_timeout(admin.sock, 3.0)
         
         # Check response
@@ -587,8 +576,6 @@ def test_multi_member_message_flow():
         msg_packet = encode_group_msg(group_id, header, ciphertext)
         admin.sock.sendall(msg_packet)
         log("  Admin sent group message")
-        
-        time.sleep(0.3)
         
         # Clean up
         admin.close()
@@ -656,7 +643,6 @@ def test_e2ee_crypto_validation():
         packet = encode_group_create(b"Crypto Validation Group")
         client.sock.sendall(packet)
         
-        time.sleep(0.5)
         response = recv_with_timeout(client.sock, 3.0)
         
         group_id = check_group_response(response, client, "E2EE Crypto Validation")
@@ -678,8 +664,6 @@ def test_e2ee_crypto_validation():
         msg_packet = encode_group_msg(group_id, header, ciphertext)
         client.sock.sendall(msg_packet)
         log("  Sent encrypted GROUP_MSG")
-        
-        time.sleep(0.3)
         
         # Step 5: Verify no error (server accepted the ciphertext)
         client.sock.settimeout(0.5)

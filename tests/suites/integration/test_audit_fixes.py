@@ -118,7 +118,6 @@ def test_cpu_backpressure():
     # Send a message to exercise flow controller
     try:
         client.send_msg(f"test_recipient_{unique_id}", "test message for cpu stats")
-        time.sleep(0.5)
     except Exception as e:
         log(f"  Warning: send failed: {e}")
     

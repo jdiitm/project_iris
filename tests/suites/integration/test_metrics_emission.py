@@ -148,7 +148,6 @@ def test_dedup_counter():
                 pass
             time.sleep(0.1)
 
-        time.sleep(0.5)
         client.close()
 
         log("  Sent duplicate message pair")
@@ -195,7 +194,6 @@ def test_ack_counter():
                 pass
             time.sleep(0.1)
 
-        time.sleep(0.5)
         send_client.close()
         recv_client.close()
 
@@ -231,7 +229,6 @@ def test_counters_non_negative():
             client.send_msg(target, f"counter_sanity_{i}")
             time.sleep(0.02)
 
-        time.sleep(0.3)
         client.close()
 
         if server_alive():

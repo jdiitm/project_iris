@@ -26,6 +26,7 @@ sys.path.insert(0, PROJECT_ROOT)
 
 from pathlib import Path
 from tests.utilities.iris_client import IrisClient
+from tests.utilities.helpers import wait_until
 
 CA_CERT = Path(PROJECT_ROOT) / "certs" / "ca.pem"
 HOST = os.environ.get('IRIS_HOST', 'localhost')
@@ -111,6 +112,18 @@ def run_erlang_rpc(code):
     return result.stdout.strip(), result.returncode
 
 
+def _port_is_ready(host, port):
+    """Return True if a TCP connection can be established."""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(0.5)
+        s.connect((host, port))
+        s.close()
+        return True
+    except (socket.error, OSError):
+        return False
+
+
 # =============================================================================
 # Test 1: Login returns session_id and RESUME replays missed messages
 # =============================================================================
@@ -146,7 +159,6 @@ def test_resume_replays_missed_messages_e2e():
     # Step 2: Login sender and send a message to receiver
     send_sock = get_tls_socket()
     raw_login(send_sock, sender)
-    time.sleep(0.1)
 
     # Receive the first message (establishes sequence baseline)
     recv_sock.settimeout(3.0)
@@ -157,7 +169,6 @@ def test_resume_replays_missed_messages_e2e():
                   struct.pack('>Q', 1) +
                   struct.pack('>H', len(test_msg)) + test_msg)
     send_sock.sendall(msg_packet)
-    time.sleep(0.3)
 
     try:
         pre_data = recv_sock.recv(4096)
@@ -167,7 +178,12 @@ def test_resume_replays_missed_messages_e2e():
 
     # Step 3: Disconnect receiver (abrupt close)
     recv_sock.close()
-    time.sleep(0.5)
+    wait_until(
+        lambda: _port_is_ready(HOST, PORT),
+        timeout=2.0,
+        interval=0.05,
+        description="server accepting connections after disconnect",
+    )
 
     # Step 4: Send more messages while receiver is disconnected
     missed_msg = b"missed_while_offline"
@@ -176,17 +192,14 @@ def test_resume_replays_missed_messages_e2e():
                    struct.pack('>Q', 2) +
                    struct.pack('>H', len(missed_msg)) + missed_msg)
     send_sock.sendall(msg_packet2)
-    time.sleep(0.5)
 
     # Step 5: Reconnect with RESUME
     recv_sock2 = get_tls_socket()
     # First login (required to establish connection context)
     raw_login(recv_sock2, receiver)
-    time.sleep(0.1)
 
     # Send RESUME with session_id and last_seq=0 (replay all)
     send_resume(recv_sock2, session_id, 0)
-    time.sleep(0.5)
 
     # Step 6: Check for replayed messages
     recv_sock2.settimeout(3.0)
@@ -235,12 +248,10 @@ def test_resume_expired_session_nack():
     user = unique_user("resume_nack")
     sock = get_tls_socket()
     raw_login(sock, user)
-    time.sleep(0.1)
 
     # Send RESUME with a fabricated session_id that doesn't exist
     fake_session_id = b"EXPIRED_SESSION_" + uuid.uuid4().hex[:16].encode()
     send_resume(sock, fake_session_id, 0)
-    time.sleep(0.5)
 
     # Expect a NACK/error response (opcode 0xFE)
     sock.settimeout(3.0)
@@ -294,12 +305,10 @@ def test_resume_falls_back_on_unknown_session():
 
     recv_sock = get_tls_socket()
     raw_login(recv_sock, receiver_name)
-    time.sleep(0.1)
 
     # Send RESUME with garbage session_id
     garbage_session = b"GARBAGE_SESSION_ID_12345"
     send_resume(recv_sock, garbage_session, 0)
-    time.sleep(0.3)
 
     # Drain any NACK response
     recv_sock.settimeout(1.0)
@@ -316,7 +325,6 @@ def test_resume_falls_back_on_unknown_session():
                   struct.pack('>Q', 1) +
                   struct.pack('>H', len(test_msg)) + test_msg)
     sender_sock.sendall(msg_packet)
-    time.sleep(0.5)
 
     # Receiver should get the message
     recv_sock.settimeout(3.0)

@@ -41,6 +41,7 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(_
 sys.path.insert(0, PROJECT_ROOT)
 
 from tests.utilities import IrisClient, unique_user
+from tests.utilities.helpers import wait_until
 
 # Determinism
 TEST_SEED = int(os.environ.get("TEST_SEED", 42))
@@ -82,7 +83,7 @@ def check_server_available():
         client.login(f"health_check_{int(time.time())}")
         client.close()
         return True
-    except Exception:
+    except (ConnectionError, OSError, socket.error):
         return False
 
 
@@ -111,7 +112,8 @@ def probe_typing_indicator(client, target_user):
     except (socket.error, BrokenPipeError, ConnectionResetError):
         # Connection broken - typing is degraded
         return False
-    except Exception:
+    except Exception as e:
+        log(f"     Typing probe unexpected error: {e}")
         return False
 
 
@@ -154,7 +156,8 @@ def probe_presence_query(client, target_user):
             return False
     except (socket.error, BrokenPipeError, ConnectionResetError):
         return False
-    except Exception:
+    except Exception as e:
+        log(f"     Presence probe unexpected error: {e}")
         return False
 
 
@@ -289,7 +292,7 @@ class LoadGenerator:
                     # Reconnect with backoff
                     try:
                         client.close()
-                    except:
+                    except Exception:
                         pass
                     
                     try:
@@ -299,7 +302,7 @@ class LoadGenerator:
                             self.reconnect_count += 1
                         consecutive_failures = 0
                         backoff = 0.1  # Reset on successful reconnect
-                    except Exception:
+                    except (ConnectionError, OSError, socket.error):
                         # Still failing - continue with backoff
                         pass
                         
@@ -309,10 +312,10 @@ class LoadGenerator:
             
             try:
                 client.close()
-            except:
+            except Exception:
                 pass
         except Exception as e:
-            pass
+            log(f"  Load worker {worker_id} failed: {e}")
     
     def start(self, num_workers=10):
         """Start load generation."""
@@ -495,8 +498,8 @@ def test_degradation_order_under_load():
         
         # Verify recovery — CI needs more time to shed backlog on fewer cores
         recovery_wait = 6 if IS_CI else 3
-        log(f"  5. Verifying recovery (waiting {recovery_wait}s)...")
-        time.sleep(recovery_wait)
+        log(f"  5. Verifying recovery (waiting up to {recovery_wait * 2}s)...")
+        wait_until(check_server_available, timeout=recovery_wait * 2)
         
         recovery_typing = probe_typing_indicator(alice, bob_user)
         recovery_presence = probe_presence_query(alice, bob_user)

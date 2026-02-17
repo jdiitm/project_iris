@@ -132,9 +132,6 @@ def test_dedup_stats_reflect_entries():
             except Exception:
                 break
 
-        # Give dedup system time to update stats
-        time.sleep(0.5)
-
         # The stats endpoint is Erlang-internal. We verify the system
         # didn't crash and messages flowed correctly (indirect stats check).
         log("  20 messages sent and received")

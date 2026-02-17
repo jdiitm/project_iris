@@ -79,8 +79,6 @@ def test_server_accepts_both_hlc_formats():
             log("  FAIL: Receiver login failed")
             return False
 
-        time.sleep(0.1)
-
         # Send 5 messages with explicit sequence numbers
         for seq in range(1, 6):
             target = receiver_user.encode('utf-8')

@@ -37,6 +37,7 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(_
 sys.path.insert(0, PROJECT_ROOT)
 
 from tests.utilities import IrisClient
+from tests.utilities.helpers import wait_until
 
 # Determinism
 TEST_SEED = int(os.environ.get("TEST_SEED", 42))
@@ -116,12 +117,10 @@ def test_post_login_corruption():
                 sock.close()
             except Exception:
                 pass
-        except Exception:
-            pass
+        except Exception as e:
+            log(f"  Attempt {attempt} connection/fuzz error: {e}")
 
-    time.sleep(0.5)
-
-    if server_alive():
+    if wait_until(server_alive, timeout=2, description="server alive after post-login corruption"):
         log("  PASS: Server survived post-login corruption (5 attempts)")
         return True
     else:
@@ -144,7 +143,6 @@ def test_ack_before_login():
             msg_id = b"fake_msg_id_12345678"
             ack_packet = bytes([0x03]) + struct.pack(">H", len(msg_id)) + msg_id
             sock.sendall(ack_packet)
-            time.sleep(0.1)
 
             try:
                 resp = sock.recv(1024)
@@ -156,12 +154,10 @@ def test_ack_before_login():
                 sock.close()
             except Exception:
                 pass
-        except Exception:
-            pass
+        except Exception as e:
+            log(f"  Attempt {attempt} connection/fuzz error: {e}")
 
-    time.sleep(0.5)
-
-    if server_alive():
+    if wait_until(server_alive, timeout=2, description="server alive after ACK-before-login"):
         log("  PASS: Server survived ACK-before-login (5 attempts)")
         return True
     else:
@@ -181,21 +177,17 @@ def test_double_login():
         try:
             sock = get_tls_socket()
             resp1 = do_login(sock, f"fuzz_double_login_{attempt}")
-            time.sleep(0.1)
             # Send second login on same connection
             resp2 = do_login(sock, f"fuzz_double_login_{attempt}_v2")
-            time.sleep(0.1)
 
             try:
                 sock.close()
             except Exception:
                 pass
-        except Exception:
-            pass
+        except Exception as e:
+            log(f"  Attempt {attempt} connection/fuzz error: {e}")
 
-    time.sleep(0.5)
-
-    if server_alive():
+    if wait_until(server_alive, timeout=2, description="server alive after double LOGIN"):
         log("  PASS: Server survived double LOGIN (5 attempts)")
         return True
     else:
@@ -214,7 +206,6 @@ def test_interleaved_valid_invalid():
     try:
         sock = get_tls_socket()
         do_login(sock, "fuzz_interleave_user")
-        time.sleep(0.2)
 
         success_count = 0
         seq_no = 0
@@ -248,9 +239,7 @@ def test_interleaved_valid_invalid():
     except Exception as e:
         log(f"  Connection error: {e}")
 
-    time.sleep(0.5)
-
-    if server_alive():
+    if wait_until(server_alive, timeout=2, description="server alive after interleaved messages"):
         log("  PASS: Server survived interleaved valid/invalid")
         return True
     else:
@@ -270,7 +259,6 @@ def test_oversized_payload_claim():
         try:
             sock = get_tls_socket(timeout=3)
             do_login(sock, f"fuzz_oversize_{attempt}")
-            time.sleep(0.1)
 
             # Opcode 0x02 (SEND) with huge length field
             target = b"oversize_target"
@@ -280,7 +268,6 @@ def test_oversized_payload_claim():
             packet += b"x" * 100
             try:
                 sock.sendall(packet)
-                time.sleep(1)
                 # Try to read -- server should have disconnected or timed out
                 try:
                     sock.recv(1024)
@@ -293,12 +280,10 @@ def test_oversized_payload_claim():
                 sock.close()
             except Exception:
                 pass
-        except Exception:
-            pass
+        except Exception as e:
+            log(f"  Attempt {attempt} connection/fuzz error: {e}")
 
-    time.sleep(0.5)
-
-    if server_alive():
+    if wait_until(server_alive, timeout=2, description="server alive after oversized payload"):
         log("  PASS: Server survived oversized payload claims (3 attempts)")
         return True
     else:
@@ -318,7 +303,6 @@ def test_invalid_opcodes():
             sock = get_tls_socket(timeout=2)
             packet = bytes([opcode]) + b"payload_data_here"
             sock.sendall(packet)
-            time.sleep(0.05)
             try:
                 sock.recv(1024)
             except Exception:
@@ -327,12 +311,10 @@ def test_invalid_opcodes():
                 sock.close()
             except Exception:
                 pass
-        except Exception:
-            pass
+        except Exception as e:
+            log(f"  Opcode 0x{opcode:02X} error: {e}")
 
-    time.sleep(0.5)
-
-    if server_alive():
+    if wait_until(server_alive, timeout=2, description="server alive after invalid opcodes"):
         log("  PASS: Server survived all invalid opcodes (0x80-0xFF)")
         return True
     else:
@@ -351,7 +333,7 @@ def test_legitimate_after_attacks():
         client = IrisClient()
         client.login("legit_after_fuzz_user")
         client.send_msg("legit_target_user", "hello after fuzzing")
-        time.sleep(0.5)
+        wait_until(server_alive, timeout=2, description="server processed legit message")
         client.close()
         log("  PASS: Legitimate client works after all attacks")
         return True

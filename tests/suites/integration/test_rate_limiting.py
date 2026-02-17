@@ -28,6 +28,7 @@ sys.path.insert(0, PROJECT_ROOT)
 
 from tests.framework import TestLogger, ClusterManager
 from tests.utilities import IrisClient
+from tests.utilities.helpers import wait_until
 
 # Determinism: seed from environment
 TEST_SEED = int(os.environ.get("TEST_SEED", 42))
@@ -129,9 +130,6 @@ def test_burst_allowance():
         log(f"FAIL: Login failed - {e}")
         return False
     
-    # Wait for any previous rate state to clear
-    time.sleep(1)
-    
     # Send burst within typical burst limit (e.g., 50)
     burst_size = 30
     success = 0
@@ -207,8 +205,15 @@ def test_rate_recovery():
     
     log(f"Initial burst: {initial_success}/50 sent")
     
-    # Wait for recovery (typical window is 1 second)
-    time.sleep(2)
+    # Poll until rate limit recovers
+    def _rate_recovered():
+        try:
+            client.send_msg(target, "recovery_probe")
+            return True
+        except Exception:
+            return False
+
+    wait_until(_rate_recovered, timeout=5.0, interval=0.5, description="rate limit recovery")
     
     # Should be able to send again
     success = 0

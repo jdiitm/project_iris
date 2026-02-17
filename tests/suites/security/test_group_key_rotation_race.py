@@ -33,6 +33,7 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(o
 sys.path.insert(0, PROJECT_ROOT)
 
 from tests.utilities import IrisClient, unique_user
+from tests.utilities.helpers import wait_until
 
 # Determinism
 TEST_SEED = int(os.environ.get("TEST_SEED", 42))
@@ -113,11 +114,11 @@ def test_remove_during_send():
 
         # Create group and add members
         admin_client.sock.sendall(encode_group_create(group_name))
-        time.sleep(0.3)
+        wait_until(server_alive, timeout=2, description="server processed group create")
         admin_client.sock.sendall(encode_group_join(group_name, alice))
-        time.sleep(0.1)
+        wait_until(server_alive, timeout=2, description="server processed join alice")
         admin_client.sock.sendall(encode_group_join(group_name, bob))
-        time.sleep(0.3)
+        wait_until(server_alive, timeout=2, description="server processed join bob")
 
         # Start sending messages from alice in a thread
         send_errors = []
@@ -187,11 +188,11 @@ def test_concurrent_removal_and_message():
 
         # Create group
         admin_client.sock.sendall(encode_group_create(group_name))
-        time.sleep(0.3)
+        wait_until(server_alive, timeout=2, description="server processed group create")
         admin_client.sock.sendall(encode_group_join(group_name, alice))
-        time.sleep(0.1)
+        wait_until(server_alive, timeout=2, description="server processed join alice")
         admin_client.sock.sendall(encode_group_join(group_name, bob))
-        time.sleep(0.3)
+        wait_until(server_alive, timeout=2, description="server processed join bob")
 
         barrier = threading.Barrier(2, timeout=5)
         results_local = {"remove_ok": False, "send_ok": False}
@@ -220,15 +221,14 @@ def test_concurrent_removal_and_message():
             t2.start()
             t1.join(timeout=3)
             t2.join(timeout=3)
-            time.sleep(0.1)
 
-            if not server_alive():
+            if not wait_until(server_alive, timeout=2, description="server alive after trial"):
                 log(f"  FAIL: Server crashed on trial {trial}")
                 return False
 
             # Re-add bob for next trial
             admin_client.sock.sendall(encode_group_join(group_name, bob))
-            time.sleep(0.2)
+            wait_until(server_alive, timeout=2, description="server processed re-add bob")
 
         # Clean up
         for c in [admin_client, alice_client, bob_client]:
@@ -266,7 +266,7 @@ def test_rapid_add_remove_add():
 
         # Create group
         admin_client.sock.sendall(encode_group_create(group_name))
-        time.sleep(0.3)
+        wait_until(server_alive, timeout=2, description="server processed group create")
 
         # Rapid add/remove cycles
         for cycle in range(10):
@@ -277,11 +277,11 @@ def test_rapid_add_remove_add():
 
         # Final add
         admin_client.sock.sendall(encode_group_join(group_name, bob))
-        time.sleep(0.2)
+        wait_until(server_alive, timeout=2, description="server processed final add")
 
         # Send a message -- should work since bob is now a member
         admin_client.sock.sendall(encode_group_msg(group_name, "post_rapid_msg"))
-        time.sleep(0.2)
+        wait_until(server_alive, timeout=2, description="server processed message")
 
         for c in [admin_client, bob_client]:
             try:
@@ -316,7 +316,7 @@ def test_server_survives():
         client = IrisClient()
         client.login("legit_after_race_tests")
         client.send_msg("some_target", "hello after race tests")
-        time.sleep(0.3)
+        wait_until(server_alive, timeout=2, description="server processed message")
         client.close()
         log("  PASS: Legitimate client works after all race tests")
         return True

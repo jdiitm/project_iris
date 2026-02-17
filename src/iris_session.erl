@@ -699,7 +699,12 @@ handle_packet({sender_key_dist, GroupId, KeyData}, User, _Pid, _Mod) when User =
                     %% Store sender key and broadcast to members
                     KeyId = crypto:strong_rand_bytes(8),
                     KeyIdHex = binary_to_list(base16_encode(KeyId)),
-                    call_iris_group(store_sender_key, [GroupId, User, list_to_binary(KeyIdHex), KeyData]),
+                    case call_iris_group(store_sender_key, [GroupId, User, list_to_binary(KeyIdHex), KeyData]) of
+                        ok -> ok;
+                        {error, StoreErr} ->
+                            logger:warning("Failed to store sender key for ~p in ~p: ~p",
+                                           [User, GroupId, StoreErr])
+                    end,
                     
                     %% Notify all other members of the new sender key
                     case call_iris_group(get_members, [GroupId]) of

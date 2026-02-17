@@ -74,18 +74,12 @@ def test_basic_offline_delivery():
         
         log(f"PASS: Step 2 - Sent 5 messages to offline user")
         
-        # Give time for storage
-        time.sleep(1.0)
-        
         # Step 3: Receiver comes online
         receiver = IrisClient(host, port)
         receiver.login(receiver_name)
         log("PASS: Step 3 - Receiver connected")
         
-        # Step 4: Wait for offline messages to be delivered
-        time.sleep(2.0)
-        
-        # Step 5: Receive messages
+        # Step 4: Receive messages
         received = []
         receive_errors = []
         
@@ -178,14 +172,10 @@ def test_offline_then_online_continuation():
         alice.send_msg(bob_name, offline_msg)
         log("Sent message to offline Bob")
         
-        time.sleep(0.5)
-        
         # Bob comes online
         bob = IrisClient(host, port)
         bob.login(bob_name)
         log("PASS: Bob connected")
-        
-        time.sleep(1.0)
         
         # Bob receives offline message
         try:
@@ -203,8 +193,6 @@ def test_offline_then_online_continuation():
         # Now continue normal conversation
         online_msg = f"online_{uuid.uuid4().hex[:6]}"
         alice.send_msg(bob_name, online_msg)
-        
-        time.sleep(0.5)
         
         try:
             msg = bob.recv_msg(timeout=2.0)
@@ -295,14 +283,10 @@ def test_multiple_offline_senders():
         
         log("PASS: All three senders sent messages")
         
-        time.sleep(1.0)
-        
         # Receiver connects
         receiver = IrisClient(host, port)
         receiver.login(receiver_name)
         log("PASS: Receiver connected")
-        
-        time.sleep(2.0)
         
         # Receive all messages
         received = []

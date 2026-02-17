@@ -31,6 +31,7 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(_
 sys.path.insert(0, PROJECT_ROOT)
 
 from tests.utilities import IrisClient, unique_user
+from tests.utilities.helpers import wait_until
 
 TEST_SEED = int(os.environ.get("TEST_SEED", 42))
 random.seed(TEST_SEED)
@@ -155,8 +156,9 @@ def test_rapid_read_receipts():
                 break
             time.sleep(0.01)
 
-        time.sleep(0.5)
         client.close()
+
+        wait_until(server_alive, timeout=2.0, description="server processes rapid receipts")
 
         if server_alive():
             log("  PASS: 50 rapid read receipts handled")

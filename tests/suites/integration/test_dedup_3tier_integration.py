@@ -177,7 +177,7 @@ def test_dedup_across_reconnect():
         receiver1.login(receiver_name)
         receiver1.close()
         receiver1 = None
-        time.sleep(0.5)
+        time.sleep(0.5)  # Server needs time to process disconnect
 
         # Sender sends while receiver is offline
         sender = IrisClient(HOST, PORT)
@@ -189,7 +189,7 @@ def test_dedup_across_reconnect():
             sender.send_msg(receiver_name, msg)
             msgs_sent.append(msg)
 
-        time.sleep(0.5)
+        time.sleep(0.5)  # Server needs time to persist offline messages
 
         # Receiver reconnects — should get all offline messages
         receiver2 = IrisClient(HOST, PORT)

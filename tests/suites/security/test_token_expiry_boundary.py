@@ -69,7 +69,6 @@ def test_valid_login_token():
         c = IrisClient()
         c.login(unique_user("expiry_valid"))
         c.send_msg("expiry_target", "token_valid_msg")
-        time.sleep(0.3)
         c.close()
         log("  PASS: Valid login + message succeeded")
         return True
@@ -127,7 +126,6 @@ def test_forged_token_header():
 
         # Login first
         sock.sendall(bytes([0x01]) + b"forged_token_user")
-        time.sleep(0.3)
         try:
             sock.recv(1024)
         except socket.timeout:
@@ -137,7 +135,6 @@ def test_forged_token_header():
         garbage_token = b"eyJhbGciOiJub25lIn0.eyJzdWIiOiJoYWNrZXIiLCJleHAiOjB9."
         packet = bytes([0x0B]) + struct.pack(">H", len(garbage_token)) + garbage_token
         sock.sendall(packet)
-        time.sleep(0.5)
 
         try:
             resp = sock.recv(1024)
@@ -148,7 +145,6 @@ def test_forged_token_header():
     except Exception:
         pass
 
-    time.sleep(0.5)
     if server_alive():
         log("  PASS: Server rejected forged token without crash")
         return True
@@ -174,7 +170,6 @@ def test_empty_token():
         sock.connect((SERVER_HOST, SERVER_PORT))
 
         sock.sendall(bytes([0x01]) + b"empty_token_user")
-        time.sleep(0.2)
         try:
             sock.recv(1024)
         except socket.timeout:
@@ -183,13 +178,11 @@ def test_empty_token():
         # TOKEN_REFRESH with zero-length token
         packet = bytes([0x0B]) + struct.pack(">H", 0)
         sock.sendall(packet)
-        time.sleep(0.3)
 
         sock.close()
     except Exception:
         pass
 
-    time.sleep(0.5)
     if server_alive():
         log("  PASS: Server handled empty token gracefully")
         return True

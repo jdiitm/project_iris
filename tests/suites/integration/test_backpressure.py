@@ -31,6 +31,7 @@ sys.path.insert(0, PROJECT_ROOT)
 
 from tests.framework import TestLogger, ClusterManager
 from tests.utilities import IrisClient
+from tests.utilities.helpers import wait_until
 
 # Determinism: seed from environment
 TEST_SEED = int(os.environ.get("TEST_SEED", 42))
@@ -270,9 +271,19 @@ def test_recovery_after_load():
         except Exception as e:
             log(f"  Cleanup client {i}: {type(e).__name__}: {e}")
     
-    # Wait for recovery
-    time.sleep(1)
-    
+    # Poll until server accepts connections again
+    def _server_accepts():
+        try:
+            c = IrisClient()
+            c.close()
+            return True
+        except Exception:
+            return False
+
+    if not wait_until(_server_accepts, timeout=5.0, interval=0.5, description="server recovery"):
+        log("FAIL: System did not recover after load")
+        return False
+
     # System should accept new connections normally
     try:
         new_client = IrisClient()

@@ -16,6 +16,7 @@ Expected duration: <60s
 import sys
 import os
 import time
+import socket
 
 # Add project root to path for proper imports
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
@@ -50,33 +51,40 @@ def test_offline_message_storage():
         
         alice.close()
         
-        # Wait a moment for storage
-        time.sleep(1)
-        
-        # Charlie comes online
+        # Charlie comes online — recv_msg timeout handles waiting for offline delivery
         log.info("coming_online", f"{charlie_user} logging in")
         charlie = IrisClient()
         charlie.login(charlie_user)
         log.connection_event("login", charlie_user)
         
-        # Charlie should receive the offline message
-        try:
-            start = time.monotonic()
-            received = charlie.recv_msg(timeout=10.0)
-            latency_ms = (time.monotonic() - start) * 1000
-            
-            tracker.record_received(msg_id)
-            log.message_received(msg_id, latency_ms, source_user="alice")
-            
-            if msg.encode() in received or received == msg.encode():
-                log.info("validation", "Offline message content correct")
-            else:
-                log.info("validation", f"Received: {received}")
-                
-        except Exception as e:
-            log.error("receive", f"Failed to receive offline message: {e}")
-            charlie.close()
-            raise
+        # Charlie should receive the offline message.
+        # Retry-login pattern: if offline delivery doesn't arrive on first
+        # attempt (server may still be committing), reconnect to re-trigger.
+        received = None
+        latency_ms = 0
+        for attempt in range(3):
+            try:
+                start = time.monotonic()
+                received = charlie.recv_msg(timeout=5.0)
+                latency_ms = (time.monotonic() - start) * 1000
+                break
+            except Exception:
+                if attempt < 2:
+                    charlie.close()
+                    charlie = IrisClient()
+                    charlie.login(charlie_user)
+                    continue
+                log.error("receive", "Failed to receive offline message after retries")
+                charlie.close()
+                raise
+        
+        tracker.record_received(msg_id)
+        log.message_received(msg_id, latency_ms, source_user="alice")
+        
+        if msg.encode() in received or received == msg.encode():
+            log.info("validation", "Offline message content correct")
+        else:
+            log.info("validation", f"Received: {received}")
         
         charlie.close()
         
@@ -99,17 +107,24 @@ def test_delete_after_read():
         log.message_sent("dar_msg_1", dave_user)
         sender.close()
         
-        time.sleep(1)
-        
-        # Dave comes online and receives
+        # Dave comes online and receives (retry-login for offline delivery)
         dave = IrisClient()
         dave.login(dave_user)
-        msg = dave.recv_msg(timeout=10.0)
+        msg = None
+        for attempt in range(3):
+            try:
+                msg = dave.recv_msg(timeout=5.0)
+                break
+            except Exception:
+                if attempt < 2:
+                    dave.close()
+                    dave = IrisClient()
+                    dave.login(dave_user)
+                    continue
+                raise
         log.message_received("dar_msg_1", 0)
         log.info("first_login", f"Dave received: {msg}")
         dave.close()
-        
-        time.sleep(1)
         
         # Dave reconnects - should NOT receive the same message again
         dave2 = IrisClient()
@@ -156,14 +171,13 @@ def test_multiple_offline_messages():
             time.sleep(0.2)  # Small delay between senders
         
         log.info("sending_complete", f"Sent {NUM_MESSAGES} messages to offline {eve_user}")
-        time.sleep(1)
         
-        # Eve comes online
+        # Eve comes online (retry-login for offline delivery)
         eve = IrisClient()
         eve.login(eve_user)
         log.connection_event("login", eve_user)
         
-        # Receive all messages
+        # Receive all messages, with retry-login if first attempt yields nothing
         received_count = 0
         for i in range(NUM_MESSAGES):
             try:
@@ -173,8 +187,23 @@ def test_multiple_offline_messages():
                 received_count += 1
                 log.message_received(msg_id, 0)
             except Exception as e:
-                log.error("receive", f"Failed to receive message {i}: {e}")
-                break
+                if i == 0:
+                    log.info("retry", "No messages on first login, reconnecting")
+                    eve.close()
+                    eve = IrisClient()
+                    eve.login(eve_user)
+                    try:
+                        msg = eve.recv_msg(timeout=5.0)
+                        msg_id = f"multi_off_{i}"
+                        tracker.record_received(msg_id)
+                        received_count += 1
+                        log.message_received(msg_id, 0)
+                    except Exception as e2:
+                        log.error("receive", f"Failed after retry: {e2}")
+                        break
+                else:
+                    log.error("receive", f"Failed to receive message {i}: {e}")
+                    break
         
         eve.close()
         

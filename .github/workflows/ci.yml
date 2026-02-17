@@ -113,15 +113,21 @@ jobs:
       - name: Run EUnit tests
         run: |
           # EUnit returns error when tests are cancelled (even with 0 failures).
-          # Capture output and check for actual failures vs benign cancellations.
+          # Capture output and check for actual failures AND cancelled counts.
           make test 2>&1 | tee /tmp/eunit_out.txt; rc=${PIPESTATUS[0]}
           if [ $rc -eq 0 ]; then
             echo "EUnit: all tests passed"
           else
-            if grep -q "Failed: 0" /tmp/eunit_out.txt; then
-              echo "::warning::EUnit reported cancelled tests but 0 failures. Investigate cancelled tests."
+            FAILED=$(grep -oP 'Failed: \K[0-9]+' /tmp/eunit_out.txt || echo "unknown")
+            CANCELLED=$(grep -oP 'Cancelled: \K[0-9]+' /tmp/eunit_out.txt || echo "0")
+            if [ "$FAILED" = "0" ]; then
+              echo "::warning::EUnit: 0 failures but $CANCELLED cancelled tests. Investigate."
+              if [ "$CANCELLED" -gt 10 ]; then
+                echo "::error::Too many cancelled tests ($CANCELLED > 10). Fix test infrastructure."
+                exit 1
+              fi
             else
-              echo "::error::EUnit tests failed"
+              echo "::error::EUnit tests failed (Failed: $FAILED)"
               exit 1
             fi
           fi
@@ -135,8 +141,11 @@ jobs:
         if: always()
         run: |
           mkdir -p coverage
-          # test-cover may exit non-zero due to EUnit cancellations; capture output
-          make test-cover 2>&1 | tee coverage/test-cover.log || true
+          # Run coverage analysis; capture exit code separately from output
+          make test-cover 2>&1 | tee coverage/test-cover.log; COVER_RC=${PIPESTATUS[0]}
+          if [ "$COVER_RC" -ne 0 ] && [ "$COVER_RC" -ne 1 ]; then
+            echo "::warning::make test-cover exited with code $COVER_RC"
+          fi
           # Extract coverage percentage and enforce minimum threshold
           COV_PCT=$(grep -oP 'Coverage: .* \(\K[0-9]+' coverage/test-cover.log || echo "0")
           echo "Coverage: ${COV_PCT}%"
@@ -335,13 +344,41 @@ jobs:
             echo "Total violations: $COUNT"
             # Hard-fail threshold: fail CI if violations exceed baseline.
             # Decrease this threshold as violations are fixed.
-            # Baseline measured 2026-02-16: 652 violations. Threshold set at 655.
-            if [ "$COUNT" -gt 655 ]; then
-              echo "::error::time.sleep() violations ($COUNT) exceed threshold (655). Fix before merging."
+            # Baseline measured 2026-02-17: 426 violations. Threshold set at 430.
+            if [ "$COUNT" -gt 430 ]; then
+              echo "::error::time.sleep() violations ($COUNT) exceed threshold (430). Fix before merging."
               exit 1
             fi
           else
             echo "OK: No time.sleep() violations in test files"
+          fi
+
+      # --- Test quality lint: no bare except: in tests ---
+      - name: "Lint: no bare except: in tests"
+        run: |
+          # Bare 'except:' (without exception type) catches SystemExit and
+          # KeyboardInterrupt, hiding real failures. Use 'except Exception:' minimum.
+          VIOLATIONS=$(grep -rn "except:" tests/ --include="*.py" \
+            | grep -v ".venv/" \
+            | grep -v "except Exception" \
+            | grep -v "# noqa" \
+            || true)
+          if [ -n "$VIOLATIONS" ]; then
+            COUNT=$(echo "$VIOLATIONS" | wc -l)
+            echo "::warning::$COUNT bare 'except:' patterns in test files."
+            echo "Replace with 'except Exception:' or specific exception types."
+            echo ""
+            echo "$VIOLATIONS" | head -20
+            echo ""
+            echo "Total: $COUNT"
+            # Ratchet: fail if count exceeds baseline (decrease as fixes are applied)
+            # Baseline measured 2026-02-17: 95 bare excepts. Threshold set at 100.
+            if [ "$COUNT" -gt 100 ]; then
+              echo "::error::Bare except count ($COUNT) exceeds threshold (100)."
+              exit 1
+            fi
+          else
+            echo "OK: No bare 'except:' patterns in test files"
           fi
 
       # --- Dependency vulnerability scan ---
@@ -572,10 +609,16 @@ jobs:
           if [ $rc -eq 0 ]; then
             echo "EUnit: all tests passed"
           else
-            if grep -q "Failed: 0" /tmp/eunit_out.txt; then
-              echo "::warning::EUnit reported cancelled tests but 0 failures."
+            FAILED=$(grep -oP 'Failed: \K[0-9]+' /tmp/eunit_out.txt || echo "unknown")
+            CANCELLED=$(grep -oP 'Cancelled: \K[0-9]+' /tmp/eunit_out.txt || echo "0")
+            if [ "$FAILED" = "0" ]; then
+              echo "::warning::EUnit: 0 failures but $CANCELLED cancelled tests."
+              if [ "$CANCELLED" -gt 10 ]; then
+                echo "::error::Too many cancelled tests ($CANCELLED > 10)."
+                exit 1
+              fi
             else
-              echo "::error::EUnit tests failed"
+              echo "::error::EUnit tests failed (Failed: $FAILED)"
               exit 1
             fi
           fi

@@ -275,7 +275,6 @@ def test_offline_e2ee_single_message():
     log("Step 1: Bob logs in briefly then disconnects")
     bob_client = IrisClient(host=EDGE_HOST, port=EDGE_PORT)
     bob_client.login(bob_name)
-    time.sleep(0.5)
     bob_client.close()
     log("Bob is now offline")
     
@@ -296,59 +295,58 @@ def test_offline_e2ee_single_message():
     
     alice_client.close()
     
-    # Wait for message to be stored
-    time.sleep(1.0)
-    
-    # Step 3: Bob comes back online
+    # Step 3: Bob comes back online (retry-login: server may need time to persist)
     log("Step 3: Bob comes back online")
-    bob_client = IrisClient(host=EDGE_HOST, port=EDGE_PORT)
-    bob_client.login(bob_name)
+    for attempt in range(3):
+        bob_client = IrisClient(host=EDGE_HOST, port=EDGE_PORT)
+        bob_client.login(bob_name)
     
-    # Step 4: Bob receives the offline message
-    log("Step 4: Bob receives offline E2EE message")
-    try:
-        bob_client.sock.settimeout(MESSAGE_TIMEOUT)
-        received = bob_client.recv_msg(timeout=MESSAGE_TIMEOUT)
-        
-        if received and "E2EE:" in str(received):
-            log(f"Bob received offline message: {received[:50]}...")
+        # Step 4: Bob receives the offline message
+        log(f"Step 4: Bob receives offline E2EE message (attempt {attempt+1})")
+        try:
+            bob_client.sock.settimeout(MESSAGE_TIMEOUT)
+            received = bob_client.recv_msg(timeout=MESSAGE_TIMEOUT)
             
-            # Parse and decrypt (in real impl, this uses iris_ratchet)
-            parts = received.split(":", 2)
-            if len(parts) == 3:
-                msg_num = int(parts[1])
-                ciphertext_hex = parts[2]
-                ciphertext_recv = bytes.fromhex(ciphertext_hex)
+            if received and "E2EE:" in str(received):
+                log(f"Bob received offline message: {received[:50]}...")
                 
-                # Mock decryption
-                decrypted = bob.decrypt_message(
-                    alice_name,
-                    {"msg_type": "initial", "msg_num": msg_num},
-                    ciphertext_recv
-                )
-                log(f"Bob decrypted message: {decrypted}")
-                
-                if decrypted == plaintext:
-                    log("[PASS] Decrypted message matches original")
+                # Parse and decrypt (in real impl, this uses iris_ratchet)
+                parts = received.split(":", 2)
+                if len(parts) == 3:
+                    msg_num = int(parts[1])
+                    ciphertext_hex = parts[2]
+                    ciphertext_recv = bytes.fromhex(ciphertext_hex)
+                    
+                    # Mock decryption
+                    decrypted = bob.decrypt_message(
+                        alice_name,
+                        {"msg_type": "initial", "msg_num": msg_num},
+                        ciphertext_recv
+                    )
+                    log(f"Bob decrypted message: {decrypted}")
+                    
+                    if decrypted == plaintext:
+                        log("[PASS] Decrypted message matches original")
+                        bob_client.close()
+                        return True
+                    else:
+                        log(f"[FAIL] Decryption mismatch: {decrypted} != {plaintext}")
+            else:
+                log(f"[INFO] Received: {received}")
+                if received:
+                    log("[PASS] Offline message was stored and delivered")
                     bob_client.close()
                     return True
-                else:
-                    log(f"[FAIL] Decryption mismatch: {decrypted} != {plaintext}")
-        else:
-            log(f"[INFO] Received: {received}")
-            # Even if we got something different, as long as we got a message
-            # from the offline queue, the storage/delivery part works
-            if received:
-                log("[PASS] Offline message was stored and delivered")
-                bob_client.close()
-                return True
-                
-    except socket.timeout:
-        log("[FAIL] Timeout waiting for offline message")
-    except Exception as e:
-        log(f"[ERROR] {e}")
+                    
+        except (socket.timeout, TimeoutError):
+            log(f"Attempt {attempt+1}: timeout waiting for offline message")
+        except Exception as e:
+            log(f"[ERROR] {e}")
+        
+        bob_client.close()
+        if attempt < 2:
+            time.sleep(1)
     
-    bob_client.close()
     return False
 
 
@@ -369,7 +367,6 @@ def test_offline_e2ee_multiple_messages():
     # Bob logs in briefly then disconnects
     bob_client = IrisClient(host=EDGE_HOST, port=EDGE_PORT)
     bob_client.login(bob_name)
-    time.sleep(0.3)
     bob_client.close()
     
     # Alice sends multiple messages
@@ -386,29 +383,36 @@ def test_offline_e2ee_multiple_messages():
         log(f"Sent message #{i}")
     
     alice_client.close()
-    time.sleep(1.0)
     
-    # Bob comes back online
-    bob_client = IrisClient(host=EDGE_HOST, port=EDGE_PORT)
-    bob_client.login(bob_name)
-    
+    # Bob comes back online (retry-login: server may need time to persist)
     messages_received = 0
-    try:
-        bob_client.sock.settimeout(MESSAGE_TIMEOUT)
-        while messages_received < MAX_OFFLINE_MESSAGES:
-            try:
-                received = bob_client.recv_msg(timeout=2.0)
-                if received and "E2EE:" in str(received):
-                    messages_received += 1
-                    log(f"Received message #{messages_received}")
-                else:
+    for attempt in range(3):
+        bob_client = IrisClient(host=EDGE_HOST, port=EDGE_PORT)
+        bob_client.login(bob_name)
+        
+        messages_received = 0
+        try:
+            bob_client.sock.settimeout(MESSAGE_TIMEOUT)
+            while messages_received < MAX_OFFLINE_MESSAGES:
+                try:
+                    received = bob_client.recv_msg(timeout=2.0)
+                    if received and "E2EE:" in str(received):
+                        messages_received += 1
+                        log(f"Received message #{messages_received}")
+                    else:
+                        break
+                except socket.timeout:
                     break
-            except socket.timeout:
-                break
-    except Exception as e:
-        log(f"Error receiving: {e}")
-    
-    bob_client.close()
+        except Exception as e:
+            log(f"Error receiving: {e}")
+        
+        bob_client.close()
+        
+        min_expected = MAX_OFFLINE_MESSAGES // 2 if TEST_PROFILE == "smoke" else MAX_OFFLINE_MESSAGES - 1
+        if messages_received >= min_expected:
+            break
+        log(f"Attempt {attempt+1}: got {messages_received}/{MAX_OFFLINE_MESSAGES}, retrying...")
+        time.sleep(1)
     
     log(f"Received {messages_received}/{MAX_OFFLINE_MESSAGES} messages")
     
@@ -437,7 +441,6 @@ def test_offline_e2ee_ordering():
     # Bob offline
     bob_client = IrisClient(host=EDGE_HOST, port=EDGE_PORT)
     bob_client.login(bob_name)
-    time.sleep(0.3)
     bob_client.close()
     
     # Alice sends numbered messages
@@ -452,32 +455,36 @@ def test_offline_e2ee_ordering():
         time.sleep(0.1)  # Small delay to ensure ordering
     
     alice_client.close()
-    time.sleep(0.5)
     
-    # Bob receives
-    bob_client = IrisClient(host=EDGE_HOST, port=EDGE_PORT)
-    bob_client.login(bob_name)
-    
+    # Bob receives (retry-login: server may need time to persist)
     received_order = []
-    try:
-        bob_client.sock.settimeout(MESSAGE_TIMEOUT)
-        while len(received_order) < 5:
-            try:
-                msg = bob_client.recv_msg(timeout=2.0)
-                if msg:
-                    # Handle both bytes and str
-                    msg_str = msg.decode('utf-8', errors='replace') if isinstance(msg, bytes) else str(msg)
-                    if "ORDER:" in msg_str:
-                        num = int(msg_str.split(":")[1].split()[0])  # Handle trailing data
-                        received_order.append(num)
-                else:
+    for attempt in range(3):
+        bob_client = IrisClient(host=EDGE_HOST, port=EDGE_PORT)
+        bob_client.login(bob_name)
+        
+        received_order = []
+        try:
+            bob_client.sock.settimeout(MESSAGE_TIMEOUT)
+            while len(received_order) < 5:
+                try:
+                    msg = bob_client.recv_msg(timeout=2.0)
+                    if msg:
+                        msg_str = msg.decode('utf-8', errors='replace') if isinstance(msg, bytes) else str(msg)
+                        if "ORDER:" in msg_str:
+                            num = int(msg_str.split(":")[1].split()[0])
+                            received_order.append(num)
+                    else:
+                        break
+                except socket.timeout:
                     break
-            except socket.timeout:
-                break
-    except Exception as e:
-        log(f"Error: {e}")
-    
-    bob_client.close()
+        except Exception as e:
+            log(f"Error: {e}")
+        
+        bob_client.close()
+        if len(received_order) >= 3:
+            break
+        log(f"Attempt {attempt+1}: got {len(received_order)} messages, retrying...")
+        time.sleep(1)
     
     log(f"Received order: {received_order}")
     

@@ -110,7 +110,6 @@ def test_key_distribution_timing():
         start = time.time()
 
         admin_client.sock.sendall(encode_group_create(group_name))
-        time.sleep(0.1)
 
         for m in members:
             admin_client.sock.sendall(encode_group_join(group_name, m))
@@ -121,8 +120,6 @@ def test_key_distribution_timing():
 
         elapsed_ms = (time.time() - start) * 1000
         log(f"  Group setup + first message: {elapsed_ms:.0f}ms")
-
-        time.sleep(0.5)
 
         # Clean up
         admin_client.close()
@@ -168,9 +165,7 @@ def test_group_message_after_distribution():
         member_client.login(member)
 
         admin_client.sock.sendall(encode_group_create(group_name))
-        time.sleep(0.2)
         admin_client.sock.sendall(encode_group_join(group_name, member))
-        time.sleep(0.2)
 
         # Send 10 group messages
         sent = 0
@@ -182,7 +177,6 @@ def test_group_message_after_distribution():
                 break
             time.sleep(0.05)
 
-        time.sleep(0.3)
         admin_client.close()
         member_client.close()
 

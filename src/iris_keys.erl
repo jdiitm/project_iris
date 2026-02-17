@@ -373,7 +373,12 @@ detect_identity_key_change(UserId, NewIK) ->
                                     Pid ! {deliver_msg, AlertPacket};
                                 _ ->
                                     %% Contact offline: store for delivery on reconnect (RFC 5.3.2 MUST)
-                                    iris_core:store_offline_durable(ContactId, AlertPacket)
+                                    case iris_core:store_offline_durable(ContactId, AlertPacket) of
+                                        ok -> ok;
+                                        {error, Err} ->
+                                            logger:warning("Key change alert offline store failed for ~p: ~p",
+                                                           [ContactId, Err])
+                                    end
                             end
                         catch Class:Reason ->
                             %% Lookup crashed (e.g. shard not running) -- treat as offline

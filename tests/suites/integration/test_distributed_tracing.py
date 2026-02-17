@@ -130,7 +130,6 @@ def test_burst_with_tracing():
                 break
             time.sleep(0.01)
 
-        time.sleep(0.5)
         client.close()
 
         if sent >= 40:
@@ -170,8 +169,6 @@ def test_cross_user_trace():
                 except Exception:
                     pass
                 time.sleep(0.01)
-
-        time.sleep(0.5)
 
         for c in clients:
             try:

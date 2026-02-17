@@ -27,6 +27,7 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(_
 sys.path.insert(0, PROJECT_ROOT)
 
 from tests.utilities import IrisClient
+from tests.utilities.helpers import wait_until
 
 
 def get_raw_socket(port=8085, timeout=5):
@@ -45,7 +46,7 @@ def server_alive(port=8085):
         s.connect(('localhost', port))
         s.close()
         return True
-    except:
+    except (socket.error, OSError):
         return False
 
 
@@ -60,14 +61,11 @@ def test_garbage_bytes():
             s = get_raw_socket()
             garbage = bytes([random.randint(0, 255) for _ in range(random.randint(1, 1024))])
             s.sendall(garbage)
-            time.sleep(0.1)
             s.close()
-        except:
+        except (ConnectionError, OSError):
             pass
     
-    time.sleep(0.5)
-    
-    if server_alive():
+    if wait_until(server_alive, timeout=2, description="server alive after garbage bytes"):
         print("✓ Server survived random garbage")
         return True
     else:
@@ -84,21 +82,17 @@ def test_oversized_packets():
         
         # Claim a huge packet size
         s.sendall(b'\x02' + struct.pack('>H', 65535) + b'x' * 100)
-        time.sleep(0.2)
         s.close()
         
         # Send actual huge packet
         s = get_raw_socket()
         s.sendall(b'\x01' + b'A' * 10000)  # 10KB username
-        time.sleep(0.2)
         s.close()
         
-    except:
+    except (ConnectionError, OSError):
         pass
     
-    time.sleep(0.5)
-    
-    if server_alive():
+    if wait_until(server_alive, timeout=2, description="server alive after oversized packets"):
         print("✓ Server survived oversized packets")
         return True
     else:
@@ -113,20 +107,16 @@ def test_null_bytes():
     try:
         s = get_raw_socket()
         s.sendall(b'\x01user\x00name')  # Null in username
-        time.sleep(0.1)
         s.close()
         
         s = get_raw_socket()
         s.sendall(b'\x01' + b'\x00' * 100)  # All nulls
-        time.sleep(0.1)
         s.close()
         
-    except:
+    except (ConnectionError, OSError):
         pass
     
-    time.sleep(0.5)
-    
-    if server_alive():
+    if wait_until(server_alive, timeout=2, description="server alive after null bytes"):
         print("✓ Server survived null byte injection")
         return True
     else:
@@ -143,12 +133,10 @@ def test_rapid_disconnect():
             s = get_raw_socket(timeout=1)
             s.sendall(b'\x01test')
             s.close()
-        except:
+        except (ConnectionError, OSError):
             pass
     
-    time.sleep(0.5)
-    
-    if server_alive():
+    if wait_until(server_alive, timeout=2, description="server alive after rapid reconnects"):
         print("✓ Server survived rapid reconnects")
         return True
     else:
@@ -164,27 +152,22 @@ def test_partial_packets():
         # Send opcode only
         s = get_raw_socket()
         s.sendall(b'\x02')
-        time.sleep(0.2)
         s.close()
         
         # Send partial length
         s = get_raw_socket()
         s.sendall(b'\x02\x00')
-        time.sleep(0.2)
         s.close()
         
         # Send truncated message
         s = get_raw_socket()
         s.sendall(b'\x02\x00\x10short')
-        time.sleep(0.2)
         s.close()
         
-    except:
+    except (ConnectionError, OSError):
         pass
     
-    time.sleep(0.5)
-    
-    if server_alive():
+    if wait_until(server_alive, timeout=2, description="server alive after partial packets"):
         print("✓ Server survived partial packets")
         return True
     else:
@@ -211,12 +194,10 @@ def test_binary_protocol_abuse():
             s.sendall(packet)
             time.sleep(0.05)
             s.close()
-        except:
+        except (ConnectionError, OSError):
             pass
     
-    time.sleep(0.5)
-    
-    if server_alive():
+    if wait_until(server_alive, timeout=2, description="server alive after protocol abuse"):
         print("✓ Server survived protocol abuse")
         return True
     else:

@@ -68,10 +68,7 @@ def test_message_ordering():
     sender.close()
     print("   All messages sent (rapid-fire, with sequence numbers)")
     
-    print("\n3. Waiting for messages to be stored...")
-    time.sleep(2)  # Give server time to store
-    
-    print(f"\n4. Connecting as receiver: {receiver_name}")
+    print(f"\n3. Connecting as receiver: {receiver_name}")
     try:
         receiver = IrisClient()
         receiver.login(receiver_name)
@@ -231,10 +228,7 @@ def test_concurrent_ordering():
     total_sent = sum(len(msgs) for msgs in sent_by_thread.values())
     print(f"\n   Total messages sent: {total_sent}")
     
-    print("\n2. Waiting for messages to be stored...")
-    time.sleep(3)
-    
-    print(f"\n3. Connecting as receiver: {receiver_name}")
+    print(f"\n2. Connecting as receiver: {receiver_name}")
     try:
         receiver = IrisClient()
         receiver.login(receiver_name)

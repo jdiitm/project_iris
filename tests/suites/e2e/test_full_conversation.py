@@ -73,8 +73,6 @@ def test_simple_conversation():
         alice.send_msg(bob_name, msg1)
         log(f"PASS: Step 2 - Alice sent: '{msg1}'")
         
-        time.sleep(0.5)
-        
         # Step 3: Bob receives
         received1 = bob.recv_msg(timeout=5.0)
         if received1:
@@ -92,8 +90,6 @@ def test_simple_conversation():
         msg2 = f"Hi Alice! {uuid.uuid4().hex[:8]}"
         bob.send_msg(alice_name, msg2)
         log(f"PASS: Step 4 - Bob replied: '{msg2}'")
-        
-        time.sleep(0.5)
         
         # Step 5: Alice receives reply
         received2 = alice.recv_msg(timeout=5.0)
@@ -168,8 +164,6 @@ def test_multi_message_conversation():
         
         log(f"Alice sent 5 messages")
         
-        time.sleep(1.0)
-        
         # Bob receives and replies to each
         bob_received = []
         bob_msgs = []
@@ -193,8 +187,6 @@ def test_multi_message_conversation():
                 log(f"  Bob recv {i}: {type(e).__name__} - {e}")
         
         log(f"Bob received {len(bob_received)}/5 messages and replied")
-        
-        time.sleep(1.0)
         
         # Alice receives Bob's replies
         alice_received = []
@@ -296,8 +288,6 @@ def test_three_party_conversation():
         carol.send_msg(alice_name, msg_ca)
         
         log("PASS: All messages sent in triangle")
-        
-        time.sleep(1.0)
         
         # Receive
         success = True

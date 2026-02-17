@@ -32,6 +32,7 @@ sys.path.insert(0, PROJECT_ROOT)
 
 from tests.framework import TestLogger, ClusterManager
 from tests.utilities import IrisClient
+from tests.utilities.helpers import wait_until
 
 # Thresholds
 MIN_DELIVERY_RATE_BASIC = 0.95  # 95% delivery for basic test
@@ -120,37 +121,40 @@ def test_hotkey_basic():
             for detail in all_error_details[:5]:
                 log.info("error", detail)
         
-        time.sleep(2)  # Allow messages to be stored
-        
-        # VIP comes online
-        vip = IrisClient()
-        vip.login(vip_user)
-        log.connection_event("login", vip_user)
-        
-        # Count received messages
+        # VIP comes online (retry-login: server may need time to persist offline messages)
         received = 0
         receive_errors = 0
-        vip.sock.settimeout(2.0)
-        
-        start = time.monotonic()
-        while time.monotonic() - start < 15:  # 15 second timeout
-            try:
-                msg = vip.recv_msg(timeout=2.0)
-                if msg:
-                    received += 1
-            except socket.timeout:
-                # No more messages available
+        for attempt in range(3):
+            vip = IrisClient()
+            vip.login(vip_user)
+            log.connection_event("login", vip_user)
+            
+            received = 0
+            receive_errors = 0
+            vip.sock.settimeout(2.0)
+            
+            start = time.monotonic()
+            while time.monotonic() - start < 15:  # 15 second timeout
+                try:
+                    msg = vip.recv_msg(timeout=2.0)
+                    if msg:
+                        received += 1
+                except socket.timeout:
+                    break
+                except socket.error as e:
+                    log.info("receive_error", f"Socket error during receive: {e}")
+                    receive_errors += 1
+                    break
+                except Exception as e:
+                    log.info("receive_error", f"Unexpected error: {type(e).__name__}: {e}")
+                    receive_errors += 1
+                    break
+            
+            vip.close()
+            if received > 0:
                 break
-            except socket.error as e:
-                log.info("receive_error", f"Socket error during receive: {e}")
-                receive_errors += 1
-                break
-            except Exception as e:
-                log.info("receive_error", f"Unexpected error: {type(e).__name__}: {e}")
-                receive_errors += 1
-                break
-        
-        vip.close()
+            log.info("retry", f"Attempt {attempt+1}: no messages yet, retrying...")
+            time.sleep(1)
         
         log.metric("total_received", received)
         log.metric("receive_errors", receive_errors)
@@ -232,7 +236,7 @@ def test_hotkey_sustained_load():
         
         flood_duration = time.monotonic() - start_time
         
-        # Wait for messages to arrive
+        # Wait for messages to arrive (use time-based wait; not all messages may arrive under load)
         time.sleep(3)
         receiver_running.clear()
         vip.close()

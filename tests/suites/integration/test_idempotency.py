@@ -35,6 +35,7 @@ PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..
 sys.path.insert(0, os.path.join(PROJECT_ROOT, 'tests'))
 
 from utilities.iris_client import IrisClient
+from utilities.helpers import wait_until
 
 
 def log(msg):
@@ -193,8 +194,6 @@ def test_same_msgid_once():
         
         log(f"Sent {num_sends} messages with SAME idempotency_key via 0x0D")
         
-        time.sleep(1.0)
-        
         received = receiver.recv_messages_until_timeout(timeout=2.0)
         matching = [m for m in received if dedup_marker in m]
         
@@ -265,8 +264,6 @@ def test_retry_storm():
         
         log(f"Sent {num_retries} messages rapidly")
         
-        time.sleep(2.0)
-        
         received = receiver.recv_messages_until_timeout(timeout=3.0)
         matching = [m for m in received if msg_id in m]
         
@@ -336,8 +333,6 @@ def test_unique_ids_all_delivered():
             time.sleep(0.05)
         
         log(f"Sent {num_messages} messages with unique IDs")
-        
-        time.sleep(2.0)
         
         received = receiver.recv_messages_until_timeout(timeout=3.0)
         
@@ -414,22 +409,18 @@ def test_idempotency_across_reconnect():
         sender1.send_msg_with_id(receiver_name, "reconnect_test", msg_id)
         log("Sent message from first connection")
         
-        time.sleep(0.5)
-        
         # Disconnect
         sender1.close()
         sender1 = None
         log("Disconnected first sender")
         
-        time.sleep(0.5)
+        time.sleep(0.1)
         
         # Reconnect and send another message
         sender2 = IdempotencyTestClient(host, port)
         sender2.login(sender_name)
         sender2.send_msg_with_id(receiver_name, "reconnect_test", msg_id)
         log("Sent message from second connection")
-        
-        time.sleep(1.0)
         
         received = receiver.recv_messages_until_timeout(timeout=2.0)
         matching = [m for m in received if msg_id in m]
@@ -521,8 +512,6 @@ def test_concurrent_same_id():
             t.join(timeout=10)
         
         log(f"Sent from {num_senders} threads, {sends_per_sender} each = {num_senders * sends_per_sender} total")
-        
-        time.sleep(2.0)
         
         received = receiver.recv_messages_until_timeout(timeout=3.0)
         matching = [m for m in received if msg_id in m]

@@ -128,12 +128,10 @@ def test_reconnect_receives():
                 pass
             time.sleep(0.02)
         send_client.close()
-        time.sleep(0.5)
 
         # Connect as receiver
         recv_client = IrisClient()
         recv_client.login(receiver)
-        time.sleep(1)
 
         # Try to receive pending messages
         received_chunks = 0
@@ -174,7 +172,6 @@ def test_stable_after_overflow():
         c = IrisClient()
         c.login("normal_after_overflow")
         c.send_msg("normal_target_overflow", "hello after overflow")
-        time.sleep(0.3)
         c.close()
         log("  PASS: Normal messaging works after overflow test")
         return True

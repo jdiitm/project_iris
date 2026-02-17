@@ -10,7 +10,6 @@ Tests cover:
 """
 
 import sys
-import time
 import socket
 import struct
 import os
@@ -90,8 +89,8 @@ def test_malformed_opcode():
         
         try:
             s.recv(1024)
-        except:
-            pass
+        except Exception:
+            pass  # Expected: server may close connection or timeout
         
         s.close()
         
@@ -125,9 +124,6 @@ def test_truncated_packet():
                   struct.pack('>Q', 999) + struct.pack('>H', 1000))
         s.sendall(b'only10byte')
         
-        # P2-3: Cannot replace — no condition to poll (delay for server processing)
-        time.sleep(0.5)
-        
         # Server may close connection (which is valid security behavior)
         # or may wait for more data - either is acceptable
         try:
@@ -138,7 +134,7 @@ def test_truncated_packet():
         
         try:
             s.close()
-        except:
+        except Exception:
             pass
         
         # Key test: Verify server still alive and accepting new connections
@@ -174,7 +170,7 @@ def test_oversized_username():
             if b"LOGIN_OK" in resp:
                 print("⚠ Server accepted oversized username")
                 return False
-        except:
+        except Exception:
             pass  # Connection closed is acceptable
         
         s.close()
@@ -208,9 +204,7 @@ def test_oversized_message():
         
         try:
             send_msg(s, target, huge_msg)
-            # P2-3: Cannot replace — no condition to poll (delay for server processing)
-            time.sleep(0.5)
-        except:
+        except Exception:
             pass  # May fail, which is fine
         
         s.close()
@@ -249,7 +243,7 @@ def test_unauthenticated_send():
             # Should be ignored or connection closed
             if b"OK" in resp or b"ACK" in resp:
                 print("⚠ Unauthenticated message might have been accepted")
-        except:
+        except Exception:
             pass  # Expected - connection closed or timeout
         
         s.close()
@@ -319,8 +313,8 @@ def test_rapid_connection_flood():
                 s = ctx.wrap_socket(raw, server_hostname='localhost')
                 s.connect(('localhost', 8085))
                 sockets.append(s)
-            except:
-                pass  # Some may fail, that's fine
+            except (ConnectionError, socket.timeout, ssl.SSLError, OSError):
+                pass  # Some may fail under flood, that's expected
         
         print(f"✓ Opened {len(sockets)} connections")
         
@@ -328,11 +322,8 @@ def test_rapid_connection_flood():
         for s in sockets:
             try:
                 s.close()
-            except:
+            except Exception:
                 pass
-        
-        # P2-3: Cannot replace — no condition to poll (delay for connection cleanup)
-        time.sleep(0.5)
         
         # Verify server still accepts connections
         s = get_connection()
@@ -349,7 +340,7 @@ def test_rapid_connection_flood():
         for s in sockets:
             try:
                 s.close()
-            except:
+            except Exception:
                 pass
 
 
@@ -367,7 +358,7 @@ def test_message_flood():
         for i in range(100):
             try:
                 send_msg(s, "target", f"flood_{i}")
-            except:
+            except (BrokenPipeError, ConnectionResetError, OSError):
                 break
         
         print("✓ Sent 100 messages rapidly")
@@ -404,8 +395,6 @@ def test_empty_message():
         # Send empty message
         send_msg(s, "target", "")
         
-        # P2-3: Cannot replace — no condition to poll (delay for server processing)
-        time.sleep(0.2)
         s.close()
         
         # Verify server alive
@@ -440,8 +429,6 @@ def test_binary_message():
                   struct.pack('>Q', 1) + struct.pack('>H', len(binary_msg)) + binary_msg)
         s.sendall(packet)
         
-        # P2-3: Cannot replace — no condition to poll (delay for server processing)
-        time.sleep(0.2)
         s.close()
         
         # Verify server alive

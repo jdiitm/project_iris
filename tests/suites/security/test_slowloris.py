@@ -55,7 +55,7 @@ def server_alive():
         s.connect((SERVER_HOST, SERVER_PORT))
         s.close()
         return True
-    except Exception:
+    except (socket.error, OSError):
         return False
 
 
@@ -194,7 +194,6 @@ def test_legitimate_during_attack():
         c = IrisClient()
         c.login("legit_during_slowloris")
         c.send_msg("target_user", "hello during attack")
-        time.sleep(0.3)
         c.close()
         legit_ok = True
         log("  Legitimate client connected and sent message")

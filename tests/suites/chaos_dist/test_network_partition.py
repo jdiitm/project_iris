@@ -1088,7 +1088,7 @@ def test_outbox_queue_ttl_simulation():
         else:
             log("    Could not connect receiver to verify delivery")
         
-        # FIX: Weak assertion hardening - require actual message delivery
+        # Assertion: require actual message delivery (not just send success)
         if message_delivered:
             log("\n  PASS: Outbox queue TTL test completed")
             log("        Message was queued during partition and delivered after heal")
@@ -1309,7 +1309,7 @@ def test_outbox_queue_overflow_backpressure():
         # - Messages were delivered after heal (at least 10% delivery rate)
         # - OR explicit rejections occurred (backpressure working)
         #
-        # FIX: Weak assertion hardening - require actual message delivery, not just sends
+        # Assertion: require actual message delivery, not just sends
         
         if sent_count < 100:
             log("\n  FAIL: Could not send enough messages to test overflow")

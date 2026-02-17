@@ -155,7 +155,6 @@ def test_v1_protocol_works():
         
         # Send V1
         send_raw(s, build_send_v1("some_target", "hello_v1"))
-        time.sleep(0.2)
         
         s.close()
         
@@ -257,7 +256,6 @@ def test_v2_extended_send():
         
         # Send V2 message with extra fields
         send_raw(s, build_send_v2("target", "hello_v2", priority=1, ttl=3600))
-        time.sleep(0.2)
         
         s.close()
         
@@ -284,7 +282,6 @@ def test_truncated_packet():
         # Test 1: Truncated login (just opcode)
         s1 = get_connection()
         send_raw(s1, b'\x01')  # Login opcode but no user
-        time.sleep(0.5)
         s1.close()
         
         # Test 2: Truncated send (partial header using current opcode 0x07)
@@ -292,7 +289,6 @@ def test_truncated_packet():
         send_raw(s2, build_login_v1("trunc_user"))
         recv_response(s2, timeout=1)
         send_raw(s2, b'\x07\x00')  # Send opcode + partial length
-        time.sleep(0.5)
         s2.close()
         
         # Verify server alive
@@ -319,7 +315,6 @@ def test_empty_fields():
         
         # Empty username login
         send_raw(s, b'\x01')  # Just opcode, no username
-        time.sleep(0.2)
         
         s.close()
         
@@ -328,7 +323,6 @@ def test_empty_fields():
         send_raw(s2, build_login_v1("empty_test"))
         recv_response(s2, timeout=1)
         send_raw(s2, build_send_v1("target", ""))  # Empty message
-        time.sleep(0.2)
         s2.close()
         
         # Verify alive

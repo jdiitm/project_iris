@@ -345,7 +345,6 @@ def test_member_removal_key_rotation():
         # Create group via protocol
         group_name = f"security_test_{int(time.time())}".encode()
         admin.sock.sendall(encode_group_create(group_name))
-        time.sleep(0.5)
         
         response = recv_with_timeout(admin.sock, 3.0)
         if len(response) == 0 or response[0] != 0x31:
@@ -367,7 +366,6 @@ def test_member_removal_key_rotation():
         # Distribute key via protocol
         key_data = admin_sender_key.export_for_member()
         admin.sock.sendall(encode_sender_key_dist(group_id, key_data))
-        time.sleep(0.3)
         log(f"     Sender key distributed (epoch {initial_epoch})")
         
         # Step 3: Alice and Bob join and receive key
@@ -400,7 +398,6 @@ def test_member_removal_key_rotation():
             "nonce": m1_nonce.hex()
         })
         admin.sock.sendall(encode_group_msg(group_id, header, m1_cipher))
-        time.sleep(0.3)
         
         # Verify Alice can decrypt
         alice_success, alice_result = alice_key_state.try_decrypt(m1_cipher, m1_nonce, m1_epoch, m1_idx)
@@ -421,7 +418,6 @@ def test_member_removal_key_rotation():
         # Step 5: REMOVE BOB from group
         log("  5. REMOVING Bob from group")
         admin.sock.sendall(encode_group_remove(group_id, bob_user.encode()))
-        time.sleep(0.3)
         log(f"     Bob removed via protocol")
         
         # Step 6: KEY ROTATION - Admin generates new sender key
@@ -433,7 +429,6 @@ def test_member_removal_key_rotation():
         # Distribute new key to Alice ONLY (Bob doesn't get it)
         new_key_data = admin_sender_key.export_for_member()
         admin.sock.sendall(encode_sender_key_dist(group_id, new_key_data))
-        time.sleep(0.3)
         
         # Alice updates her key state
         alice_key_state = MemberKeyState(crypto, new_key, new_epoch, 0)
@@ -454,7 +449,6 @@ def test_member_removal_key_rotation():
             "nonce": m2_nonce.hex()
         })
         admin.sock.sendall(encode_group_msg(group_id, header2, m2_cipher))
-        time.sleep(0.3)
         
         # Step 8: Alice MUST be able to decrypt M2
         log("  8. Alice attempts to decrypt M2")
