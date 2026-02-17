@@ -40,6 +40,10 @@ generate_node_cert() {
     local NODE_NAME=$1
     local NODE_TYPE=$2  # core or edge
     
+    # Docker hostname strips hyphens (e.g. core-east-1 -> coreeast1)
+    local DOCKER_HOSTNAME
+    DOCKER_HOSTNAME=$(echo "$NODE_NAME" | tr -d '-')
+    
     echo "   Generating certificate for $NODE_NAME..."
     
     # Generate private key
@@ -67,8 +71,9 @@ subjectAltName = @alt_names
 
 [alt_names]
 DNS.1 = ${NODE_NAME}
-DNS.2 = localhost
-DNS.3 = *.iris.local
+DNS.2 = ${DOCKER_HOSTNAME}
+DNS.3 = localhost
+DNS.4 = *.iris.local
 IP.1 = 127.0.0.1
 EOF
     
