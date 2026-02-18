@@ -47,13 +47,17 @@ class IrisClient:
         if ssl_context is not None:
             context = ssl_context
         else:
-            # TLS is mandatory — create context with CA verification
-            context = ssl.create_default_context()
             ca_cert = os.environ.get('IRIS_CA_CERT', str(DEFAULT_CA_CERT))
             if os.path.exists(ca_cert):
+                # Bare SSLContext avoids loading system CAs — self-signed test
+                # CA must be the only trusted root.
+                context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
                 context.load_verify_locations(ca_cert)
-            # Disable hostname check — test certs use edge-east-1 etc., not localhost
-            context.check_hostname = False
+                context.check_hostname = False
+            else:
+                context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+                context.check_hostname = False
+                context.verify_mode = ssl.CERT_NONE
         
         # Wrap BEFORE connect — TCP+TLS handshake happens atomically
         self.sock = context.wrap_socket(raw_sock, server_hostname=host)

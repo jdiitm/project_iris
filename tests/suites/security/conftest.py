@@ -7,14 +7,17 @@ verifies the server is accepting connections before each test function,
 preventing cascading SSL EOF failures from connection exhaustion.
 """
 import os
+import sys
 import socket
 import ssl
 import time
 import pytest
 from pathlib import Path
-from tests.utilities.tls_connection import get_unverified_ssl_context
 
 PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
+sys.path.insert(0, str(PROJECT_ROOT))
+
+from tests.utilities.tls_connection import get_unverified_ssl_context
 SERVER_HOST = os.environ.get("IRIS_HOST", "localhost")
 SERVER_PORT = int(os.environ.get("IRIS_PORT", "8085"))
 CA_CERT = PROJECT_ROOT / "certs" / "ca.pem"

@@ -36,11 +36,11 @@ import struct
 import threading
 from pathlib import Path
 
+PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
+sys.path.insert(0, str(PROJECT_ROOT))
+
 from tests.utilities.tls_connection import get_verified_ssl_context
 
-PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
-
-# TLS Configuration
 CA_CERT = PROJECT_ROOT / "certs" / "ca.pem"
 
 # Determinism

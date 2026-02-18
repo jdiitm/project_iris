@@ -30,10 +30,10 @@ import struct
 from pathlib import Path
 from typing import Optional, List, Dict
 
-from tests.utilities.tls_connection import get_verified_ssl_context
-
-# Project root
 PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
+sys.path.insert(0, str(PROJECT_ROOT))
+
+from tests.utilities.tls_connection import get_verified_ssl_context
 
 # Test configuration
 SERVER_HOST = os.environ.get("IRIS_HOST", "localhost")

@@ -39,11 +39,12 @@ import threading
 import json
 from pathlib import Path
 
-# TLS Configuration
 PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
-CA_CERT = PROJECT_ROOT / "certs" / "ca.pem"
+sys.path.insert(0, str(PROJECT_ROOT))
 
 from tests.utilities.tls_connection import get_verified_ssl_context
+
+CA_CERT = PROJECT_ROOT / "certs" / "ca.pem"
 
 
 def create_tls_socket(host: str, port: int, timeout: int = 10,

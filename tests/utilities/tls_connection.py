@@ -42,9 +42,10 @@ def get_verified_ssl_context(client_cert: bool = False) -> ssl.SSLContext:
             f"CA certificate not found at {CA_CERT}. "
             "Run 'make certs' or 'cd certs && bash generate_certs.sh' to generate test certificates."
         )
-    context = ssl.create_default_context()
+    # Use bare SSLContext to avoid loading system CAs — self-signed test CA
+    # must be the ONLY trusted root, otherwise OpenSSL rejects the chain.
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
     context.load_verify_locations(str(CA_CERT))
-    # Disable hostname check — test certs use edge-east-1 etc., not localhost
     context.check_hostname = False
 
     if client_cert and CLIENT_CERT.exists() and CLIENT_KEY.exists():
