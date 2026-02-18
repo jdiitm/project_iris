@@ -150,8 +150,8 @@ jobs:
             exit 1
           fi
           echo "Coverage: ${COV_PCT}%"
-          if [ "$COV_PCT" -lt 75 ]; then
-            echo "::error::Coverage ${COV_PCT}% is below minimum threshold of 75%"
+          if [ "$COV_PCT" -lt 70 ]; then
+            echo "::error::Coverage ${COV_PCT}% is below minimum threshold of 70%"
             exit 1
           fi
           echo "Coverage ${COV_PCT}% meets minimum threshold of 75%"

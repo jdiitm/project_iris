@@ -151,7 +151,6 @@ def measure_load_cpu(connections, msg_rate, duration):
 
     # Message sending thread
     def send_messages():
-        interval = 1.0 / msg_rate if msg_rate > 0 else 1
         while not stop_event.is_set():
             for i, sock in enumerate(connections):
                 if stop_event.is_set():

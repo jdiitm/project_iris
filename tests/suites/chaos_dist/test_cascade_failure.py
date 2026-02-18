@@ -251,7 +251,6 @@ class LoadGenerator:
         if not sock:
             return
 
-        interval = self.users / self.rate  # Spread load across users
         end_time = time.time() + duration
         msg_id = 0
 
