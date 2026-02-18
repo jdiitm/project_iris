@@ -113,11 +113,8 @@ def test_remove_during_send():
 
         # Create group and add members
         admin_client.sock.sendall(encode_group_create(group_name))
-        time.sleep(0.3)
         admin_client.sock.sendall(encode_group_join(group_name, alice))
-        time.sleep(0.1)
         admin_client.sock.sendall(encode_group_join(group_name, bob))
-        time.sleep(0.3)
 
         # Start sending messages from alice in a thread
         send_errors = []
@@ -128,7 +125,6 @@ def test_remove_during_send():
                 try:
                     alice_client.sock.sendall(encode_group_msg(group_name, f"msg_{i}"))
                     send_count[0] += 1
-                    time.sleep(0.05)
                 except Exception as e:
                     send_errors.append(str(e))
                     break
@@ -137,7 +133,6 @@ def test_remove_during_send():
         sender.start()
 
         # Remove bob mid-send
-        time.sleep(0.2)
         admin_client.sock.sendall(encode_group_leave(group_name, bob))
 
         sender.join(timeout=5)
@@ -187,11 +182,8 @@ def test_concurrent_removal_and_message():
 
         # Create group
         admin_client.sock.sendall(encode_group_create(group_name))
-        time.sleep(0.3)
         admin_client.sock.sendall(encode_group_join(group_name, alice))
-        time.sleep(0.1)
         admin_client.sock.sendall(encode_group_join(group_name, bob))
-        time.sleep(0.3)
 
         barrier = threading.Barrier(2, timeout=5)
         results_local = {"remove_ok": False, "send_ok": False}
@@ -220,7 +212,6 @@ def test_concurrent_removal_and_message():
             t2.start()
             t1.join(timeout=3)
             t2.join(timeout=3)
-            time.sleep(0.1)
 
             if not server_alive():
                 log(f"  FAIL: Server crashed on trial {trial}")
@@ -228,7 +219,6 @@ def test_concurrent_removal_and_message():
 
             # Re-add bob for next trial
             admin_client.sock.sendall(encode_group_join(group_name, bob))
-            time.sleep(0.2)
 
         # Clean up
         for c in [admin_client, alice_client, bob_client]:
@@ -266,22 +256,17 @@ def test_rapid_add_remove_add():
 
         # Create group
         admin_client.sock.sendall(encode_group_create(group_name))
-        time.sleep(0.3)
 
         # Rapid add/remove cycles
         for cycle in range(10):
             admin_client.sock.sendall(encode_group_join(group_name, bob))
-            time.sleep(0.05)
             admin_client.sock.sendall(encode_group_leave(group_name, bob))
-            time.sleep(0.05)
 
         # Final add
         admin_client.sock.sendall(encode_group_join(group_name, bob))
-        time.sleep(0.2)
 
         # Send a message -- should work since bob is now a member
         admin_client.sock.sendall(encode_group_msg(group_name, "post_rapid_msg"))
-        time.sleep(0.2)
 
         for c in [admin_client, bob_client]:
             try:
@@ -316,7 +301,6 @@ def test_server_survives():
         client = IrisClient()
         client.login("legit_after_race_tests")
         client.send_msg("some_target", "hello after race tests")
-        time.sleep(0.3)
         client.close()
         log("  PASS: Legitimate client works after all race tests")
         return True

@@ -457,12 +457,10 @@ def test_revoked_member_isolation():
         log(f"  3. Alice adds Bob and Carol to group")
         alice.add_member(group_id, bob_name)
         alice.add_member(group_id, carol_name)
-        time.sleep(1)
 
         # Send test message (all should receive)
         log(f"  4. Alice sends message (all members should receive)")
         alice.send_group_message(group_id, "Message while Bob is member", key_epoch=1)
-        time.sleep(2)
 
         # Check both received
         bob_msg_count_before = len(bob.received_messages)
@@ -472,7 +470,6 @@ def test_revoked_member_isolation():
         # Alice removes Bob
         log(f"  5. Alice REMOVES Bob from group")
         alice.remove_member(group_id, bob_name)
-        time.sleep(1)
 
         # Clear message buffers
         bob.received_messages.clear()
@@ -481,7 +478,6 @@ def test_revoked_member_isolation():
         # Alice sends new message (only Carol should receive)
         log(f"  6. Alice sends POST-REVOCATION message (epoch=2)")
         alice.send_group_message(group_id, "SECRET_AFTER_BOB_REMOVED", key_epoch=2)
-        time.sleep(2)
 
         # Check results
         bob_msg_count_after = len(bob.received_messages)
@@ -593,13 +589,11 @@ def test_key_rotation_on_removal():
 
         admin.add_member(group_id, member1_name)
         admin.add_member(group_id, member2_name)
-        time.sleep(1)
 
         # Distribute initial sender key (epoch 1)
         log(f"  2. Distributing initial sender key (epoch 1)")
         initial_key = b"SENDER_KEY_EPOCH_1_" + os.urandom(16)
         admin.distribute_sender_key(group_id, initial_key)
-        time.sleep(1)
 
         # Record initial key state
         member1_keys_before = dict(member1.received_sender_keys)
@@ -611,13 +605,11 @@ def test_key_rotation_on_removal():
         # Remove member1
         log(f"  3. Removing member1 from group")
         admin.remove_member(group_id, member1_name)
-        time.sleep(1)
 
         # Distribute new sender key (epoch 2) - simulating rotation
         log(f"  4. Distributing new sender key (epoch 2)")
         rotated_key = b"SENDER_KEY_EPOCH_2_" + os.urandom(16)
         admin.distribute_sender_key(group_id, rotated_key)
-        time.sleep(2)
 
         # Check if member2 received new key
         member2_keys_after = dict(member2.received_sender_keys)

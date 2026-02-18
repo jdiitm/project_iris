@@ -178,8 +178,6 @@ def test_plaintext_rejected():
         test_message = f"PLAINTEXT_TEST_{time.time()}"
         send_plaintext_message(sender_sock, receiver_name, test_message)
 
-        # Wait for response from server
-        time.sleep(0.5)
         response = recv_with_timeout(sender_sock, timeout=3.0)
 
         # Check for error response
@@ -293,7 +291,6 @@ def test_multiple_plaintext_rejected():
         rejections = 0
         for i in range(3):
             send_plaintext_message(sock, f"target_{i}", f"plaintext_msg_{i}")
-            time.sleep(0.2)
 
             response = recv_with_timeout(sock, timeout=1.0)
             error_msg = parse_error_response(response)
@@ -372,7 +369,6 @@ def test_cbor_messages_accepted():
         sock.sendall(payload)
         log("  Sent sequenced message (opcode 0x07)")
 
-        time.sleep(0.3)
         response = recv_with_timeout(sock, timeout=2.0)
 
         # Check for rejection (should NOT happen)

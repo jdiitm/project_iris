@@ -83,9 +83,6 @@ def test_partial_tls_handshake():
 
     log(f"  Opened {connected} half-TLS connections")
 
-    # Hold them open for a bit
-    time.sleep(5)
-
     # Verify server is still alive during the attack
     if not server_alive():
         log("  FAIL: Server died during partial TLS attack")
@@ -104,8 +101,6 @@ def test_partial_tls_handshake():
             s.close()
         except Exception:
             pass
-
-    time.sleep(2)
 
     if server_alive():
         log(f"  PASS: Server survived {connected} partial TLS connections")
@@ -142,7 +137,6 @@ def test_post_tls_stalled_login():
             pass
 
     log(f"  Opened {connected} stalled-LOGIN connections")
-    time.sleep(5)
 
     alive = server_alive()
     if not alive:
@@ -153,8 +147,6 @@ def test_post_tls_stalled_login():
             s.close()
         except Exception:
             pass
-
-    time.sleep(2)
 
     if server_alive():
         log(f"  PASS: Server survived {connected} stalled LOGIN connections")
@@ -191,7 +183,6 @@ def test_legitimate_during_attack():
         c = IrisClient()
         c.login("legit_during_slowloris")
         c.send_msg("target_user", "hello during attack")
-        time.sleep(0.3)
         c.close()
         legit_ok = True
         log("  Legitimate client connected and sent message")

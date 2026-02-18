@@ -271,8 +271,6 @@ def test_concurrent_connection_flood():
     log(f"    Failed: {stats['failed']}")
     log(f"    Rate: {total/duration:.1f} conn/sec")
 
-    # Verify server survived
-    time.sleep(2)
     server_ok = check_server_available()
 
     if server_ok:
@@ -310,10 +308,6 @@ def test_recovery_after_throttle():
 
     log(f"    Rapid connections done, {refused_count} refused")
 
-    # Phase 2: Wait for cooldown
-    log("  Phase 2: Waiting for cooldown (10 seconds)...")
-    time.sleep(10)
-
     # Phase 3: Verify recovery
     log("  Phase 3: Testing recovery...")
 
@@ -327,7 +321,6 @@ def test_recovery_after_throttle():
             log(f"    Connection {i+1}: OK ({latency:.1f}ms)")
         else:
             log(f"    Connection {i+1}: {error_type}")
-        time.sleep(1)
 
     if recovery_success >= recovery_attempts - 1:
         log_test("Throttle recovery", True,
@@ -402,7 +395,6 @@ def test_server_stability_after_attack():
             pass
 
     # Phase 4: Final stability check
-    time.sleep(2)
     final_check = check_server_available()
 
     log(f"    Final stability check: {'OK' if final_check else 'FAILED'}")

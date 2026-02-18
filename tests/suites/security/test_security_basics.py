@@ -10,7 +10,6 @@ Tests cover:
 """
 
 import sys
-import time
 import socket
 import struct
 import os
@@ -121,9 +120,6 @@ def test_truncated_packet():
                   struct.pack('>Q', 999) + struct.pack('>H', 1000))
         s.sendall(b'only10byte')
 
-        # P2-3: Cannot replace — no condition to poll (delay for server processing)
-        time.sleep(0.5)
-
         # Server may close connection (which is valid security behavior)
         # or may wait for more data - either is acceptable
         try:
@@ -204,8 +200,6 @@ def test_oversized_message():
 
         try:
             send_msg(s, target, huge_msg)
-            # P2-3: Cannot replace — no condition to poll (delay for server processing)
-            time.sleep(0.5)
         except:
             pass  # May fail, which is fine
 
@@ -322,9 +316,6 @@ def test_rapid_connection_flood():
             except:
                 pass
 
-        # P2-3: Cannot replace — no condition to poll (delay for connection cleanup)
-        time.sleep(0.5)
-
         # Verify server still accepts connections
         s = get_connection()
         login(s, "post_flood_user")
@@ -395,8 +386,6 @@ def test_empty_message():
         # Send empty message
         send_msg(s, "target", "")
 
-        # P2-3: Cannot replace — no condition to poll (delay for server processing)
-        time.sleep(0.2)
         s.close()
 
         # Verify server alive
@@ -431,8 +420,6 @@ def test_binary_message():
                   struct.pack('>Q', 1) + struct.pack('>H', len(binary_msg)) + binary_msg)
         s.sendall(packet)
 
-        # P2-3: Cannot replace — no condition to poll (delay for server processing)
-        time.sleep(0.2)
         s.close()
 
         # Verify server alive

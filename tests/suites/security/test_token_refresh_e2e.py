@@ -111,7 +111,6 @@ def test_refresh_returns_new_tokens():
     user = unique_user("refresh_e2e")
     sock = get_tls_socket()
     login_resp = raw_login(sock, user)
-    time.sleep(0.1)
 
     # Extract refresh token from LOGIN_OK response (created by server via Core RPC)
     _session_id, refresh_token = parse_login_response(login_resp)
@@ -124,7 +123,6 @@ def test_refresh_returns_new_tokens():
 
     # Send TOKEN_REFRESH
     send_token_refresh(sock, refresh_token)
-    time.sleep(0.5)
 
     # Check response
     sock.settimeout(3.0)
@@ -180,7 +178,6 @@ def test_refresh_reuse_detected():
     user = unique_user("reuse_test")
     sock = get_tls_socket()
     login_resp = raw_login(sock, user)
-    time.sleep(0.1)
 
     _session_id, refresh_token = parse_login_response(login_resp)
     if not refresh_token:
@@ -190,7 +187,6 @@ def test_refresh_reuse_detected():
 
     # First use -- should succeed
     send_token_refresh(sock, refresh_token)
-    time.sleep(0.5)
 
     sock.settimeout(3.0)
     first_response = None
@@ -202,7 +198,6 @@ def test_refresh_reuse_detected():
 
     # Second use (replay) -- should fail with token_reused error
     send_token_refresh(sock, refresh_token)
-    time.sleep(0.5)
 
     reuse_rejected = False
     try:
@@ -249,12 +244,10 @@ def test_refresh_expired_rejected():
     user = unique_user("expired_test")
     sock = get_tls_socket()
     raw_login(sock, user)
-    time.sleep(0.1)
 
     # Send a completely fake token
     fake_token = b"EXPIRED_FAKE_TOKEN_" + uuid.uuid4().hex[:20].encode()
     send_token_refresh(sock, fake_token)
-    time.sleep(0.5)
 
     sock.settimeout(3.0)
     rejected = False
