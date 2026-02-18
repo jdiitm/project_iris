@@ -87,7 +87,10 @@ iris_auth_test_() ->
       {"Login rate limiter fail-closed on missing ETS", fun test_login_rate_fail_closed/0},
 
       %% JWT missing alg field must be rejected
-      {"JWT missing alg field rejected", fun test_missing_alg_header/0}
+      {"JWT missing alg field rejected", fun test_missing_alg_header/0},
+
+      %% H-1: Cross-node revocation via ETS-only propagation
+      {"ETS-only revocation detected (cross-node propagation)", fun test_ets_only_revocation/0}
      ]}.
 
 %% =============================================================================
@@ -384,6 +387,31 @@ test_missing_alg_header() ->
 
     Result = iris_auth:validate_token(Token),
     ?assertMatch({error, missing_algorithm}, Result).
+
+%% =============================================================================
+%% H-1: Cross-node revocation via ETS-only propagation
+%% =============================================================================
+%% Simulates receive_revocation/2 from another node: token is in ETS but
+%% NOT yet in Mnesia. The double-check in is_revoked must catch it.
+
+test_ets_only_revocation() ->
+    UserId = <<"ets_only_revoke_user">>,
+    {ok, Token} = iris_auth:create_token(UserId),
+
+    %% Token valid initially — extract JTI for later revocation
+    {ok, Claims} = iris_auth:validate_token(Token),
+    Jti = maps:get(<<"jti">>, Claims),
+    ?assert(is_binary(Jti)),
+
+    %% Simulate cross-node propagation: insert into ETS directly
+    %% (this is what receive_revocation/2 does on remote nodes)
+    iris_auth:receive_revocation(Jti, os:system_time(second)),
+
+    %% Token must now be revoked via ETS fast-path.
+    %% Note: second validate may also hit jti replay, but revocation
+    %% check runs BEFORE replay check in the validation pipeline.
+    Result = iris_auth:validate_token(Token),
+    ?assertMatch({error, token_revoked}, Result).
 
 %% Helper: minimal JSON encode for test JWT construction
 jsx_encode(Map) ->

@@ -589,12 +589,14 @@ is_revoked(TokenId) ->
     case ets:member(?REVOCATION_TABLE, TokenId) of
         true -> true;
         false ->
-            %% Transactional read for revocation check
-            %% (was dirty_read -- could miss concurrent revocations)
             case mnesia:sync_transaction(fun() ->
                 mnesia:read(revoked_tokens, TokenId)
             end) of
-                {atomic, []} -> false;
+                {atomic, []} ->
+                    %% Double-check ETS: a cross-node propagation
+                    %% (receive_revocation/2) may have arrived during
+                    %% the Mnesia transaction, closing the race window.
+                    ets:member(?REVOCATION_TABLE, TokenId);
                 {atomic, [_|_]} -> 
                     %% Cache locally for fast subsequent checks
                     Now = os:system_time(second),

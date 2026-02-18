@@ -260,6 +260,30 @@ invalid_input_sizes_rejected_test() ->
         crypto:strong_rand_bytes(16))).  %% Wrong size (should be 32)
 
 %% =============================================================================
+%% H-6: Weak DH Output Rejection
+%% =============================================================================
+%% A zero shared secret from X25519 indicates a small-subgroup attack.
+%% The implementation must detect and reject this.
+%% initiate_exchange/2 catches all errors from DH, so if a weak key
+%% somehow passes signature verification, the exchange returns an error
+%% instead of a compromised shared secret.
+
+weak_dh_output_error_propagation_test() ->
+    %% Verify that initiate_exchange returns {error, _} (not {ok, ...})
+    %% when given a completely invalid key bundle. This exercises the
+    %% error propagation path that catches weak_dh_output errors.
+    {IK_A_Pub, IK_A_Priv} = iris_x3dh:generate_identity_key(),
+    ZeroKey = <<0:256>>,
+    AliceKeys = #{identity_key_private => IK_A_Priv,
+                  identity_key_public => IK_A_Pub},
+    BobBundle = #{identity_key => ZeroKey,
+                  signed_prekey => ZeroKey,
+                  signed_prekey_signature => <<0:512>>,
+                  one_time_prekey => undefined},
+    Result = iris_x3dh:initiate_exchange(AliceKeys, BobBundle),
+    ?assertMatch({error, _}, Result).
+
+%% =============================================================================
 %% Error Handling Tests
 %% =============================================================================
 

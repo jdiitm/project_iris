@@ -89,7 +89,10 @@ iris_session_test_() ->
       
       %% Integration tests
       {"Full session lifecycle", fun test_full_lifecycle/0},
-      {"Concurrent status queries", fun test_concurrent_status/0}
+      {"Concurrent status queries", fun test_concurrent_status/0},
+
+      %% H-5: Block check logs when Mnesia table missing
+      {"Block check allows when table missing (feature not deployed)", fun test_block_check_table_missing/0}
      ]}.
 
 %% =============================================================================
@@ -428,3 +431,14 @@ test_concurrent_status() ->
     lists:foreach(fun(R) ->
         ?assertMatch({ok, User, [{send, _}]}, R)
     end, Results).
+
+%% =============================================================================
+%% H-5: Block check with missing Mnesia table
+%% =============================================================================
+
+test_block_check_table_missing() ->
+    %% When user_blocks table doesn't exist (feature not deployed),
+    %% check_block_status must return ok (allow) and log a warning.
+    %% In production, iris_core:create_tables/1 always creates this table.
+    Result = iris_session:check_block_status(<<"sender">>, <<"recipient">>),
+    ?assertEqual(ok, Result).

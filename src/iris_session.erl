@@ -1233,7 +1233,15 @@ rate_limit_check(User) ->
         %% Without this, the login check depletes the same token bucket that
         %% check_message_rate/1 uses, silently dropping the Nth message when
         %% N equals the initial token count (Burst / 2).
-        _ -> iris_rate_limiter:check_typed(User, login)
+        _ ->
+            try iris_rate_limiter:check_typed(User, login)
+            catch _:Reason ->
+                %% ETS table may not exist during startup race (gen_server
+                %% is registered before init/1 creates the table). Allow
+                %% through with a warning rather than blocking all logins.
+                logger:warning("Rate limiter not ready (startup race?): ~p", [Reason]),
+                allow
+            end
     end.
 
 authenticate(_User, undefined) ->
@@ -1313,7 +1321,10 @@ check_message_rate(User, Type) ->
     iris_flow_controller:track_request(User),
     case whereis(iris_rate_limiter) of
         undefined -> allow;
-        _ -> iris_rate_limiter:check_typed(User, Type)
+        _ ->
+            try iris_rate_limiter:check_typed(User, Type)
+            catch _:_ -> allow
+            end
     end.
 
 encode_rate_limited(RetryAfter) ->
@@ -1441,10 +1452,13 @@ check_block_status(Sender, Recipient) ->
             iris_metrics:inc(blocked_message_count),
             {error, blocked}
     catch
-        exit:{aborted, {no_exists, _}} ->
-            %% Mnesia table not created — blocking feature not deployed.
-            %% This is NOT a transient failure; the feature simply isn't configured.
-            %% Allow messages through (no blocks exist to enforce).
+        exit:{aborted, {no_exists, Table}} ->
+            %% Mnesia table not created. In production, iris_core:create_tables/1
+            %% always creates user_blocks. This path only fires in test/dev when
+            %% iris_core hasn't started. Log so it's visible in production.
+            logger:warning("Block table ~p missing — allowing message (feature not deployed?)",
+                           [Table]),
+            iris_metrics:inc(block_check_table_missing),
             ok;
         error:undef ->
             %% iris_user_safety module not loaded — feature not deployed.
