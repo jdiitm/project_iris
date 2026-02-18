@@ -252,7 +252,12 @@ do_partition_check(State = #state{quorum_threshold = Threshold}) ->
     VisibleCount = length([N || N <- Expected, lists:member(N, AllVisible)]),
     
     HasQuorum = case ExpectedCount of
-        0 -> true;  %% No expected nodes configured = always have quorum
+        0 ->
+            %% No expected nodes configured — cannot determine quorum.
+            %% Fail-safe: treat as NO quorum to prevent silent split-brain.
+            logger:warning("Partition guard: expected_nodes is empty — "
+                           "cannot determine quorum, assuming unsafe"),
+            false;
         _ -> (VisibleCount / ExpectedCount) > Threshold
     end,
     

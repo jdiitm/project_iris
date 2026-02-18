@@ -280,9 +280,15 @@ generate_x25519_keypair() ->
     %% crypto:generate_key/2 returns {PublicKey, PrivateKey} for x25519
     crypto:generate_key(ecdh, x25519).
 
-%% @doc Perform X25519 Diffie-Hellman
+%% @doc Perform X25519 Diffie-Hellman with weak key rejection.
+%% A zero shared secret indicates a small-subgroup attack.
 x25519_shared(PrivateKey, PublicKey) ->
-    crypto:compute_key(ecdh, PublicKey, PrivateKey, x25519).
+    Shared = crypto:compute_key(ecdh, PublicKey, PrivateKey, x25519),
+    ZeroKey = <<0:256>>,
+    case Shared of
+        ZeroKey -> error(weak_dh_output);
+        _ -> Shared
+    end.
 
 %% @doc HKDF-SHA256 key derivation
 -spec hkdf_sha256(IKM :: binary(), Salt :: binary(), Info :: binary(), 

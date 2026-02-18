@@ -69,7 +69,9 @@ def encode_read_receipt(target, msg_id):
 # Test 1: Read Receipt Normal Operation
 # =============================================================================
 def test_read_receipt_normal():
-    """Send a read receipt while both parties are online."""
+    """Send a read receipt while both parties are online.
+    Verify both server stability AND that the connection remains functional
+    after the receipt is processed."""
     log("\n=== Test 1: Read Receipt Normal ===")
 
     sender = unique_user("rr_sender")
@@ -88,11 +90,17 @@ def test_read_receipt_normal():
         # Receiver sends read receipt back to sender
         recv_client.sock.sendall(encode_read_receipt(sender, "rr_msg_001"))
 
+        # Verify connection is still functional: send another message
+        # after the read receipt. If the server crashed or the connection
+        # broke, this will raise an exception.
+        verify_msg = f"post_receipt_verify_{time.time()}"
+        recv_client.send_msg(sender, verify_msg)
+
         send_client.close()
         recv_client.close()
 
         if server_alive():
-            log("  PASS: Read receipt sent without crash")
+            log("  PASS: Read receipt sent, connection remained functional")
             return True
         else:
             log("  FAIL: Server crashed on read receipt")

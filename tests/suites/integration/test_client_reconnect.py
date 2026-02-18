@@ -98,13 +98,14 @@ def test_pending_acks_preserved():
     # Should receive message from offline storage
     try:
         msg = receiver2.recv_msg(timeout=5.0)
-        if test_msg in str(msg):
+        msg_str = msg.decode('utf-8', errors='replace') if isinstance(msg, (bytes, bytearray)) else str(msg)
+        if test_msg in msg_str:
             log("PASS: Pending message preserved after disconnect")
             sender.close()
             receiver2.close()
             return True
         else:
-            log(f"WARN: Different message received: {msg}")
+            log(f"WARN: Different message received (expected '{test_msg}' in payload): {msg_str[:200]}")
             sender.close()
             receiver2.close()
             return False
@@ -162,13 +163,14 @@ def test_offline_message_delivery():
 
     try:
         msg = receiver.recv_msg(timeout=5.0)
-        if test_msg in str(msg):
+        msg_str = msg.decode('utf-8', errors='replace') if isinstance(msg, (bytes, bytearray)) else str(msg)
+        if test_msg in msg_str:
             log("PASS: Offline message delivered correctly")
             sender.close()
             receiver.close()
             return True
         else:
-            log(f"FAIL: Wrong message received: {msg}")
+            log(f"FAIL: Wrong message received (expected '{test_msg}' in payload): {msg_str[:200]}")
             sender.close()
             receiver.close()
             return False
@@ -235,7 +237,8 @@ def test_multi_message_durability():
     for i in range(5):
         try:
             msg = receiver.recv_msg(timeout=3.0)
-            received.append(str(msg))
+            msg_str = msg.decode('utf-8', errors='replace') if isinstance(msg, (bytes, bytearray)) else str(msg)
+            received.append(msg_str)
         except socket.timeout:
             # No more messages available
             break

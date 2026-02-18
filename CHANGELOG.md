@@ -4,6 +4,45 @@ All notable changes to Iris Messaging System.
 
 ## [Unreleased]
 
+### Changed
+
+#### Production Readiness (2026-02-11 — 2026-02-18)
+
+**Final hardening pass before production deployment. Test suite expanded to 172 Python + 186 Erlang tests.**
+
+- **Production Readiness Audit** (commit `484d539`):
+  - `iris_auth.erl`: hardened JWT validation edge cases
+  - `iris_partition_guard.erl`: improved reconciliation safety
+  - `iris_session.erl`: strengthened session handling under edge conditions
+  - `iris_x3dh.erl`: additional X3DH key exchange validation
+  - New Erlang tests: `iris_x3dh_tests`, `iris_auth_tests`, `iris_partition_guard_tests`, `iris_session_tests` expanded
+
+- **Production Readiness Hardening** (PRs #134-140):
+  - mTLS symlink race fix for Docker clusters
+  - CI security gate: secret scanning, TLS enforcement verification
+  - Production config validation script (`scripts/validate_production_config.escript`)
+  - Ruff linting baseline for Python tests
+  - Dialyzer baseline tracking for Erlang static analysis
+
+- **`time.sleep` Cleanup** (8 commits, ~130 calls removed):
+  - Removed from: unit, contract, E2E, compatibility, integration, security, resilience/stress/performance, chaos tests
+  - Restored 20 legitimate sleeps that caused regressions when removed
+  - Reduced from ~530 to ~401 instances across 88 files (was 108 files)
+
+- **CI Pipeline Optimization**:
+  - Parallelized Python test jobs (fast/security/heavy split)
+  - Batched Docker chaos cluster lifecycle
+  - Coverage threshold held at 70%
+  - Release smoke test softened for CI environment
+
+- **Test Stabilization**:
+  - Fixed soak memory test false positive
+  - Removed failure masks from test assertions
+  - Restored test preconditions in `proto_properties` and `fanout` tests
+  - Contract suite expanded: 11 → 14 tests (added `test_audit_fix_regression`, `test_production_config_safety`, `test_production_config_validation`)
+
+- **Documentation**: Consolidated to eliminate redundancy. `DEPENDENCIES.md` merged into `README.md`. Test counts centralized in `TESTING.md` as single source of truth. Deferred-work sections consolidated into `ROADMAP.md`.
+
 ### Added
 
 #### RFC v4.0 Forensic Audit Fixes (2026-02-09 — 2026-02-10)

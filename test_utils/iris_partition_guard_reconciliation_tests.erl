@@ -20,11 +20,14 @@ setup() ->
     %% Stop any existing partition guard
     catch gen_server:stop(iris_partition_guard),
     timer:sleep(50),
+    %% Configure expected_nodes to include this node so quorum is achievable
+    application:set_env(iris_core, expected_cluster_nodes, [node()]),
     ok.
 
 cleanup(ok) ->
     catch gen_server:stop(iris_partition_guard),
     catch unregister(iris_reconciliation_test_listener),
+    application:unset_env(iris_core, expected_cluster_nodes),
     ok.
 
 iris_partition_guard_reconciliation_test_() ->

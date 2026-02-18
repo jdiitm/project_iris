@@ -1,6 +1,6 @@
 # Testing Guide
 
-**Status**: 169 Python + 185 Erlang tests passing | **Last Verified**: 2026-02-15
+**Status**: 172 Python + 186 Erlang tests passing | **Last Verified**: 2026-02-18
 
 ## Quick Start
 
@@ -65,7 +65,7 @@ Docker chaos tests (`chaos_dist/`) are **destructive** — they kill containers,
 
 ## Test Suites
 
-### Python Test Suites (169 files)
+### Python Test Suites (172 files)
 
 | Suite | Files | Description |
 |-------|-------|-------------|
@@ -79,10 +79,10 @@ Docker chaos tests (`chaos_dist/`) are **destructive** — they kill containers,
 | chaos_dist | 26 | Docker-based chaos (SIGKILL, partition, disk full) |
 | chaos_controlled | 2 | Combined chaos (self-managed cluster) |
 | compatibility | 8 | Protocol versions, HLC migration, compression |
-| contract | 11 | Edge-core contract, rate limit constants, RFC v4 |
+| contract | 14 | Edge-core contract, rate limit constants, RFC v4, production config |
 | conformance | 1 | WebSocket RFC 6455 compliance |
 
-### Erlang Test Suites (185 test modules + 7 support modules)
+### Erlang Test Suites (186 test modules + 7 support modules)
 
 | Category | Modules | Examples |
 |----------|---------|----------|
@@ -189,6 +189,6 @@ tests/
 ├── utilities/           # IrisClient (TLS-enabled), TLS helpers
 └── artifacts/           # Test outputs (gitignored)
 
-test_utils/              # 185 Erlang EUnit test modules + 7 support modules
+test_utils/              # 186 Erlang EUnit test modules + 7 support modules
 docker/global-cluster/   # Docker cluster scripts
 ```

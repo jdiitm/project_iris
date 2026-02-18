@@ -50,7 +50,10 @@ iris_partition_guard_test_() ->
 
       %% : Safe-AP — writes rejected in minority partition
       {"Writes rejected during minority partition (safe-AP)", fun test_writes_rejected_during_minority_partition/0},
-      {"Partition mode is 'diverged' not 'safe_mode'", fun test_partition_mode_is_diverged/0}
+      {"Partition mode is 'diverged' not 'safe_mode'", fun test_partition_mode_is_diverged/0},
+
+      %% H-7: Empty expected_nodes must NOT grant quorum
+      {"Empty expected_nodes rejects writes (fail-safe)", fun test_empty_expected_nodes_unsafe/0}
      ]}.
 
 %% =============================================================================
@@ -216,6 +219,28 @@ test_partition_mode_is_diverged() ->
 %%           end}
 %%          ]
 %%      end}.
+
+%% =============================================================================
+%% H-7: Empty expected_nodes must not grant quorum
+%% =============================================================================
+
+test_empty_expected_nodes_unsafe() ->
+    %% With no expected nodes configured, the guard cannot determine quorum.
+    %% It must fail-safe: treat as unsafe (no quorum).
+    application:set_env(iris_core, expected_cluster_nodes, []),
+    case iris_partition_guard:start_link() of
+        {ok, Pid} ->
+            Pid ! check_partition,
+            timer:sleep(100),
+            Result = iris_partition_guard:is_safe_for_writes(),
+            gen_server:stop(Pid, normal, 1000),
+            ?assertEqual({error, minority_partition}, Result);
+        {error, {already_started, ExistingPid}} ->
+            gen_server:stop(ExistingPid, normal, 1000),
+            timer:sleep(50),
+            test_empty_expected_nodes_unsafe()
+    end,
+    application:unset_env(iris_core, expected_cluster_nodes).
 
 %% =============================================================================
 %% 2.2: resolve_authority/4 — Split-Brain Resolution

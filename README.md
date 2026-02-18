@@ -1,12 +1,12 @@
 # Project Iris: WhatsApp-Class Messaging Engine
 
-[![Tests](https://img.shields.io/badge/tests-354%2B%20passing-brightgreen)](tests/run_all_tests.sh)
+[![Tests](https://img.shields.io/badge/tests-358%2B%20passing-brightgreen)](tests/run_all_tests.sh)
 [![TLS](https://img.shields.io/badge/TLS-enforced-green)](docs/DEPLOYMENT.md)
 [![Erlang](https://img.shields.io/badge/Erlang-OTP%2026%2B-blue)](https://www.erlang.org/)
 
-> **Status**: Development / Pre-alpha. Tested at **10K concurrent connections** locally.
-> Full test suite (169 Python + 185 Erlang tests) passing with TLS enforced. Last verified: 2026-02-15.
-> Architecture designed for 1M+ users per region. See [Scalability Analysis](docs/SCALABILITY_ANALYSIS.md).
+> **Status**: Release candidate. Final validation before production deployment.
+> Full test suite passing with TLS enforced (see [TESTING.md](docs/TESTING.md) for counts). Last verified: 2026-02-18.
+> Tested at **10K concurrent connections** locally. Architecture designed for 1M+ users per region. See [Scalability Analysis](docs/SCALABILITY_ANALYSIS.md).
 
 ## What This Is
 
@@ -179,7 +179,7 @@ cd docker/global-cluster
 
 ## Testing
 
-**169 Python + 185 Erlang tests** across 12 suites. See [TESTING.md](docs/TESTING.md) for full details.
+All tests passing across 12 suites. See [TESTING.md](docs/TESTING.md) for authoritative counts and details.
 
 ```bash
 ./tests/run_all_tests.sh              # Full suite
@@ -226,7 +226,7 @@ See [DEPLOYMENT.md](docs/DEPLOYMENT.md) for TLS and certificate setup.
 ```
 project_iris/
 ├── src/                    # 70 Erlang source modules (20K+ lines)
-├── test_utils/             # 185 Erlang EUnit test modules (non-standard location; see note below)
+├── test_utils/             # 186 Erlang EUnit test modules (non-standard location; see note below)
 ├── tests/
 │   ├── run_all_tests.sh    # Authoritative test runner
 │   ├── suites/             # 12 test categories
@@ -240,7 +240,7 @@ project_iris/
 │   │   ├── chaos_dist/     # Docker chaos (26 tests, fresh cluster each)
 │   │   ├── chaos_controlled/ # Combined chaos (2 tests)
 │   │   ├── compatibility/  # Protocol versions, HLC migration (8 tests)
-│   │   ├── contract/       # Edge-core + RFC contracts (11 tests)
+│   │   ├── contract/       # Edge-core + RFC contracts, production config (14 tests)
 │   │   └── conformance/    # WebSocket RFC 6455 (1 test)
 │   ├── framework/          # ClusterManager, assertions, wait utilities
 │   └── utilities/          # IrisClient (TLS-enabled), TLS helpers
@@ -257,6 +257,25 @@ project_iris/
 > standard `test/` directory. This is a project convention — the Makefile and CI
 > pipeline are configured to find tests there. The `tests/` directory (with an 's')
 > contains the Python integration/e2e test suites.
+
+---
+
+## Dependencies
+
+**Zero external Erlang dependencies.** All functionality is implemented against OTP 26 standard applications (`kernel`, `stdlib`, `crypto`, `ssl`, `public_key`, `mnesia`). This eliminates supply-chain attack surface and ensures reproducible builds with zero network fetches.
+
+| Native Library | Required | Purpose |
+|----------------|----------|---------|
+| `libzstd-dev` | Optional | Zstd compression NIF (RFC Section 11.1). Falls back to zlib if absent. |
+
+| Build Tool | Version | Purpose |
+|------------|---------|---------|
+| Erlang/OTP | 26+ | Runtime and compiler |
+| GNU Make | Any | Build orchestration |
+| rebar3 | Any | OTP release packaging only (`make release`). Not used for dependency management. |
+| Python 3.11+ | Test-only | Integration test framework |
+
+Since there are no external Erlang dependencies, there is no `rebar.lock` or dependency manifest. In lieu of dependency scanning, the CI pipeline runs Dialyzer (static analysis), Xref (dead code detection), and property-based tests.
 
 ---
 
