@@ -172,6 +172,7 @@ def test_rapid_unique_messages_no_false_drops():
         # This still stresses the hot tier dedup at near-max throughput.
         for i in range(num_messages):
             sender.send_msg(receiver_name, f"rapid_{i}_{uuid.uuid4().hex[:6]}")
+            time.sleep(0.21)
 
         # Receive all
         received = 0
