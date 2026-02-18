@@ -72,7 +72,6 @@ def test_hot_tier_within_window():
             msg = f"hotwin_{i}_{uuid.uuid4().hex[:6]}"
             sender.send_msg(receiver_name, msg)
             sent.append(msg)
-            time.sleep(0.02)
 
         # Receive all
         received = []
@@ -123,7 +122,6 @@ def test_dedup_stats_reflect_entries():
         # Send a batch of messages
         for i in range(20):
             sender.send_msg(receiver_name, f"stats_test_{i}_{uuid.uuid4().hex[:4]}")
-            time.sleep(0.01)
 
         # Receive them to complete the cycle
         for _ in range(20):
@@ -131,9 +129,6 @@ def test_dedup_stats_reflect_entries():
                 receiver.recv_msg(timeout=3.0)
             except Exception:
                 break
-
-        # Give dedup system time to update stats
-        time.sleep(0.5)
 
         # The stats endpoint is Erlang-internal. We verify the system
         # didn't crash and messages flowed correctly (indirect stats check).
@@ -177,7 +172,6 @@ def test_rapid_unique_messages_no_false_drops():
         # This still stresses the hot tier dedup at near-max throughput.
         for i in range(num_messages):
             sender.send_msg(receiver_name, f"rapid_{i}_{uuid.uuid4().hex[:6]}")
-            time.sleep(0.21)
 
         # Receive all
         received = 0

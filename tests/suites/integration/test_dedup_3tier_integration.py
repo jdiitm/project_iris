@@ -120,7 +120,6 @@ def test_unique_messages_all_delivered():
             msg = f"unique_3tier_{i}_{uuid.uuid4().hex[:8]}"
             sender.send_msg(receiver_name, msg)
             sent_messages.append(msg)
-            time.sleep(0.21)
 
         # Receive all messages
         received_messages = []
@@ -176,7 +175,6 @@ def test_dedup_across_reconnect():
         receiver1.login(receiver_name)
         receiver1.close()
         receiver1 = None
-        time.sleep(0.5)
 
         # Sender sends while receiver is offline
         sender = IrisClient(HOST, PORT)
@@ -187,8 +185,6 @@ def test_dedup_across_reconnect():
             msg = f"offline_3tier_{i}_{uuid.uuid4().hex[:6]}"
             sender.send_msg(receiver_name, msg)
             msgs_sent.append(msg)
-
-        time.sleep(0.5)
 
         # Receiver reconnects — should get all offline messages
         receiver2 = IrisClient(HOST, PORT)

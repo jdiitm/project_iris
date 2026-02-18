@@ -50,7 +50,6 @@ def test_message_not_delivered_to_wrong_user():
         # Send message to a non-existent user
         offline_target = f"nonexistent_user_{int(time.time())}_xyz"
         user_a.send_msg(offline_target, "secret_message_for_offline_user")
-        time.sleep(1.0)
 
         # Check that user B did NOT receive the message
         leaked_to_b = False

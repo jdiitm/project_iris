@@ -50,9 +50,6 @@ def test_offline_message_storage():
 
         alice.close()
 
-        # Wait a moment for storage
-        time.sleep(1)
-
         # Charlie comes online
         log.info("coming_online", f"{charlie_user} logging in")
         charlie = IrisClient()
@@ -99,8 +96,6 @@ def test_delete_after_read():
         log.message_sent("dar_msg_1", dave_user)
         sender.close()
 
-        time.sleep(1)
-
         # Dave comes online and receives
         dave = IrisClient()
         dave.login(dave_user)
@@ -108,8 +103,6 @@ def test_delete_after_read():
         log.message_received("dar_msg_1", 0)
         log.info("first_login", f"Dave received: {msg}")
         dave.close()
-
-        time.sleep(1)
 
         # Dave reconnects - should NOT receive the same message again
         dave2 = IrisClient()
@@ -153,10 +146,8 @@ def test_multiple_offline_messages():
             sender.send_msg(eve_user, f"Message {i}")
             log.message_sent(msg_id, eve_user)
             sender.close()
-            time.sleep(0.2)  # Small delay between senders
 
         log.info("sending_complete", f"Sent {NUM_MESSAGES} messages to offline {eve_user}")
-        time.sleep(1)
 
         # Eve comes online
         eve = IrisClient()

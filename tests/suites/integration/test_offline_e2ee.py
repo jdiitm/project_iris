@@ -274,7 +274,6 @@ def test_offline_e2ee_single_message():
     log("Step 1: Bob logs in briefly then disconnects")
     bob_client = IrisClient(host=EDGE_HOST, port=EDGE_PORT)
     bob_client.login(bob_name)
-    time.sleep(0.5)
     bob_client.close()
     log("Bob is now offline")
 
@@ -294,9 +293,6 @@ def test_offline_e2ee_single_message():
     log(f"Alice sent E2EE message ({len(message_content)} bytes)")
 
     alice_client.close()
-
-    # Wait for message to be stored
-    time.sleep(1.0)
 
     # Step 3: Bob comes back online
     log("Step 3: Bob comes back online")
@@ -368,7 +364,6 @@ def test_offline_e2ee_multiple_messages():
     # Bob logs in briefly then disconnects
     bob_client = IrisClient(host=EDGE_HOST, port=EDGE_PORT)
     bob_client.login(bob_name)
-    time.sleep(0.3)
     bob_client.close()
 
     # Alice sends multiple messages
@@ -385,7 +380,6 @@ def test_offline_e2ee_multiple_messages():
         log(f"Sent message #{i}")
 
     alice_client.close()
-    time.sleep(1.0)
 
     # Bob comes back online
     bob_client = IrisClient(host=EDGE_HOST, port=EDGE_PORT)
@@ -436,7 +430,6 @@ def test_offline_e2ee_ordering():
     # Bob offline
     bob_client = IrisClient(host=EDGE_HOST, port=EDGE_PORT)
     bob_client.login(bob_name)
-    time.sleep(0.3)
     bob_client.close()
 
     # Alice sends numbered messages
@@ -448,10 +441,8 @@ def test_offline_e2ee_ordering():
         content = f"ORDER:{i}"
         alice_client.send_msg(bob_name, content)
         sequence.append(i)
-        time.sleep(0.1)  # Small delay to ensure ordering
 
     alice_client.close()
-    time.sleep(0.5)
 
     # Bob receives
     bob_client = IrisClient(host=EDGE_HOST, port=EDGE_PORT)

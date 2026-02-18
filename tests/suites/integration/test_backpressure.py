@@ -269,9 +269,6 @@ def test_recovery_after_load():
         except Exception as e:
             log(f"  Cleanup client {i}: {type(e).__name__}: {e}")
 
-    # Wait for recovery
-    time.sleep(1)
-
     # System should accept new connections normally
     try:
         new_client = IrisClient()

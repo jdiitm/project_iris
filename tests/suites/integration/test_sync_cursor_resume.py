@@ -121,19 +121,16 @@ def test_resume_after_disconnect_delivers_missed():
 
         # Step 3: Send a message while receiver is online
         send_message(send_sock, receiver_name, "msg_before_disconnect")
-        time.sleep(1)
         drain_responses(recv_sock, timeout=2.0)
         log("  Sent message while receiver online")
 
         # Step 4: Receiver disconnects
         recv_sock.close()
         log("  Receiver disconnected")
-        time.sleep(1)
 
         # Step 5: Send messages while receiver is offline
         for i in range(3):
             send_message(send_sock, receiver_name, f"offline_msg_{i}")
-        time.sleep(1)
         log("  Sent 3 messages while receiver offline")
 
         # Step 6: Receiver reconnects

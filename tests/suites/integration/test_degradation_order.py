@@ -265,17 +265,11 @@ class LoadGenerator:
                     consecutive_failures = 0
                     backoff = 0.1  # Reset on success
 
-                    # Small delay based on intensity (higher = more load)
-                    time.sleep(0.01 / self.intensity)
-
                 except socket.error:
                     with self.lock:
                         self.error_count += 1
                     consecutive_failures += 1
 
-                    # Exponential backoff to prevent TLS handshake storm
-                    # This ensures graceful degradation testing rather than crash testing
-                    time.sleep(backoff)
                     backoff = min(backoff * 2, max_backoff)
 
                     # Reconnect with backoff
@@ -456,8 +450,6 @@ def test_degradation_order_under_load():
         message_failures = 0
 
         for check_round in range(10):
-            time.sleep(2)
-
             stats = load_gen.get_stats()
             log(f"     Round {check_round + 1}: {stats['messages']} msgs, {stats['errors']} errors")
 
@@ -485,11 +477,7 @@ def test_degradation_order_under_load():
         log("  4. Stopping load...")
         load_gen.stop()
 
-        # Verify recovery — CI needs more time to shed backlog on fewer cores
-        recovery_wait = 6 if IS_CI else 3
-        log(f"  5. Verifying recovery (waiting {recovery_wait}s)...")
-        time.sleep(recovery_wait)
-
+        log("  5. Verifying recovery...")
         recovery_typing = probe_typing_indicator(alice, bob_user)
         recovery_presence = probe_presence_query(alice, bob_user)
         recovery_message = probe_message_delivery(alice, bob, bob_user)

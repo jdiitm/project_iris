@@ -188,11 +188,8 @@ def test_same_msgid_once():
                 dedup_marker,
                 idempotency_key=idempotency_key
             )
-            time.sleep(0.01)
 
         log(f"Sent {num_sends} messages with SAME idempotency_key via 0x0D")
-
-        time.sleep(1.0)
 
         received = receiver.recv_messages_until_timeout(timeout=2.0)
         matching = [m for m in received if dedup_marker in m]
@@ -264,8 +261,6 @@ def test_retry_storm():
 
         log(f"Sent {num_retries} messages rapidly")
 
-        time.sleep(2.0)
-
         received = receiver.recv_messages_until_timeout(timeout=3.0)
         matching = [m for m in received if msg_id in m]
 
@@ -332,11 +327,8 @@ def test_unique_ids_all_delivered():
             msg_id = generate_msg_id()
             sent_ids.append(msg_id)
             sender.send_msg_with_id(receiver_name, f"content_{i}", msg_id)
-            time.sleep(0.05)
 
         log(f"Sent {num_messages} messages with unique IDs")
-
-        time.sleep(2.0)
 
         received = receiver.recv_messages_until_timeout(timeout=3.0)
 
@@ -413,22 +405,16 @@ def test_idempotency_across_reconnect():
         sender1.send_msg_with_id(receiver_name, "reconnect_test", msg_id)
         log("Sent message from first connection")
 
-        time.sleep(0.5)
-
         # Disconnect
         sender1.close()
         sender1 = None
         log("Disconnected first sender")
-
-        time.sleep(0.5)
 
         # Reconnect and send another message
         sender2 = IdempotencyTestClient(host, port)
         sender2.login(sender_name)
         sender2.send_msg_with_id(receiver_name, "reconnect_test", msg_id)
         log("Sent message from second connection")
-
-        time.sleep(1.0)
 
         received = receiver.recv_messages_until_timeout(timeout=2.0)
         matching = [m for m in received if msg_id in m]
@@ -500,7 +486,6 @@ def test_concurrent_same_id():
 
                 for i in range(sends_per_sender):
                     sender.send_msg_with_id(receiver_name, f"concurrent_{thread_id}_{i}", msg_id)
-                    time.sleep(0.01)
 
                 with results_lock:
                     results.append(('success', thread_id))
@@ -520,8 +505,6 @@ def test_concurrent_same_id():
             t.join(timeout=10)
 
         log(f"Sent from {num_senders} threads, {sends_per_sender} each = {num_senders * sends_per_sender} total")
-
-        time.sleep(2.0)
 
         received = receiver.recv_messages_until_timeout(timeout=3.0)
         matching = [m for m in received if msg_id in m]

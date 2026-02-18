@@ -106,7 +106,6 @@ def test_basic_messaging_works():
         print("✓ Message sent")
 
         # Receive
-        time.sleep(0.5)
         msg = receiver.recv_msg(timeout=5.0)
 
         if msg:

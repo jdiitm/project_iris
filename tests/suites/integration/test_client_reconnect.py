@@ -83,9 +83,6 @@ def test_pending_acks_preserved():
     except Exception:
         pass
 
-    # Wait for pending ack to be saved to offline
-    time.sleep(2)
-
     # Reconnect receiver
     try:
         receiver2 = IrisClient()
@@ -147,9 +144,6 @@ def test_offline_message_delivery():
         log(f"FAIL: Could not send message - {e}")
         sender.close()
         return False
-
-    # Wait for storage
-    time.sleep(1)
 
     # Now offline user connects
     try:
@@ -217,8 +211,6 @@ def test_multi_message_durability():
         log(f"Send errors: {len(send_errors)}")
         for err in send_errors:
             log(f"  {err}")
-
-    time.sleep(1)
 
     # Connect receiver
     try:

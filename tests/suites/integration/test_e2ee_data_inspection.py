@@ -136,8 +136,6 @@ def test_e2ee_data_not_plaintext():
         sender.sock.sendall(e2ee_packet)
         log(f"  Sent E2EE message ({len(e2ee_packet)} bytes) via opcode 0x23")
 
-        time.sleep(1.0)
-
         # Receive raw data on receiver side
         try:
             receiver.sock.settimeout(5.0)
