@@ -102,10 +102,7 @@ class SoakTestConfig:
         self.sample_interval = int(os.environ.get('SOAK_SAMPLE_INTERVAL', '30'))  # 30s for quick runs
         self.host = os.environ.get('IRIS_HOST', 'localhost')
         self.port = int(os.environ.get('IRIS_PORT', '8085'))
-        # Short soak tests (< 10 min) are dominated by BEAM allocator warmup,
-        # not steady-state leak behavior. Use a relaxed threshold for short runs.
-        default_growth = '20' if self.duration_hours < 0.17 else '10'
-        self.max_memory_growth_pct = float(os.environ.get('SOAK_MAX_GROWTH_PCT', default_growth))
+        self.max_memory_growth_pct = float(os.environ.get('SOAK_MAX_GROWTH_PCT', '10'))
 
     def __str__(self):
         return (f"SoakTestConfig(duration={self.duration_hours}h, "
@@ -251,10 +248,7 @@ class MemoryMonitor:
             }
 
         first = valid_samples[0]
-        # Use second-to-last sample if available: the final sample is often
-        # taken during load-generator shutdown, causing a transient spike
-        # from mass connection teardown that doesn't reflect steady state.
-        last = valid_samples[-2] if len(valid_samples) >= 3 else valid_samples[-1]
+        last = valid_samples[-1]
 
         # Calculate growth
         growth_mb = last.beam_rss_mb - first.beam_rss_mb
@@ -318,6 +312,8 @@ class LoadGenerator:
             'reconnects': 0
         }
         self.stats_lock = threading.Lock()
+        self._connected_count = 0
+        self.all_connected = threading.Event()
         # Use unique prefix for this test run to avoid conflicts
         self.user_prefix = unique_user("soak")
 
@@ -366,6 +362,7 @@ class LoadGenerator:
         username = f"{self.user_prefix}_{client_id}"
         msg_interval = 1.0 / self.config.msg_rate
         client = None
+        counted = False
 
         while self.running:
             try:
@@ -375,8 +372,20 @@ class LoadGenerator:
                         client = IrisClient(self.config.host, self.config.port)
                         client.login(username)
                     else:
-                        # Fallback: just track stats without real connection
+                        if not counted:
+                            counted = True
+                            with self.stats_lock:
+                                self._connected_count += 1
+                                if self._connected_count >= self.config.connections:
+                                    self.all_connected.set()
                         continue
+
+                    if not counted:
+                        counted = True
+                        with self.stats_lock:
+                            self._connected_count += 1
+                            if self._connected_count >= self.config.connections:
+                                self.all_connected.set()
 
                 # Send a message
                 target = f"{self.user_prefix}_{(client_id + 1) % self.config.connections}"
@@ -444,9 +453,9 @@ def test_soak_24h():
         test_sock.close()
         log(f"Successfully connected to {config.host}:{config.port}")
     except Exception as e:
-        log(f"SKIP: Cannot connect to server at {config.host}:{config.port}: {e}")
-        log("Make sure the Iris server is running before running soak tests.")
-        return True  # Skip, don't fail
+        log(f"FAIL: Cannot connect to server at {config.host}:{config.port}: {e}")
+        log("Server must be running for soak test.")
+        return False
 
     # Initialize components
     monitor = MemoryMonitor(config)
@@ -461,6 +470,20 @@ def test_soak_24h():
         monitor.start()
 
         load_gen.start()
+
+        # Wait for all connections to be established before taking baseline.
+        # Without this, the baseline captures pre-connection memory and the
+        # connection overhead (~260KB/conn for TLS) appears as false growth.
+        conn_timeout = 60
+        if not load_gen.all_connected.wait(timeout=conn_timeout):
+            log(f"Warning: Only {load_gen._connected_count}/{config.connections} "
+                f"connected after {conn_timeout}s")
+        else:
+            log(f"All {config.connections} connections established")
+
+        # Brief stabilization pause for BEAM allocator to settle after
+        # the burst of connection setup.
+        time.sleep(5)
 
         # Mark warm-up complete — analysis starts from HERE
         monitor.mark_warm_up_complete()
@@ -500,9 +523,9 @@ def test_soak_24h():
         log("Test interrupted by user")
 
     finally:
-        # Cleanup
-        load_gen.stop()
+        # Stop monitor first so no samples are taken during teardown
         monitor.stop()
+        load_gen.stop()
 
     # Analyze results
     log("\n" + "=" * 70)
@@ -512,9 +535,9 @@ def test_soak_24h():
     results = monitor.analyze()
 
     if results['status'] == 'insufficient_data':
-        log(f"WARNING: {results['error']}")
-        log("Test inconclusive - not enough data collected")
-        return True  # Don't fail on insufficient data
+        log(f"FAIL: {results['error']}")
+        log("Insufficient memory samples — cannot verify absence of leaks")
+        return False
 
     log(f"Test duration: {results['duration_hours']:.2f} hours")
     log(f"Samples collected: {results['samples']}")
