@@ -126,11 +126,8 @@ def test_server_handles_unknown_opcodes_gracefully():
         if b"LOGIN_OK" not in resp:
             raise Exception(f"Login failed: {resp}")
 
-        time.sleep(0.05)
-
         # Send an undefined opcode (0xFE — not in protocol)
         sock.sendall(bytes([0xFE, 0x00, 0x00]))
-        time.sleep(0.3)
 
         # Server should still be alive
         sock.sendall(b'\x05' + struct.pack('>H', 4) + b'test')

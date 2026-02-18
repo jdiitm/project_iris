@@ -147,7 +147,6 @@ def test_reliable_msg_uses_opcode_0x11():
         # Receiver: raw TLS socket to inspect exact bytes
         recv_sock = get_raw_tls_connection()
         raw_login(recv_sock, receiver_name)
-        time.sleep(0.05)
 
         # Sender: use IrisClient for convenience
         sender = IrisClient(HOST, PORT)
@@ -240,7 +239,6 @@ def test_multiple_messages_all_0x11():
     try:
         recv_sock = get_raw_tls_connection()
         raw_login(recv_sock, receiver_name)
-        time.sleep(0.05)
 
         sender = IrisClient(HOST, PORT)
         sender.login(sender_name)
@@ -248,7 +246,6 @@ def test_multiple_messages_all_0x11():
         # Send messages
         for i in range(num_messages):
             sender.send_msg(receiver_name, f"multi_msg_{i}")
-            time.sleep(0.02)
 
         # Receive all and verify opcodes
         buf = b''
@@ -316,7 +313,6 @@ def test_0x10_is_cbor_not_reliable():
     try:
         sock = get_raw_tls_connection()
         raw_login(sock, user_name)
-        time.sleep(0.05)
 
         # Send a packet with opcode 0x10 — server should treat as CBOR_MSG
         # Construct a valid CBOR_MSG: 0x10 | TargetLen(16) | Target | CborLen(32) | CborPayload
@@ -331,7 +327,6 @@ def test_0x10_is_cbor_not_reliable():
 
         # Server should handle this as CBOR_MSG (may route, may error on unknown target).
         # The key assertion: server does NOT crash, connection stays alive.
-        time.sleep(0.3)
 
         # Verify connection is still alive by attempting a status query
         sock.sendall(b'\x05' + struct.pack('>H', len(target)) + target)
