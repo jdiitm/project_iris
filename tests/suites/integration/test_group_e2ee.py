@@ -11,9 +11,10 @@ Validates the full TCP protocol stack for E2EE group messaging:
 5. Group leave operations (opcode 0x32)
 6. CRYPTO VALIDATION: Real encryption/decryption with AES-GCM
 
-VERIFICATION STATUS:
-- TRANSPORT-ONLY: Protocol opcodes and message routing
-- CRYPTO VALIDATED: Uses cryptography library for real E2EE validation
+VERIFICATION STATUS: CRYPTO VALIDATED
+- Protocol opcodes and message routing: verified via live TCP
+- Cryptographic correctness: AES-256-GCM encryption/decryption, HKDF chain derivation,
+  X25519 key exchange, Sender Key symmetric ratchet (requires cryptography library)
 
 This is a TRUE integration test that uses TCP sockets (not erl -eval).
 

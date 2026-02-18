@@ -14,8 +14,12 @@
 
 | RFC | Requirement | Implementation | Test | Verification |
 |-----|-------------|----------------|------|--------------|
+| NFR-1 | Connection latency ≤ 100ms | `iris_edge_listener.erl` TLS accept | `measure_dials.py`, `benchmark_unit_cost.py` | **PARTIAL** (dev-scale; production SLA requires load testing) |
+| NFR-2 | Delivery latency ≤ 100ms P99 (in-region) | `iris_router.erl` local-first routing | `benchmark_throughput.py`, `benchmark_e2ee_latency.py` | **PARTIAL** (measured at dev scale; P99 at production load unproven) |
 | NFR-3 | Cross-region P99 ≤ 500ms | `iris_region_bridge.erl` | `test_cross_region_latency.py` | **VERIFIED** |
+| NFR-5 | 100K msg/sec per node | `iris_async_router.erl` worker pool, lock-free ETS | `benchmark_throughput.py` | **PARTIAL** (8K msg/s measured locally; 100K requires production hardware) |
 | NFR-6 | 99.999% durability | `store_durable/3` with sync_transaction | `test_ack_durability.py` | **VERIFIED** (SIGKILL) |
+| NFR-7 | 99.99% availability | Supervisor trees, circuit breaker, failover | `test_slo_tracking.py`, `error_budget.py` | **PARTIAL** (SLI/SLO metrics implemented; 99.99% requires extended soak validation) |
 | NFR-8 | Zero data loss (RPO=0) | ACK after Mnesia commit | `test_ack_durability.py`, `test_multimaster_durability.py` | **VERIFIED** (SIGKILL, multi-node) |
 | NFR-9 | Failover ≤ 30s | pg discovery + circuit breaker | `test_failover_time.py` | **VERIFIED** |
 | **NFR-14** | **TLS mandatory** | **TLS enforced on all connections** | `test_tls_mandatory.py`, all tests | **VERIFIED** |
@@ -28,7 +32,7 @@
 | NFR-31 | Span instrumentation | 7 key session operations | `iris_trace_tests.erl` | **IMPLEMENTED** |
 | NFR-32 | Standard counters | `msg_in`/`msg_out`/`ack_sent` in session handlers | `iris_metrics_callsite_tests.erl` | **IMPLEMENTED** |
 | FR-5 | Message ordering | HLC + `send_msg_seq` (opcode 0x07) | `test_cross_node_ordering.py` | **VERIFIED** |
-| FR-20 | Group E2EE | Sender Keys protocol | `test_group_e2ee.py` | **TRANSPORT-ONLY** |
+| FR-20 | Group E2EE | Sender Keys protocol | `test_group_e2ee.py` | **VERIFIED** (crypto: AES-256-GCM + HKDF + X25519) |
 | Section 8 | Inbox 10K limit | Guard in `iris_core:store_offline_durable/2` | `iris_inbox_limit_tests.erl` | **IMPLEMENTED** |
 | Section 8 | Payload 64KB limit | `iris_limits:validate_payload/1` on E2EE/Group paths | `iris_rfc_v4_constants_tests.erl` | **IMPLEMENTED** |
 | Section 7.2 | Outbox 7-day TTL | `cleanup_expired_outbox/0` in drain timer | `iris_region_bridge.erl` | **IMPLEMENTED** |
@@ -51,7 +55,7 @@
 
 **FR-20 (Group E2EE / Double Ratchet)**:
 - **Erlang (VERIFIED)**: `iris_ratchet_tests.erl` — forward secrecy, attack resistance, out-of-order delivery, bidirectional DH ratchet
-- **Python**: `test_group_e2ee.py`, `test_post_compromise.py` — protocol layer with 100+ ratchet advances
+- **Python (VERIFIED crypto)**: `test_group_e2ee.py` — real AES-256-GCM encryption/decryption, HKDF Sender Key chain derivation, X25519 key exchange; `test_post_compromise.py` — 100+ ratchet advances
 
 ---
 
