@@ -29,6 +29,26 @@ import threading
 from typing import Optional
 
 # =============================================================================
+# Hypothesis Configuration (deterministic CI)
+# =============================================================================
+try:
+    from hypothesis import settings as hypothesis_settings, Verbosity
+    hypothesis_settings.register_profile(
+        "ci",
+        derandomize=True,
+        max_examples=100,
+        verbosity=Verbosity.quiet,
+    )
+    hypothesis_settings.register_profile(
+        "dev",
+        max_examples=50,
+    )
+    if os.environ.get("CI"):
+        hypothesis_settings.load_profile("ci")
+except ImportError:
+    pass
+
+# =============================================================================
 # Configuration
 # =============================================================================
 

@@ -27,6 +27,8 @@ edge*.log
 __pycache__/
 *.pyc
 .pytest_cache/
+.hypothesis/
+.venv/
 
 # Test artifacts
 tests/artifacts/runs/
