@@ -1,0 +1,6 @@
+# Ruff lint baseline — single source of truth
+# Measured: 2026-02-18 on Python 3.11
+# Update this file ONLY when violations are fixed (ratchet down, never up)
+# CI reads this value as the maximum allowed violation count
+# Excludes cosmetic whitespace rules (W291, W293) which are in pyproject.toml ignore list
+689

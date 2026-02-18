@@ -18,7 +18,6 @@ Pattern: follows test_jwt_security.py using raw TLS socket.
 import sys
 import os
 import socket
-import ssl
 import struct
 import time
 
@@ -74,7 +73,6 @@ def test_token_refresh_opcode_accepted():
         sock = get_tls_socket()
         user = unique_user("refresh_test")
         raw_login(sock, user)
-        time.sleep(0.05)
 
         # Send TOKEN_REFRESH: 0x0B | TokenLen(16) | Token
         refresh_token = b"fake_refresh_token_for_testing_only"
@@ -82,8 +80,6 @@ def test_token_refresh_opcode_accepted():
                   struct.pack('>H', len(refresh_token)) +
                   refresh_token)
         sock.sendall(packet)
-
-        time.sleep(0.3)
 
         # Verify connection still alive
         sock.sendall(b'\x05' + struct.pack('>H', 4) + b'test')

@@ -23,7 +23,6 @@ Tier: 2 (Docker chaos)
 import os
 import sys
 import socket
-import ssl
 import subprocess
 import time
 import struct
@@ -104,7 +103,6 @@ def send_message_via_edge(user, target, msg):
     try:
         sock = create_tls_socket(SERVER_HOST, EDGE_EAST_PORT)
         sock.sendall(bytes([0x01]) + user.encode("utf-8"))
-        time.sleep(0.3)
         try:
             sock.recv(1024)
         except socket.timeout:
@@ -119,7 +117,6 @@ def send_message_via_edge(user, target, msg):
                   struct.pack(">Q", _quorum_seq_counter[0]) +
                   struct.pack(">H", len(msg_bytes)) + msg_bytes)
         sock.sendall(packet)
-        time.sleep(0.5)
 
         # Try to read response (ACK or error)
         try:
@@ -152,7 +149,6 @@ def test_minority_failure():
         for i in range(5):
             if send_message_via_edge(f"quorum_sender_{i}", f"quorum_target_{i}", f"minority_test_{i}"):
                 success += 1
-            time.sleep(0.2)
 
         # Restore killed node
         docker_start(CORE_EAST_2)
@@ -192,7 +188,6 @@ def test_write_during_repair():
         for i in range(5):
             if send_message_via_edge(f"repair_sender_{i}", f"repair_target_{i}", f"repair_test_{i}"):
                 success += 1
-            time.sleep(0.5)
 
         # Wait for full recovery
         wait_for_port(SERVER_HOST, EDGE_EAST_PORT, timeout=30)

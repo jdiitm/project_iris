@@ -10,7 +10,7 @@ Shared utilities for Iris tests including:
 
 from .iris_client import IrisClient
 from .helpers import (
-    unique_user, 
+    unique_user,
     unique_suffix,
     seed_random,
     test_randint,
@@ -21,8 +21,8 @@ from .helpers import (
 )
 
 __all__ = [
-    "IrisClient", 
-    "unique_user", 
+    "IrisClient",
+    "unique_user",
     "unique_suffix",
     "seed_random",
     "test_randint",

@@ -13,6 +13,8 @@ ignore = [
     "E501",  # line too long (handled by line-length)
     "E741",  # ambiguous variable name (common in test code)
     "W605",  # invalid escape sequence (common in regex patterns)
+    "W291",  # trailing whitespace (cosmetic, not a correctness issue)
+    "W293",  # whitespace before ':' (cosmetic, not a correctness issue)
 ]
 
 [tool.ruff.lint.per-file-ignores]

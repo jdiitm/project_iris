@@ -29,14 +29,13 @@ replication, not just single-node persistence.
 import time
 import sys
 import os
-import subprocess
 
 # Add project root to path for proper imports
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 sys.path.insert(0, PROJECT_ROOT)
 
 from tests.utilities import IrisClient
-from tests.framework.cluster import ClusterManager, get_cluster
+from tests.framework.cluster import get_cluster
 
 
 def log(msg):
@@ -63,13 +62,13 @@ def test_message_survives_restart():
     log("=" * 60)
     log("TEST: Message Survives Node Restart")
     log("=" * 60)
-    
+
     host, port = get_connection_params()
-    
+
     offline_user = f"durability_receiver_{int(time.time())}"
     sender_user = f"durability_sender_{int(time.time())}"
     test_msg = f"DURABLE_MSG_{int(time.time())}"
-    
+
     try:
         # Step 1: Send message to offline user
         sender = IrisClient(host, port)
@@ -77,14 +76,14 @@ def test_message_survives_restart():
         sender.send_msg(offline_user, test_msg)
         log(f"Sent message to offline user: {offline_user}")
         sender.close()
-        
+
         # Step 2: Wait for WAL flush (500ms + margin)
         time.sleep(1.0)
-        
+
         # Step 3: Recipient logs in and receives
         receiver = IrisClient(host, port)
         receiver.login(offline_user)
-        
+
         try:
             msg = receiver.recv_msg(timeout=5.0)
             if test_msg in str(msg):
@@ -113,32 +112,32 @@ def test_replication_latency():
     log("=" * 60)
     log("TEST: Replication Latency")
     log("=" * 60)
-    
+
     host, port = get_connection_params()
-    
+
     try:
         sender = IrisClient(host, port)
         sender.login(f"latency_sender_{int(time.time())}")
-        
+
         latencies = []
         NUM_MESSAGES = 100
-        
+
         for i in range(NUM_MESSAGES):
             target = f"latency_target_{i}_{int(time.time())}"
             start = time.perf_counter()
             sender.send_msg(target, f"latency_test_{i}")
             end = time.perf_counter()
             latencies.append((end - start) * 1000)  # ms
-        
+
         sender.close()
-        
+
         latencies.sort()
         p50 = latencies[len(latencies) // 2]
         p99 = latencies[int(len(latencies) * 0.99)]
         avg = sum(latencies) / len(latencies)
-        
+
         log(f"Latency - Avg: {avg:.2f}ms, P50: {p50:.2f}ms, P99: {p99:.2f}ms")
-        
+
         # P99 should be under 50ms for acceptable performance
         # (In single-node test, this will be very fast; in cluster it may be higher)
         if p99 < 50:
@@ -163,30 +162,30 @@ def test_durability_stats():
     log("=" * 60)
     log("TEST: Durability Stats (via message flow)")
     log("=" * 60)
-    
+
     host, port = get_connection_params()
-    
+
     try:
         # The durability stats are exercised when messages flow through the system
         # We verify this indirectly by sending messages and confirming delivery
         sender = IrisClient(host, port)
         sender.login(f"stats_sender_{int(time.time())}")
-        
+
         receiver_name = f"stats_receiver_{int(time.time())}"
-        
+
         # Send a few messages to exercise the durability path
         for i in range(5):
             sender.send_msg(receiver_name, f"stats_test_msg_{i}")
-        
+
         sender.close()
-        
+
         # Wait for messages to be stored
         time.sleep(0.5)
-        
+
         # Verify messages were stored by receiving them
         receiver = IrisClient(host, port)
         receiver.login(receiver_name)
-        
+
         received = 0
         try:
             for _ in range(5):
@@ -195,16 +194,16 @@ def test_durability_stats():
                     received += 1
         except:
             pass
-        
+
         receiver.close()
-        
+
         if received >= 3:  # Allow some tolerance
             log(f"PASS: Durability path exercised ({received}/5 messages delivered)")
             return True
         else:
             log(f"WARN: Only {received}/5 messages delivered")
             return True  # Warning, not failure
-            
+
     except Exception as e:
         log(f"FAIL: Test error: {e}")
         return False
@@ -220,19 +219,19 @@ def test_graceful_degradation():
     log("=" * 60)
     log("TEST: Graceful Degradation")
     log("=" * 60)
-    
+
     host, port = get_connection_params()
-    
+
     try:
         # In single-node test, there's no secondary
         # System should degrade gracefully to local-only
         sender = IrisClient(host, port)
         sender.login(f"degrade_sender_{int(time.time())}")
-        
+
         # Send several messages - should all succeed even without secondary
         for i in range(10):
             sender.send_msg(f"degrade_target_{i}", f"degrade_test_{i}")
-        
+
         sender.close()
         log("PASS: System continues working without secondary node")
         return True
@@ -258,11 +257,11 @@ def test_cross_node_replication():
     log("=" * 60)
     log("TEST: Cross-Node Replication (AUDIT FIX)")
     log("=" * 60)
-    
+
     host = os.environ.get('IRIS_HOST', 'localhost')
     port1 = 8085  # First edge node
     port2 = 8086  # Second edge node (if available)
-    
+
     # Check if second edge is available
     cluster = get_cluster()
     if not cluster.is_port_open(port2):
@@ -270,32 +269,32 @@ def test_cross_node_replication():
         log("INFO: Skipping cross-node test - single node mode")
         log("PASS: Test skipped (requires multi-node cluster)")
         return True
-    
+
     unique_id = int(time.time())
     sender_user = f"cross_sender_{unique_id}"
     receiver_user = f"cross_receiver_{unique_id}"
     test_messages = [f"CROSS_NODE_MSG_{i}_{unique_id}" for i in range(5)]
-    
+
     try:
         # Step 1: Connect sender to edge node 1 (port 8085)
         log(f"  Connecting sender to edge 1 (port {port1})")
         sender = IrisClient(host, port1)
         sender.login(sender_user)
-        
+
         # Step 2: Send messages to offline user via edge 1
         for msg in test_messages:
             sender.send_msg(receiver_user, msg)
         log(f"  Sent {len(test_messages)} messages via edge 1")
         sender.close()
-        
+
         # Step 3: Wait for replication to propagate
         time.sleep(1.5)
-        
+
         # Step 4: Connect receiver to DIFFERENT edge node 2 (port 8086)
         log(f"  Connecting receiver to edge 2 (port {port2})")
         receiver = IrisClient(host, port2)
         receiver.login(receiver_user)
-        
+
         # Step 5: Receive messages from edge 2
         received_messages = []
         try:
@@ -305,13 +304,13 @@ def test_cross_node_replication():
                     received_messages.append(msg)
         except Exception as e:
             log(f"  Receive stopped: {e}")
-        
+
         receiver.close()
-        
+
         # Step 6: Verify cross-node delivery
         received_count = len(received_messages)
         log(f"  Received {received_count}/{len(test_messages)} messages via edge 2")
-        
+
         # Check message content
         matches = 0
         for sent_msg in test_messages:
@@ -319,7 +318,7 @@ def test_cross_node_replication():
                 if sent_msg in str(recv_msg):
                     matches += 1
                     break
-        
+
         if matches >= len(test_messages) - 1:  # Allow 1 lost message
             log("PASS: Cross-node replication verified")
             log(f"  Messages sent via edge 1, received via edge 2: {matches}/{len(test_messages)}")
@@ -334,7 +333,7 @@ def test_cross_node_replication():
             log("  For CI: Treating as PASS with warning (requires cluster config)")
             log("PASS: (with replication warning)")
             return True  # Don't block CI, but the warning is logged
-            
+
     except Exception as e:
         log(f"WARN: Cross-node test error: {e}")
         log("PASS: (with exception - requires cluster config)")
@@ -345,37 +344,37 @@ def main():
     log("=" * 60)
     log(" CLUSTER DURABILITY TEST SUITE")
     log("=" * 60)
-    
+
     # Check cluster status
     cluster = get_cluster()
     health = cluster.health_check()
     log(f"Cluster health: {health}")
-    
+
     results = []
-    
+
     results.append(("Message Survives Restart", test_message_survives_restart()))
     results.append(("Replication Latency", test_replication_latency()))
     results.append(("Durability Stats", test_durability_stats()))
     results.append(("Graceful Degradation", test_graceful_degradation()))
-    
+
     # AUDIT FIX: Add cross-node replication test
     results.append(("Cross-Node Replication", test_cross_node_replication()))
-    
+
     log("")
     log("=" * 60)
     log(" RESULTS")
     log("=" * 60)
-    
+
     passed = sum(1 for _, r in results if r)
     total = len(results)
-    
+
     for name, result in results:
         status = "PASS" if result else "FAIL"
         log(f"  [{status}] {name}")
-    
+
     log("")
     log(f"{passed}/{total} tests passed")
-    
+
     return 0 if passed == total else 1
 
 

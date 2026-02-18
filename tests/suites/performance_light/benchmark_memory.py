@@ -14,9 +14,7 @@ import os
 import sys
 import time
 import socket
-import ssl
 import subprocess
-import threading
 from pathlib import Path
 
 # Add project root to path
@@ -103,12 +101,12 @@ def create_connection(user_id):
     try:
         raw_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         raw_sock.settimeout(10 if IS_CI else 5)
-        
+
         # Wrap BEFORE connect — TCP+TLS handshake happens atomically.
         context = get_ssl_context()
         sock = context.wrap_socket(raw_sock, server_hostname='localhost')
         sock.connect(('localhost', EDGE_PORT))
-        
+
         # Login packet: 0x01 | username
         username = f"mem_user_{user_id}".encode()
         sock.sendall(b'\x01' + username)
@@ -152,7 +150,7 @@ def measure_with_connections(count):
     _conn_errors.clear()
     connections = []
     failed = 0
-    
+
     for i in range(count):
         sock = create_connection(i)
         if sock:
@@ -161,16 +159,16 @@ def measure_with_connections(count):
             failed += 1
         if (i + 1) % 50 == 0:
             log(f"  Created {i + 1}/{count} ({len(connections)} ok, {failed} failed)")
-    
+
     log(f"  Total connections: {len(connections)}/{count} (failed: {failed})")
     if _conn_errors:
         log(f"  Connection errors (first {len(_conn_errors)}):")
         for err in _conn_errors:
             log(f"    {err}")
-    
+
     # Let memory stabilize (GC, SSL session finalization)
     time.sleep(5 if IS_CI else 3)
-    
+
     # Take 3 samples and use the minimum — BEAM GC can cause transient spikes
     samples = []
     for _ in range(3):
@@ -180,7 +178,7 @@ def measure_with_connections(count):
         time.sleep(1)
     memory = min(samples) if samples else 0
     log(f"  Memory with connections: {memory:.1f} MB (samples: {[f'{s:.1f}' for s in samples]})")
-    
+
     return connections, memory
 
 
@@ -203,19 +201,19 @@ def run_benchmark():
     # not a server inefficiency.
     per_conn_limit_kb = profile.get("per_conn_kb_tls", profile["per_conn_kb"])
     base_overhead_limit = profile["base_overhead_mb"]
-    
+
     log(f"Profile: {TEST_PROFILE}")
     log(f"Target connections: {target_connections}")
     log(f"Per-connection limit: {per_conn_limit_kb} KB (TLS)")
     log(f"Base overhead limit: {base_overhead_limit} MB")
     log("")
-    
+
     # Measure baseline
     baseline_mb = measure_baseline()
-    
+
     # Create connections and measure
     connections, total_mb = measure_with_connections(target_connections)
-    
+
     # Calculate metrics
     conn_count = len(connections)
     if conn_count > 0:
@@ -224,10 +222,10 @@ def run_benchmark():
     else:
         memory_increase = 0
         per_conn_kb = 0
-    
+
     # Cleanup
     cleanup_connections(connections)
-    
+
     # Results
     log("")
     log("=" * 60)
@@ -239,16 +237,16 @@ def run_benchmark():
     log(f"  Connections created: {conn_count}")
     log(f"  Per-connection memory: {per_conn_kb:.2f} KB")
     log("")
-    
+
     # Assertions — identical for CI and local
     passed = True
-    
+
     if baseline_mb > base_overhead_limit:
         log(f"  ❌ Base overhead exceeded: {baseline_mb:.1f} MB > {base_overhead_limit} MB")
         passed = False
     else:
         log(f"  ✅ Base overhead OK: {baseline_mb:.1f} MB <= {base_overhead_limit} MB")
-    
+
     # Per-connection memory is only meaningful when enough connections succeed.
     # With very few connections, allocator carrier overhead dominates and the
     # metric is unreliable.
@@ -263,7 +261,7 @@ def run_benchmark():
         log(f"  ⚠️ Per-connection metric unreliable ({conn_count} < {min_reliable_conns} conns): {per_conn_kb:.2f} KB (skipping assertion)")
     else:
         log(f"  ⚠️ No connections established — per-connection metric N/A")
-    
+
     if conn_count < target_connections * 0.9:
         log(f"  ⚠️ Connection count low: {conn_count} < {int(target_connections * 0.9)}")
         # Don't fail for this in smoke profile
@@ -271,7 +269,7 @@ def run_benchmark():
             passed = False
     else:
         log(f"  ✅ Connection count OK: {conn_count}")
-    
+
     # NFR-19 Hard Gate: Per-connection memory MUST NOT exceed 10KB at scale.
     # At smoke scale, TLS overhead dominates so we only gate on full profile.
     NFR19_HARD_LIMIT_KB = 10
@@ -281,7 +279,7 @@ def run_benchmark():
             passed = False
         else:
             log(f"  NFR-19 PASS: Per-connection memory {per_conn_kb:.2f} KB <= {NFR19_HARD_LIMIT_KB} KB")
-    
+
     log("")
     return passed
 
@@ -304,7 +302,7 @@ def main():
     log("=" * 60)
     log(f"IS_CI={IS_CI}, TLS=mandatory, CA_CERT exists={CA_CERT.exists()}")
     log(f"CA_CERT exists: {CA_CERT.exists()}")
-    
+
     try:
         if is_server_running():
             # Server already running (managed by run_all_tests.sh or started manually).
@@ -322,7 +320,7 @@ def main():
         import traceback
         traceback.print_exc()
         sys.exit(1)
-    
+
     if passed:
         log("✅ All memory benchmarks passed!")
         sys.exit(0)

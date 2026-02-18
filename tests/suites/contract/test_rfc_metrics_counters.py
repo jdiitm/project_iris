@@ -18,8 +18,6 @@ import os
 import sys
 import time
 import socket
-import ssl
-import struct
 import urllib.request
 import re
 
@@ -60,7 +58,7 @@ def get_metrics():
         req = urllib.request.Request(url, method="GET")
         with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
             return resp.read().decode("utf-8")
-    except Exception as e:
+    except Exception:
         return None
 
 

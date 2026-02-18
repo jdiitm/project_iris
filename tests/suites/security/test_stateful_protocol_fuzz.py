@@ -31,7 +31,6 @@ import ssl
 import struct
 import time
 import random
-from pathlib import Path
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 sys.path.insert(0, PROJECT_ROOT)
@@ -107,7 +106,6 @@ def test_post_login_corruption():
                 garbage = bytes([random.randint(0, 255) for _ in range(random.randint(1, 512))])
                 try:
                     sock.sendall(garbage)
-                    time.sleep(0.05)
                 except (BrokenPipeError, ConnectionResetError, ssl.SSLError):
                     break  # Server disconnected -- expected
 
@@ -117,8 +115,6 @@ def test_post_login_corruption():
                 pass
         except Exception:
             pass
-
-    time.sleep(0.5)
 
     if server_alive():
         log("  PASS: Server survived post-login corruption (5 attempts)")
@@ -143,7 +139,6 @@ def test_ack_before_login():
             msg_id = b"fake_msg_id_12345678"
             ack_packet = bytes([0x03]) + struct.pack(">H", len(msg_id)) + msg_id
             sock.sendall(ack_packet)
-            time.sleep(0.1)
 
             try:
                 resp = sock.recv(1024)
@@ -157,8 +152,6 @@ def test_ack_before_login():
                 pass
         except Exception:
             pass
-
-    time.sleep(0.5)
 
     if server_alive():
         log("  PASS: Server survived ACK-before-login (5 attempts)")
@@ -180,10 +173,8 @@ def test_double_login():
         try:
             sock = get_tls_socket()
             resp1 = do_login(sock, f"fuzz_double_login_{attempt}")
-            time.sleep(0.1)
             # Send second login on same connection
             resp2 = do_login(sock, f"fuzz_double_login_{attempt}_v2")
-            time.sleep(0.1)
 
             try:
                 sock.close()
@@ -191,8 +182,6 @@ def test_double_login():
                 pass
         except Exception:
             pass
-
-    time.sleep(0.5)
 
     if server_alive():
         log("  PASS: Server survived double LOGIN (5 attempts)")
@@ -213,7 +202,6 @@ def test_interleaved_valid_invalid():
     try:
         sock = get_tls_socket()
         do_login(sock, "fuzz_interleave_user")
-        time.sleep(0.2)
 
         success_count = 0
         seq_no = 0
@@ -236,7 +224,6 @@ def test_interleaved_valid_invalid():
                     sock.sendall(garbage)
                 except (BrokenPipeError, ConnectionResetError, ssl.SSLError):
                     break
-            time.sleep(0.05)
 
         try:
             sock.close()
@@ -246,8 +233,6 @@ def test_interleaved_valid_invalid():
         log(f"  Sent {success_count} valid messages before disconnect")
     except Exception as e:
         log(f"  Connection error: {e}")
-
-    time.sleep(0.5)
 
     if server_alive():
         log("  PASS: Server survived interleaved valid/invalid")
@@ -269,7 +254,6 @@ def test_oversized_payload_claim():
         try:
             sock = get_tls_socket(timeout=3)
             do_login(sock, f"fuzz_oversize_{attempt}")
-            time.sleep(0.1)
 
             # Opcode 0x02 (SEND) with huge length field
             target = b"oversize_target"
@@ -279,7 +263,6 @@ def test_oversized_payload_claim():
             packet += b"x" * 100
             try:
                 sock.sendall(packet)
-                time.sleep(1)
                 # Try to read -- server should have disconnected or timed out
                 try:
                     sock.recv(1024)
@@ -294,8 +277,6 @@ def test_oversized_payload_claim():
                 pass
         except Exception:
             pass
-
-    time.sleep(0.5)
 
     if server_alive():
         log("  PASS: Server survived oversized payload claims (3 attempts)")
@@ -317,7 +298,6 @@ def test_invalid_opcodes():
             sock = get_tls_socket(timeout=2)
             packet = bytes([opcode]) + b"payload_data_here"
             sock.sendall(packet)
-            time.sleep(0.05)
             try:
                 sock.recv(1024)
             except Exception:
@@ -328,8 +308,6 @@ def test_invalid_opcodes():
                 pass
         except Exception:
             pass
-
-    time.sleep(0.5)
 
     if server_alive():
         log("  PASS: Server survived all invalid opcodes (0x80-0xFF)")
@@ -350,7 +328,6 @@ def test_legitimate_after_attacks():
         client = IrisClient()
         client.login("legit_after_fuzz_user")
         client.send_msg("legit_target_user", "hello after fuzzing")
-        time.sleep(0.5)
         client.close()
         log("  PASS: Legitimate client works after all attacks")
         return True

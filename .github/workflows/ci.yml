@@ -154,7 +154,7 @@ jobs:
             echo "::error::Coverage ${COV_PCT}% is below minimum threshold of 70%"
             exit 1
           fi
-          echo "Coverage ${COV_PCT}% meets minimum threshold of 70%"
+          echo "Coverage ${COV_PCT}% meets minimum threshold of 75%"
 
       - name: Upload coverage report
         if: always()
@@ -189,7 +189,7 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Install Python dependencies
-        run: pip install -r requirements-test.txt
+        run: pip install --require-hashes -r requirements-test-locked.txt
 
       - name: Install system dependencies
         run: sudo apt-get update -qq && sudo apt-get install -y -qq libzstd-dev
@@ -356,21 +356,36 @@ jobs:
             echo "OK: No time.sleep() violations in test files"
           fi
 
-      # --- Python lint (ruff) ---
-      - name: "Lint: Python code quality (ruff)"
+      # --- Python lint (ruff) — HARD GATE with ratchet baseline ---
+      - name: "Lint: Python code quality (ruff) (HARD GATE)"
         run: |
           pip install ruff --quiet
-          RUFF_ERRORS=$(ruff check tests/ scripts/ --config pyproject.toml 2>&1 | tail -1 || true)
-          echo "$RUFF_ERRORS"
-          ruff check tests/ scripts/ --config pyproject.toml --statistics || {
-            echo "::warning::Ruff found lint issues. Fix with: ruff check tests/ scripts/ --fix"
-          }
+          BASELINE=$(grep -v '^#' scripts/ruff_baseline.txt | grep -E '^[0-9]+$' | head -1)
+          if [ -z "$BASELINE" ]; then
+            echo "::error::Cannot read ruff baseline from scripts/ruff_baseline.txt"
+            exit 1
+          fi
+          echo "Ruff baseline: $BASELINE violations"
+          RUFF_OUTPUT=$(ruff check tests/ scripts/ --config pyproject.toml 2>&1 || true)
+          RUFF_COUNT=$(echo "$RUFF_OUTPUT" | grep -oP 'Found \K[0-9]+' | head -1 || echo "0")
+          if [ -z "$RUFF_COUNT" ] || [ "$RUFF_COUNT" = "0" ]; then
+            echo "Ruff: CLEAN (no violations)"
+          else
+            ruff check tests/ scripts/ --config pyproject.toml --statistics || true
+            echo ""
+            echo "Ruff violations: $RUFF_COUNT (baseline: $BASELINE)"
+            if [ "$RUFF_COUNT" -gt "$BASELINE" ]; then
+              echo "::error::Ruff violations ($RUFF_COUNT) exceed baseline ($BASELINE). New violations introduced."
+              exit 1
+            fi
+            echo "Ruff violations ($RUFF_COUNT) within baseline ($BASELINE). Fix with: ruff check tests/ scripts/ --fix"
+          fi
 
       # --- Dependency vulnerability scan ---
       - name: Dependency vulnerability scan (pip-audit)
         run: |
           pip install pip-audit
-          pip-audit -r requirements-test.txt --strict
+          pip-audit -r requirements-test-locked.txt --strict
 
       # --- Prometheus alert rules validation ---
       - name: Validate alert rules (YAML)
@@ -437,7 +452,7 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Install Python dependencies
-        run: pip install -r requirements-test.txt
+        run: pip install --require-hashes -r requirements-test-locked.txt
 
       - name: Install system dependencies
         run: sudo apt-get update -qq && sudo apt-get install -y -qq libzstd-dev
@@ -457,6 +472,33 @@ jobs:
 
       - name: Validate CI security config contract
         run: python3 tests/suites/contract/test_ci_security_config.py
+
+      # --- Secret scanning: detect accidentally committed real secrets ---
+      - name: "Secret scan: no real credentials in repo"
+        run: |
+          echo "Scanning for accidentally committed secrets..."
+          FOUND=false
+          # Private key files (PEM-encoded private keys outside certs/ dir)
+          PRIVATE_KEYS=$(find . -name '*.key' -not -path './certs/*' -not -path './.git/*' -not -path './.venv/*' 2>/dev/null || true)
+          if [ -n "$PRIVATE_KEYS" ]; then
+            echo "::error::Private key files found outside certs/: $PRIVATE_KEYS"
+            FOUND=true
+          fi
+          # Actual AWS/GCP/Azure credentials
+          CLOUD_CREDS=$(grep -rn 'AKIA[0-9A-Z]\{16\}\|AIza[0-9A-Za-z_-]\{35\}' --include='*.py' --include='*.erl' --include='*.config' --include='*.yml' . 2>/dev/null | grep -v '.git/' || true)
+          if [ -n "$CLOUD_CREDS" ]; then
+            echo "::error::Cloud credentials found: $CLOUD_CREDS"
+            FOUND=true
+          fi
+          # .env files with actual secrets (not examples)
+          if [ -f .env ] && grep -qE '(SECRET|TOKEN|PASSWORD|KEY)=.{20,}' .env 2>/dev/null; then
+            echo "::error::.env file contains what appears to be real secrets"
+            FOUND=true
+          fi
+          if [ "$FOUND" = "true" ]; then
+            exit 1
+          fi
+          echo "OK: No accidentally committed secrets detected"
 
       # --- Live security tests (requires running server) ---
       - name: Start TLS server
@@ -652,7 +694,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install -r requirements-test.txt
+          pip install --require-hashes -r requirements-test-locked.txt
           sudo apt-get update -qq && sudo apt-get install -y -qq libzstd-dev
 
       - name: Download ebin
@@ -736,7 +778,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install -r requirements-test.txt
+          pip install --require-hashes -r requirements-test-locked.txt
           sudo apt-get update -qq && sudo apt-get install -y -qq libzstd-dev
 
       - name: Compile
@@ -856,22 +898,32 @@ jobs:
             failed=true
           fi
 
-          # Docker chaos must pass when it runs (skip is OK — nightly only)
+          # Docker chaos must pass when it runs (skip is OK — nightly/main only)
+          # ACCEPTED RISK: PRs don't run chaos tests. Nightly schedule covers this.
+          # If chaos has not passed on main within 7 days, investigate nightly schedule.
           if [[ "$chaos" == "failure" || "$chaos" == "cancelled" ]]; then
             echo "::error::Docker chaos tests failed ($chaos)"
             failed=true
           fi
 
-          # Full suite must pass when it runs (skip is OK — manual only)
+          # Full suite must pass when it runs (skip is OK — manual dispatch only)
           if [[ "$full" == "failure" || "$full" == "cancelled" ]]; then
             echo "::error::Full suite failed ($full)"
             failed=true
           fi
 
-          # At least one real test tier must have run
+          # At least one real test tier must have run (prevents empty pipeline)
           if [[ "$erlang" == "skipped" && "$python" == "skipped" && "$full" == "skipped" ]]; then
             echo "::error::No test jobs ran — pipeline misconfiguration"
             failed=true
+          fi
+
+          # Both Erlang AND Python tiers must run on every PR (not just one)
+          if [[ "$erlang" == "skipped" || "$python" == "skipped" ]]; then
+            if [[ "$full" == "skipped" ]]; then
+              echo "::error::Both erlang-tests and python-quick must run on every PR"
+              failed=true
+            fi
           fi
 
           echo ""

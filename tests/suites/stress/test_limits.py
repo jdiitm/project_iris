@@ -18,7 +18,6 @@ import os
 import sys
 import argparse
 import socket
-import csv
 import signal
 
 # Add project root to sys.path
@@ -27,7 +26,7 @@ project_root = os.path.abspath(os.path.join(current_dir, "../../.."))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
-from tests.framework.cluster import ClusterManager, get_cluster
+from tests.framework.cluster import ClusterManager
 
 # ============================================================================
 # Utilities
@@ -45,7 +44,7 @@ def create_socket(host, port, timeout=5.0):
         return create_tls_socket(host, port, timeout=timeout)
     except Exception:
         pass
-    
+
     # Fallback to non-TLS (for local development without certs)
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     s.settimeout(timeout)
@@ -96,7 +95,7 @@ def get_memory_usage():
         return total_kb / 1024  # Convert to MB
     except:
         pass
-    
+
     # Fallback to grep-based approach
     try:
         mem_raw = subprocess.getoutput("ps aux | grep beam.smp | grep -v grep | awk '{sum+=$6} END {print sum}'")
@@ -149,29 +148,29 @@ def main():
         "smoke": {"users": 100, "timeout": 30, "ram_mb": 2048},    # Quick validation (base VM + connections)
         "full":  {"users": 1000000, "timeout": 600, "ram_mb": 16384} # Production scale
     }
-    
+
     profile_name = os.environ.get("TEST_PROFILE", "smoke")
     if profile_name not in PROFILES:
         log(f"ERROR: Unknown profile '{profile_name}'. Available: {list(PROFILES.keys())}")
         sys.exit(1)
-    
+
     profile = PROFILES[profile_name]
-    
+
     parser = argparse.ArgumentParser()
     parser.add_argument('--users', type=int, default=profile["users"])
     parser.add_argument('--timeout', type=int, default=profile["timeout"], help='Monitoring timeout in seconds')
     parser.add_argument('--profile', type=str, default=profile_name, help='Test profile (smoke/full)')
     args = parser.parse_args()
-    
+
     log(f"[Profile: {args.profile}] users={args.users}, timeout={args.timeout}s")
-    
+
     # Ensure correct CWD
     os.chdir(project_root)
     init_csv()
-    
+
     # RAM limit is fixed per profile - no dynamic adjustment
     limit_ram = profile["ram_mb"]
-    
+
     # If server is already running (e.g. started by run_all_tests.sh), use it directly.
     # ClusterManager.force_stop() would kill the externally-managed TLS server.
     server_running = False
@@ -200,29 +199,29 @@ def main():
             log("CRITICAL: Edge node not responding on port 8085!")
             sys.exit(1)
         log("Edge node verified alive on port 8085")
-        
+
         initial_conns = get_tcp_connections(8085)
         log(f"Initial TCP connections: {initial_conns}")
-        
+
         log(f"[*] Generating Load: {args.users} users...")
-        
+
         # Start load generator
         cmd = f"erl +P 2000000 -setcookie iris_secret -sname gen_lim -hidden -noshell -pa ebin -eval \"iris_extreme_gen:start({args.users}, {args.timeout + 60}, normal), timer:sleep(infinity).\""
         p_load = run_cmd(cmd, bg=True)
-        
+
         max_ram = 0
         max_conns = 0
         no_progress_count = 0
-        
+
         log(f"Monitoring for up to {args.timeout}s...")
         start = time.time()
-        
+
         target_reached = False
         target_conns = int(args.users * 0.5)  # Expect at least 50% of target connections
-        
+
         while time.time() - start < args.timeout:
             time.sleep(10)
-            
+
             # Verify edge is still alive
             if not verify_edge_alive():
                 log("CRITICAL: Edge crashed during load test!")
@@ -232,14 +231,14 @@ def main():
                     except:
                         pass
                 sys.exit(1)
-            
+
             mb, conns = get_metrics()
             old_max_conns = max_conns
             max_ram = max(max_ram, mb)
             max_conns = max(max_conns, conns)
             log(f"Metrics: {mb:.0f}MB RAM | {conns} TCP connections")
             log_resources(mb, conns)
-            
+
             # Early exit for smoke profile if no connections and no progress
             if conns == old_max_conns == 0:
                 no_progress_count += 1
@@ -248,12 +247,10 @@ def main():
                     break
             else:
                 no_progress_count = 0
-            
+
             if conns >= target_conns:
                 log(f"Target connection count reached! ({conns} >= {target_conns})")
                 target_reached = True
-                # Hold for stability verification
-                time.sleep(10)
                 # Final check
                 if verify_edge_alive():
                     log("Edge stable at target load.")
@@ -261,33 +258,33 @@ def main():
                 else:
                     log("CRITICAL: Edge crashed at target load!")
                     sys.exit(1)
-        
+
         # Cleanup
         if p_load:
             try:
                 os.killpg(os.getpgid(p_load.pid), signal.SIGTERM)
             except:
                 pass
-        
+
         # Assertions
         log("\n--- LIMIT VERIFICATION ---")
         log(f"Max RAM: {max_ram:.0f} MB")
         log(f"Max TCP Connections: {max_conns}")
-        
+
         failed = False
-        
+
         if max_ram > limit_ram:
             log(f"[FAIL] RAM exceeded limit ({limit_ram} MB)")
             failed = True
         else:
             log(f"[PASS] RAM within limit ({limit_ram} MB)")
-        
+
         # Connection expectation based on profile
         # smoke: 30% due to shorter test duration
         # full: 50% of target
         is_smoke = profile_name == "smoke"
         min_expected_conns = int(args.users * 0.3) if is_smoke else int(args.users * 0.5)
-        
+
         if max_conns < min_expected_conns:
             log(f"[FAIL] Did not reach connection target (Got {max_conns}, Expected > {min_expected_conns})")
             # In smoke profile, this might be due to timing - don't fail if edge is stable
@@ -298,14 +295,14 @@ def main():
                 failed = True
         else:
             log(f"[PASS] Reached connection target ({max_conns} >= {min_expected_conns})")
-        
+
         # Final stability check
         if verify_edge_alive():
             log("[PASS] Edge node remained stable throughout test")
         else:
             log("[FAIL] Edge node died during test")
             failed = True
-        
+
         if failed:
             sys.exit(1)
         else:

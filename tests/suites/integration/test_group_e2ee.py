@@ -27,14 +27,12 @@ import sys
 import time
 import struct
 import socket
-import threading
-from typing import Optional, List, Tuple
+from typing import Optional, Tuple
 
 # Path setup
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 sys.path.insert(0, PROJECT_ROOT)
 
-from tests.framework import TestLogger, ClusterManager
 from tests.utilities import IrisClient, unique_user
 
 # Test configuration
@@ -71,7 +69,7 @@ def encode_group_msg(group_id: bytes, header_cbor: bytes, ciphertext: bytes) -> 
     gid_len = len(group_id)
     header_len = len(header_cbor)
     cipher_len = len(ciphertext)
-    return (bytes([0x33]) + 
+    return (bytes([0x33]) +
             struct.pack(">H", gid_len) + group_id +
             struct.pack(">H", header_len) + header_cbor +
             struct.pack(">I", cipher_len) + ciphertext)
@@ -87,7 +85,7 @@ def encode_sender_key_dist(group_id: bytes, key_data: bytes) -> bytes:
     """Encode SENDER_KEY_DIST packet (0x36)."""
     gid_len = len(group_id)
     key_len = len(key_data)
-    return (bytes([0x36]) + 
+    return (bytes([0x36]) +
             struct.pack(">H", gid_len) + group_id +
             struct.pack(">I", key_len) + key_data)
 
@@ -100,7 +98,7 @@ def simple_cbor_map(data: dict) -> bytes:
         header = bytes([0xa0 | n])  # map with n pairs
     else:
         header = bytes([0xb8, n])  # map with 1-byte length
-    
+
     result = header
     for k, v in data.items():
         # Encode key as text string
@@ -110,7 +108,7 @@ def simple_cbor_map(data: dict) -> bytes:
             result += bytes([0x60 | k_len]) + k_bytes
         else:
             result += bytes([0x78, k_len]) + k_bytes
-        
+
         # Encode value as byte string (for ciphertext) or text string
         v_bytes = v.encode('utf-8') if isinstance(v, str) else v
         v_len = len(v_bytes)
@@ -125,7 +123,7 @@ def simple_cbor_map(data: dict) -> bytes:
                 result += bytes([0x40 | v_len]) + v_bytes
             else:
                 result += bytes([0x58, v_len]) + v_bytes
-    
+
     return result
 
 
@@ -133,16 +131,16 @@ def parse_group_join(data: bytes) -> Optional[Tuple[bytes, bytes]]:
     """Parse GROUP_JOIN notification (0x31) -> (group_id, user)."""
     if len(data) < 5 or data[0] != 0x31:
         return None
-    
+
     gid_len = struct.unpack(">H", data[1:3])[0]
     if len(data) < 3 + gid_len + 2:
         return None
-    
+
     group_id = data[3:3+gid_len]
     user_len = struct.unpack(">H", data[3+gid_len:5+gid_len])[0]
     if len(data) < 5 + gid_len + user_len:
         return None
-    
+
     user = data[5+gid_len:5+gid_len+user_len]
     return (group_id, user)
 
@@ -151,27 +149,27 @@ def parse_group_msg(data: bytes) -> Optional[Tuple[bytes, bytes, bytes]]:
     """Parse GROUP_MSG delivery (0x33) -> (group_id, header, ciphertext)."""
     if len(data) < 9 or data[0] != 0x33:
         return None
-    
+
     gid_len = struct.unpack(">H", data[1:3])[0]
     if len(data) < 3 + gid_len + 2:
         return None
-    
+
     group_id = data[3:3+gid_len]
     offset = 3 + gid_len
-    
+
     header_len = struct.unpack(">H", data[offset:offset+2])[0]
     offset += 2
     if len(data) < offset + header_len + 4:
         return None
-    
+
     header = data[offset:offset+header_len]
     offset += header_len
-    
+
     cipher_len = struct.unpack(">I", data[offset:offset+4])[0]
     offset += 4
     if len(data) < offset + cipher_len:
         return None
-    
+
     ciphertext = data[offset:offset+cipher_len]
     return (group_id, header, ciphertext)
 
@@ -204,26 +202,26 @@ def check_group_response(response: bytes, client, test_name: str) -> Optional[by
         log(f"  FAIL: No response received")
         client.close()
         return None
-    
+
     # Check for GROUP_JOIN notification (success)
     if response[0] == 0x31:
         result = parse_group_join(response)
         if result:
             group_id, _ = result
             return group_id
-    
+
     # Check for service unavailable - this is a FAILURE
     if is_group_service_unavailable(response):
         log(f"  FAIL: Group service not available - ensure iris_group module is compiled and loaded")
         client.close()
         return None  # Return None = failure, not skip
-    
+
     # Check for other error response
     if response[0] == 0xFE:
         log(f"  FAIL: Error response received")
         client.close()
         return None
-    
+
     log(f"  FAIL: Unexpected response: {hex(response[0])}")
     client.close()
     return None
@@ -236,29 +234,27 @@ def check_group_response(response: bytes, client, test_name: str) -> Optional[by
 def test_group_create_via_protocol():
     """Test: Create a group via TCP protocol (opcode 0x30)."""
     log("=== Test: Group Create via Protocol ===")
-    
+
     try:
         # Connect and login
         client = IrisClient()
         user = unique_user("group_admin")
         client.login(user)
         log(f"  Logged in as {user}")
-        
+
         # Send GROUP_CREATE packet
         group_name = b"Test Group via Protocol"
         packet = encode_group_create(group_name)
         client.sock.sendall(packet)
         log("  Sent GROUP_CREATE packet")
-        
-        # Wait for GROUP_JOIN response (0x31)
-        time.sleep(0.5)
+
         response = recv_with_timeout(client.sock, 3.0)
-        
+
         if len(response) == 0:
             log("  FAIL: No response received")
             client.close()
             return False
-        
+
         # Check for GROUP_JOIN notification
         if response[0] == 0x31:
             result = parse_group_join(response)
@@ -268,7 +264,7 @@ def test_group_create_via_protocol():
                 log("  PASS: Group created via protocol")
                 client.close()
                 return True
-        
+
         # Check for error response (0xFE)
         if response[0] == 0xFE:
             # Parse error to check if it's "group_service_unavailable"
@@ -283,11 +279,11 @@ def test_group_create_via_protocol():
             log("  FAIL: Error response received")
             client.close()
             return False
-        
+
         log(f"  FAIL: Unexpected response opcode: {hex(response[0])}")
         client.close()
         return False
-        
+
     except Exception as e:
         log(f"  FAIL: Exception: {e}")
         return False
@@ -296,44 +292,39 @@ def test_group_create_via_protocol():
 def test_group_message_delivery():
     """Test: Send and receive group messages via TCP protocol."""
     log("=== Test: Group Message Delivery ===")
-    
+
     try:
         # Create admin and two members
         admin = IrisClient()
         admin_user = unique_user("group_admin")
         admin.login(admin_user)
         log(f"  Admin logged in: {admin_user}")
-        
+
         # Create group
         group_name = b"Message Test Group"
         packet = encode_group_create(group_name)
         admin.sock.sendall(packet)
-        
-        time.sleep(0.5)
+
         response = recv_with_timeout(admin.sock, 3.0)
-        
+
         # Check response
         group_id = check_group_response(response, admin, "Group Message Delivery")
         if group_id is None:
             return False
-        
+
         log(f"  Group created: {group_id.decode('utf-8', errors='replace')}")
-        
+
         # Note: In a full implementation, admin would add members here
         # For now, we test that the admin can send a message to the group
-        
+
         # Send GROUP_MSG
         header = simple_cbor_map({"sender": admin_user, "type": "text"})
         ciphertext = b"Hello, group! This is an encrypted message."  # Simulated ciphertext
-        
+
         msg_packet = encode_group_msg(group_id, header, ciphertext)
         admin.sock.sendall(msg_packet)
         log("  Sent GROUP_MSG packet")
-        
-        # Since admin is the only member, they won't receive their own message
-        # But the server should accept the message without error
-        time.sleep(0.3)
-        
+
         # Check for any error response
         admin.sock.settimeout(0.5)
         try:
@@ -344,11 +335,11 @@ def test_group_message_delivery():
                 return False
         except socket.timeout:
             pass  # No error response = success
-        
+
         log("  PASS: Group message sent successfully")
         admin.close()
         return True
-        
+
     except Exception as e:
         log(f"  FAIL: Exception: {e}")
         return False
@@ -357,38 +348,35 @@ def test_group_message_delivery():
 def test_sender_key_distribution():
     """Test: Distribute sender keys via TCP protocol (opcode 0x36)."""
     log("=== Test: Sender Key Distribution ===")
-    
+
     try:
         # Create user and group
         client = IrisClient()
         user = unique_user("sender_key_user")
         client.login(user)
         log(f"  Logged in as {user}")
-        
+
         # Create group
         packet = encode_group_create(b"Sender Key Test Group")
         client.sock.sendall(packet)
-        
-        time.sleep(0.5)
+
         response = recv_with_timeout(client.sock, 3.0)
-        
+
         # Check response
         group_id = check_group_response(response, client, "Sender Key Distribution")
         if group_id is None:
             return False
-        
+
         log(f"  Group created: {group_id.decode('utf-8', errors='replace')}")
-        
+
         # Send SENDER_KEY_DIST packet
         # Simulated sender key (in reality, this would be a serialized SenderKeyState)
         sender_key_data = b'\x00' * 32 + b'\x01' * 32  # 64-byte simulated key
-        
+
         dist_packet = encode_sender_key_dist(group_id, sender_key_data)
         client.sock.sendall(dist_packet)
         log("  Sent SENDER_KEY_DIST packet")
-        
-        time.sleep(0.3)
-        
+
         # Check for error response
         client.sock.settimeout(0.5)
         try:
@@ -399,11 +387,11 @@ def test_sender_key_distribution():
                 return False
         except socket.timeout:
             pass  # No error = success
-        
+
         log("  PASS: Sender key distributed")
         client.close()
         return True
-        
+
     except Exception as e:
         log(f"  FAIL: Exception: {e}")
         return False
@@ -412,41 +400,39 @@ def test_sender_key_distribution():
 def test_group_roster_request():
     """Test: Request group roster via TCP protocol (opcode 0x35)."""
     log("=== Test: Group Roster Request ===")
-    
+
     try:
         # Create user and group
         client = IrisClient()
         user = unique_user("roster_user")
         client.login(user)
         log(f"  Logged in as {user}")
-        
+
         # Create group
         packet = encode_group_create(b"Roster Test Group")
         client.sock.sendall(packet)
-        
-        time.sleep(0.5)
+
         response = recv_with_timeout(client.sock, 3.0)
-        
+
         # Check response
         group_id = check_group_response(response, client, "Group Roster Request")
         if group_id is None:
             return False
-        
+
         log(f"  Group created: {group_id.decode('utf-8', errors='replace')}")
-        
+
         # Request roster
         roster_packet = encode_group_roster(group_id)
         client.sock.sendall(roster_packet)
         log("  Sent GROUP_ROSTER request")
-        
-        time.sleep(0.5)
+
         response = recv_with_timeout(client.sock, 3.0)
-        
+
         if len(response) == 0:
             log("  FAIL: No roster response received")
             client.close()
             return False
-        
+
         # Check for roster response (0x35 with CBOR payload) or error
         if response[0] == 0x35:
             log("  Received roster response")
@@ -457,11 +443,11 @@ def test_group_roster_request():
             log("  FAIL: Error response received")
             client.close()
             return False
-        
+
         log(f"  FAIL: Unexpected response: {hex(response[0])}")
         client.close()
         return False
-        
+
     except Exception as e:
         log(f"  FAIL: Exception: {e}")
         return False
@@ -470,36 +456,34 @@ def test_group_roster_request():
 def test_group_leave():
     """Test: Leave a group via TCP protocol (opcode 0x32)."""
     log("=== Test: Group Leave ===")
-    
+
     try:
         # Create user and group
         client = IrisClient()
         user = unique_user("leave_user")
         client.login(user)
         log(f"  Logged in as {user}")
-        
+
         # Create group
         packet = encode_group_create(b"Leave Test Group")
         client.sock.sendall(packet)
-        
-        time.sleep(0.5)
+
         response = recv_with_timeout(client.sock, 3.0)
-        
+
         # Check response
         group_id = check_group_response(response, client, "Group Leave")
         if group_id is None:
             return False
-        
+
         log(f"  Group created: {group_id.decode('utf-8', errors='replace')}")
-        
+
         # Leave group
         leave_packet = encode_group_leave(group_id)
         client.sock.sendall(leave_packet)
         log("  Sent GROUP_LEAVE request")
-        
-        time.sleep(0.3)
+
         response = recv_with_timeout(client.sock, 2.0)
-        
+
         # Check for success (0x32 OK) or error
         if len(response) > 0:
             if response[0] == 0x32 or (len(response) > 2 and b"OK" in response):
@@ -514,12 +498,12 @@ def test_group_leave():
                 log("  PASS: Leave correctly rejected for last admin")
                 client.close()
                 return True
-        
+
         # No response might mean success
         log("  PASS: Group leave processed")
         client.close()
         return True
-        
+
     except Exception as e:
         log(f"  FAIL: Exception: {e}")
         return False
@@ -528,30 +512,29 @@ def test_group_leave():
 def test_multi_member_message_flow():
     """Test: Full message flow with multiple group members."""
     log("=== Test: Multi-Member Message Flow ===")
-    
+
     try:
         # Create three users
         admin = IrisClient()
         admin_user = unique_user("mm_admin")
         admin.login(admin_user)
-        
+
         member1 = IrisClient()
         member1_user = unique_user("mm_member1")
         member1.login(member1_user)
-        
+
         member2 = IrisClient()
         member2_user = unique_user("mm_member2")
         member2.login(member2_user)
-        
+
         log(f"  Users connected: {admin_user}, {member1_user}, {member2_user}")
-        
+
         # Admin creates group
         packet = encode_group_create(b"Multi-Member Group")
         admin.sock.sendall(packet)
-        
-        time.sleep(0.5)
+
         response = recv_with_timeout(admin.sock, 3.0)
-        
+
         # Check response
         if is_group_service_unavailable(response):
             log("  SKIP: Group service not available (tested via test_group_membership)")
@@ -559,45 +542,43 @@ def test_multi_member_message_flow():
             member1.close()
             member2.close()
             return True
-        
+
         if len(response) == 0 or response[0] != 0x31:
             log("  FAIL: Could not create group")
             admin.close()
             member1.close()
             member2.close()
             return False
-        
+
         result = parse_group_join(response)
         group_id, _ = result
         log(f"  Group created: {group_id.decode('utf-8', errors='replace')}")
-        
+
         # Note: In a full implementation, we would:
         # 1. Admin adds member1 and member2 to the group
         # 2. Each member distributes their sender key
         # 3. Admin sends a group message
         # 4. All members receive the message
-        
+
         # For now, we verify the basic protocol works
         # The group module backend (iris_group.erl) handles membership
-        
+
         # Admin sends a message
         header = simple_cbor_map({"sender": admin_user, "type": "text"})
         ciphertext = b"Hello from admin!"
-        
+
         msg_packet = encode_group_msg(group_id, header, ciphertext)
         admin.sock.sendall(msg_packet)
         log("  Admin sent group message")
-        
-        time.sleep(0.3)
-        
+
         # Clean up
         admin.close()
         member1.close()
         member2.close()
-        
+
         log("  PASS: Multi-member flow completed")
         return True
-        
+
     except Exception as e:
         log(f"  FAIL: Exception: {e}")
         return False
@@ -619,9 +600,9 @@ def test_e2ee_crypto_validation():
     RFC Reference: RFC-001-AMENDMENT-001 (E2EE requirements)
     """
     global CRYPTO_VALIDATED
-    
+
     log("=== Test: E2EE Crypto Validation (Real Encryption) ===")
-    
+
     # Try to import cryptography library
     try:
         from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -632,40 +613,39 @@ def test_e2ee_crypto_validation():
         log("  Install with: pip install cryptography")
         log("  This test requires real crypto validation - no skips allowed")
         return False
-    
+
     try:
         # Step 1: Generate real encryption key (simulating Signal's sender key)
         key = os.urandom(32)  # 256-bit AES key
         nonce = os.urandom(12)  # 96-bit nonce for AES-GCM
-        
+
         # Step 2: Encrypt a test message
         plaintext = b"SECRET_E2EE_TEST_CONTENT_12345"
         aesgcm = AESGCM(key)
         ciphertext = aesgcm.encrypt(nonce, plaintext, None)
-        
+
         log(f"  Generated ciphertext: {len(ciphertext)} bytes")
         log(f"  Plaintext: {plaintext.decode()}")
-        
+
         # Step 3: Connect and create a group
         client = IrisClient()
         user = unique_user("crypto_test")
         client.login(user)
         log(f"  Logged in as {user}")
-        
+
         # Create group
         packet = encode_group_create(b"Crypto Validation Group")
         client.sock.sendall(packet)
-        
-        time.sleep(0.5)
+
         response = recv_with_timeout(client.sock, 3.0)
-        
+
         group_id = check_group_response(response, client, "E2EE Crypto Validation")
         if group_id is None:
             log("  FAIL: Could not create group for crypto test")
             return False
-        
+
         log(f"  Group created: {group_id.decode('utf-8', errors='replace')}")
-        
+
         # Step 4: Send encrypted message through server
         # Header includes nonce so receiver can decrypt
         header = simple_cbor_map({
@@ -673,14 +653,12 @@ def test_e2ee_crypto_validation():
             "type": "encrypted",
             "nonce": nonce.hex()  # Nonce as hex for transmission
         })
-        
+
         # Ciphertext is the AES-GCM encrypted blob
         msg_packet = encode_group_msg(group_id, header, ciphertext)
         client.sock.sendall(msg_packet)
         log("  Sent encrypted GROUP_MSG")
-        
-        time.sleep(0.3)
-        
+
         # Step 5: Verify no error (server accepted the ciphertext)
         client.sock.settimeout(0.5)
         try:
@@ -691,7 +669,7 @@ def test_e2ee_crypto_validation():
                 return False
         except socket.timeout:
             pass  # No error = success
-        
+
         # Step 6: Verify we can still decrypt our own ciphertext
         # (proves we know the key, simulating receiver-side)
         decrypted = aesgcm.decrypt(nonce, ciphertext, None)
@@ -699,9 +677,9 @@ def test_e2ee_crypto_validation():
             log(f"  FAIL: Decryption mismatch!")
             client.close()
             return False
-        
+
         log(f"  Decryption verified: {decrypted.decode()}")
-        
+
         # Step 7: Test that tampered ciphertext fails decryption
         tampered = bytes([ciphertext[0] ^ 0xFF]) + ciphertext[1:]
         try:
@@ -711,9 +689,9 @@ def test_e2ee_crypto_validation():
             return False
         except Exception:
             log("  Tamper detection verified (invalid ciphertext rejected)")
-        
+
         client.close()
-        
+
         CRYPTO_VALIDATED = True
         log("  PASS: E2EE crypto validation complete")
         log("  - Real AES-GCM encryption used")
@@ -721,7 +699,7 @@ def test_e2ee_crypto_validation():
         log("  - Decryption verified client-side")
         log("  - Tamper detection verified")
         return True
-        
+
     except Exception as e:
         log(f"  FAIL: Exception: {e}")
         return False
@@ -739,7 +717,7 @@ def test_x25519_key_exchange():
     RFC Reference: RFC-001-AMENDMENT-001 (Signal Protocol / X3DH)
     """
     log("=== Test: X25519 Key Exchange Validation ===")
-    
+
     try:
         from cryptography.hazmat.primitives.asymmetric import x25519
         from cryptography.hazmat.primitives import serialization
@@ -747,47 +725,47 @@ def test_x25519_key_exchange():
         log("  FAIL: cryptography library not installed")
         log("  This test requires real crypto validation - no skips allowed")
         return False
-    
+
     try:
         # Generate Alice's key pair
         alice_private = x25519.X25519PrivateKey.generate()
         alice_public = alice_private.public_key()
-        
+
         # Generate Bob's key pair
         bob_private = x25519.X25519PrivateKey.generate()
         bob_public = bob_private.public_key()
-        
+
         # Derive shared secret (Diffie-Hellman)
         alice_shared = alice_private.exchange(bob_public)
         bob_shared = bob_private.exchange(alice_public)
-        
+
         # Verify both parties derive the same secret
         if alice_shared != bob_shared:
             log("  FAIL: Shared secret mismatch!")
             return False
-        
+
         log(f"  X25519 key exchange successful")
         log(f"  Shared secret: {len(alice_shared)} bytes")
-        
+
         # Verify shared secret has high entropy (not all zeros, etc.)
         if alice_shared == bytes(32) or len(set(alice_shared)) < 10:
             log("  FAIL: Shared secret has low entropy")
             return False
-        
+
         # Verify public key serialization
         alice_pub_bytes = alice_public.public_bytes(
             encoding=serialization.Encoding.Raw,
             format=serialization.PublicFormat.Raw
         )
-        
+
         if len(alice_pub_bytes) != 32:
             log(f"  FAIL: Public key wrong size: {len(alice_pub_bytes)}")
             return False
-        
+
         log(f"  Public key size: {len(alice_pub_bytes)} bytes (correct)")
         log("  PASS: X25519 key exchange validated")
         return True
-        
+
     except Exception as e:
         log(f"  FAIL: Exception: {e}")
         return False
@@ -796,7 +774,7 @@ def test_x25519_key_exchange():
 def ensure_group_service():
     """Ensure iris_group service is running on the server."""
     import subprocess
-    
+
     # Start iris_group service via Erlang RPC
     code = """
     case whereis(iris_group) of
@@ -808,7 +786,7 @@ def ensure_group_service():
             io:format(\"already_running~n\")
     end.
     """
-    
+
     try:
         result = subprocess.run(
             ["erl", "-noshell", "-pa", "ebin",
@@ -848,7 +826,7 @@ def test_sender_key_crypto_chain():
     for Sender Key message encryption.
     """
     log("=== Test: Sender Key Cryptographic Chain (FR-20) ===")
-    
+
     try:
         from cryptography.hazmat.primitives.ciphers.aead import AESGCM
         from cryptography.hazmat.primitives.kdf.hkdf import HKDF
@@ -856,12 +834,12 @@ def test_sender_key_crypto_chain():
     except ImportError:
         log("  FAIL: cryptography library not installed")
         return False
-    
+
     try:
         # Step 1: Generate initial Sender Key (32-byte random)
         sender_key = os.urandom(32)
         log(f"  1. Generated Sender Key: {sender_key[:8].hex()}...")
-        
+
         # Step 2: Derive chain key using HKDF
         # This simulates the initial chain key derivation
         hkdf_chain = HKDF(
@@ -872,7 +850,7 @@ def test_sender_key_crypto_chain():
         )
         chain_key_0 = hkdf_chain.derive(sender_key)
         log(f"  2. Derived Chain Key 0: {chain_key_0[:8].hex()}...")
-        
+
         # Step 3: Derive message key from chain key
         hkdf_msg = HKDF(
             algorithm=hashes.SHA256(),
@@ -885,13 +863,13 @@ def test_sender_key_crypto_chain():
         msg_nonce = msg_material[32:44]
         log(f"  3. Derived Message Key: {msg_key[:8].hex()}...")
         log(f"     Nonce: {msg_nonce.hex()}")
-        
+
         # Step 4: Encrypt message with AES-GCM
         plaintext = b"Test message for Sender Key chain verification"
         aesgcm = AESGCM(msg_key)
         ciphertext = aesgcm.encrypt(msg_nonce, plaintext, None)
         log(f"  4. Encrypted: {len(plaintext)} bytes -> {len(ciphertext)} bytes")
-        
+
         # Step 5: Advance chain key (forward secrecy)
         hkdf_advance = HKDF(
             algorithm=hashes.SHA256(),
@@ -901,12 +879,12 @@ def test_sender_key_crypto_chain():
         )
         chain_key_1 = hkdf_advance.derive(chain_key_0)
         log(f"  5. Advanced to Chain Key 1: {chain_key_1[:8].hex()}...")
-        
+
         # Verify chain keys are different (forward secrecy)
         if chain_key_0 == chain_key_1:
             log("  FAIL: Chain key did not advance!")
             return False
-        
+
         # Step 6: Derive message key for second message
         hkdf_msg_1 = HKDF(
             algorithm=hashes.SHA256(),
@@ -917,26 +895,26 @@ def test_sender_key_crypto_chain():
         msg_material_1 = hkdf_msg_1.derive(chain_key_1)
         msg_key_1 = msg_material_1[:32]
         msg_nonce_1 = msg_material_1[32:44]
-        
+
         # Verify message keys are different
         if msg_key == msg_key_1:
             log("  FAIL: Message keys should differ between chain positions!")
             return False
-        
+
         log(f"  6. Second Message Key: {msg_key_1[:8].hex()}... (different)")
-        
+
         # Step 7: Decrypt original message
         decrypted = aesgcm.decrypt(msg_nonce, ciphertext, None)
         if decrypted != plaintext:
             log("  FAIL: Decryption produced wrong plaintext!")
             return False
         log(f"  7. Decrypted successfully: {decrypted[:30]}...")
-        
+
         # Step 8: Verify old message key cannot decrypt new message
         plaintext_2 = b"Second message with new key"
         aesgcm_1 = AESGCM(msg_key_1)
         ciphertext_2 = aesgcm_1.encrypt(msg_nonce_1, plaintext_2, None)
-        
+
         try:
             # Try to decrypt message 2 with old key
             aesgcm.decrypt(msg_nonce_1, ciphertext_2, None)
@@ -944,7 +922,7 @@ def test_sender_key_crypto_chain():
             return False
         except Exception:
             log("  8. Old message key cannot decrypt new message (correct)")
-        
+
         # Step 9: Simulate 10 chain advances and verify all unique
         chain_keys = [chain_key_0, chain_key_1]
         current = chain_key_1
@@ -957,21 +935,21 @@ def test_sender_key_crypto_chain():
             )
             current = hkdf_i.derive(current)
             chain_keys.append(current)
-        
+
         # Verify all chain keys are unique
         if len(set(chain_keys)) != len(chain_keys):
             log("  FAIL: Chain key collision detected!")
             return False
-        
+
         log(f"  9. Verified 10 unique chain keys (no collisions)")
-        
+
         log("  PASS: Sender Key crypto chain verified")
         log("  - HKDF derivation working")
         log("  - AES-GCM encryption/decryption working")
         log("  - Chain advancement working (forward secrecy)")
         log("  - Key uniqueness verified")
         return True
-        
+
     except Exception as e:
         log(f"  FAIL: Exception: {e}")
         import traceback
@@ -984,14 +962,14 @@ def main():
     log(f"=== Group E2EE Integration Tests (profile={TEST_PROFILE}, seed={TEST_SEED}) ===")
     log("NOTE: These tests use actual TCP sockets (not erl -eval)")
     log("")
-    
+
     # Check if group service is available
     # Note: The group service needs to be running on the server side
     # These tests verify the protocol layer, not group functionality
     # (which is tested by test_group_membership.py)
-    
+
     results = []
-    
+
     # Protocol tests (transport layer)
     results.append(("Group Create via Protocol", test_group_create_via_protocol()))
     results.append(("Group Message Delivery", test_group_message_delivery()))
@@ -999,12 +977,12 @@ def main():
     results.append(("Group Roster Request", test_group_roster_request()))
     results.append(("Group Leave", test_group_leave()))
     results.append(("Multi-Member Message Flow", test_multi_member_message_flow()))
-    
+
     # Crypto validation tests (real encryption)
     results.append(("E2EE Crypto Validation", test_e2ee_crypto_validation()))
     results.append(("X25519 Key Exchange", test_x25519_key_exchange()))
     results.append(("Sender Key Crypto Chain (FR-20)", test_sender_key_crypto_chain()))
-    
+
     log("\n=== Results ===")
     passed = 0
     failed = 0
@@ -1015,16 +993,16 @@ def main():
             passed += 1
         else:
             failed += 1
-    
+
     log(f"\nTotal: {passed}/{len(results)} passed")
-    
+
     # Report crypto validation status
     if CRYPTO_VALIDATED:
         log("\nE2EE Verification: CRYPTO VALIDATED (real AES-GCM + X25519)")
     else:
         log("\nE2EE Verification: TRANSPORT-ONLY (cryptography library not used)")
         log("  Install 'cryptography' package for full crypto validation")
-    
+
     if failed > 0:
         log("[FAIL] Some tests failed")
         sys.exit(1)

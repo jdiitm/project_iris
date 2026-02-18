@@ -17,7 +17,6 @@ verifying ordering is preserved.
 import os
 import sys
 import socket
-import ssl
 import struct
 import time
 from pathlib import Path
@@ -76,8 +75,6 @@ def test_server_accepts_both_hlc_formats():
             log("  FAIL: Receiver login failed")
             return False
 
-        time.sleep(0.1)
-
         # Send 5 messages with explicit sequence numbers
         for seq in range(1, 6):
             target = receiver_user.encode('utf-8')
@@ -87,7 +84,6 @@ def test_server_accepts_both_hlc_formats():
                       struct.pack('>Q', seq) +
                       struct.pack('>H', len(msg)) + msg)
             sender_sock.sendall(packet)
-            time.sleep(0.02)
 
         # Receive and verify ordering
         received = []

@@ -15,7 +15,6 @@ even when interleaved with member removal operations.
 import os
 import sys
 import socket
-import ssl
 import struct
 import time
 from pathlib import Path
@@ -55,7 +54,6 @@ def create_group(sock, group_name):
     name_bytes = group_name.encode('utf-8')
     packet = bytes([0x30]) + struct.pack('>H', len(name_bytes)) + name_bytes
     sock.sendall(packet)
-    time.sleep(0.2)
     try:
         resp = sock.recv(4096)
         return resp
@@ -71,7 +69,6 @@ def add_member(sock, group_id, member_name):
               struct.pack('>H', len(gid_bytes)) + gid_bytes +
               struct.pack('>H', len(member_bytes)) + member_bytes)
     sock.sendall(packet)
-    time.sleep(0.1)
     try:
         return sock.recv(4096)
     except socket.timeout:
@@ -83,7 +80,6 @@ def leave_group(sock, group_id):
     gid_bytes = group_id if isinstance(group_id, bytes) else group_id.encode('utf-8')
     packet = bytes([0x32]) + struct.pack('>H', len(gid_bytes)) + gid_bytes
     sock.sendall(packet)
-    time.sleep(0.1)
     try:
         return sock.recv(4096)
     except socket.timeout:
@@ -123,8 +119,6 @@ def test_group_message_during_member_removal():
             log("  FAIL: Bob login failed")
             return False
 
-        time.sleep(0.1)
-
         # Step 1: Create group
         group_name = f"rotation_test_{ts}"
         resp = create_group(admin_sock, group_name)
@@ -140,7 +134,7 @@ def test_group_message_during_member_removal():
         if resp and len(resp) > 3 and resp[0] == 0x31:
             gid_len = struct.unpack('>H', resp[1:3])[0]
             group_id = resp[3:3+gid_len]
-        
+
         if group_id is None:
             # Try to use the group name as ID
             group_id = group_name.encode('utf-8')
@@ -148,7 +142,6 @@ def test_group_message_during_member_removal():
         # Step 2: Add members
         add_member(admin_sock, group_id, alice_user)
         add_member(admin_sock, group_id, bob_user)
-        time.sleep(0.1)
 
         # Step 3: Bob leaves (triggers sender key rotation)
         leave_group(bob_sock, group_id)
@@ -163,8 +156,6 @@ def test_group_message_during_member_removal():
                   struct.pack('>H', len(fake_header_cbor)) + fake_header_cbor +
                   struct.pack('>I', len(fake_ciphertext)) + fake_ciphertext)
         admin_sock.sendall(packet)
-
-        time.sleep(0.3)
 
         # Step 5: Verify server is still alive
         verify_sock = get_tls_socket()
@@ -202,8 +193,6 @@ def test_server_survives_rapid_join_leave():
             log("  FAIL: Login failed")
             return False
 
-        time.sleep(0.1)
-
         # Create group
         resp = create_group(admin_sock, f"rapid_group_{ts}")
         if resp is None:
@@ -225,8 +214,6 @@ def test_server_survives_rapid_join_leave():
             add_member(admin_sock, group_id, member)
             leave_group(member_sock, group_id)
             member_sock.close()
-
-        time.sleep(0.3)
 
         # Verify server health
         verify_sock = get_tls_socket()

@@ -18,7 +18,6 @@ Pattern: follows test_resilience.py using raw TLS socket and IrisClient.
 import sys
 import os
 import socket
-import ssl
 import struct
 import time
 import uuid
@@ -75,7 +74,6 @@ def test_resume_opcode_does_not_crash():
         sock = get_tls_socket()
         user = unique_user("resume_test")
         raw_login(sock, user)
-        time.sleep(0.05)
 
         # Send RESUME: 0x0A | SessionIdLen(16) | SessionId | LastSeqNo(64)
         session_id = uuid.uuid4().hex[:16].encode('utf-8')
@@ -85,8 +83,6 @@ def test_resume_opcode_does_not_crash():
                   session_id +
                   struct.pack('>Q', last_seq))
         sock.sendall(packet)
-
-        time.sleep(0.3)
 
         # Verify connection still alive by sending a status query
         sock.sendall(b'\x05' + struct.pack('>H', 4) + b'test')
@@ -121,7 +117,6 @@ def test_stale_session_fallback():
         sock = get_tls_socket()
         user = unique_user("stale_sess")
         raw_login(sock, user)
-        time.sleep(0.05)
 
         # Send RESUME with a completely fabricated session_id
         fake_session = b"NOSUCHSESSION123"
@@ -130,8 +125,6 @@ def test_stale_session_fallback():
                   fake_session +
                   struct.pack('>Q', 0))
         sock.sendall(packet)
-
-        time.sleep(0.3)
 
         # Connection should still be usable -- send a normal message
         target = unique_user("stale_target")
@@ -197,7 +190,6 @@ def test_messaging_continues_after_resume():
                          session_id +
                          struct.pack('>Q', 1))
         sender.sock.sendall(resume_packet)
-        time.sleep(0.2)
 
         # Send another message after resume
         post_msg = "after_resume"

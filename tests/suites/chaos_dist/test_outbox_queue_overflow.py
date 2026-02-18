@@ -23,11 +23,8 @@ Pattern: follows test_region_outage.py and test_split_brain.py.
 
 import os
 import sys
-import socket
 import subprocess
 import time
-import struct
-from typing import Optional, Tuple
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).parent.parent.parent.parent

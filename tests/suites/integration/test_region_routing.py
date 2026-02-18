@@ -51,7 +51,7 @@ def run_erlang_test(code):
 def test_default_region():
     """Test default region configuration."""
     print("[TEST] Default region configuration...")
-    
+
     success, stdout, stderr = run_erlang_test("""
         %% Clear config
         application:unset_env(iris_core, region_id),
@@ -62,7 +62,7 @@ def test_default_region():
         
         io:format("PASS: default region is local~n")
     """)
-    
+
     if success and "PASS" in stdout:
         print("  ✓ PASS")
         return True
@@ -73,7 +73,7 @@ def test_default_region():
 def test_region_configuration():
     """Test region configuration."""
     print("[TEST] Region configuration...")
-    
+
     success, stdout, stderr = run_erlang_test("""
         %% Set region
         application:set_env(iris_core, region_id, <<"us-east-1">>),
@@ -90,7 +90,7 @@ def test_region_configuration():
         
         io:format("PASS: region configuration works~n")
     """)
-    
+
     if success and "PASS" in stdout:
         print("  ✓ PASS")
         return True
@@ -101,7 +101,7 @@ def test_region_configuration():
 def test_home_region_deterministic():
     """Test that home region assignment is deterministic."""
     print("[TEST] Home region determinism...")
-    
+
     success, stdout, stderr = run_erlang_test("""
         %% Configure regions
         application:set_env(iris_core, regions, [<<"us-east-1">>, <<"eu-west-1">>, <<"ap-south-1">>]),
@@ -121,7 +121,7 @@ def test_home_region_deterministic():
         
         io:format("PASS: home region is deterministic~n")
     """)
-    
+
     if success and "PASS" in stdout:
         print("  ✓ PASS")
         return True
@@ -132,7 +132,7 @@ def test_home_region_deterministic():
 def test_home_region_distribution():
     """Test that users are distributed across regions."""
     print("[TEST] Home region distribution...")
-    
+
     success, stdout, stderr = run_erlang_test("""
         %% Configure regions
         Regions = [<<"us-east-1">>, <<"eu-west-1">>, <<"ap-south-1">>],
@@ -161,7 +161,7 @@ def test_home_region_distribution():
         
         io:format("PASS: users are distributed across regions~n")
     """)
-    
+
     if success and "PASS" in stdout:
         print("  ✓ PASS")
         return True
@@ -172,7 +172,7 @@ def test_home_region_distribution():
 def test_is_local_region():
     """Test local region check."""
     print("[TEST] is_local_region check...")
-    
+
     success, stdout, stderr = run_erlang_test("""
         %% Set current region
         application:set_env(iris_core, region_id, <<"us-east-1">>),
@@ -189,7 +189,7 @@ def test_is_local_region():
         
         io:format("PASS: is_local_region works correctly~n")
     """)
-    
+
     if success and "PASS" in stdout:
         print("  ✓ PASS")
         return True
@@ -200,7 +200,7 @@ def test_is_local_region():
 def test_region_endpoints():
     """Test region endpoint management."""
     print("[TEST] Region endpoint management...")
-    
+
     success, stdout, stderr = run_erlang_test("""
         %% Clear existing
         application:unset_env(iris_core, region_endpoints),
@@ -223,7 +223,7 @@ def test_region_endpoints():
         
         io:format("PASS: region endpoint management works~n")
     """)
-    
+
     if success and "PASS" in stdout:
         print("  ✓ PASS")
         return True
@@ -236,28 +236,28 @@ def main():
     print("=" * 60)
     print("Test Suite: iris_region_router Integration Tests")
     print("=" * 60)
-    
+
     results = []
-    
+
     results.append(("default region", test_default_region()))
     results.append(("region configuration", test_region_configuration()))
     results.append(("home region determinism", test_home_region_deterministic()))
     results.append(("home region distribution", test_home_region_distribution()))
     results.append(("is_local_region", test_is_local_region()))
     results.append(("region endpoints", test_region_endpoints()))
-    
+
     print("\n" + "=" * 60)
     print("Results:")
     passed = sum(1 for _, r in results if r)
     failed = sum(1 for _, r in results if not r)
-    
+
     for name, result in results:
         status = "✓ PASS" if result else "✗ FAIL"
         print(f"  {name}: {status}")
-    
+
     print(f"\nTotal: {passed} passed, {failed} failed")
     print("=" * 60)
-    
+
     if failed > 0:
         sys.exit(1)
     else:

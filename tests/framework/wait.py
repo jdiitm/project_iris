@@ -22,7 +22,7 @@ Benefits:
 """
 
 import time
-from typing import Callable, Any, Optional, TypeVar, Union
+from typing import Callable, Optional, TypeVar
 
 T = TypeVar('T')
 
@@ -55,7 +55,7 @@ def wait_for(
     """
     deadline = time.monotonic() + timeout
     last_exception = None
-    
+
     while time.monotonic() < deadline:
         try:
             if condition():
@@ -63,7 +63,7 @@ def wait_for(
         except Exception as e:
             last_exception = e
         time.sleep(interval)
-    
+
     msg = f"Timeout ({timeout}s) waiting for {description}"
     if last_exception:
         msg += f" (last error: {last_exception})"
@@ -95,13 +95,13 @@ def wait_for_count(
     """
     deadline = time.monotonic() + timeout
     count = 0
-    
+
     while time.monotonic() < deadline:
         count = get_count()
         if count >= target:
             return count
         time.sleep(interval)
-    
+
     raise WaitTimeout(
         f"Timeout ({timeout}s) waiting for {description}: got {count}, expected {target}"
     )
@@ -129,13 +129,13 @@ def poll_until(
         WaitTimeout: If timeout exceeded
     """
     deadline = time.monotonic() + timeout
-    
+
     while time.monotonic() < deadline:
         result = check()
         if result:
             return result
         time.sleep(interval)
-    
+
     raise WaitTimeout(f"Timeout ({timeout}s) waiting for {description}")
 
 
@@ -161,7 +161,7 @@ def wait_for_server(
         WaitTimeout: If timeout exceeded
     """
     import socket
-    
+
     def check_port():
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -171,7 +171,7 @@ def wait_for_server(
             return result == 0
         except Exception:
             return False
-    
+
     return wait_for(
         check_port,
         timeout=timeout,
@@ -200,7 +200,7 @@ def wait_for_file(
         WaitTimeout: If timeout exceeded
     """
     import os
-    
+
     return wait_for(
         lambda: os.path.exists(path),
         timeout=timeout,
@@ -231,7 +231,7 @@ def wait_for_process(
         WaitTimeout: If timeout exceeded
     """
     import os
-    
+
     def process_exists():
         try:
             os.kill(pid, 0)
@@ -240,7 +240,7 @@ def wait_for_process(
             return False
         except PermissionError:
             return True  # Process exists but we can't signal it
-    
+
     if wait_for_exit:
         return wait_for(
             lambda: not process_exists(),
@@ -268,22 +268,22 @@ class PollingContext:
                     break
                 ctx.poll()
     """
-    
+
     def __init__(self, timeout: float = 30.0, interval: float = 0.1):
         self.timeout = timeout
         self.interval = interval
         self.deadline = None
         self.active = False
-    
+
     def __enter__(self):
         self.deadline = time.monotonic() + self.timeout
         self.active = True
         return self
-    
+
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.active = False
         return False
-    
+
     def poll(self):
         """Sleep for interval and check if still active."""
         if time.monotonic() >= self.deadline:
@@ -291,7 +291,7 @@ class PollingContext:
             return False
         time.sleep(self.interval)
         return self.active
-    
+
     def remaining(self) -> float:
         """Get remaining time until timeout."""
         return max(0, self.deadline - time.monotonic())

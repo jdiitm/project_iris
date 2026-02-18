@@ -32,7 +32,6 @@ import sys
 import socket
 import subprocess
 import time
-import json
 import struct
 from typing import Optional, Tuple, List
 
@@ -62,10 +61,10 @@ def log(msg: str):
 
 class WriteTracker:
     """Track writes and their acknowledgments for consistency verification."""
-    
+
     def __init__(self):
         self.writes = []  # [(side, msg_id, target, content, acked)]
-    
+
     def record(self, side: str, msg_id: str, target: str, content: str, acked: bool):
         self.writes.append({
             'side': side,
@@ -74,13 +73,13 @@ class WriteTracker:
             'content': content,
             'acked': acked
         })
-    
+
     def get_acked_writes(self) -> List[dict]:
         return [w for w in self.writes if w['acked']]
-    
+
     def get_east_acked(self) -> List[dict]:
         return [w for w in self.writes if w['acked'] and w['side'] == 'east']
-    
+
     def get_west_acked(self) -> List[dict]:
         return [w for w in self.writes if w['acked'] and w['side'] == 'west']
 
@@ -104,11 +103,11 @@ def send_message_with_tracking(sock: socket.socket, target: str, message: str) -
     """
     target_bytes = target.encode()
     msg_bytes = message.encode()
-    
+
     # Increment sequence counter
     _seq_counter[0] += 1
     seq_no = _seq_counter[0]
-    
+
     # Protocol: 0x07 | TargetLen(16) | Target | SeqNo(64) | MsgLen(16) | Msg
     packet = (
         bytes([0x07]) +
@@ -116,12 +115,12 @@ def send_message_with_tracking(sock: socket.socket, target: str, message: str) -
         struct.pack('>Q', seq_no) +
         struct.pack('>H', len(msg_bytes)) + msg_bytes
     )
-    
+
     try:
         sock.sendall(packet)
         sock.settimeout(5)
         response = sock.recv(1024)
-        
+
         if len(response) > 0:
             # Check for ACK or rejection indicators
             if b"REJECT" in response or b"ERROR" in response or b"SAFE_MODE" in response:
@@ -141,11 +140,11 @@ def retrieve_offline_messages(port: int, username: str) -> List[str]:
     messages = []
     try:
         sock = create_tls_socket(SERVER_HOST, port, timeout=10)
-        
+
         # Login
         packet = bytes([0x01]) + username.encode()
         sock.sendall(packet)
-        
+
         # Read login response and any offline messages
         sock.settimeout(3)
         try:
@@ -158,11 +157,11 @@ def retrieve_offline_messages(port: int, username: str) -> List[str]:
                     messages.append(data.hex())
         except socket.timeout:
             pass
-        
+
         sock.close()
     except Exception as e:
         log(f"Failed to retrieve messages for {username}: {e}")
-    
+
     return messages
 
 
@@ -228,7 +227,7 @@ def check_partition_guard_status(container: str) -> dict:
         target_node = "core_east_1@coreeast1"
     else:
         target_node = "core_west_1@corewest1"
-    
+
     # P2 FIX: Use simple text format to avoid shell quoting issues
     # Output format: MODE:mode_value QUORUM:quorum_value
     cmd = f'''erl -noshell -sname check_pg_$RANDOM -setcookie iris_secret -eval "
@@ -243,7 +242,7 @@ def check_partition_guard_status(container: str) -> dict:
                 io:format(\\"UNEXPECTED:~p~n\\", [Other])
         end,
         init:stop()."'''
-    
+
     try:
         result = subprocess.run(
             ["docker", "exec", container, "sh", "-c", cmd],
@@ -251,9 +250,9 @@ def check_partition_guard_status(container: str) -> dict:
             text=True,
             timeout=15
         )
-        
+
         output = result.stdout.strip()
-        
+
         # Parse the simple format
         if "ERROR:" in output:
             error_part = output.split("ERROR:")[1].strip() if "ERROR:" in output else output
@@ -281,7 +280,7 @@ def get_connected_nodes(container: str) -> str:
         io:format("~p~n", [nodes(connected)]),
         init:stop().'
     """
-    
+
     try:
         result = subprocess.run(
             ["docker", "exec", container, "sh", "-c", cmd],
@@ -301,19 +300,19 @@ def test_split_brain_detection():
     print("\n" + "=" * 70)
     print("Split-Brain Detection and Data Consistency Test (RFC Section 7.1)")
     print("=" * 70)
-    
+
     # Prerequisites
     if not check_docker_available():
         print("FAIL: Docker not available - required for split-brain test")
         sys.exit(1)
-    
+
     if not check_cluster_running():
         print("FAIL: Cluster not running. Start with: make cluster-up")
         sys.exit(1)
-    
+
     test_id = str(int(time.time()))
     tracker = WriteTracker()
-    
+
     results = {
         "partition_created": False,
         "east_writes_during_partition": 0,
@@ -325,23 +324,23 @@ def test_split_brain_detection():
         "data_consistent": None,
         "recovery_successful": False,
     }
-    
+
     try:
         # ================================================================
         # Phase 1: Verify Baseline Connectivity
         # ================================================================
         log("\n=== Phase 1: Verify Baseline ===")
-        
+
         log(f"East core connected nodes: {get_connected_nodes(EAST_CORE)}")
         log(f"West core connected nodes: {get_connected_nodes(WEST_CORE)}")
-        
+
         # Connect to both sides
         east_user = f"east_user_{test_id}"
         west_user = f"west_user_{test_id}"
-        
+
         east_sock = connect_and_login(EAST_EDGE_PORT, east_user)
         west_sock = connect_and_login(WEST_EDGE_PORT, west_user)
-        
+
         if not east_sock:
             log("FAIL: Cannot connect to East edge")
             return False
@@ -349,68 +348,68 @@ def test_split_brain_detection():
             log("FAIL: Cannot connect to West edge")
             east_sock.close()
             return False
-        
+
         log("PASS: Connected to both East and West edges")
-        
+
         # Verify baseline write works
         baseline_ack, _ = send_message_with_tracking(east_sock, west_user, f"baseline_{test_id}")
         if not baseline_ack:
             log("WARN: Baseline write did not get ACK")
         else:
             log("PASS: Baseline write acknowledged")
-        
+
         east_sock.close()
         west_sock.close()
-        
+
         # ================================================================
         # Phase 2: Create Network Partition
         # ================================================================
         log("\n=== Phase 2: Create Network Partition ===")
-        
+
         if not docker_network_disconnect(WEST_CORE, BACKBONE_NETWORK):
             log("WARN: Failed to disconnect West core - continuing anyway")
-        
+
         results["partition_created"] = True
         log("PASS: Network partition created (West isolated from backbone)")
-        
+
         # AUDIT P4 FIX: Reduced from 10s, partition detection is ~5s
         log("Waiting for partition detection...")
         time.sleep(6)
-        
+
         # ================================================================
         # Phase 3: Check Partition Guard Status
         # ================================================================
         log("\n=== Phase 3: Check Partition Guard Status ===")
-        
+
         east_status = check_partition_guard_status(EAST_CORE)
         west_status = check_partition_guard_status(WEST_CORE)
-        
+
         log(f"East partition guard: {east_status}")
         log(f"West partition guard: {west_status}")
-        
+
         east_safe_mode = east_status.get("mode") == "safe"
         west_safe_mode = west_status.get("mode") == "safe"
-        
+
         if east_safe_mode or west_safe_mode:
             log("PASS: Partition guard detected split - safe mode active")
-        
+
         # ================================================================
         # Phase 4: Attempt Writes on BOTH Sides During Partition
         # ================================================================
         log("\n=== Phase 4: Write Attempts During Partition ===")
-        
+
         # Reconnect
         east_sock = connect_and_login(EAST_EDGE_PORT, east_user)
         west_sock = connect_and_login(WEST_EDGE_PORT, west_user)
-        
+
         if not east_sock:
             log("WARN: Cannot reconnect to East during partition")
         if not west_sock:
             log("WARN: Cannot reconnect to West during partition")
-        
+
         # Attempt multiple writes from each side
         NUM_WRITES = 5
-        
+
         # East writes
         if east_sock:
             for i in range(NUM_WRITES):
@@ -423,7 +422,7 @@ def test_split_brain_detection():
                     results["east_acked"] += 1
                 log(f"  East write {i}: {info}")
             east_sock.close()
-        
+
         # West writes
         if west_sock:
             for i in range(NUM_WRITES):
@@ -436,59 +435,59 @@ def test_split_brain_detection():
                     results["west_acked"] += 1
                 log(f"  West write {i}: {info}")
             west_sock.close()
-        
+
         log(f"East: {results['east_acked']}/{results['east_writes_during_partition']} writes acked")
         log(f"West: {results['west_acked']}/{results['west_writes_during_partition']} writes acked")
-        
+
         results["both_sides_acked"] = results["east_acked"] > 0 and results["west_acked"] > 0
-        
+
         # ================================================================
         # Phase 5: Heal Partition
         # ================================================================
         log("\n=== Phase 5: Heal Partition ===")
-        
+
         if docker_network_connect(WEST_CORE, BACKBONE_NETWORK):
             log("PASS: West core reconnected to backbone")
             results["partition_healed"] = True
         else:
             log("WARN: Failed to reconnect West core")
-        
+
         # AUDIT P4 FIX: Reduced from 15s
         log("Waiting for cluster recovery...")
         time.sleep(10)
-        
+
         log(f"East core connected nodes: {get_connected_nodes(EAST_CORE)}")
         log(f"West core connected nodes: {get_connected_nodes(WEST_CORE)}")
-        
+
         # ================================================================
         # Phase 6: Verify Data Consistency
         # ================================================================
         log("\n=== Phase 6: Verify Data Consistency ===")
-        
+
         # If both sides acked writes, we MUST verify consistency
         if results["both_sides_acked"]:
             log("CRITICAL: Both sides accepted writes during partition - checking consistency...")
-            
+
             # Retrieve messages for east_user (should have west's writes)
             east_retrieval = f"east_verify_{test_id}"
             west_retrieval = f"west_verify_{test_id}"
-            
+
             # Check east-side offline messages for west's writes
             east_msgs = retrieve_offline_messages(EAST_EDGE_PORT, east_user)
             west_msgs = retrieve_offline_messages(WEST_EDGE_PORT, west_user)
-            
+
             log(f"East user has {len(east_msgs)} pending messages")
             log(f"West user has {len(west_msgs)} pending messages")
-            
+
             # Count how many acked writes are findable
             east_acked_writes = tracker.get_east_acked()
             west_acked_writes = tracker.get_west_acked()
-            
+
             # For a proper consistency check, we need to verify:
             # 1. Messages acked on east are readable from east-accessible storage
             # 2. Messages acked on west are readable from west-accessible storage
             # 3. After merge, no conflicts or lost data
-            
+
             # Simplified check: verify we can still send messages after healing
             test_sock = connect_and_login(EAST_EDGE_PORT, f"post_heal_east_{test_id}")
             if test_sock:
@@ -506,15 +505,15 @@ def test_split_brain_detection():
         else:
             log("OK: At least one side rejected writes - no divergence risk")
             results["data_consistent"] = True
-        
+
         # ================================================================
         # Phase 7: Verify Recovery
         # ================================================================
         log("\n=== Phase 7: Verify Recovery ===")
-        
+
         east_sock = connect_and_login(EAST_EDGE_PORT, f"recovery_east_{test_id}")
         west_sock = connect_and_login(WEST_EDGE_PORT, f"recovery_west_{test_id}")
-        
+
         if east_sock and west_sock:
             log("PASS: Both edges accessible after recovery")
             results["recovery_successful"] = True
@@ -522,54 +521,54 @@ def test_split_brain_detection():
             west_sock.close()
         else:
             log("FAIL: Recovery incomplete - one or both edges inaccessible")
-        
+
     except Exception as e:
         log(f"Test error: {e}")
         import traceback
         traceback.print_exc()
-        
+
         # Heal partition on error
         docker_network_connect(WEST_CORE, BACKBONE_NETWORK)
         return False
-    
+
     # ================================================================
     # Final Evaluation with Strict Criteria
     # ================================================================
     print("\n" + "=" * 70)
     print("TEST RESULTS")
     print("=" * 70)
-    
+
     for key, value in results.items():
         status = "PASS" if value else "FAIL" if value is False else "INFO"
         print(f"  [{status}] {key}: {value}")
-    
+
     print("\n" + "=" * 70)
     print("ASSERTIONS")
     print("=" * 70)
-    
+
     passed = True
-    
+
     # Assertion 1: Partition was created
     if not results["partition_created"]:
         log("FAIL: Partition was not created")
         passed = False
     else:
         log("PASS: Partition was created")
-    
+
     # Assertion 2: Partition was healed
     if not results["partition_healed"]:
         log("FAIL: Partition was not healed")
         passed = False
     else:
         log("PASS: Partition was healed")
-    
+
     # Assertion 3: Recovery successful
     if not results["recovery_successful"]:
         log("FAIL: Recovery not successful")
         passed = False
     else:
         log("PASS: Recovery successful")
-    
+
     # Assertion 4: CRITICAL - If both sides accepted writes, data must be consistent
     if results["both_sides_acked"]:
         if results["data_consistent"]:
@@ -579,7 +578,7 @@ def test_split_brain_detection():
             passed = False
     else:
         log("PASS: Split-brain prevented (at least one side rejected writes)")
-    
+
     # Assertion 5: Check write behavior during partition
     # Zero acked writes during partition is actually SAFE (conservative behavior)
     total_acked = results["east_acked"] + results["west_acked"]
@@ -587,11 +586,11 @@ def test_split_brain_detection():
         log("PASS: System rejected all writes during partition (conservative/safe behavior)")
     else:
         log(f"PASS: {total_acked} writes were acked during partition test")
-    
+
     print("\n" + "=" * 70)
     print("FINAL RESULT")
     print("=" * 70)
-    
+
     if passed:
         print("PASS: Split-brain test completed successfully")
         if results["both_sides_acked"]:
@@ -606,7 +605,7 @@ def test_split_brain_detection():
 
 def main():
     result = test_split_brain_detection()
-    
+
     if result is True:
         return 0
     elif result is False:

@@ -21,7 +21,6 @@ import struct
 import time
 import threading
 import subprocess
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
 from pathlib import Path
@@ -82,7 +81,7 @@ if TEST_PROFILE not in PROFILES:
 CONFIG = PROFILES[TEST_PROFILE]
 
 
-@dataclass 
+@dataclass
 class PhaseMetrics:
     """Metrics for a test phase."""
     name: str
@@ -197,11 +196,11 @@ def send_message(sock: socket.socket, target: str, message: str) -> Tuple[bool, 
     try:
         target_bytes = target.encode()
         msg_bytes = message.encode()
-        
+
         # Increment sequence counter
         _cascade_seq_counter[0] += 1
         seq_no = _cascade_seq_counter[0]
-        
+
         # Protocol: 0x07 | TargetLen(16) | Target | SeqNo(64) | MsgLen(16) | Msg
         packet = (
             bytes([0x07]) +
@@ -209,12 +208,12 @@ def send_message(sock: socket.socket, target: str, message: str) -> Tuple[bool, 
             struct.pack('>Q', seq_no) +
             struct.pack('>H', len(msg_bytes)) + msg_bytes
         )
-        
+
         # Fire-and-forget: successful socket write = success
         sock.sendall(packet)
         latency = (time.time() - start) * 1000
         return True, latency
-            
+
     except socket.timeout:
         return False, (time.time() - start) * 1000
     except socket.error:
@@ -226,7 +225,7 @@ def send_message(sock: socket.socket, target: str, message: str) -> Tuple[bool, 
 
 class LoadGenerator:
     """Generates continuous load on the system."""
-    
+
     def __init__(self, users: int, rate: float):
         self.users = users
         self.rate = rate
@@ -234,32 +233,31 @@ class LoadGenerator:
         self.metrics = PhaseMetrics(name="")
         self._lock = threading.Lock()
         self._threads = []
-    
+
     def _worker(self, user_id: int, duration: float):
         """Worker thread sending messages."""
         username = f"cascade_user_{user_id}"
         target = f"cascade_target_{user_id % 10}"
-        
+
         # Try different edge nodes for resilience
         edges = list(EDGE_PORTS.items())
         sock = None
-        
+
         for edge_name, port in edges:
             sock = connect_and_login(SERVER_HOST, port, username)
             if sock:
                 break
-        
+
         if not sock:
             return
-        
-        interval = self.users / self.rate  # Spread load across users
+
         end_time = time.time() + duration
         msg_id = 0
-        
+
         while time.time() < end_time and self.running:
             msg = f"cascade_msg_{user_id}_{msg_id}"
             success, latency = send_message(sock, target, msg)
-            
+
             with self._lock:
                 self.metrics.messages_sent += 1
                 if success:
@@ -267,34 +265,33 @@ class LoadGenerator:
                     self.metrics.latencies_ms.append(latency)
                 else:
                     self.metrics.messages_failed += 1
-            
+
             msg_id += 1
-            time.sleep(interval)
-        
+
         try:
             sock.close()
         except Exception:
             pass
-    
+
     def start(self, phase_name: str, duration: float):
         """Start generating load."""
         self.metrics = PhaseMetrics(name=phase_name)
         self.running = True
         self._threads = []
-        
+
         for i in range(self.users):
             t = threading.Thread(target=self._worker, args=(i, duration))
             t.daemon = True
             t.start()
             self._threads.append(t)
-    
+
     def stop(self) -> PhaseMetrics:
         """Stop generating load and return metrics."""
         self.running = False
         for t in self._threads:
             t.join(timeout=5)
         return self.metrics
-    
+
     def get_current_metrics(self) -> PhaseMetrics:
         """Get current metrics snapshot."""
         with self._lock:
@@ -312,7 +309,7 @@ def run_cascade_failure_test() -> dict:
     log(f"=== Cascade Failure Test (Profile: {TEST_PROFILE}) ===")
     log(f"Concurrent users: {CONFIG['concurrent_users']}")
     log(f"Message rate: {CONFIG['msgs_per_second']} msg/sec")
-    
+
     results = {
         "warmup": None,
         "during_failure": None,
@@ -322,84 +319,84 @@ def run_cascade_failure_test() -> dict:
         "cores_after": 0,
         "killed_node": None,
     }
-    
+
     # Count initial cores
     results["cores_before"] = count_running_cores()
     log(f"Initial running cores: {results['cores_before']}")
-    
+
     if results["cores_before"] < 2:
         log("ERROR: Need at least 2 running cores for cascade test")
         return results
-    
+
     generator = LoadGenerator(CONFIG['concurrent_users'], CONFIG['msgs_per_second'])
-    
+
     try:
         # Phase 1: Warmup - establish baseline
         log(f"\n=== Phase 1: Warmup ({CONFIG['warmup_seconds']}s) ===")
         generator.start("warmup", CONFIG['warmup_seconds'])
         time.sleep(CONFIG['warmup_seconds'])
         results["warmup"] = generator.stop()
-        
+
         log(f"  Sent: {results['warmup'].messages_sent}, "
             f"Success: {results['warmup'].messages_succeeded}, "
             f"Failed: {results['warmup'].messages_failed}")
-        
+
         # Phase 2: Kill a core node while continuing load
         log(f"\n=== Phase 2: Killing core node during load ({CONFIG['during_failure_seconds']}s) ===")
-        
+
         # Start new load
         generator.start("during_failure", CONFIG['during_failure_seconds'])
-        
+
         # Wait 5 seconds then kill a node
         time.sleep(5)
-        
+
         # Find a running core to kill (prefer not-primary)
         for node in reversed(CORE_NODES):  # Start from less critical nodes
             if check_container_running(node):
                 results["killed_node"] = node
                 kill_container(node)
                 break
-        
+
         # Continue load during failure
         time.sleep(CONFIG['during_failure_seconds'] - 5)
         results["during_failure"] = generator.stop()
         results["cores_during"] = count_running_cores()
-        
+
         log(f"  Killed: {results['killed_node']}")
         log(f"  Cores after kill: {results['cores_during']}")
         log(f"  Sent: {results['during_failure'].messages_sent}, "
             f"Success: {results['during_failure'].messages_succeeded}, "
             f"Failed: {results['during_failure'].messages_failed}")
-        
+
         # Phase 3: Recovery - restart killed node
         log(f"\n=== Phase 3: Recovery ({CONFIG['recovery_seconds']}s) ===")
-        
+
         # Restart the killed node
         if results["killed_node"]:
             start_container(results["killed_node"])
             time.sleep(10)  # Let it rejoin
             _reconnect_edge_after_core_restart(results["killed_node"])
-        
+
         # Test recovery
         generator.start("recovery", CONFIG['recovery_seconds'])
         time.sleep(CONFIG['recovery_seconds'])
         results["recovery"] = generator.stop()
         results["cores_after"] = count_running_cores()
-        
+
         log(f"  Cores after recovery: {results['cores_after']}")
         log(f"  Sent: {results['recovery'].messages_sent}, "
             f"Success: {results['recovery'].messages_succeeded}, "
             f"Failed: {results['recovery'].messages_failed}")
-        
+
     except Exception as e:
         log(f"Test error: {e}")
         generator.stop()
-        
+
         # Try to restore killed node
         if results.get("killed_node"):
             start_container(results["killed_node"])
             _reconnect_edge_after_core_restart(results["killed_node"])
-    
+
     return results
 
 
@@ -408,44 +405,44 @@ def analyze_results(results: dict) -> bool:
     log("\n" + "=" * 50)
     log("Results Analysis")
     log("=" * 50)
-    
+
     passed = True
-    
+
     # Check warmup (should be stable)
     if results["warmup"] and results["warmup"].messages_sent > 0:
         warmup_success = results["warmup"].messages_succeeded / results["warmup"].messages_sent
         log(f"\nWarmup success rate: {warmup_success:.1%}")
         if warmup_success < 0.95:
             log("  WARNING: Warmup had issues")
-    
+
     # Check during-failure (some loss expected)
     if results["during_failure"] and results["during_failure"].messages_sent > 0:
         failure_loss = results["during_failure"].messages_failed / results["during_failure"].messages_sent
         log(f"\nDuring-failure loss rate: {failure_loss:.1%}")
-        
+
         if failure_loss > CONFIG["max_loss_during_failover"]:
             log(f"  FAIL: Loss {failure_loss:.1%} exceeds threshold {CONFIG['max_loss_during_failover']:.1%}")
             passed = False
         else:
             log(f"  PASS: Loss within acceptable range")
-    
+
     # Check recovery (should return to normal)
     if results["recovery"] and results["recovery"].messages_sent > 0:
         recovery_loss = results["recovery"].messages_failed / results["recovery"].messages_sent
         log(f"\nRecovery loss rate: {recovery_loss:.1%}")
-        
+
         if recovery_loss > CONFIG["max_loss_after_recovery"]:
             log(f"  FAIL: Recovery loss {recovery_loss:.1%} exceeds threshold {CONFIG['max_loss_after_recovery']:.1%}")
             passed = False
         else:
             log(f"  PASS: System recovered successfully")
-    
+
     # Check that system didn't cascade fail
     if results["cores_after"] < results["cores_before"]:
         log(f"\nWARNING: Not all cores recovered ({results['cores_after']}/{results['cores_before']})")
     else:
         log(f"\nAll cores recovered: {results['cores_after']}/{results['cores_before']}")
-    
+
     return passed
 
 
@@ -455,28 +452,28 @@ def main():
     print("Cascade Failure Test")
     print("Per PRINCIPAL_AUDIT_REPORT.md Phase 3")
     print("=" * 70)
-    
+
     # Check prerequisites
     if not check_docker_available():
         print("\nSKIP:INFRA - Docker not available")
         sys.exit(2)
-    
+
     if not DOCKER_COMPOSE_FILE.exists():
         print(f"\nSKIP:INFRA - Docker compose not found: {DOCKER_COMPOSE_FILE}")
         sys.exit(2)
-    
+
     running_cores = count_running_cores()
     if running_cores < 2:
         print(f"\nSKIP:INFRA - Need at least 2 running cores, found {running_cores}")
         print("       Start cluster with: make cluster-up")
         sys.exit(2)
-    
+
     # Run test
     results = run_cascade_failure_test()
-    
+
     # Analyze and report
     passed = analyze_results(results)
-    
+
     print("\n" + "=" * 70)
     if passed:
         print("RESULT: PASSED - System handles cascade failure gracefully")

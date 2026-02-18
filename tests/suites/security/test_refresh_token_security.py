@@ -21,7 +21,6 @@ import subprocess
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 sys.path.insert(0, PROJECT_ROOT)
 
-from tests.utilities.iris_client import IrisClient
 
 HOST = os.environ.get('IRIS_HOST', 'localhost')
 PORT = int(os.environ.get('IRIS_PORT', '8085'))

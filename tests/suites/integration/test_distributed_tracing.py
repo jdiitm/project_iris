@@ -128,9 +128,7 @@ def test_burst_with_tracing():
                 sent += 1
             except Exception:
                 break
-            time.sleep(0.01)
 
-        time.sleep(0.5)
         client.close()
 
         if sent >= 40:
@@ -169,9 +167,6 @@ def test_cross_user_trace():
                     client.send_msg(target, f"multi_trace_{idx}_{i}")
                 except Exception:
                     pass
-                time.sleep(0.01)
-
-        time.sleep(0.5)
 
         for c in clients:
             try:

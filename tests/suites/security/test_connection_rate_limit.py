@@ -86,15 +86,15 @@ def log_test(name: str, passed: bool, message: str = ""):
 def create_connection(timeout=5.0):
     """Create a TLS connection to the server."""
     context = get_verified_ssl_context()
-    
+
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.settimeout(timeout)
-    
+
     try:
         tls_sock = context.wrap_socket(sock, server_hostname=SERVER_HOST)
         tls_sock.connect((SERVER_HOST, SERVER_PORT))
         return tls_sock
-    except Exception as e:
+    except Exception:
         sock.close()
         raise
 
@@ -152,12 +152,12 @@ def test_rapid_connections_throttled():
     - Server remains stable (doesn't crash)
     """
     log("\n=== Test: Rapid Connections Throttled (RFC Section 10) ===")
-    
+
     if not check_server_available():
         log_test("Rapid connection throttling", False,
                 "FAIL: Server not available - cannot proceed")
         return False
-    
+
     # Temporarily lower the rate limit so the test can trigger it.
     # The test config sets conn_rate_max=500 for stress tests; we need it low
     # here to verify the mechanism works.
@@ -165,16 +165,16 @@ def test_rapid_connections_throttled():
     log(f"  Setting conn_rate_max={TEST_RATE_LIMIT} via rpc...")
     if not set_conn_rate_limit(TEST_RATE_LIMIT):
         log("  WARNING: Could not set rate limit via rpc; testing with current limit")
-    
+
     NUM_CONNECTIONS = 60
     NUM_WORKERS = 50  # High parallelism to burst above rate limit
-    
+
     log(f"  Bursting {NUM_CONNECTIONS} concurrent connections ({NUM_WORKERS} workers)...")
-    
+
     successful = 0
     failed = 0
     lock = threading.Lock()
-    
+
     def burst_connect(_):
         nonlocal successful, failed
         success, error_type, latency = attempt_connection()
@@ -183,25 +183,25 @@ def test_rapid_connections_throttled():
                 successful += 1
             else:
                 failed += 1
-    
+
     try:
         start_time = time.time()
         with concurrent.futures.ThreadPoolExecutor(max_workers=NUM_WORKERS) as executor:
             futures = [executor.submit(burst_connect, i) for i in range(NUM_CONNECTIONS)]
             concurrent.futures.wait(futures, timeout=30)
         duration = time.time() - start_time
-        
+
         rate = NUM_CONNECTIONS / duration if duration > 0 else 0
-        
+
         log(f"\n  Results:")
         log(f"    Duration: {duration:.1f}s")
         log(f"    Successful: {successful}")
         log(f"    Failed/Closed: {failed}")
         log(f"    Effective rate: {rate:.1f} conn/sec")
-        
+
         # AUDIT FIX: Rate limiting MUST cause some rejections.
         # RFC Section 10: Per-IP connection rate limiting at Edge is MANDATORY.
-        
+
         if failed > 0:
             log_test("Rapid connection throttling", True,
                     f"Rate limiting active: {failed}/{NUM_CONNECTIONS} denied")
@@ -228,23 +228,23 @@ def test_concurrent_connection_flood():
     This simulates a more aggressive attack pattern using parallel connections.
     """
     log("\n=== Test: Concurrent Connection Flood ===")
-    
+
     if not check_server_available():
         log_test("Concurrent flood", False,
                 "FAIL: Server not available - cannot proceed")
         return False
-    
+
     NUM_WORKERS = 20
     CONNECTIONS_PER_WORKER = 10
-    
+
     log(f"  Launching {NUM_WORKERS} workers, {CONNECTIONS_PER_WORKER} connections each...")
-    
+
     stats = {
         'successful': 0,
         'failed': 0,
         'lock': threading.Lock()
     }
-    
+
     def worker(worker_id):
         for i in range(CONNECTIONS_PER_WORKER):
             success, error_type, _ = attempt_connection()
@@ -253,28 +253,28 @@ def test_concurrent_connection_flood():
                     stats['successful'] += 1
                 else:
                     stats['failed'] += 1
-    
+
     # Launch workers
     start_time = time.time()
-    
+
     with concurrent.futures.ThreadPoolExecutor(max_workers=NUM_WORKERS) as executor:
         futures = [executor.submit(worker, i) for i in range(NUM_WORKERS)]
         concurrent.futures.wait(futures, timeout=60)
-    
+
     duration = time.time() - start_time
     total = stats['successful'] + stats['failed']
-    
+
     log(f"\n  Results:")
     log(f"    Duration: {duration:.1f}s")
     log(f"    Total attempts: {total}")
     log(f"    Successful: {stats['successful']}")
     log(f"    Failed: {stats['failed']}")
     log(f"    Rate: {total/duration:.1f} conn/sec")
-    
+
     # Verify server survived
     time.sleep(2)
     server_ok = check_server_available()
-    
+
     if server_ok:
         log_test("Concurrent flood", True,
                 f"Server survived {total} concurrent connections")
@@ -293,33 +293,33 @@ def test_recovery_after_throttle():
     new connections are accepted again.
     """
     log("\n=== Test: Recovery After Throttle ===")
-    
+
     if not check_server_available():
         log_test("Throttle recovery", False,
                 "FAIL: Server not available - cannot proceed")
         return False
-    
+
     # Phase 1: Trigger rate limiting with rapid connections
     log("  Phase 1: Triggering rate limiting...")
-    
+
     refused_count = 0
     for i in range(50):
         success, error_type, _ = attempt_connection()
         if error_type == "refused":
             refused_count += 1
-    
+
     log(f"    Rapid connections done, {refused_count} refused")
-    
+
     # Phase 2: Wait for cooldown
     log("  Phase 2: Waiting for cooldown (10 seconds)...")
     time.sleep(10)
-    
+
     # Phase 3: Verify recovery
     log("  Phase 3: Testing recovery...")
-    
+
     recovery_success = 0
     recovery_attempts = 5
-    
+
     for i in range(recovery_attempts):
         success, error_type, latency = attempt_connection()
         if success:
@@ -328,7 +328,7 @@ def test_recovery_after_throttle():
         else:
             log(f"    Connection {i+1}: {error_type}")
         time.sleep(1)
-    
+
     if recovery_success >= recovery_attempts - 1:
         log_test("Throttle recovery", True,
                 f"Recovery: {recovery_success}/{recovery_attempts} connections succeeded")
@@ -347,17 +347,17 @@ def test_server_stability_after_attack():
     the server MUST remain operational for legitimate users.
     """
     log("\n=== Test: Server Stability After Attack ===")
-    
+
     if not check_server_available():
         log_test("Post-attack stability", False,
                 "FAIL: Server not available - cannot proceed")
         return False
-    
+
     test_id = int(time.time())
-    
+
     # Phase 1: Attack with many connections
     log("  Phase 1: Simulating connection flood attack...")
-    
+
     connections = []
     for i in range(30):
         try:
@@ -365,48 +365,48 @@ def test_server_stability_after_attack():
             connections.append(conn)
         except Exception:
             pass
-    
+
     log(f"    Established {len(connections)} connections")
-    
+
     # Phase 2: Verify legitimate operation still works
     log("  Phase 2: Verifying legitimate operations...")
-    
+
     try:
         # Login as legitimate user
         legit = create_connection(timeout=5.0)
-        
+
         # Send login
         user = f"legit_user_{test_id}".encode()
         legit.sendall(bytes([0x01]) + user)
-        
+
         # Wait for response
         legit.settimeout(3.0)
         response = legit.recv(1024)
-        
+
         login_ok = len(response) > 0
         log(f"    Legitimate login: {'OK' if login_ok else 'FAILED'}")
-        
+
         legit.close()
-        
+
     except Exception as e:
         log(f"    Legitimate operation failed: {e}")
         login_ok = False
-    
+
     # Phase 3: Cleanup attack connections
     log("  Phase 3: Cleaning up...")
-    
+
     for conn in connections:
         try:
             conn.close()
         except:
             pass
-    
+
     # Phase 4: Final stability check
     time.sleep(2)
     final_check = check_server_available()
-    
+
     log(f"    Final stability check: {'OK' if final_check else 'FAILED'}")
-    
+
     if login_ok and final_check:
         log_test("Post-attack stability", True,
                 "Server remained operational during and after attack")
@@ -432,37 +432,37 @@ def main():
     log("\nRFC Section 10: Connection rate limiting per-IP at Edge")
     log("Tests DoS protection via connection throttling")
     log("")
-    
+
     # Pre-flight check - FAIL if server not available
     if not check_server_available():
         log("FAIL: Server not available")
         log("Start server with 'make start' before running this test")
         sys.exit(1)
-    
+
     log("Server: Available")
-    
+
     # Run tests
     test_rapid_connections_throttled()
     test_concurrent_connection_flood()
     test_recovery_after_throttle()
     test_server_stability_after_attack()
-    
+
     # Summary
     log("\n" + "=" * 60)
     log("SUMMARY")
     log("=" * 60)
-    
+
     passed = sum(1 for _, p, _ in results if p)
     failed = sum(1 for _, p, _ in results if not p)
-    
+
     for name, p, msg in results:
         status = "PASS" if p else "FAIL"
         log(f"  [{status}] {name}")
-    
+
     log(f"\nTotal: {len(results)} tests")
     log(f"Passed: {passed}")
     log(f"Failed: {failed}")
-    
+
     if failed > 0:
         log("\nFAIL: Connection rate limit tests FAILED")
         log("RFC Section 10: NOT COMPLIANT")

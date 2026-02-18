@@ -25,7 +25,6 @@ import os
 import sys
 import threading
 import psutil
-import argparse
 from pathlib import Path
 
 HOST = 'localhost'
@@ -146,7 +145,7 @@ def benchmark_worker(results, errors, pid):
     if not sock:
         errors.append(f"Worker {pid} failed to connect")
         return
-    
+
     try:
         # Login
         sock.sendall(packet_login(f"user_{pid}"))
@@ -155,17 +154,17 @@ def benchmark_worker(results, errors, pid):
             errors.append(f"Worker {pid} login failed")
             sock.close()
             return
-        
+
         # Send messages using RFC-compliant opcode 0x07 (sequenced)
         target = "recipient_0"
         payload = b"X" * 50
-        
+
         start = time.time()
         for j in range(MSG_COUNT):
             pkt = packet_msg(target, payload, j + 1)
             sock.sendall(pkt)
         dur = time.time() - start
-        
+
         sock.close()
         results.append(dur)
     except (OSError, socket.timeout) as e:
@@ -187,9 +186,9 @@ def measure_system_resources(pid, duration, container):
     try:
         p = psutil.Process(pid)
         cpu_start = p.cpu_times()
-        
+
         time.sleep(duration)
-        
+
         cpu_end = p.cpu_times()
         container['cpu_user'] = cpu_end.user - cpu_start.user
         container['cpu_sys'] = cpu_end.system - cpu_start.system
@@ -213,9 +212,9 @@ def main() -> int:
     log("--- UNIT COST BENCHMARK ---")
     log(f"  IS_CI={IS_CI}, TLS=mandatory, CA_CERT exists={CA_CERT.exists()}")
     log(f"  THREADS={THREADS}, MSG_COUNT={MSG_COUNT}, MIN_THROUGHPUT={MIN_THROUGHPUT}")
-    
+
     passed = True
-    
+
     # Quick TCP probe — verify server is listening before attempting TLS.
     # Using a short timeout (3s) to fail fast if server is down, instead of
     # the full SOCKET_TIMEOUT (30s) which would cause the test to appear stuck.
@@ -229,7 +228,7 @@ def main() -> int:
         log(f"FAIL: Server not running on port 8085 ({e})")
         log("Please start the cluster before running benchmarks")
         return 1
-    
+
     # Verify TLS/connection works with full handshake (retry up to 3 times)
     # After heavy benchmarks, the server's SSL acceptor may need a moment to stabilise.
     conn_ok = False
@@ -250,7 +249,7 @@ def main() -> int:
     if not conn_ok:
         log("FAIL: Could not establish any connection after 3 attempts")
         return 1
-    
+
     # Find beam pid
     erl_pid = None
     for proc in psutil.process_iter(['pid', 'name']):
@@ -260,39 +259,39 @@ def main() -> int:
                 break
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             continue
-            
+
     if not erl_pid:
         log("FAIL: Erlang node (beam) process not found")
         return 1
 
     log(f"PASS: Found Erlang PID: {erl_pid}")
-    
+
     # Configuration — THREADS and MSG_COUNT set at module level (CI-aware)
     TOTAL_MSGS = THREADS * MSG_COUNT
-    
+
     # Global timeout: prevent infinite hangs from degraded server
     # CI: 120s, Local: 300s
     GLOBAL_TIMEOUT = 120 if IS_CI else 300
-    
+
     log(f"Running benchmark: {THREADS} threads x {MSG_COUNT} msgs = {TOTAL_MSGS} total messages")
     log(f"Environment: {'CI' if IS_CI else 'local'}, timeout: {GLOBAL_TIMEOUT}s")
-    
+
     # Start resource monitoring
     res_container = {}
     monitor = threading.Thread(target=measure_system_resources, args=(erl_pid, 5, res_container))
     monitor.start()
-    
+
     # Run benchmark workers
     threads = []
     durations = []
     errors = []
-    
+
     start_time = time.time()
     for i in range(THREADS):
         t = threading.Thread(target=benchmark_worker, args=(durations, errors, i), daemon=True)
         t.start()
         threads.append(t)
-    
+
     # Join with timeout to prevent infinite hangs
     for t in threads:
         remaining = GLOBAL_TIMEOUT - (time.time() - start_time)
@@ -303,14 +302,14 @@ def main() -> int:
         if t.is_alive():
             log("WARN: Worker thread still alive after timeout")
     monitor.join(timeout=10)
-    
+
     total_time = time.time() - start_time
-    
+
     # ================================================================
     # ASSERTIONS
     # ================================================================
     log("\n=== ASSERTIONS ===")
-    
+
     # Check for worker errors
     if errors:
         log(f"FAIL: {len(errors)} worker errors occurred:")
@@ -319,26 +318,26 @@ def main() -> int:
         passed = False
     else:
         log(f"PASS: All {THREADS} workers completed successfully")
-    
+
     # Calculate metrics
     if len(durations) > 0:
         successful_msgs = len(durations) * MSG_COUNT
         cpu_total_seconds = res_container.get('cpu_user', 0) + res_container.get('cpu_sys', 0)
         msgs_per_sec = successful_msgs / total_time if total_time > 0 else 0
         cpu_per_msg = cpu_total_seconds / successful_msgs if successful_msgs > 0 else 0
-        
+
         log("\n--- METRICS ---")
         log(f"Total Messages: {successful_msgs}")
         log(f"Total Time:     {total_time:.4f}s")
         log(f"Throughput:     {msgs_per_sec:.2f} msgs/sec")
         log(f"Total CPU Time: {cpu_total_seconds:.4f}s")
         log(f"CPU Cost/Msg:   {cpu_per_msg*1_000_000:.2f} microseconds")
-        
+
         if cpu_per_msg > 0:
             log(f"Est. Max RPS (1 Core): {1.0/cpu_per_msg:.2f}")
-        
+
         log("\n=== THRESHOLD CHECK ===")
-        
+
         # Assertion: Throughput meets minimum
         if msgs_per_sec >= MIN_THROUGHPUT:
             log(f"PASS: Throughput {msgs_per_sec:.0f} msg/s >= {MIN_THROUGHPUT} threshold")
@@ -348,7 +347,7 @@ def main() -> int:
     else:
         log("FAIL: No successful benchmark runs completed")
         passed = False
-    
+
     # Final result
     log("\n=== RESULT ===")
     if passed:

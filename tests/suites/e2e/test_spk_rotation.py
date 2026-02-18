@@ -67,7 +67,7 @@ def run_erlang_command(code, timeout=TIMEOUT):
 def test_spk_rotation_mechanism():
     """Test that SPK rotation generates a new key."""
     log("\n=== Test 1: SPK Rotation Mechanism ===")
-    
+
     code = '''
         UserId = <<"spk_rotation_test_user">>,
         
@@ -127,9 +127,9 @@ def test_spk_rotation_mechanism():
         
         iris_keys:delete_user_keys(UserId)
     '''
-    
+
     success, stdout, stderr = run_erlang_command(code)
-    
+
     if success and "SPK_ROTATION_OK" in stdout:
         log("  ✓ SPK rotation mechanism works")
         return True
@@ -142,7 +142,7 @@ def test_spk_rotation_mechanism():
 def test_spk_rotation_invalidates_old():
     """Test that old SPK is invalidated for new sessions after rotation."""
     log("\n=== Test 2: Old SPK Invalidation ===")
-    
+
     code = '''
         UserId = <<"spk_invalidation_test">>,
         
@@ -224,9 +224,9 @@ def test_spk_rotation_invalidates_old():
         
         iris_keys:delete_user_keys(UserId)
     '''
-    
+
     success, stdout, stderr = run_erlang_command(code)
-    
+
     if success and "SPK_INVALIDATION_OK" in stdout:
         log("  ✓ Old SPK invalidated for new sessions")
         return True
@@ -240,7 +240,7 @@ def test_spk_grace_period():
     """Test that existing sessions using old SPK still work (grace period)."""
     log("\n=== Test 3: SPK Grace Period ===")
     log("  Sessions established before rotation should continue working")
-    
+
     code = '''
         UserId = <<"spk_grace_test">>,
         
@@ -314,9 +314,9 @@ def test_spk_grace_period():
         
         iris_keys:delete_user_keys(UserId)
     '''
-    
+
     success, stdout, stderr = run_erlang_command(code)
-    
+
     if success and "SPK_GRACE_OK" in stdout:
         log("  ✓ Existing sessions work after SPK rotation (grace period)")
         return True
@@ -329,10 +329,10 @@ def test_spk_grace_period():
 def test_spk_rotation_schedule():
     """Test SPK rotation schedule logic (weekly rotation)."""
     log("\n=== Test 4: SPK Rotation Schedule (Weekly) ===")
-    
+
     # Note: The needs_spk_rotation function may not be implemented.
     # This test verifies the concept and documents the requirement.
-    
+
     code = '''
         UserId = <<"spk_schedule_test">>,
         
@@ -372,9 +372,9 @@ def test_spk_rotation_schedule():
         
         iris_keys:delete_user_keys(UserId)
     '''
-    
+
     success, stdout, stderr = run_erlang_command(code)
-    
+
     if success and "SPK_SCHEDULE_OK" in stdout:
         log("  ✓ SPK storage works (rotation is client-triggered)")
         log("    NFR-25: Client must rotate SPK every 7 days")
@@ -391,28 +391,28 @@ def main():
     log("=" * 60)
     log("Target: Weekly SPK rotation for forward secrecy")
     log("")
-    
+
     results = []
-    
+
     results.append(("SPK rotation mechanism", test_spk_rotation_mechanism()))
     results.append(("Old SPK invalidation", test_spk_rotation_invalidates_old()))
     results.append(("SPK grace period", test_spk_grace_period()))
     results.append(("SPK rotation schedule", test_spk_rotation_schedule()))
-    
+
     # Summary
     log("\n" + "=" * 60)
     log("RESULTS")
     log("=" * 60)
-    
+
     passed = sum(1 for _, r in results if r)
     total = len(results)
-    
+
     for name, result in results:
         status = "✓ PASS" if result else "✗ FAIL"
         log(f"  {status}: {name}")
-    
+
     log(f"\n  Total: {passed}/{total} tests passed")
-    
+
     if passed == total:
         log("\n✅ PASS: SPK rotation verified")
         log("   NFR-25: Weekly SPK rotation mechanism working")

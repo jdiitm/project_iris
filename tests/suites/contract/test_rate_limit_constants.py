@@ -20,7 +20,6 @@ Tier: 0 (Required on every merge)
 
 import sys
 import os
-import subprocess
 import re
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))

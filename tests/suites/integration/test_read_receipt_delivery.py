@@ -153,9 +153,7 @@ def test_rapid_read_receipts():
                 client.sock.sendall(encode_read_receipt(target, f"rapid_msg_{i}"))
             except Exception:
                 break
-            time.sleep(0.01)
 
-        time.sleep(0.5)
         client.close()
 
         if server_alive():

@@ -8,7 +8,7 @@ These utilities poll for conditions rather than waiting blindly.
 import socket
 import time
 import subprocess
-from typing import Callable, Optional, Any
+from typing import Callable, Any
 
 
 class ReadinessTimeout(Exception):
@@ -45,7 +45,7 @@ def wait_for_condition(
         except Exception:
             pass  # Condition check failed, retry
         time.sleep(poll_interval)
-    
+
     raise ReadinessTimeout(f"Timeout waiting for {description} after {timeout}s")
 
 
@@ -78,7 +78,7 @@ def wait_for_port(
             return result == 0
         finally:
             sock.close()
-    
+
     return wait_for_condition(
         check_port,
         timeout=timeout,
@@ -107,14 +107,14 @@ def wait_for_http(
     """
     import urllib.request
     import urllib.error
-    
+
     def check_http():
         try:
             req = urllib.request.urlopen(url, timeout=2)
             return req.getcode() == expected_status
         except (urllib.error.URLError, urllib.error.HTTPError):
             return False
-    
+
     return wait_for_condition(
         check_http,
         timeout=timeout,
@@ -150,7 +150,7 @@ def wait_for_erlang_node(
             timeout=5
         )
         return result.returncode == 0
-    
+
     return wait_for_condition(
         check_node,
         timeout=timeout,
@@ -192,7 +192,7 @@ def wait_for_docker_container(
                 text=True
             )
             return result.returncode == 0 and "true" in result.stdout
-    
+
     return wait_for_condition(
         check_container,
         timeout=timeout,
@@ -231,7 +231,7 @@ def wait_for_mnesia_ready(
             timeout=10
         )
         return result.returncode == 0
-    
+
     return wait_for_condition(
         check_mnesia,
         timeout=timeout,
@@ -259,19 +259,19 @@ def wait_for_cluster_ready(
         True if cluster is formed
     """
     start = time.time()
-    
+
     # First, wait for all containers to have Mnesia running
     for container in containers:
         remaining = timeout - (time.time() - start)
         if remaining <= 0:
             raise ReadinessTimeout(f"Timeout waiting for cluster (stuck on {container})")
-        
+
         try:
             wait_for_docker_container(container, timeout=remaining, require_healthy=True)
         except ReadinessTimeout:
             # Container might not have health check, try basic running check
             wait_for_docker_container(container, timeout=5, require_healthy=False)
-    
+
     return True
 
 
@@ -301,12 +301,12 @@ def poll_until(
     """
     start = time.time()
     last_value = None
-    
+
     while time.time() - start < timeout:
         try:
             value = check_fn()
             last_value = value
-            
+
             if callable(expected):
                 if expected(value):
                     return value
@@ -314,9 +314,9 @@ def poll_until(
                 return value
         except Exception:
             pass
-        
+
         time.sleep(poll_interval)
-    
+
     raise ReadinessTimeout(
         f"Timeout waiting for {description}: last value was {last_value}, expected {expected}"
     )

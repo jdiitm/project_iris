@@ -520,7 +520,10 @@ do_direct_mnesia_write(User, Msg, BucketCount, MaybeSeqNo) ->
     BucketID = erlang:phash2(Msg, BucketCount),
     Key = {User, BucketID},
     F = fun() -> mnesia:write({offline_msg, Key, Timestamp, Msg}) end,
-    mnesia:activity(sync_transaction, F).
+    case mnesia:sync_transaction(F) of
+        {atomic, ok} -> ok;
+        {aborted, Reason} -> {error, Reason}
+    end.
 
 %% =============================================================================
 %% Internal: Batched Mnesia Flush
@@ -542,19 +545,9 @@ do_flush(State = #state{pending = Pending, wal_log = Log}) ->
         end, Pending)
     end,
     
-    %% mnesia:activity can exit (not just return) on table errors.
-    %% Wrap in try to prevent gen_server crash and preserve pending entries.
-    try mnesia:activity(sync_transaction, F) of
-        ok ->
-            mark_committed(Log, Pending),
-            checkpoint_wal(Log),  %% Truncate WAL after successful flush
-            State#state{
-                pending = [],
-                pending_count = 0,
-                writes_mnesia = State#state.writes_mnesia + length(Pending),
-                batch_count = State#state.batch_count + 1,
-                wal_checkpoints = State#state.wal_checkpoints + 1
-            };
+    %% Use mnesia:sync_transaction which returns {atomic, _} | {aborted, _}
+    %% (not mnesia:activity which returns result directly and exits on error).
+    try mnesia:sync_transaction(F) of
         {atomic, _} ->
             mark_committed(Log, Pending),
             checkpoint_wal(Log),  %% Truncate WAL after successful flush
@@ -567,14 +560,8 @@ do_flush(State = #state{pending = Pending, wal_log = Log}) ->
             };
         {aborted, Reason} ->
             logger:error("Mnesia batch write aborted: ~p", [Reason]),
-            State;  %% Keep pending for retry — WAL NOT truncated
-        Error ->
-            logger:error("Mnesia batch write error: ~p", [Error]),
-            State   %% Keep pending for retry — WAL NOT truncated
+            State  %% Keep pending for retry — WAL NOT truncated
     catch
-        exit:{aborted, Reason} ->
-            logger:error("Mnesia batch write exit: ~p", [Reason]),
-            State;  %% Keep pending for retry — WAL NOT truncated
         Class:Reason ->
             logger:error("Mnesia batch write ~p: ~p", [Class, Reason]),
             State   %% Keep pending for retry — WAL NOT truncated
@@ -711,11 +698,10 @@ write_replay_batch(Entries) ->
             mnesia:write({offline_msg, Key, Timestamp, Msg})
         end, Entries)
     end,
-    case mnesia:activity(sync_transaction, F) of
-        ok -> ok;
+    case mnesia:sync_transaction(F) of
         {atomic, _} -> ok;
-        Error ->
-            logger:error("WAL replay batch failed: ~p", [Error]),
+        {aborted, Reason} ->
+            logger:error("WAL replay batch failed: ~p", [Reason]),
             error
     end.
 

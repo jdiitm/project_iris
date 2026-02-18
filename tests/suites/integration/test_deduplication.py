@@ -32,7 +32,6 @@ import uuid
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
 from utilities.iris_client import IrisClient
-from framework.wait import wait_for
 
 
 def log(msg):
@@ -51,7 +50,7 @@ def unique_user(prefix: str) -> str:
 
 class DeduplicationTestClient(IrisClient):
     """Extended client for deduplication testing with message ID control."""
-    
+
     def send_msg_with_id(self, target, msg, msg_id):
         """
         Send a message with a specific message ID.
@@ -60,7 +59,7 @@ class DeduplicationTestClient(IrisClient):
         target_bytes = target.encode('utf-8') if isinstance(target, str) else target
         msg_bytes = msg.encode('utf-8') if isinstance(msg, str) else msg
         msg_id_bytes = msg_id.encode('utf-8') if isinstance(msg_id, str) else msg_id
-        
+
         # TG-4 AUDIT MITIGATION: Use SEND_SEQ (0x07) instead of deprecated 0x02
         # Protocol: 0x07 | TargetLen(16) | Target | SeqNo(64) | MsgLen(16) | Msg
         seq_no = getattr(self, '_seq_counter', 0)
@@ -83,41 +82,41 @@ def test_unique_messages_delivered():
     log("=" * 60)
     log("TEST: Unique Messages All Delivered")
     log("=" * 60)
-    
+
     host = os.environ.get('IRIS_HOST', 'localhost')
     port = int(os.environ.get('IRIS_PORT', '8085'))
-    
+
     sender = None
     receiver = None
-    
+
     try:
         sender = IrisClient(host, port)
         receiver = IrisClient(host, port)
-        
+
         # Use unique usernames to prevent ETS race conditions
         sender_name = unique_user("dedup_snd")
         receiver_name = unique_user("dedup_rcv")
-        
+
         sender.login(sender_name)
         receiver.login(receiver_name)
-        
+
         log("PASS: Connected sender and receiver")
-        
+
         # Send unique messages
         num_messages = 10
         sent_messages = []
-        
+
         for i in range(num_messages):
             msg = f"unique_{uuid.uuid4().hex[:8]}_{i}"
             sender.send_msg(receiver_name, msg)
             sent_messages.append(msg)
-        
+
         log(f"Sent {num_messages} unique messages")
-        
+
         # Receive all messages (poll with recv timeout instead of blind sleep)
         received = []
         receive_errors = []
-        
+
         for attempt in range(num_messages * 2):  # Allow for potential duplicates
             try:
                 msg = receiver.recv_msg(timeout=1.0)
@@ -133,21 +132,21 @@ def test_unique_messages_delivered():
             except Exception as e:
                 receive_errors.append(f"attempt {attempt}: {type(e).__name__} - {e}")
                 break
-        
+
         log(f"Received {len(received)} messages")
-        
+
         if receive_errors:
             for err in receive_errors:
                 log(f"  {err}")
-        
+
         # Check: all unique messages should be received exactly once
         received_set = set(received)
         sent_set = set(sent_messages)
-        
+
         missing = sent_set - received_set
         if missing:
             log(f"WARN: Missing {len(missing)} messages (may be in offline storage)")
-        
+
         if len(received) == len(set(received)):
             log("PASS: No duplicates received")
             return True
@@ -155,7 +154,7 @@ def test_unique_messages_delivered():
             duplicates = len(received) - len(set(received))
             log(f"FAIL: {duplicates} duplicate messages received")
             return False
-            
+
     except socket.error as e:
         log(f"FAIL: Socket error - {e}")
         return False
@@ -186,33 +185,33 @@ def test_retry_storm_handling():
     log("\n" + "=" * 60)
     log("TEST: Retry Storm Handling")
     log("=" * 60)
-    
+
     host = os.environ.get('IRIS_HOST', 'localhost')
     port = int(os.environ.get('IRIS_PORT', '8085'))
-    
+
     sender = None
     receiver = None
-    
+
     try:
         sender = IrisClient(host, port)
         receiver = IrisClient(host, port)
-        
+
         # Use unique usernames to prevent ETS race conditions
         sender_name = unique_user("storm_snd")
         receiver_name = unique_user("storm_rcv")
-        
+
         sender.login(sender_name)
         receiver.login(receiver_name)
-        
+
         log("PASS: Connected clients")
-        
+
         # Send same content multiple times (simulating retries)
         storm_msg = f"storm_{int(time.time())}"
         for i in range(5):
             sender.send_msg(receiver_name, storm_msg)
-        
+
         log("Sent 5 'retry' messages with same content")
-        
+
         # Count received (poll with recv timeout)
         received = []
         for attempt in range(10):
@@ -229,15 +228,15 @@ def test_retry_storm_handling():
             except Exception as e:
                 log(f"  Receive error at {attempt}: {type(e).__name__} - {e}")
                 break
-        
+
         # Note: Without message IDs, these are technically different messages
         # The dedup module works on message IDs, not content
         # So here we're really testing that the system doesn't crash under load
-        
+
         log(f"Received {len(received)} messages")
         log("PASS: System handled rapid sends without issue")
         return True
-        
+
     except socket.error as e:
         log(f"FAIL: Socket error - {e}")
         return False
@@ -271,31 +270,31 @@ def test_dedup_across_reconnects():
     log("\n" + "=" * 60)
     log("TEST: Dedup Across Reconnects")
     log("=" * 60)
-    
+
     host = os.environ.get('IRIS_HOST', 'localhost')
     port = int(os.environ.get('IRIS_PORT', '8085'))
-    
+
     sender = None
     receiver1 = None
     receiver2 = None
-    
+
     try:
         # Use unique usernames to prevent ETS race conditions
         sender_name = unique_user("rcon_snd")
         receiver_name = unique_user("rcon_rcv")
-        
+
         sender = IrisClient(host, port)
         sender.login(sender_name)
-        
+
         # Send message to offline user
         offline_msg = f"offline_{uuid.uuid4().hex[:8]}"
         sender.send_msg(receiver_name, offline_msg)
         log("Sent message to offline user")
-        
+
         # First connect - should get the message
         receiver1 = IrisClient(host, port)
         receiver1.login(receiver_name)
-        
+
         first_msgs = []
         for attempt in range(3):
             try:
@@ -311,15 +310,15 @@ def test_dedup_across_reconnects():
             except Exception as e:
                 log(f"  First connect recv {attempt}: {type(e).__name__} - {e}")
                 break
-        
+
         receiver1.close()
         receiver1 = None
         log(f"First connect: received {len(first_msgs)} messages")
-        
+
         # Second connect - should NOT get duplicates
         receiver2 = IrisClient(host, port)
         receiver2.login(receiver_name)
-        
+
         second_msgs = []
         for attempt in range(3):
             try:
@@ -335,14 +334,14 @@ def test_dedup_across_reconnects():
             except Exception as e:
                 log(f"  Second connect recv {attempt}: {type(e).__name__} - {e}")
                 break
-        
+
         receiver2.close()
         receiver2 = None
         log(f"Second connect: received {len(second_msgs)} messages")
-        
+
         sender.close()
         sender = None
-        
+
         # Check for duplicates across connections
         if offline_msg in first_msgs and offline_msg in second_msgs:
             log("FAIL: Duplicate delivery detected across reconnects")
@@ -350,7 +349,7 @@ def test_dedup_across_reconnects():
         else:
             log("PASS: No duplicate delivery across reconnects")
             return True
-        
+
     except socket.error as e:
         log(f"FAIL: Socket error - {e}")
         return False
@@ -377,22 +376,22 @@ def test_dedup_across_reconnects():
 
 if __name__ == "__main__":
     results = []
-    
+
     results.append(("Unique Messages Delivered", test_unique_messages_delivered()))
     results.append(("Retry Storm Handling", test_retry_storm_handling()))
     results.append(("Dedup Across Reconnects", test_dedup_across_reconnects()))
-    
+
     log("\n" + "=" * 60)
     log("SUMMARY")
     log("=" * 60)
-    
+
     passed = sum(1 for _, r in results if r)
     total = len(results)
-    
+
     for name, result in results:
         status = "PASS" if result else "FAIL"
         log(f"  [{status}] {name}")
-    
+
     log(f"\n{passed}/{total} tests passed")
-    
+
     sys.exit(0 if passed == total else 1)

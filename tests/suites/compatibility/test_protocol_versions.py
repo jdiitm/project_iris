@@ -25,7 +25,6 @@ NO SKIPS, NO FALLBACKS - binary pass/fail only.
 import sys
 import os
 import socket
-import ssl
 import struct
 import time
 from pathlib import Path
@@ -43,7 +42,7 @@ CA_CERT = Path(PROJECT_ROOT) / "certs" / "ca.pem"
 def get_connection(port=8085):
     """Get a TLS socket connection."""
     context = get_verified_ssl_context()
-    
+
     raw_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     raw_sock.settimeout(5.0)
     raw_sock.connect(('localhost', port))
@@ -82,7 +81,7 @@ def build_send_v1(target, message, seq_no=1):
     """
     target_bytes = target.encode('utf-8')
     msg_bytes = message.encode('utf-8')
-    return (b'\x07' + 
+    return (b'\x07' +
             struct.pack('>H', len(target_bytes)) + target_bytes +
             struct.pack('>Q', seq_no) +
             struct.pack('>H', len(msg_bytes)) + msg_bytes)
@@ -119,7 +118,7 @@ def build_send_v2(target, message, priority=0, ttl=86400, seq_no=1):
     target_bytes = target.encode('utf-8')
     msg_bytes = message.encode('utf-8')
     # Base V1 format (using current opcode 0x07)
-    base = (b'\x07' + 
+    base = (b'\x07' +
             struct.pack('>H', len(target_bytes)) + target_bytes +
             struct.pack('>Q', seq_no) +
             struct.pack('>H', len(msg_bytes)) + msg_bytes)
@@ -137,33 +136,33 @@ def test_v1_protocol_works():
     print("=" * 60)
     print("TEST: V1 Protocol Works")
     print("=" * 60)
-    
+
     try:
         s = get_connection()
-        
+
         # Login V1
         send_raw(s, build_login_v1("compat_v1_user"))
         resp = recv_response(s)
-        
+
         if resp and b"LOGIN_OK" in resp:
             print("✓ V1 LOGIN works")
         else:
             print(f"✓ V1 LOGIN accepted (response: {resp})")
-        
+
         # Send V1
         send_raw(s, build_send_v1("some_target", "hello_v1"))
         time.sleep(0.2)
-        
+
         s.close()
-        
+
         # Verify server still running
         s2 = get_connection()
         send_raw(s2, build_login_v1("verify_user"))
         s2.close()
-        
+
         print("✓ V1 protocol fully operational")
         return True
-        
+
     except Exception as e:
         print(f"✗ Error: {e}")
         return False
@@ -174,30 +173,30 @@ def test_unknown_opcode_handled():
     print("\n" + "=" * 60)
     print("TEST: Unknown Opcode Handling")
     print("=" * 60)
-    
+
     try:
         s = get_connection()
         send_raw(s, build_login_v1("opcode_test"))
         recv_response(s, timeout=1)
-        
+
         # Send unknown opcodes (0xF0-0xFF range)
         for opcode in [0xF0, 0xF5, 0xFA, 0xFF]:
             send_raw(s, bytes([opcode]) + b'some_data')
             time.sleep(0.1)
-        
+
         print("✓ Sent 4 unknown opcodes")
-        
+
         s.close()
-        
+
         # Verify server survived
         s2 = get_connection()
         send_raw(s2, build_login_v1("after_unknown"))
         resp = recv_response(s2, timeout=1)
         s2.close()
-        
+
         print("✓ Server survived unknown opcodes")
         return True
-        
+
     except Exception as e:
         print(f"✗ Error: {e}")
         return False
@@ -208,34 +207,34 @@ def test_v2_extended_login():
     print("\n" + "=" * 60)
     print("TEST: V2 Extended Login (Forward Compat)")
     print("=" * 60)
-    
+
     try:
         s = get_connection()
-        
+
         # Send V2 login with extra fields
         send_raw(s, build_login_v2("v2_user", "2.1.0", "ios"))
         resp = recv_response(s, timeout=2)
-        
+
         # Server should either:
         # 1. Accept login (ignoring extra data)
         # 2. Reject cleanly (protocol error)
         # NOT: Crash
-        
+
         if resp:
             print(f"✓ Server responded: {resp[:50]}...")
         else:
             print("✓ Server accepted or silently processed")
-        
+
         s.close()
-        
+
         # Verify server alive
         s2 = get_connection()
         send_raw(s2, build_login_v1("after_v2"))
         s2.close()
-        
+
         print("✓ Server survived V2 extended login")
         return True
-        
+
     except Exception as e:
         print(f"✗ Error: {e}")
         return False
@@ -246,26 +245,26 @@ def test_v2_extended_send():
     print("\n" + "=" * 60)
     print("TEST: V2 Extended Send (Forward Compat)")
     print("=" * 60)
-    
+
     try:
         s = get_connection()
         send_raw(s, build_login_v1("v2_sender"))
         recv_response(s, timeout=1)
-        
+
         # Send V2 message with extra fields
         send_raw(s, build_send_v2("target", "hello_v2", priority=1, ttl=3600))
         time.sleep(0.2)
-        
+
         s.close()
-        
+
         # Verify server alive
         s2 = get_connection()
         send_raw(s2, build_login_v1("after_v2_send"))
         s2.close()
-        
+
         print("✓ Server survived V2 extended send")
         return True
-        
+
     except Exception as e:
         print(f"✗ Error: {e}")
         return False
@@ -276,14 +275,14 @@ def test_truncated_packet():
     print("\n" + "=" * 60)
     print("TEST: Truncated Packet Handling")
     print("=" * 60)
-    
+
     try:
         # Test 1: Truncated login (just opcode)
         s1 = get_connection()
         send_raw(s1, b'\x01')  # Login opcode but no user
         time.sleep(0.5)
         s1.close()
-        
+
         # Test 2: Truncated send (partial header using current opcode 0x07)
         s2 = get_connection()
         send_raw(s2, build_login_v1("trunc_user"))
@@ -291,15 +290,15 @@ def test_truncated_packet():
         send_raw(s2, b'\x07\x00')  # Send opcode + partial length
         time.sleep(0.5)
         s2.close()
-        
+
         # Verify server alive
         s3 = get_connection()
         send_raw(s3, build_login_v1("after_trunc"))
         s3.close()
-        
+
         print("✓ Server handled truncated packets")
         return True
-        
+
     except Exception as e:
         print(f"✗ Error: {e}")
         return False
@@ -310,16 +309,16 @@ def test_empty_fields():
     print("\n" + "=" * 60)
     print("TEST: Empty Field Handling")
     print("=" * 60)
-    
+
     try:
         s = get_connection()
-        
+
         # Empty username login
         send_raw(s, b'\x01')  # Just opcode, no username
         time.sleep(0.2)
-        
+
         s.close()
-        
+
         # Empty message
         s2 = get_connection()
         send_raw(s2, build_login_v1("empty_test"))
@@ -327,15 +326,15 @@ def test_empty_fields():
         send_raw(s2, build_send_v1("target", ""))  # Empty message
         time.sleep(0.2)
         s2.close()
-        
+
         # Verify alive
         s3 = get_connection()
         send_raw(s3, build_login_v1("after_empty"))
         s3.close()
-        
+
         print("✓ Server handled empty fields")
         return True
-        
+
     except Exception as e:
         print(f"✗ Error: {e}")
         return False
@@ -355,13 +354,13 @@ def build_version_negotiate(supported_versions, capabilities=None):
     """
     if capabilities is None:
         capabilities = []
-    
+
     # Opcode 0x00 for version negotiation
     packet = bytes([0x00])
-    
+
     # Number of supported versions (1 byte)
     packet += bytes([len(supported_versions)])
-    
+
     # Each version as 2-byte major.minor
     for version in supported_versions:
         if isinstance(version, tuple):
@@ -369,15 +368,15 @@ def build_version_negotiate(supported_versions, capabilities=None):
         else:
             major, minor = version, 0
         packet += struct.pack('>BB', major, minor)
-    
+
     # Number of capabilities (1 byte)
     packet += bytes([len(capabilities)])
-    
+
     # Each capability as length-prefixed string
     for cap in capabilities:
         cap_bytes = cap.encode('utf-8')
         packet += struct.pack('>B', len(cap_bytes)) + cap_bytes
-    
+
     return packet
 
 
@@ -389,19 +388,19 @@ def parse_version_response(data):
     """
     if not data or len(data) < 3:
         return None
-    
+
     if data[0] != 0x00:
         # Not a version response - might be error or different opcode
         return {'error': f'unexpected opcode: {data[0]:02x}'}
-    
+
     major = data[1]
     minor = data[2]
-    
+
     result = {
         'version': (major, minor),
         'capabilities': []
     }
-    
+
     if len(data) > 3:
         num_caps = data[3]
         offset = 4
@@ -414,7 +413,7 @@ def parse_version_response(data):
                 cap = data[offset:offset + cap_len].decode('utf-8', errors='replace')
                 result['capabilities'].append(cap)
                 offset += cap_len
-    
+
     return result
 
 
@@ -428,17 +427,17 @@ def test_version_negotiation_v1():
     print("\n" + "=" * 60)
     print("TEST: RFC 11.1 Version Negotiation (V1 only)")
     print("=" * 60)
-    
+
     try:
         s = get_connection()
-        
+
         # Send version negotiation offering V1
         packet = build_version_negotiate([(1, 0)], [])
         print(f"  Sending: version negotiate [1.0]")
         send_raw(s, packet)
-        
+
         resp = recv_response(s, timeout=3)
-        
+
         if resp:
             # Try to parse as version response
             parsed = parse_version_response(resp)
@@ -446,7 +445,7 @@ def test_version_negotiation_v1():
                 major, minor = parsed['version']
                 print(f"  Server selected: version {major}.{minor}")
                 print(f"  Capabilities: {parsed.get('capabilities', [])}")
-                
+
                 # V1 should be accepted
                 if major == 1:
                     print("✓ Server correctly negotiated V1")
@@ -465,22 +464,22 @@ def test_version_negotiation_v1():
         else:
             print("  No response to version negotiation")
             print("✓ Server may use implicit V1 (no explicit negotiation)")
-        
+
         s.close()
-        
+
         # Verify server still works with V1 protocol
         s2 = get_connection()
         send_raw(s2, build_login_v1("after_version_neg"))
         resp2 = recv_response(s2, timeout=2)
         s2.close()
-        
+
         if resp2:
             print("✓ Server accepts V1 protocol after negotiation attempt")
             return True
         else:
             print("✗ Server not responding after version negotiation")
             return False
-        
+
     except Exception as e:
         print(f"✗ Error: {e}")
         return False
@@ -496,24 +495,24 @@ def test_version_negotiation_multiple():
     print("\n" + "=" * 60)
     print("TEST: RFC 11.1 Version Negotiation (Multiple Versions)")
     print("=" * 60)
-    
+
     try:
         s = get_connection()
-        
+
         # Offer V1 and V2
         packet = build_version_negotiate([(1, 0), (2, 0)], ["e2ee", "groups"])
         print(f"  Sending: version negotiate [1.0, 2.0] caps=[e2ee, groups]")
         send_raw(s, packet)
-        
+
         resp = recv_response(s, timeout=3)
-        
+
         if resp:
             parsed = parse_version_response(resp)
             if parsed and 'version' in parsed:
                 major, minor = parsed['version']
                 print(f"  Server selected: version {major}.{minor}")
                 print(f"  Server capabilities: {parsed.get('capabilities', [])}")
-                
+
                 # Server should select V1 or V2
                 if major in (1, 2):
                     print(f"✓ Server correctly negotiated V{major}")
@@ -525,18 +524,18 @@ def test_version_negotiation_multiple():
         else:
             print("  No explicit negotiation response")
             print("✓ Server may use implicit version selection")
-        
+
         s.close()
-        
+
         # Verify server still works
         s2 = get_connection()
         send_raw(s2, build_login_v1("multi_version_test"))
         resp2 = recv_response(s2, timeout=2)
         s2.close()
-        
+
         print("✓ Server operational after multi-version negotiation")
         return True
-        
+
     except Exception as e:
         print(f"✗ Error: {e}")
         return False
@@ -555,17 +554,17 @@ def test_unsupported_version():
     print("\n" + "=" * 60)
     print("TEST: RFC 11.1 Unsupported Version Handling")
     print("=" * 60)
-    
+
     try:
         s = get_connection()
-        
+
         # Offer only unsupported version
         packet = build_version_negotiate([(99, 0)], [])
         print(f"  Sending: version negotiate [99.0] (unsupported)")
         send_raw(s, packet)
-        
+
         resp = recv_response(s, timeout=3)
-        
+
         if resp:
             print(f"  Server response: {resp[:30]}")
             if resp[0] == 0x00:
@@ -579,18 +578,18 @@ def test_unsupported_version():
                 print("✓ Server responded (not crashed)")
         else:
             print("  No response (server may close connection for bad version)")
-        
+
         try:
             s.close()
         except:
             pass
-        
+
         # Critical: Server must still be running
         s2 = get_connection()
         send_raw(s2, build_login_v1("after_bad_version"))
         resp2 = recv_response(s2, timeout=2)
         s2.close()
-        
+
         if resp2:
             print("✓ Server survived unsupported version request")
             return True
@@ -602,7 +601,7 @@ def test_unsupported_version():
             s3.close()
             print("✓ Server still accepting connections")
             return True
-        
+
     except Exception as e:
         print(f"✗ Error: {e}")
         return False
@@ -618,23 +617,23 @@ def test_version_downgrade():
     print("\n" + "=" * 60)
     print("TEST: RFC 11.1 Version Downgrade Prevention")
     print("=" * 60)
-    
+
     try:
         s = get_connection()
-        
+
         # Offer V2 first (preferred), then V1
         packet = build_version_negotiate([(2, 0), (1, 0)], [])
         print(f"  Sending: version negotiate [2.0, 1.0] (prefer V2)")
         send_raw(s, packet)
-        
+
         resp = recv_response(s, timeout=3)
-        
+
         if resp:
             parsed = parse_version_response(resp)
             if parsed and 'version' in parsed:
                 major, _ = parsed['version']
                 print(f"  Server selected: V{major}")
-                
+
                 # If server supports V2, it should select V2
                 # If only V1 supported, V1 is acceptable
                 print(f"✓ Server selected version {major}")
@@ -642,18 +641,18 @@ def test_version_downgrade():
                 print("✓ Server responded (implicit version handling)")
         else:
             print("✓ Server uses implicit version (acceptable)")
-        
+
         s.close()
-        
+
         # Verify functionality
         s2 = get_connection()
         send_raw(s2, build_login_v1("downgrade_test"))
         resp2 = recv_response(s2, timeout=2)
         s2.close()
-        
+
         print("✓ Server operational after version negotiation")
         return True
-        
+
     except Exception as e:
         print(f"✗ Error: {e}")
         return False
@@ -665,9 +664,9 @@ def main():
     print(" P2-4: Validating version tolerance")
     print(" RFC 11.1: Version Negotiation")
     print("=" * 60)
-    
+
     results = []
-    
+
     # Original tests
     results.append(("V1 Protocol Works", test_v1_protocol_works()))
     results.append(("Unknown Opcode", test_unknown_opcode_handled()))
@@ -675,31 +674,31 @@ def main():
     results.append(("V2 Extended Send", test_v2_extended_send()))
     results.append(("Truncated Packet", test_truncated_packet()))
     results.append(("Empty Fields", test_empty_fields()))
-    
+
     # RFC 11.1 Version Negotiation tests
     results.append(("RFC 11.1 Version Neg V1", test_version_negotiation_v1()))
     results.append(("RFC 11.1 Version Neg Multi", test_version_negotiation_multiple()))
     results.append(("RFC 11.1 Unsupported Version", test_unsupported_version()))
     results.append(("RFC 11.1 Downgrade Prevention", test_version_downgrade()))
-    
+
     print("\n" + "=" * 60)
     print("SUMMARY")
     print("=" * 60)
-    
+
     passed = sum(1 for _, r in results if r)
     total = len(results)
-    
+
     for name, result in results:
         status = "PASS" if result else "FAIL"
         print(f"  [{status}] {name}")
-    
+
     print(f"\n{passed}/{total} compatibility tests passed")
-    
+
     if passed == total:
         print("\nRFC 11.1 Version Negotiation: COMPLIANT")
     else:
         print("\nRFC 11.1 Version Negotiation: GAPS DETECTED")
-    
+
     return 0 if passed == total else 1
 
 

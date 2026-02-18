@@ -39,8 +39,7 @@ import socket
 import subprocess
 import time
 import struct
-import threading
-from typing import Optional, Tuple, List, Dict
+from typing import Optional, Tuple, Dict
 
 # Determinism
 TEST_SEED = int(os.environ.get("TEST_SEED", 42))
@@ -126,17 +125,17 @@ def iptables_drop_all(container: str) -> bool:
     commands = [
         # Drop all incoming packets
         ["docker", "exec", container, "iptables", "-A", "INPUT", "-j", "DROP"],
-        # Drop all outgoing packets  
+        # Drop all outgoing packets
         ["docker", "exec", container, "iptables", "-A", "OUTPUT", "-j", "DROP"],
     ]
-    
+
     success = True
     for cmd in commands:
         result = subprocess.run(cmd, capture_output=True, timeout=10)
         if result.returncode != 0:
             log(f"  WARN: iptables command failed on {container}: {result.stderr.decode()}")
             success = False
-    
+
     return success
 
 
@@ -148,14 +147,14 @@ def reconnect_edges_to_cores():
     connections to cores. This function explicitly re-establishes those connections.
     """
     log("  Reconnecting edges to cores...")
-    
+
     edge_core_pairs = [
         ("edge-east-1", "core_east_1@coreeast1"),
         ("edge-east-2", "core_east_2@coreeast2"),
         ("edge-west-1", "core_west_1@corewest1"),
         ("edge-west-2", "core_west_2@corewest2"),
     ]
-    
+
     for edge, core_node in edge_core_pairs:
         try:
             # Ping from edge to core to re-establish Erlang distribution connection
@@ -163,7 +162,7 @@ def reconnect_edges_to_cores():
             subprocess.run(cmd, shell=True, capture_output=True, timeout=10)
         except Exception as e:
             log(f"  WARN: Could not reconnect {edge}: {e}")
-    
+
     log("  Edge reconnection complete")
 
 
@@ -175,14 +174,14 @@ def iptables_restore(container: str) -> bool:
         ["docker", "exec", container, "iptables", "-F", "INPUT"],
         ["docker", "exec", container, "iptables", "-F", "OUTPUT"],
     ]
-    
+
     success = True
     for cmd in commands:
         result = subprocess.run(cmd, capture_output=True, timeout=10)
         if result.returncode != 0:
             log(f"  WARN: iptables flush failed on {container}: {result.stderr.decode()}")
             success = False
-    
+
     return success
 
 
@@ -203,7 +202,7 @@ def iptables_partition(container: str, block_from: list) -> bool:
         True if all rules were applied successfully
     """
     success = True
-    
+
     for target in block_from:
         # Get target container's IP addresses (containers may be on multiple networks)
         # Use space separator to handle multi-network containers
@@ -215,15 +214,15 @@ def iptables_partition(container: str, block_from: list) -> bool:
             log(f"  WARN: Could not get IP for {target}")
             success = False
             continue
-        
+
         # Split the space-separated IPs and filter empty strings
         target_ips = [ip for ip in result.stdout.decode().strip().split() if ip]
-        
+
         if not target_ips:
             log(f"  WARN: No IP found for {target}")
             success = False
             continue
-        
+
         # Block traffic to/from each IP of the target
         for ip in target_ips:
             if not ip:
@@ -234,13 +233,13 @@ def iptables_partition(container: str, block_from: list) -> bool:
                 # Block outgoing to target
                 ["docker", "exec", container, "iptables", "-A", "OUTPUT", "-d", ip, "-j", "DROP"],
             ]
-            
+
             for cmd in commands:
                 result = subprocess.run(cmd, capture_output=True, timeout=10)
                 if result.returncode != 0:
                     log(f"  WARN: iptables rule failed: {' '.join(cmd)}: {result.stderr.decode()}")
                     success = False
-    
+
     return success
 
 
@@ -255,19 +254,19 @@ def check_partition_guard(container: str, probe_from: str = None) -> Dict:
                    Use a different container when target is partitioned
     """
     import random
-    
+
     # Get the node name for RPC
     node_name = CORE_NODES.get(container, {}).get("node", "")
     if not node_name:
         return {"error": "unknown_container"}
-    
+
     # If no probe_from specified, try to use a non-partitioned container
     if probe_from is None:
         # Default to querying from the same container
         probe_from = container
-    
+
     probe_id = random.randint(10000, 99999)
-    
+
     # Use RPC to query the actual running node's partition guard status
     cmd = f"""erl -noshell -sname probe{probe_id} -setcookie iris_secret -eval '
         case rpc:call(\\'{node_name}\\', iris_partition_guard, get_status, [], 5000) of
@@ -291,16 +290,16 @@ def check_partition_guard(container: str, probe_from: str = None) -> Dict:
         end,
         halt(0).'
     """
-    
+
     try:
         result = subprocess.run(
             ["docker", "exec", probe_from, "sh", "-c", cmd],
             capture_output=True, text=True, timeout=15
         )
-        
+
         output = result.stdout.strip()
         status = {}
-        
+
         # Parse output: mode=normal safe=true visible=6 expected=6
         for part in output.split():
             if "=" in part:
@@ -313,7 +312,7 @@ def check_partition_guard(container: str, probe_from: str = None) -> Dict:
                     status[key] = int(val)
                 else:
                     status[key] = val
-        
+
         return status if status else {"raw": output, "stderr": result.stderr}
     except Exception as e:
         return {"error": str(e)}
@@ -338,7 +337,7 @@ def connect_and_login_with_retry(port: int, username: str, max_retries: int = 3)
     Used after partition heal when edge nodes may need time to re-establish connectivity.
     """
     from tests.suites.chaos_dist.utils import tls_connect_and_login_with_retry
-    return tls_connect_and_login_with_retry(SERVER_HOST, port, username, 
+    return tls_connect_and_login_with_retry(SERVER_HOST, port, username,
                                             timeout=TIMEOUT, max_retries=max_retries)
 
 
@@ -356,11 +355,11 @@ def send_message(sock: socket.socket, target: str, content: str) -> Tuple[bool, 
     """
     target_bytes = target.encode()
     msg_bytes = content.encode()
-    
+
     # Increment sequence counter
     _seq_counter[0] += 1
     seq_no = _seq_counter[0]
-    
+
     # Protocol: 0x07 | TargetLen(16) | Target | SeqNo(64) | MsgLen(16) | Msg
     packet = (
         bytes([0x07]) +
@@ -368,10 +367,10 @@ def send_message(sock: socket.socket, target: str, content: str) -> Tuple[bool, 
         struct.pack('>Q', seq_no) +
         struct.pack('>H', len(msg_bytes)) + msg_bytes
     )
-    
+
     try:
         sock.sendall(packet)
-        
+
         # Brief check for immediate error response (very short timeout)
         # Messages are fire-and-forget; we only check for immediate rejection
         sock.settimeout(0.1)
@@ -386,7 +385,7 @@ def send_message(sock: socket.socket, target: str, content: str) -> Tuple[bool, 
         except socket.timeout:
             # No immediate error - message was accepted (fire-and-forget)
             return True, "accepted"
-        
+
         return True, "accepted"
     except socket.timeout:
         return False, "timeout"
@@ -422,26 +421,26 @@ def test_minority_partition_write_rejection() -> bool:
     log("\n" + "=" * 60)
     log("Test 1: Minority Partition Write Rejection")
     log("=" * 60)
-    
+
     test_id = f"minority_{int(time.time())}"
-    
+
     # Phase 1: Create partition - isolate West (2 nodes)
     log("\nPhase 1: Creating minority partition (isolating core-west-1, core-west-2)...")
-    
+
     for container in MINORITY_CONTAINERS:
         if not iptables_drop_all(container):
             log(f"  WARN: Failed to partition {container}")
-    
+
     log("  Partition created. Polling for detection...")
     # AUDIT P4 FIX: Poll partition guard instead of blind sleep
     wait_for_condition(
         lambda: any(check_partition_guard(c).get("safe") == False for c in MAJORITY_CONTAINERS[:2]),
         timeout_seconds=15, poll_interval=2.0
     )
-    
+
     # Phase 2: Check partition guard status on minority
     log("\nPhase 2: Checking partition guard on minority nodes...")
-    
+
     minority_safe = []
     for container in MINORITY_CONTAINERS:
         status = check_partition_guard(container)
@@ -451,14 +450,14 @@ def test_minority_partition_write_rejection() -> bool:
         expected = status.get("expected", "?")
         log(f"  {container}: mode={mode}, safe={safe}, visible={visible}/{expected}")
         minority_safe.append(safe)
-    
+
     # Phase 3: Attempt write on minority (via edge connected to West)
     log("\nPhase 3: Attempting write on minority partition...")
-    
+
     # The edge-west-1 connects to core-west-1
     # During partition, this should fail or be rejected
     west_sock = connect_and_login(EDGE_WEST["port"], f"west_user_{test_id}")
-    
+
     write_accepted = False
     if west_sock:
         acked, info = send_message(west_sock, f"target_{test_id}", f"minority_write_{test_id}")
@@ -467,28 +466,28 @@ def test_minority_partition_write_rejection() -> bool:
         west_sock.close()
     else:
         log("  Could not connect to West edge (expected if fully partitioned)")
-    
+
     # Phase 4: Restore connectivity
     log("\nPhase 4: Restoring connectivity...")
     for container in MINORITY_CONTAINERS:
         iptables_restore(container)
-    
+
     time.sleep(2)  # Brief settle for iptables flush
-    
+
     # Evaluation
     log("\nEvaluation:")
-    
+
     # PASS conditions:
     # 1. Partition guard on minority shows safe_for_writes=false, OR
     # 2. Write was rejected/timed out, OR
     # 3. We couldn't query partition guard (node is isolated) - this is expected behavior
     #    The write may have been "accepted" by the edge but will fail during replication
-    
+
     minority_detected_partition = any(s == False for s in minority_safe)
     write_rejected = not write_accepted
     # Check if partition guard was unreachable (expected when node is partitioned)
     partition_guard_unreachable = all(s == "unknown" for s in minority_safe)
-    
+
     if minority_detected_partition:
         log("  PASS: Minority nodes detected partition (safe_for_writes=false)")
         return True
@@ -515,24 +514,24 @@ def test_majority_partition_write_success() -> bool:
     log("\n" + "=" * 60)
     log("Test 2: Majority Partition Write Success")
     log("=" * 60)
-    
+
     test_id = f"majority_{int(time.time())}"
-    
+
     # Phase 1: Create partition - isolate West (2 nodes)
     log("\nPhase 1: Creating minority partition (isolating core-west-1, core-west-2)...")
-    
+
     for container in MINORITY_CONTAINERS:
         iptables_drop_all(container)
-    
+
     log("  Partition created. Polling for detection...")
     wait_for_condition(
         lambda: any(check_partition_guard(c).get("safe") == False for c in MAJORITY_CONTAINERS[:2]),
         timeout_seconds=15, poll_interval=2.0
     )
-    
+
     # Phase 2: Check partition guard on majority
     log("\nPhase 2: Checking partition guard on majority nodes...")
-    
+
     majority_safe = []
     for container in MAJORITY_CONTAINERS[:2]:  # Just check a couple
         status = check_partition_guard(container)
@@ -541,12 +540,12 @@ def test_majority_partition_write_success() -> bool:
         visible = status.get("visible", "?")
         log(f"  {container}: mode={mode}, safe={safe}, visible={visible}")
         majority_safe.append(safe)
-    
+
     # Phase 3: Attempt write on majority (via edge connected to East)
     log("\nPhase 3: Attempting write on majority partition...")
-    
+
     east_sock = connect_and_login(EDGE_EAST["port"], f"east_user_{test_id}")
-    
+
     write_accepted = False
     if east_sock:
         acked, info = send_message(east_sock, f"target_{test_id}", f"majority_write_{test_id}")
@@ -555,17 +554,17 @@ def test_majority_partition_write_success() -> bool:
         east_sock.close()
     else:
         log("  FAIL: Could not connect to East edge")
-    
+
     # Phase 4: Restore connectivity
     log("\nPhase 4: Restoring connectivity...")
     for container in MINORITY_CONTAINERS:
         iptables_restore(container)
-    
+
     time.sleep(2)  # Brief settle for iptables flush
-    
+
     # Evaluation
     log("\nEvaluation:")
-    
+
     if write_accepted:
         log("  PASS: Majority accepted write during partition")
         return True
@@ -590,37 +589,37 @@ def test_automatic_convergence() -> bool:
     log("\n" + "=" * 60)
     log("Test 3: Automatic Convergence on Heal")
     log("=" * 60)
-    
+
     test_id = f"converge_{int(time.time())}"
-    
+
     # Phase 1: Create partition
     log("\nPhase 1: Creating partition...")
-    
+
     for container in MINORITY_CONTAINERS:
         iptables_drop_all(container)
-    
+
     log("  Partition active. Polling for detection...")
     wait_for_condition(
         lambda: any(check_partition_guard(c).get("safe") == False for c in MAJORITY_CONTAINERS[:2]),
         timeout_seconds=15, poll_interval=2.0
     )
-    
+
     # Phase 2: Heal partition
     log("\nPhase 2: Healing partition...")
-    
+
     for container in MINORITY_CONTAINERS:
         iptables_restore(container)
-    
+
     # Wait for QUORUM_RECOVERY_DELAY_MS (10s) + margin
     log("  Polling for automatic convergence...")
     wait_for_condition(
         lambda: all(check_partition_guard(c).get("safe", False) for c in MINORITY_CONTAINERS + MAJORITY_CONTAINERS[:2]),
         timeout_seconds=30, poll_interval=2.0
     )
-    
+
     # Phase 3: Check all nodes have rejoined
     log("\nPhase 3: Checking cluster convergence...")
-    
+
     all_healthy = True
     for container in MINORITY_CONTAINERS + MAJORITY_CONTAINERS[:2]:
         status = check_partition_guard(container)
@@ -628,16 +627,16 @@ def test_automatic_convergence() -> bool:
         mode = status.get("mode", "unknown")
         visible = status.get("visible", 0)
         log(f"  {container}: mode={mode}, safe={safe}, visible={visible}")
-        
+
         if not safe or mode == "safe_mode":
             all_healthy = False
-    
+
     # Phase 4: Verify writes work on both sides (send cross-partition messages)
     log("\nPhase 4: Sending cross-partition test messages...")
-    
+
     east_write_ok = False
     west_write_ok = False
-    
+
     # Login as senders and targets on both sides
     # East sender -> West target
     east_sender = connect_and_login(EDGE_EAST["port"], f"east_sender_{test_id}")
@@ -646,7 +645,7 @@ def test_automatic_convergence() -> bool:
         east_write_ok = acked
         east_sender.close()
     log(f"  East->West message: {'PASS' if east_write_ok else 'FAIL'}")
-    
+
     # West sender -> East target
     west_sender = connect_and_login(EDGE_WEST["port"], f"west_sender_{test_id}")
     if west_sender:
@@ -654,16 +653,16 @@ def test_automatic_convergence() -> bool:
         west_write_ok = acked
         west_sender.close()
     log(f"  West->East message: {'PASS' if west_write_ok else 'FAIL'}")
-    
+
     # Phase 5: Verify cross-partition message delivery (RFC Section 7.2 data consistency)
     log("\nPhase 5: Verifying cross-partition message delivery...")
-    
+
     # Brief wait for message propagation through Mnesia
     time.sleep(3)  # Reduced: messages propagate within 1-2s after convergence
-    
+
     east_received = False
     west_received = False
-    
+
     # Login as the receivers to check for offline messages
     # NOTE: Offline messages are delivered AUTOMATICALLY after LOGIN_OK
     # No need to send opcode 0x04 (that's batch_send, not catchup)
@@ -681,7 +680,7 @@ def test_automatic_convergence() -> bool:
                     response += chunk
             except socket.timeout:
                 pass  # Expected - no more data
-            
+
             # Check if the message from West arrived
             if f"west_to_east_{test_id}".encode() in response:
                 east_received = True
@@ -692,7 +691,7 @@ def test_automatic_convergence() -> bool:
             log(f"  East receiver error: {e}")
         finally:
             east_receiver.close()
-    
+
     west_receiver = connect_and_login(EDGE_WEST["port"], f"west_receiver_{test_id}")
     if west_receiver:
         try:
@@ -707,7 +706,7 @@ def test_automatic_convergence() -> bool:
                     response += chunk
             except socket.timeout:
                 pass  # Expected - no more data
-            
+
             # Check if the message from East arrived
             if f"east_to_west_{test_id}".encode() in response:
                 west_received = True
@@ -718,13 +717,13 @@ def test_automatic_convergence() -> bool:
             log(f"  West receiver error: {e}")
         finally:
             west_receiver.close()
-    
+
     # Evaluation
     log("\nEvaluation:")
-    
+
     write_success = east_write_ok and west_write_ok
     data_consistency = east_received and west_received
-    
+
     if write_success and data_consistency:
         log("  PASS: Cluster converged, writes succeed, cross-partition data synced")
         log("  RFC Section 7.2: DATA CONSISTENCY VERIFIED")
@@ -771,35 +770,35 @@ def test_partition_fifo_ordering() -> bool:
     log("\n" + "=" * 60)
     log("Test: Partition FIFO Ordering (RFC Section 7.2)")
     log("=" * 60)
-    
+
     test_id = f"fifo_{int(time.time())}"
     NUM_MESSAGES = 50
-    
+
     sender_name = f"fifo_sender_{test_id}"
     receiver_name = f"fifo_receiver_{test_id}"
-    
+
     # Phase 1: Create partition
     log("\nPhase 1: Creating partition (isolating West region)...")
-    
+
     for container in MINORITY_CONTAINERS:
         if not iptables_drop_all(container):
             log(f"  WARN: Failed to partition {container}")
-    
+
     log("  Partition created. Polling for detection...")
     wait_for_condition(
         lambda: any(check_partition_guard(c).get("safe") == False for c in MAJORITY_CONTAINERS[:2]),
         timeout_seconds=15, poll_interval=2.0
     )
-    
+
     # Phase 2: Send numbered messages from majority (East) to minority user
     log(f"\nPhase 2: Sending {NUM_MESSAGES} numbered messages during partition...")
-    
+
     sender = connect_and_login(EDGE_EAST["port"], sender_name)
     if not sender:
         log("  FAIL: Could not connect sender to majority")
         iptables_restore_all()
         return False
-    
+
     sent_messages = []
     for i in range(NUM_MESSAGES):
         msg_content = f"FIFO_MSG_{test_id}_{i:04d}"  # Zero-padded for easy sorting
@@ -808,46 +807,46 @@ def test_partition_fifo_ordering() -> bool:
             sent_messages.append(msg_content)
         else:
             log(f"  WARN: Message {i} not accepted")
-    
+
     sender.close()
     log(f"  Sent {len(sent_messages)} messages")
-    
+
     if len(sent_messages) < NUM_MESSAGES * 0.9:
         log(f"  FAIL: Too few messages accepted ({len(sent_messages)}/{NUM_MESSAGES})")
         iptables_restore_all()
         return False
-    
+
     # Phase 3: Heal partition
     log("\nPhase 3: Healing partition...")
-    
+
     for container in MINORITY_CONTAINERS:
         iptables_restore(container)
-    
+
     # CRITICAL: Reconnect edges to cores after partition heal
     # Without this, edges may not be able to reach cores that have the messages
     time.sleep(2)  # Brief wait for iptables rules to take effect
     reconnect_edges_to_cores()
-    
+
     log("  Polling for convergence...")
     # AUDIT P4 FIX: Poll for convergence instead of blind 45s sleep
     wait_for_condition(
         lambda: all(check_partition_guard(c).get("safe", False) for c in MINORITY_CONTAINERS + MAJORITY_CONTAINERS[:2]),
         timeout_seconds=60, poll_interval=3.0
     )
-    
+
     # Phase 4: Connect as receiver and fetch messages
     log("\nPhase 4: Fetching messages as receiver...")
-    
+
     # Use retry logic - after partition heal, edge nodes may need time to reconnect
     receiver = connect_and_login_with_retry(EDGE_EAST["port"], receiver_name, max_retries=5)
     if not receiver:
         # Try West edge with retries
         receiver = connect_and_login_with_retry(EDGE_WEST["port"], receiver_name, max_retries=5)
-    
+
     if not receiver:
         log("  FAIL: Could not connect as receiver after multiple retries")
         return False
-    
+
     # Offline messages are delivered AUTOMATICALLY after LOGIN_OK
     # No need to send opcode 0x04 (that's batch_send, not catchup)
     received_messages = []
@@ -856,7 +855,7 @@ def test_partition_fifo_ordering() -> bool:
         # The server may send messages in chunks with gaps between them.
         # A single 20s timeout would miss later chunks after the first gap.
         receiver.settimeout(5.0)
-        
+
         all_data = b""
         start_time = time.time()
         consecutive_timeouts = 0
@@ -872,21 +871,21 @@ def test_partition_fifo_ordering() -> bool:
                 consecutive_timeouts += 1
                 if consecutive_timeouts >= MAX_CONSECUTIVE_TIMEOUTS:
                     break  # No more data coming
-        
+
         log(f"  Received {len(all_data)} bytes of data")
-        
+
         # Extract FIFO messages from received data
         for msg in sent_messages:
             if msg.encode() in all_data:
                 received_messages.append(msg)
-        
+
     except Exception as e:
         log(f"  Error fetching messages: {e}")
     finally:
         receiver.close()
-    
+
     log(f"  Received {len(received_messages)}/{len(sent_messages)} messages")
-    
+
     # During iptables partition scenarios, significant message loss is EXPECTED.
     # When IRIS_MULTIMASTER_DURABILITY=true, sync_transaction must replicate to
     # majority nodes. With West partitioned via iptables (TCP timeout, not instant
@@ -900,10 +899,10 @@ def test_partition_fifo_ordering() -> bool:
     if len(received_messages) < MIN_MESSAGES_FOR_ORDERING:
         log(f"  FAIL: Too few messages for FIFO verification ({len(received_messages)}/{MIN_MESSAGES_FOR_ORDERING} minimum)")
         return False
-    
+
     # Phase 5: Verify FIFO ordering
     log("\nPhase 5: Verifying FIFO ordering...")
-    
+
     # Extract sequence numbers from received messages
     received_seqs = []
     for msg in received_messages:
@@ -913,18 +912,18 @@ def test_partition_fifo_ordering() -> bool:
             received_seqs.append(seq)
         except ValueError:
             continue
-    
+
     # Check if received in order
     is_ordered = True
     out_of_order_count = 0
     prev_seq = -1
-    
+
     for seq in received_seqs:
         if seq < prev_seq:
             is_ordered = False
             out_of_order_count += 1
         prev_seq = seq
-    
+
     if is_ordered:
         delivery_rate = len(received_messages) / len(sent_messages) * 100
         log(f"  PASS: {len(received_messages)}/{len(sent_messages)} messages received ({delivery_rate:.0f}%), all in FIFO order")
@@ -933,7 +932,7 @@ def test_partition_fifo_ordering() -> bool:
     else:
         log(f"  FAIL: {out_of_order_count} messages out of order")
         log("  RFC Section 7.2 FIFO ordering VIOLATED")
-        
+
         # Show first few out-of-order occurrences
         prev = -1
         shown = 0
@@ -942,7 +941,7 @@ def test_partition_fifo_ordering() -> bool:
                 log(f"    Position {i}: expected >{prev}, got {seq}")
                 shown += 1
             prev = seq
-        
+
         return False
 
 
@@ -971,13 +970,13 @@ def test_outbox_queue_ttl_simulation():
     """
     log("\n=== Test: Outbox Queue TTL Configuration (RFC 7.2) ===")
     log("  RFC 7.2: Outbox Queue TTL = 7 days")
-    
+
     test_id = int(time.time())
-    
+
     try:
         # Step 1: Check TTL configuration in Erlang
         log("\n  Step 1: Checking TTL configuration...")
-        
+
         check_cmd = '''
         docker exec core-east-1 erl -pa /app/ebin -noshell -eval '
             %% Check outbox queue TTL configuration
@@ -1005,34 +1004,34 @@ def test_outbox_queue_ttl_simulation():
             halt(0).
         ' 2>/dev/null
         '''
-        
+
         result = subprocess.run(
             ["bash", "-c", check_cmd],
             capture_output=True,
             text=True,
             timeout=30
         )
-        
+
         if "OUTBOX_TTL_OK" in result.stdout:
             log(f"    TTL configured correctly: {result.stdout.strip()}")
         elif "OUTBOX_TTL_SHORT" in result.stdout:
             log(f"    Warning: TTL may be short: {result.stdout.strip()}")
         else:
             log("    TTL config check inconclusive (may use default)")
-        
+
         # Step 2: Create partition and queue messages
         log("\n  Step 2: Creating partition to test queue behavior...")
-        
+
         # Isolate one container
         iptables_partition("core-west-1", MAJORITY_CONTAINERS)
         time.sleep(3)  # Brief settle for iptables rules
-        
+
         # Try to send message to user on partitioned node
         sender = connect_and_login(EDGE_EAST["port"], f"ttl_sender_{test_id}")
         if sender:
             msg = f"TTL_TEST_MSG_{test_id}"
             target = f"ttl_receiver_{test_id}"
-            
+
             # Send message (should be queued since target region partitioned)
             msg_bytes = target.encode() + b'\x00' + msg.encode()
             packet = bytes([0x07]) + struct.pack(">H", len(target)) + target.encode() + struct.pack(">Q", test_id) + struct.pack(">H", len(msg)) + msg.encode()
@@ -1040,11 +1039,11 @@ def test_outbox_queue_ttl_simulation():
             time.sleep(1)
             sender.close()
             log(f"    Sent message to partitioned region: {msg}")
-        
+
         # Step 3: Heal partition
         log("\n  Step 3: Healing partition...")
         iptables_restore("core-west-1")
-        
+
         # CRITICAL: Reconnect edges to cores after partition heal
         time.sleep(2)  # Brief wait for iptables rules to take effect
         reconnect_edges_to_cores()
@@ -1053,18 +1052,18 @@ def test_outbox_queue_ttl_simulation():
             lambda: check_partition_guard("core-west-1").get("safe", False),
             timeout_seconds=20, poll_interval=2.0
         )
-        
+
         # Step 4: Verify message was queued and delivered
         log("\n  Step 4: Verifying queued message delivery...")
-        
+
         # Connect as receiver and verify delivery (use retry logic after partition)
         receiver = connect_and_login_with_retry(EDGE_WEST["port"], f"ttl_receiver_{test_id}", max_retries=5)
         message_delivered = False
-        
+
         if receiver:
             receiver.settimeout(10.0)  # Longer timeout for post-partition delivery
             all_data = b""
-            
+
             try:
                 while True:
                     try:
@@ -1076,18 +1075,18 @@ def test_outbox_queue_ttl_simulation():
                         break
             except Exception:
                 pass
-            
+
             if f"TTL_TEST_MSG_{test_id}".encode() in all_data:
                 log("    Message delivered after partition heal")
                 log("    Outbox queue working correctly")
                 message_delivered = True
             else:
                 log(f"    Message NOT found in received data ({len(all_data)} bytes)")
-            
+
             receiver.close()
         else:
             log("    Could not connect receiver to verify delivery")
-        
+
         # FIX: Weak assertion hardening - require actual message delivery
         if message_delivered:
             log("\n  PASS: Outbox queue TTL test completed")
@@ -1098,7 +1097,7 @@ def test_outbox_queue_ttl_simulation():
             log("\n  FAIL: Message was NOT delivered after partition heal")
             log("        Outbox queue may not be storing/delivering messages correctly")
             return False
-        
+
     except Exception as e:
         log(f"  Error: {e}")
         return False
@@ -1120,15 +1119,15 @@ def test_outbox_queue_overflow_backpressure():
     """
     log("\n=== Test: Outbox Queue Overflow Backpressure (RFC 7.2) ===")
     log("  RFC 7.2: Overflow -> Reject new messages (backpressure)")
-    
+
     test_id = int(time.time())
-    
+
     try:
         # Step 1: Create partition
         log("\n  Step 1: Creating partition...")
         iptables_partition("core-west-1", MAJORITY_CONTAINERS)
         iptables_partition("core-west-2", MAJORITY_CONTAINERS)
-        
+
         # CRITICAL: Wait for Mnesia to detect the partitioned nodes as down.
         # With multimaster_durability=true, sync_transaction replicates to ALL
         # disc_copies nodes. If west nodes are still in running_db_nodes, each
@@ -1148,7 +1147,7 @@ def test_outbox_queue_overflow_backpressure():
             io:format(\\"~p\\", [WestDown]),
             halt(0).
         "'''.format(int(time.time()) % 100000)
-        
+
         for attempt in range(30):
             try:
                 result = subprocess.run(
@@ -1163,9 +1162,9 @@ def test_outbox_queue_overflow_backpressure():
             time.sleep(2)
         else:
             log("    WARN: Mnesia may not have fully detected partition, proceeding anyway")
-        
+
         time.sleep(2)  # Extra settle
-        
+
         # Step 2: Send messages to test outbox queue behavior.
         # Now that Mnesia has excluded west nodes, writes are fast.
         # With multimaster_durability=true, sync_transaction replicates to all
@@ -1173,17 +1172,17 @@ def test_outbox_queue_overflow_backpressure():
         # a partition window. 200 messages gives meaningful volume (>100 threshold)
         # while allowing >10% delivery rate from actual server throughput.
         log("\n  Step 2: Sending messages to fill outbox queue...")
-        
+
         sender = connect_and_login(EDGE_EAST["port"], f"overflow_sender_{test_id}")
         if not sender:
             log("  Could not connect sender")
             return False
-        
+
         target = f"overflow_receiver_{test_id}"
         sent_count = 0
         rejected_count = 0
         NUM_MSGS = 200
-        
+
         for i in range(NUM_MSGS):
             msg = f"OVERFLOW_MSG_{test_id}_{i:04d}"
             success, info = send_message(sender, target, msg)
@@ -1194,18 +1193,18 @@ def test_outbox_queue_overflow_backpressure():
                 if info == "connection_broken" or info == "connection_reset":
                     log(f"    Connection lost at message {i}: {info}")
                     break
-            
+
             if i % 50 == 0:
                 log(f"    Sent {i+1} messages...")
-        
+
         sender.close()
-        
+
         log(f"    Total sent: {sent_count}")
         log(f"    Explicit rejections: {rejected_count}")
-        
+
         # Step 3: Check queue status
         log("\n  Step 3: Checking queue status...")
-        
+
         queue_check = '''
         docker exec core-east-1 erl -pa /app/ebin -noshell -eval '
             %% Check outbox queue size
@@ -1225,46 +1224,46 @@ def test_outbox_queue_overflow_backpressure():
             halt(0).
         ' 2>/dev/null
         '''
-        
+
         result = subprocess.run(
             ["bash", "-c", queue_check],
             capture_output=True,
             text=True,
             timeout=30
         )
-        
+
         if result.stdout:
             log(f"    Queue status: {result.stdout.strip()}")
-        
+
         # Step 4: Heal partition (same pattern as proven FIFO test)
         log("\n  Step 4: Healing partition...")
         iptables_restore("core-west-1")
         iptables_restore("core-west-2")
-        
+
         # Reconnect edges to cores after partition heal (critical for delivery)
         time.sleep(2)
         reconnect_edges_to_cores()
-        
+
         log("    Polling for convergence...")
         wait_for_condition(
             lambda: all(check_partition_guard(c).get("safe", False)
                        for c in MINORITY_CONTAINERS + MAJORITY_CONTAINERS[:2]),
             timeout_seconds=60, poll_interval=3.0
         )
-        
+
         # Step 5: Verify message delivery
         # Connect to EAST edge where the messages were originally stored.
         # Use retry loop: messages may still be routing through fallback paths
         # after partition heal. Offline messages are NOT deleted on retrieval,
         # so re-connecting returns previous + newly stored messages.
         log("\n  Step 5: Verifying message delivery after heal...")
-        
+
         received_count = 0
         best_data = b""
-        
+
         for fetch_attempt in range(3):
             receiver = connect_and_login_with_retry(EDGE_EAST["port"], target, max_retries=5)
-            
+
             if receiver:
                 receiver.settimeout(5.0)
                 all_data = b""
@@ -1282,48 +1281,48 @@ def test_outbox_queue_overflow_backpressure():
                         consecutive_timeouts += 1
                         if consecutive_timeouts >= MAX_CONSECUTIVE_TIMEOUTS:
                             break
-                
+
                 receiver.close()
-                
+
                 # Count received messages
                 attempt_count = 0
                 for i in range(NUM_MSGS):
                     if f"OVERFLOW_MSG_{test_id}_{i:04d}".encode() in all_data:
                         attempt_count += 1
-                
+
                 if attempt_count > received_count:
                     received_count = attempt_count
                     best_data = all_data
-                
+
                 if received_count >= sent_count * 0.05:
                     break
-            
+
             if fetch_attempt < 2:
                 time.sleep(5)
-        
+
         log(f"    Received {len(best_data)} bytes of data")
         log(f"    Received after heal: {received_count}/{sent_count}")
-        
+
         # Backpressure test passes if:
         # - We were able to send many messages (queue accepted them)
         # - Messages were delivered after heal (at least 10% delivery rate)
         # - OR explicit rejections occurred (backpressure working)
         #
         # FIX: Weak assertion hardening - require actual message delivery, not just sends
-        
+
         if sent_count < 100:
             log("\n  FAIL: Could not send enough messages to test overflow")
             return False
-        
+
         # Calculate delivery rate
         delivery_rate = received_count / max(sent_count, 1) * 100
         log(f"    Delivery rate: {delivery_rate:.1f}%")
-        
+
         # Require minimum 5% delivery rate after partition heal
         # This validates that queue actually stores and delivers messages.
         # In CI (Docker-in-Docker), observed rates are 9-15%; 5% gives margin.
         MIN_DELIVERY_RATE = 5.0
-        
+
         if received_count == 0:
             log("\n  FAIL: Zero messages delivered after partition heal")
             log("        Outbox queue is NOT working correctly")
@@ -1338,7 +1337,7 @@ def test_outbox_queue_overflow_backpressure():
             log(f"        Delivered {received_count}/{sent_count} messages ({delivery_rate:.1f}%)")
             log("        Backpressure mechanism operational")
             return True
-        
+
     except Exception as e:
         log(f"  Error: {e}")
         return False
@@ -1357,31 +1356,31 @@ def main():
     print("=" * 70)
     print("Tests TRUE netsplit using iptables (processes running but blocked)")
     print("")
-    
+
     # Prerequisites
     if not docker_available():
         print("SKIP:INFRA - Docker not available")
         return 2
-    
+
     if not cluster_running():
         print("SKIP:INFRA - Docker cluster not running. Start with: make cluster-up")
         return 2
-    
+
     # Check iptables capability
     if not container_has_iptables("core-west-1"):
         print("SKIP:INFRA - Containers lack iptables capability")
         print("  Add --cap-add=NET_ADMIN to docker-compose")
         return 2
-    
+
     # Ensure clean state before tests
     log("Ensuring clean state (flushing any existing iptables rules)...")
     for container in MINORITY_CONTAINERS + MAJORITY_CONTAINERS:
         iptables_restore(container)
     time.sleep(3)  # Brief settle for iptables flush
-    
+
     # Run tests
     results = []
-    
+
     try:
         results.append(("Minority Partition Write Rejection", test_minority_partition_write_rejection()))
         results.append(("Majority Partition Write Success", test_majority_partition_write_success()))
@@ -1394,15 +1393,15 @@ def main():
         log("\nCleaning up: restoring all network connectivity...")
         for container in MINORITY_CONTAINERS + MAJORITY_CONTAINERS:
             iptables_restore(container)
-    
+
     # Summary
     print("\n" + "=" * 70)
     print("SUMMARY")
     print("=" * 70)
-    
+
     passed = 0
     failed = 0
-    
+
     for name, result in results:
         status = "PASS" if result else "FAIL"
         print(f"  [{status}] {name}")
@@ -1410,9 +1409,9 @@ def main():
             passed += 1
         else:
             failed += 1
-    
+
     print(f"\nTotal: {passed}/{len(results)} passed")
-    
+
     if failed == 0:
         print("\nPASS: All network partition tests passed")
         print("  RFC-001 Section 7.2: COMPLIANT")

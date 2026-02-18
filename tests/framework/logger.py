@@ -7,7 +7,6 @@ No external dependencies - pure Python.
 
 import json
 import os
-import sys
 import time
 from datetime import datetime
 from pathlib import Path
@@ -41,7 +40,7 @@ class TestLogger:
     Writes JSON Lines format to file with optional console output.
     Thread-safe.
     """
-    
+
     def __init__(
         self,
         test_id: str,
@@ -56,7 +55,7 @@ class TestLogger:
         self.console_output = console_output
         self._lock = threading.Lock()
         self._start_time = time.monotonic_ns()
-        
+
         # Determine output directory
         if output_dir:
             self.output_dir = Path(output_dir)
@@ -66,17 +65,17 @@ class TestLogger:
                 self.output_dir = Path(artifacts_env)
             else:
                 self.output_dir = Path(__file__).parent.parent / "artifacts" / "logs"
-        
+
         self.output_dir.mkdir(parents=True, exist_ok=True)
-        
+
         # Create log file
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         self.log_file = self.output_dir / f"{test_id}_{timestamp}.jsonl"
         self._file_handle = open(self.log_file, "w")
-        
+
         # Log initialization
         self.info("test_start", f"Test {test_id} started")
-    
+
     def _create_event(
         self,
         event_type: str,
@@ -94,34 +93,34 @@ class TestLogger:
             message=message,
             **kwargs
         )
-    
+
     def _write(self, event: LogEvent):
         """Write event to log file and optionally console."""
         event_dict = asdict(event)
         # Remove None values for cleaner output
         event_dict = {k: v for k, v in event_dict.items() if v is not None}
-        
+
         json_line = json.dumps(event_dict, separators=(',', ':'))
-        
+
         with self._lock:
             self._file_handle.write(json_line + "\n")
             self._file_handle.flush()
-            
+
             if self.console_output:
                 # Simplified console output
                 level = "ERROR" if event.error_type else "INFO"
                 print(f"[{event.wall_time[11:19]}] [{level}] {event.event_type}: {event.message}")
-    
+
     def info(self, event_type: str, message: str = "", **kwargs):
         """Log an info event."""
         event = self._create_event(event_type, message, **kwargs)
         self._write(event)
-    
+
     def error(self, event_type: str, message: str = "", error_type: str = "error", **kwargs):
         """Log an error event."""
         event = self._create_event(event_type, message, error_type=error_type, **kwargs)
         self._write(event)
-    
+
     def message_sent(
         self,
         message_id: str,
@@ -139,7 +138,7 @@ class TestLogger:
             **kwargs
         )
         self._write(event)
-    
+
     def message_received(
         self,
         message_id: str,
@@ -157,7 +156,7 @@ class TestLogger:
             **kwargs
         )
         self._write(event)
-    
+
     def message_acked(self, message_id: str, latency_ms: float, **kwargs):
         """Log a message acknowledgment event."""
         event = self._create_event(
@@ -168,7 +167,7 @@ class TestLogger:
             **kwargs
         )
         self._write(event)
-    
+
     def message_lost(self, message_id: str, **kwargs):
         """Log a message loss event."""
         event = self._create_event(
@@ -179,7 +178,7 @@ class TestLogger:
             **kwargs
         )
         self._write(event)
-    
+
     def duplicate_detected(self, message_id: str, count: int, **kwargs):
         """Log a duplicate message detection event."""
         event = self._create_event(
@@ -191,7 +190,7 @@ class TestLogger:
             **kwargs
         )
         self._write(event)
-    
+
     def connection_event(self, event_subtype: str, user: str, **kwargs):
         """Log a connection event (login, disconnect, etc)."""
         event = self._create_event(
@@ -201,7 +200,7 @@ class TestLogger:
             **kwargs
         )
         self._write(event)
-    
+
     def cluster_event(self, event_subtype: str, message: str = "", **kwargs):
         """Log a cluster event."""
         event = self._create_event(
@@ -210,7 +209,7 @@ class TestLogger:
             **kwargs
         )
         self._write(event)
-    
+
     def metric(self, name: str, value: float, unit: str = "", **kwargs):
         """Log a metric event."""
         event = self._create_event(
@@ -219,20 +218,20 @@ class TestLogger:
             extra={"metric_name": name, "metric_value": value, "metric_unit": unit, **kwargs}
         )
         self._write(event)
-    
+
     def close(self):
         """Close the logger and finalize the log file."""
         elapsed_ns = time.monotonic_ns() - self._start_time
         elapsed_ms = elapsed_ns / 1_000_000
-        
+
         self.info("test_end", f"Test {self.test_id} completed in {elapsed_ms:.2f}ms")
-        
+
         with self._lock:
             self._file_handle.close()
-    
+
     def __enter__(self):
         return self
-    
+
     def __exit__(self, exc_type, exc_val, exc_tb):
         if exc_type:
             self.error("test_error", str(exc_val), error_type=exc_type.__name__)

@@ -29,7 +29,6 @@ Prerequisites:
 import os
 import sys
 import socket
-import ssl
 import struct
 import subprocess
 import time
@@ -66,7 +65,7 @@ class TestPhase:
     KILL = "killing_primary"
     RECOVER = "waiting_recovery"
     VERIFY = "verifying_durability"
-    
+
 current_phase = TestPhase.INIT
 
 
@@ -99,14 +98,13 @@ def login(sock, username):
     """Send login packet and wait for LOGIN_OK."""
     packet = bytes([0x01]) + username.encode()
     sock.sendall(packet)
-    
+
     # Wait for response with extended timeout for post-failover scenarios
     old_timeout = sock.gettimeout()
     sock.settimeout(15)  # Extended timeout for cluster recovery scenarios
     try:
         response = sock.recv(1024)
         if b"LOGIN_OK" in response:
-            time.sleep(0.05)  # Ensure server-side registration completes
             return True, response
         else:
             return False, response
@@ -128,20 +126,20 @@ def send_message(sock, target, message):
     """
     target_bytes = target.encode()
     msg_bytes = message.encode()
-    
+
     # Increment sequence counter
     _seq_counter[0] += 1
     seq_no = _seq_counter[0]
-    
+
     packet = (
         bytes([0x07]) +
         struct.pack('>H', len(target_bytes)) + target_bytes +
         struct.pack('>Q', seq_no) +
         struct.pack('>H', len(msg_bytes)) + msg_bytes
     )
-    
+
     sock.sendall(packet)
-    
+
     # Wait for any response (ACK or echo)
     try:
         response = sock.recv(1024)
@@ -157,12 +155,12 @@ def receive_offline_messages(sock, timeout=10):
     Returns list of message contents received.
     """
     import ssl
-    
+
     messages = []
     sock.settimeout(1.0)  # Short timeout for polling
     end_time = time.time() + timeout
     buffer = b""
-    
+
     while time.time() < end_time:
         try:
             data = sock.recv(4096)
@@ -170,10 +168,6 @@ def receive_offline_messages(sock, timeout=10):
                 buffer += data
                 buffer, msgs = parse_and_ack_messages(sock, buffer)
                 messages.extend(msgs)
-                # If we got messages and buffer is empty, we might be done
-                if messages and not buffer:
-                    # Wait a bit more for any stragglers
-                    time.sleep(0.5)
         except socket.timeout:
             if messages:
                 break
@@ -182,7 +176,7 @@ def receive_offline_messages(sock, timeout=10):
             continue
         except Exception:
             break
-    
+
     return messages
 
 
@@ -193,42 +187,42 @@ def parse_and_ack_messages(sock, data):
     """
     messages = []
     idx = 0
-    
+
     while idx < len(data):
         opcode = data[idx]
-        
+
         # Check for reliable message (opcode 17 = 0x11, PROTOCOL_V1_FREEZE v1.1)
         if opcode == 17:
             # Format: 0x11 | IdLen(16) | MsgId | MsgLen(32) | Msg
             if idx + 3 > len(data):
                 break  # Need more data
-            
+
             id_len = struct.unpack('>H', data[idx+1:idx+3])[0]
-            
+
             if idx + 3 + id_len + 4 > len(data):
                 break  # Need more data
-            
+
             msg_id = data[idx+3:idx+3+id_len]
             msg_len = struct.unpack('>I', data[idx+3+id_len:idx+3+id_len+4])[0]
-            
+
             if idx + 3 + id_len + 4 + msg_len > len(data):
                 break  # Need more data
-            
+
             msg = data[idx+3+id_len+4:idx+3+id_len+4+msg_len]
-            
+
             # Send ACK (opcode 0x03 | MsgId)
             try:
                 ack_packet = bytes([0x03]) + msg_id
                 sock.sendall(ack_packet)
             except Exception:
                 pass
-            
+
             messages.append(msg)
             idx += 3 + id_len + 4 + msg_len
         else:
             # Skip unknown byte
             idx += 1
-    
+
     remaining = data[idx:] if idx < len(data) else b""
     return remaining, messages
 
@@ -262,7 +256,7 @@ def wait_for_container_healthy(container_name, timeout=60):
     """Wait for container to be healthy."""
     log(f"Waiting for {container_name} to be healthy (max {timeout}s)")
     start_time = time.time()
-    
+
     while time.time() - start_time < timeout:
         result = subprocess.run(
             ["docker", "inspect", "--format", "{{.State.Health.Status}}", container_name],
@@ -270,7 +264,7 @@ def wait_for_container_healthy(container_name, timeout=60):
             text=True
         )
         status = result.stdout.strip()
-        
+
         if status == "healthy":
             log(f"{container_name} is healthy")
             return True
@@ -281,9 +275,9 @@ def wait_for_container_healthy(container_name, timeout=60):
             # Container running but no health check defined
             log(f"{container_name} is running (no health check)")
             return True
-            
+
         time.sleep(2)
-    
+
     log(f"Timeout waiting for {container_name}")
     return False
 
@@ -304,7 +298,7 @@ def check_container_running(container_name):
     )
     if "true" in result.stdout.lower():
         return True
-    
+
     # Fallback: search by name pattern using docker ps
     # This handles cases where compose adds directory prefix
     result = subprocess.run(
@@ -315,7 +309,7 @@ def check_container_running(container_name):
     if result.stdout.strip():
         log(f"Found container matching '{container_name}': {result.stdout.strip()}")
         return True
-    
+
     return False
 
 
@@ -329,13 +323,13 @@ def start_docker_cluster():
     """Attempt to start the Docker global cluster if not running."""
     docker_compose_dir = PROJECT_ROOT / "docker" / "global-cluster"
     docker_compose_file = docker_compose_dir / "docker-compose.yml"
-    
+
     if not docker_compose_file.exists():
         log(f"Docker compose file not found: {docker_compose_file}")
         return False
-    
+
     log("Attempting to start Docker global cluster...")
-    
+
     try:
         # Start cluster
         result = subprocess.run(
@@ -345,13 +339,13 @@ def start_docker_cluster():
             text=True,
             timeout=180
         )
-        
+
         if result.returncode != 0:
             log(f"Docker compose failed: {result.stderr}")
             return False
-        
+
         log("Cluster starting, waiting for containers...")
-        
+
         # Wait for core containers
         for i in range(90):  # 90 seconds max
             if check_container_running(PRIMARY_CORE) and check_container_running(SECONDARY_CORE):
@@ -363,10 +357,10 @@ def start_docker_cluster():
         else:
             log("Timeout waiting for core containers")
             return False
-        
+
         # Initialize replication
         return reinit_cluster_replication()
-        
+
     except subprocess.TimeoutExpired:
         log("Timeout starting cluster")
         return False
@@ -378,13 +372,13 @@ def start_docker_cluster():
 def reinit_cluster_replication():
     """Reinitialize Mnesia replication."""
     init_script = PROJECT_ROOT / "docker" / "global-cluster" / "init_cluster.sh"
-    
+
     if not init_script.exists():
         log(f"Init script not found: {init_script}")
         return False
-    
+
     log("Initializing Mnesia replication...")
-    
+
     try:
         result = subprocess.run(
             ["bash", str(init_script)],
@@ -393,7 +387,7 @@ def reinit_cluster_replication():
             text=True,
             timeout=180
         )
-        
+
         if result.returncode == 0:
             log("Replication initialized successfully")
             time.sleep(5)  # AUDIT P4: Reduced from 10s
@@ -403,7 +397,7 @@ def reinit_cluster_replication():
             for line in result.stdout.strip().split('\n')[-5:]:
                 log(f"  {line}")
             return False
-            
+
     except subprocess.TimeoutExpired:
         log("Timeout running init script")
         return False
@@ -415,10 +409,10 @@ def reinit_cluster_replication():
 def reconnect_edge_to_core(edge_container, core_node):
     """Reconnect edge to core after core restart."""
     log(f"Reconnecting {edge_container} to {core_node}")
-    
+
     # Use erl to ping from within the edge container
     cmd = f"docker exec {edge_container} erl -noshell -hidden -sname tmp_reconn_{generate_unique_id()} -setcookie iris_secret -eval \"rpc:call(edge_east_2@edgeeast2, net_adm, ping, ['{core_node}']), init:stop().\""
-    
+
     result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=10)
     time.sleep(1)
     return True
@@ -432,115 +426,115 @@ def test_multimaster_durability():
     then verifies the message was replicated to the secondary.
     """
     global current_phase
-    
+
     print("\n" + "=" * 70)
     print("Multi-Master Durability Test (RFC NFR-6, NFR-8)")
     print("=" * 70)
     print("\nThis test validates TRUE RPO=0 with SIGKILL (hard crash)")
     print("Unlike graceful shutdown, SIGKILL doesn't allow WAL flush.\n")
-    
+
     # Prerequisites
     current_phase = TestPhase.INIT
-    
+
     if not check_docker_available():
         print("SKIP:INFRA - Docker not available")
         sys.exit(2)
-    
+
     # Check if core containers are running, try to start if not
     primary_running = check_container_running(PRIMARY_CORE)
     secondary_running = check_container_running(SECONDARY_CORE)
-    
+
     if not primary_running or not secondary_running:
         log(f"Primary ({PRIMARY_CORE}): {'running' if primary_running else 'NOT running'}")
         log(f"Secondary ({SECONDARY_CORE}): {'running' if secondary_running else 'NOT running'}")
-        
+
         auto_start = os.environ.get("IRIS_AUTO_START_DOCKER", "true").lower() == "true"
-        
+
         if not auto_start:
             log("Auto-start disabled (set IRIS_AUTO_START_DOCKER=true to enable)")
             print("SKIP:INFRA - Cluster not running and auto-start disabled. Start with: make cluster-up")
             sys.exit(2)
-        
+
         log("Attempting to start Docker cluster...")
         if not start_docker_cluster():
             print("SKIP:INFRA - Failed to start Docker cluster")
             sys.exit(2)
-        
+
         # Re-check after starting
         if not check_container_running(PRIMARY_CORE):
             print(f"SKIP:INFRA - Primary core {PRIMARY_CORE} still not running after cluster start")
             sys.exit(2)
-        
+
         if not check_container_running(SECONDARY_CORE):
             print(f"SKIP:INFRA - Secondary core {SECONDARY_CORE} still not running after cluster start")
             sys.exit(2)
-    
+
     # Generate unique test identifiers
     test_id = generate_unique_id()
     sender = f"mm_sender_{test_id}"
     receiver = f"mm_receiver_{test_id}"
     test_message = f"MULTIMASTER_DURABILITY_TEST_{test_id}_{time.time()}"
-    
+
     log(f"Test ID: {test_id}")
     log(f"Sender: {sender}")
     log(f"Receiver: {receiver}")
     log(f"Message: {test_message}")
-    
+
     # Phase 1: Send message via primary edge -> primary core
     current_phase = TestPhase.SEND
-    
+
     log(f"Connecting to primary edge (port {PRIMARY_EDGE_PORT})")
     try:
         sock = connect(SERVER_HOST, PRIMARY_EDGE_PORT)
     except Exception as e:
         print(f"FAIL - Failed to connect to primary edge: {e}")
         sys.exit(1)
-    
+
     log(f"Logging in as {sender}")
     success, response = login(sock, sender)
     if not success:
         print(f"FAIL - Login failed: {response}")
         sock.close()
         sys.exit(1)
-    
+
     log(f"Sending message to offline receiver: {receiver}")
     ack_received, response = send_message(sock, receiver, test_message)
     sock.close()
-    
+
     if ack_received:
         log("✓ ACK received - message is now durable (per contract)")
     else:
         log("⚠ No ACK received - continuing anyway")
-    
+
     # Wait for Mnesia sync_transaction to complete replication
     # sync_transaction blocks until ALL disc_copies nodes have committed,
     # but we add extra time for network propagation and stability
     log("Waiting 5s for Mnesia multi-master sync_transaction replication...")
     time.sleep(5)
-    
+
     # Phase 2: SIGKILL the primary core (hard crash)
     current_phase = TestPhase.KILL
-    
+
     log(f"=== SIGKILL {PRIMARY_CORE} (hard crash simulation) ===")
     if not docker_sigkill(PRIMARY_CORE):
         log(f"Failed to kill {PRIMARY_CORE}")
         return False
-    
+
     log("✓ Primary core killed with SIGKILL")
     log("Waiting 3s for cluster to detect failure...")
     time.sleep(3)
-    
+
     # Phase 3: Wait for recovery and verify via secondary
     current_phase = TestPhase.RECOVER
-    
+
     log(f"Connecting to secondary edge (port {SECONDARY_EDGE_PORT})")
-    
+
     # Secondary edge should still be connected to secondary core
     # Give it a moment to stabilize after primary death
     time.sleep(5)
-    
+
     current_phase = TestPhase.VERIFY
-    
+
     # Try connecting with retries
     sock2 = None
     for attempt in range(5):
@@ -555,25 +549,25 @@ def test_multimaster_durability():
                 log(f"Failed to connect to secondary after 5 attempts: {e}")
                 docker_start(PRIMARY_CORE)
                 return False
-    
+
     if sock2 is None:
         log("Failed to establish connection to secondary")
         docker_start(PRIMARY_CORE)
         return False
-    
+
     # Try login with retries (cluster may need time to stabilize)
     success = False
     response = b""
     for login_attempt in range(3):
         log(f"Logging in as receiver: {receiver} (attempt {login_attempt + 1})")
         success, response = login(sock2, receiver)
-        
+
         if success:
             break
-        
+
         log(f"Login attempt {login_attempt + 1} failed: {response}")
         sock2.close()
-        
+
         if login_attempt < 2:
             log("Waiting 5s before retry...")
             time.sleep(5)
@@ -582,7 +576,7 @@ def test_multimaster_durability():
             except Exception as e:
                 log(f"Reconnect failed: {e}")
                 continue
-    
+
     if not success:
         log(f"Receiver login failed after all attempts")
         try:
@@ -591,15 +585,15 @@ def test_multimaster_durability():
             pass
         docker_start(PRIMARY_CORE)
         return False
-    
+
     log("Checking for offline messages using reliable message protocol...")
-    
+
     # Receive messages using reliable message protocol (with ACK)
     messages = receive_offline_messages(sock2, timeout=15)
     sock2.close()
-    
+
     log(f"Received {len(messages)} message(s)")
-    
+
     # Check if our test message is in any received message
     message_found = False
     for msg in messages:
@@ -607,16 +601,16 @@ def test_multimaster_durability():
             message_found = True
             log(f"✓ Found test message in received data")
             break
-    
+
     if not message_found and messages:
         log(f"Messages received but test message not found:")
         for i, msg in enumerate(messages[:3]):  # Show first 3
             log(f"  [{i}]: {msg[:50]}...")
-    
+
     # Restart primary core for cluster health
     log(f"Restarting {PRIMARY_CORE} for cluster health...")
     docker_start(PRIMARY_CORE)
-    
+
     # Results
     print("\n" + "=" * 70)
     if message_found:
@@ -650,14 +644,14 @@ def restore_cluster_state():
     running and reconnected - does NOT do full Mnesia re-init.
     """
     log("[cleanup] Light-weight cluster recovery...")
-    
+
     # Just ensure the primary container is started (we already start it in the test)
     try:
         # Verify primary is running
         if not check_container_running(PRIMARY_CORE):
             docker_start(PRIMARY_CORE)
             wait_for_container_healthy(PRIMARY_CORE, timeout=30)
-        
+
         log("[cleanup] Primary container running")
     except Exception as e:
         log(f"[cleanup] Warning: Light-weight recovery failed: {e}")
@@ -665,10 +659,10 @@ def restore_cluster_state():
 
 def main():
     result = test_multimaster_durability()
-    
+
     # Restore cluster state for subsequent tests
     restore_cluster_state()
-    
+
     print("\n" + "=" * 70)
     if result is True:
         print("RESULT: PASSED - Multi-master durability validated")

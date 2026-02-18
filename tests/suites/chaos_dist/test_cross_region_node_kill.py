@@ -29,11 +29,9 @@ Tier: 2 (Docker chaos)
 import os
 import sys
 import socket
-import ssl
 import subprocess
 import time
 import struct
-import threading
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
@@ -127,7 +125,6 @@ def login_and_send(host, port, user, target, messages):
     sock = create_tls_socket(host, port)
     # LOGIN
     sock.sendall(bytes([0x01]) + user.encode("utf-8"))
-    time.sleep(0.3)
     try:
         sock.recv(1024)
     except socket.timeout:
@@ -146,7 +143,6 @@ def login_and_send(host, port, user, target, messages):
         try:
             sock.sendall(packet)
             sent += 1
-            time.sleep(0.01)
         except Exception:
             break
     return sock, sent
@@ -191,7 +187,6 @@ def test_kill_bridge_mid_delivery():
         log("  Connecting receiver in EU region...")
         recv_sock = create_tls_socket(SERVER_HOST, EDGE_EU_PORT)
         recv_sock.sendall(bytes([0x01]) + receiver.encode("utf-8"))
-        time.sleep(0.5)
 
         # Send cross-region message from East
         log("  Sending cross-region message from East...")
@@ -200,7 +195,6 @@ def test_kill_bridge_mid_delivery():
         log(f"  Sent {sent} messages")
 
         # Kill the bridge node immediately
-        time.sleep(0.5)
         docker_kill(CORE_EAST_1)
         time.sleep(KILL_WAIT)
 
@@ -268,7 +262,6 @@ def test_bulk_messages_during_partition_and_kill():
         log(f"  Sent {sent}/{MESSAGE_COUNT} messages")
 
         # Kill bridge after some messages are queued
-        time.sleep(1)
         docker_kill(CORE_EAST_1)
         log(f"  Bridge killed. Waiting {KILL_WAIT}s...")
         time.sleep(KILL_WAIT)

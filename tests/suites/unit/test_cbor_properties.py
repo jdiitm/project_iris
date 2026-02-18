@@ -40,7 +40,7 @@ except ImportError:
 
 class CBOREncoder:
     """Reference CBOR encoder for testing Erlang implementation."""
-    
+
     UINT = 0
     NEGINT = 1
     BYTES = 2
@@ -48,7 +48,7 @@ class CBOREncoder:
     ARRAY = 4
     MAP = 5
     SIMPLE = 7
-    
+
     @classmethod
     def encode(cls, value):
         if isinstance(value, bool):
@@ -70,7 +70,7 @@ class CBOREncoder:
             return cls._encode_uint(cls.ARRAY, len(value)) + items
         elif isinstance(value, dict):
             items = b''.join(
-                cls.encode(k) + cls.encode(v) 
+                cls.encode(k) + cls.encode(v)
                 for k, v in value.items()
             )
             return cls._encode_uint(cls.MAP, len(value)) + items
@@ -78,7 +78,7 @@ class CBOREncoder:
             return bytes([0xFB]) + struct.pack('>d', value)
         else:
             raise ValueError(f"Cannot encode {type(value)}")
-    
+
     @classmethod
     def _encode_uint(cls, major, value):
         if value < 24:
@@ -95,18 +95,18 @@ class CBOREncoder:
 
 class CBORDecoder:
     """Reference CBOR decoder for testing."""
-    
+
     @classmethod
     def decode(cls, data):
         value, _ = cls._decode_value(data, 0)
         return value
-    
+
     @classmethod
     def _decode_value(cls, data, offset):
         initial = data[offset]
         major = initial >> 5
         additional = initial & 0x1F
-        
+
         if major == 0:  # Unsigned int
             value, offset = cls._decode_uint(data, offset + 1, additional)
             return value, offset
@@ -144,9 +144,9 @@ class CBORDecoder:
             elif additional == 27:
                 value = struct.unpack('>d', data[offset + 1:offset + 9])[0]
                 return value, offset + 9
-        
+
         raise ValueError(f"Unknown CBOR major type {major}")
-    
+
     @classmethod
     def _decode_uint(cls, data, offset, additional):
         if additional < 24:
@@ -301,15 +301,15 @@ def test_protocol_message():
     """Test encoding of CBOR protocol message."""
     target = b"alice"
     payload = {"type": "text", "body": "Hello!"}
-    
+
     msg = encode_cbor_msg(target, payload)
-    
+
     # Verify structure
     assert msg[0] == 0x10, "Wrong opcode"
     target_len = struct.unpack('>H', msg[1:3])[0]
     assert target_len == len(target)
     assert msg[3:3 + target_len] == target
-    
+
     print("[PASS] test_protocol_message")
 
 def test_complex_payload():
@@ -327,7 +327,7 @@ def test_complex_payload():
             }
         }
     }
-    
+
     encoded = CBOREncoder.encode(payload)
     decoded = CBORDecoder.decode(encoded)
     assert decoded == payload
@@ -404,7 +404,7 @@ if HYPOTHESIS_AVAILABLE:
 
 def main():
     print(f"[INFO] Running CBOR property tests with seed={TEST_SEED}")
-    
+
     # Run basic tests
     tests = [
         test_encode_small_integers,
@@ -422,7 +422,7 @@ def main():
         test_protocol_message,
         test_complex_payload,
     ]
-    
+
     failed = 0
     for test in tests:
         try:
@@ -433,7 +433,7 @@ def main():
         except Exception as e:
             print(f"[ERROR] {test.__name__}: {e}")
             failed += 1
-    
+
     # Run property tests if available
     if HYPOTHESIS_AVAILABLE:
         property_tests = [
@@ -444,7 +444,7 @@ def main():
             test_property_array_roundtrip,
             test_property_map_roundtrip,
         ]
-        
+
         for test in property_tests:
             try:
                 test()
@@ -455,7 +455,7 @@ def main():
             except Exception as e:
                 print(f"[ERROR] {test.__name__}: {e}")
                 failed += 1
-    
+
     if failed > 0:
         print(f"\n[RESULT] {failed} test(s) failed")
         sys.exit(1)

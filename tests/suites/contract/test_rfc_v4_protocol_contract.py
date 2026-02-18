@@ -23,7 +23,6 @@ Pattern: follows test_edge_core_contract.py with static + live checks.
 import os
 import sys
 import socket
-import ssl
 import struct
 import time
 from pathlib import Path

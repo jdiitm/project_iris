@@ -3,7 +3,6 @@ import time
 import threading
 import random
 import os
-import subprocess
 import socket
 import struct
 
@@ -17,7 +16,7 @@ project_root = os.path.abspath(os.path.join(current_dir, "../../.."))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
-from tests.framework.cluster import ClusterManager, get_cluster
+from tests.framework.cluster import ClusterManager
 
 # Test profiles
 TEST_PROFILE = os.environ.get("TEST_PROFILE", "smoke")
@@ -91,7 +90,7 @@ def create_socket(host, port, timeout=10.0):
         return create_tls_socket(host, port, timeout=timeout)
     except Exception:
         pass
-    
+
     # Fallback to non-TLS (for local development without certs)
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     s.settimeout(timeout)
@@ -115,19 +114,19 @@ def client_worker(region_id, user_id, mode):
     # Let's adjust to ClusterManager ports: 8085 + region_id - 1
     # Assuming region_id is 1-based (1, 2)
     port = 8085 + (region_id - 1)
-    
+
     host = 'localhost'
-    
+
     my_user = f"user_r{region_id}_{user_id}"
-    
+
     try:
         s = create_socket(host, port, timeout=10.0)
         s.sendall(packet_login(my_user))
         s.recv(1024) # Ack
-        
+
         # Receiver Loop (Background)
-        s.settimeout(0.01) 
-        
+        s.settimeout(0.01)
+
         end_time = time.time() + DURATION
         while time.time() < end_time:
             # 1. Send
@@ -144,7 +143,7 @@ def client_worker(region_id, user_id, mode):
                 payload = f"INTER_MSG:{time.time()}"
                 s.sendall(packet_msg(target, payload))
                 with stats_lock: stats["inter_sent"] += 1
-            
+
             # 2. Receive
             try:
                 data = s.recv(4096)
@@ -157,18 +156,18 @@ def client_worker(region_id, user_id, mode):
                     # For metrics, let's just regex for the pattern we sent.
                     # payload = f"INTRA_MSG:{time.time()}"
                     decoded = data.decode('utf-8', errors='ignore')
-                    
+
                     # Find potential timestamps
                     # INTRA_MSG:1234567890.123
-                    
+
                     import re
                     # Find all matches
                     matches = re.findall(r"(INTRA|INTER)_MSG:(\d+\.\d+)", decoded)
-                    
+
                     curr_time = time.time()
                     intra_count = 0
                     inter_count = 0
-                    
+
                     for m in matches:
                         m_type, ts_str = m
                         try:
@@ -182,7 +181,7 @@ def client_worker(region_id, user_id, mode):
                                 log_latency(latency, "inter_region")
                         except:
                             pass
-                            
+
                     with stats_lock:
                         stats["intra_received"] += intra_count
                         stats["inter_received"] += inter_count
@@ -190,59 +189,59 @@ def client_worker(region_id, user_id, mode):
                 pass
             except Exception:
                 break
-                
+
             # Rate limit
             time.sleep(0.01)
-            
+
         s.close()
-    except Exception as e:
+    except Exception:
         # log(f"Client Error: {e}")
         with stats_lock: stats["errors"] += 1
 
 def main():
     # Ensure CWD
     os.chdir(project_root)
-    
+
     with ClusterManager(project_root=project_root, default_edge_count=NUM_REGIONS) as cluster:
         # Phase 1: Local Switching Test (Intra-Region)
         # Both Regions running, but users only talk to neighbors.
         log("--- PHASE 1: INTRA-REGION FLOOD (Local Switching) ---")
         init_csv() # Init CSV
         threads = []
-        
+
         # Launch R1 Users (Talk to R1)
         for i in range(50): # 50 Active Workers per region to generate load
             t = threading.Thread(target=client_worker, args=(1, i, 'intra'))
             t.start()
             threads.append(t)
-            
+
         # Launch R2 Users (Talk to R2)
         for i in range(50):
             t = threading.Thread(target=client_worker, args=(2, i, 'intra'))
             t.start()
             threads.append(t)
-            
+
         for t in threads: t.join()
-        
+
         log(f"Phase 1 Stats: {stats}")
-        
+
         # Reset Stats
         stats["intra_sent"] = 0
         stats["intra_received"] = 0
         stats["inter_sent"] = 0
         stats["inter_received"] = 0
         stats["errors"] = 0
-        
+
         # Phase 2: Global Routing Test (Inter-Region)
         log("--- PHASE 2: INTER-REGION FLOOD (Core RPC) ---")
         threads = []
-        
+
         # Launch R1 Users (Talk to R2)
         for i in range(50):
             t = threading.Thread(target=client_worker, args=(1, i, 'inter'))
             t.start()
             threads.append(t)
-    
+
         # Launch R2 Users (Talk to R1) -- Need to be online to receive
         # But for simplicity, we just have R2 users *also* sending Inter or just listening.
         # Let's have them send Inter too.
@@ -250,9 +249,9 @@ def main():
             t = threading.Thread(target=client_worker, args=(2, i, 'inter'))
             t.start()
             threads.append(t)
-            
+
         for t in threads: t.join()
-        
+
         log(f"Phase 2 Stats: {stats}")
         log("Test Complete.")
 

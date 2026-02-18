@@ -21,8 +21,6 @@ Tier: 2 (Security hardening)
 
 import os
 import sys
-import ssl
-import socket
 import subprocess
 import time
 from pathlib import Path

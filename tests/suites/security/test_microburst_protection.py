@@ -146,7 +146,6 @@ def test_normal_traffic_unaffected():
         for i in range(10):
             c.send_msg("microburst_target", f"normal_msg_{i}")
 
-        time.sleep(0.5)
         c.close()
         log("  PASS: Normal traffic passed without rejection")
         return True

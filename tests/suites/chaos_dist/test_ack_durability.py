@@ -59,7 +59,7 @@ RECOVERY_TIMEOUT = 60 * CI_TIMEOUT_FACTOR
 def connect_tls(max_retries=5, retry_delay=2.0):
     """Create TLS connection to Iris edge with retry logic."""
     context = get_verified_ssl_context()
-    
+
     last_err = None
     for attempt in range(max_retries):
         try:
@@ -88,7 +88,6 @@ def login(sock, username):
     try:
         response = sock.recv(1024)
         if b"LOGIN_OK" in response:
-            time.sleep(0.05)  # Ensure server-side registration completes
             return True
         return False
     except socket.timeout:
@@ -107,18 +106,18 @@ def send_message(sock, target, message):
     """
     target_bytes = target.encode()
     msg_bytes = message.encode()
-    
+
     # Increment sequence counter
     _seq_counter[0] += 1
     seq_no = _seq_counter[0]
-    
+
     # Protocol: 0x07 | TargetLen(16) | Target | SeqNo(64) | MsgLen(16) | Msg
     packet = (bytes([0x07]) +
               len(target_bytes).to_bytes(2, 'big') + target_bytes +
               seq_no.to_bytes(8, 'big') +
               len(msg_bytes).to_bytes(2, 'big') + msg_bytes)
     sock.sendall(packet)
-    
+
     # Wait for ACK (timeout means no ACK received)
     try:
         response = sock.recv(1024)
@@ -137,13 +136,12 @@ def receive_offline_messages(sock, timeout=10):
     The server sends reliable messages (opcode 16) that require ACK.
     Returns list of message contents received.
     """
-    import struct
-    
+
     messages = []
     sock.settimeout(1.0)  # Short timeout for polling
     end_time = time.time() + timeout
     buffer = b""
-    
+
     while time.time() < end_time:
         try:
             data = sock.recv(4096)
@@ -160,7 +158,7 @@ def receive_offline_messages(sock, timeout=10):
             continue
         except Exception:
             break
-    
+
     return messages
 
 
@@ -170,45 +168,45 @@ def parse_and_ack_messages(sock, data):
     Returns (remaining_buffer, list_of_message_contents)
     """
     import struct
-    
+
     messages = []
     idx = 0
-    
+
     while idx < len(data):
         opcode = data[idx]
-        
+
         # Check for reliable message (opcode 17 = 0x11, PROTOCOL_V1_FREEZE v1.1)
         if opcode == 17:
             # Format: 0x11 | IdLen(16) | MsgId | MsgLen(32) | Msg
             if idx + 3 > len(data):
                 break  # Need more data
-            
+
             id_len = struct.unpack('>H', data[idx+1:idx+3])[0]
-            
+
             if idx + 3 + id_len + 4 > len(data):
                 break  # Need more data
-            
+
             msg_id = data[idx+3:idx+3+id_len]
             msg_len = struct.unpack('>I', data[idx+3+id_len:idx+3+id_len+4])[0]
-            
+
             if idx + 3 + id_len + 4 + msg_len > len(data):
                 break  # Need more data
-            
+
             msg = data[idx+3+id_len+4:idx+3+id_len+4+msg_len]
-            
+
             # Send ACK (opcode 0x03 | MsgId)
             try:
                 ack_packet = bytes([0x03]) + msg_id
                 sock.sendall(ack_packet)
             except Exception:
                 pass
-            
+
             messages.append(msg)
             idx += 3 + id_len + 4 + msg_len
         else:
             # Skip unknown byte
             idx += 1
-    
+
     remaining = data[idx:] if idx < len(data) else b""
     return remaining, messages
 
@@ -300,7 +298,7 @@ def check_cluster_replication_healthy():
         return _check()
     except ImportError:
         pass
-    
+
     # Fallback implementation
     try:
         import random
@@ -349,19 +347,19 @@ def ensure_cluster_healthy():
         return _ensure(max_attempts=3)
     except ImportError:
         pass
-    
+
     # Fallback implementation with escalating recovery
     init_script = PROJECT_ROOT / "docker" / "global-cluster" / "init_cluster.sh"
     docker_dir = PROJECT_ROOT / "docker" / "global-cluster"
     compose_file = docker_dir / "docker-compose.yml"
-    
+
     for attempt in range(3):
         if check_cluster_replication_healthy():
             log(f"  Cluster replication is healthy")
             return True
-        
+
         log(f"  Cluster unhealthy, reinitializing (attempt {attempt+1}/3)...")
-        
+
         # Escalate to full restart after 2 failed attempts
         if attempt >= 2:
             log("  Escalating to full cluster restart...")
@@ -377,15 +375,15 @@ def ensure_cluster_healthy():
                 )
                 # AUDIT P4 FIX: Poll for containers instead of blind 60s sleep
                 log("  Polling for containers to start...")
-                from tests.suites.chaos_dist.utils import wait_for_condition, wait_for_container_running
+                from tests.suites.chaos_dist.utils import wait_for_container_running
                 wait_for_container_running("core-east-1", timeout=90)
             except Exception as e:
                 log(f"  Full restart failed: {e}")
-        
+
         if not init_script.exists():
             log(f"  Init script not found: {init_script}")
             return False
-        
+
         try:
             result = subprocess.run(
                 ["bash", str(init_script)],
@@ -408,7 +406,7 @@ def ensure_cluster_healthy():
         except Exception as e:
             log(f"  Reinitialization error: {e}")
             time.sleep(10)
-    
+
     # Final check after all attempts
     return check_cluster_replication_healthy()
 
@@ -422,29 +420,29 @@ def test_ack_implies_durability():
     print("\n" + "=" * 60)
     print("ACK-Durability Test (RFC NFR-6, NFR-8)")
     print("=" * 60)
-    
+
     # Check prerequisites
     if not check_docker_available():
         print("  ⚠️ Docker not available - skipping container kill test")
         print("  Running simplified durability test instead...")
         return run_simplified_test()
-    
+
     if not check_container_exists(CONTAINER_NAME):
         print(f"  ❌ FAIL: Container {CONTAINER_NAME} not found")
         print("  Start cluster with: make cluster-up")
         return False  # No skips - cluster must be running
-    
+
     # Ensure cluster replication is healthy before running durability test
     print("\n0. Ensuring cluster replication is healthy...")
     if not ensure_cluster_healthy():
         print("  ❌ Could not establish healthy cluster replication after 3 attempts")
         print("  This is required for ACK-durability to work correctly")
         return False  # FAIL - cluster must be healthy for this test
-    
+
     sender = f"durability_sender_{int(time.time())}"
     receiver = f"durability_receiver_{int(time.time())}"
     test_message = f"DURABILITY_TEST_{time.time()}"
-    
+
     print(f"\n1. Connecting as sender: {sender}")
     try:
         sock = connect_plaintext()  # Use plaintext for now
@@ -453,51 +451,51 @@ def test_ack_implies_durability():
         print(f"  ❌ FAIL: Connection failed: {e}")
         print("  Ensure server is running: make start")
         return False
-    
+
     print(f"\n2. Sending message to offline receiver: {receiver}")
     print(f"   Message: {test_message}")
     ack_received = send_message(sock, receiver, test_message)
     sock.close()
-    
+
     if not ack_received:
         print("  ⚠️ No ACK received (server may not send ACKs)")
         print("  Continuing with kill test anyway...")
     else:
         print("  ✅ ACK received from server")
-    
+
     # CRITICAL: Do NOT wait before killing. RFC NFR-8 requires ACK to mean
     # "data is durable NOW". Any sleep here would mask race conditions where
     # ACK is sent before sync_transaction completes.
     # If this test fails, the bug is in the server (ACK sent prematurely).
-    
+
     print(f"\n3. Stopping core node: {CONTAINER_NAME} (IMMEDIATELY after ACK)")
     if not kill_container(CONTAINER_NAME):
         print("  ❌ Failed to kill container")
         return False
     print("  ✅ Container killed")
-    
+
     print(f"\n4. Waiting 3 seconds for node to be fully dead...")
     time.sleep(3)
-    
+
     print(f"\n5. Starting container: {CONTAINER_NAME}")
     if not start_container(CONTAINER_NAME):
         print("  ❌ Failed to start container")
         return False
-    
+
     print(f"\n6. Waiting for node recovery (up to {RECOVERY_TIMEOUT}s)...")
     if not wait_for_container_healthy(CONTAINER_NAME, RECOVERY_TIMEOUT):
         print("  ⚠️ Container not healthy, but may still work")
-    
+
     # Extra wait for Mnesia to fully recover (disc_copies tables load slowly)
     # AUDIT P4 FIX: Reduced from 20s, container health check above covers most of this
     print("  Waiting for Mnesia recovery...")
     time.sleep(10)
-    
+
     # Reconnect edge to core (hidden nodes don't auto-reconnect)
     print("  Reconnecting edge to core after restart...")
     reconnect_edge_to_core()
     time.sleep(2)
-    
+
     print(f"\n7. Connecting as receiver: {receiver}")
     sock = None
     for attempt in range(10):
@@ -514,25 +512,25 @@ def test_ack_implies_durability():
             else:
                 print(f"  ❌ Reconnection failed after 10 attempts: {e}")
                 return False
-    
+
     if sock is None:
         print(f"  ❌ Failed to connect")
         return False
-    
+
     print("\n8. Reading offline messages...")
     # Receive messages using reliable message protocol (with ACK)
     messages = receive_offline_messages(sock, timeout=15)
     sock.close()
-    
+
     print(f"   Received {len(messages)} message(s)")
-    
+
     # Check if our test message is in any received message
     found = False
     for msg in messages:
         if test_message.encode() in msg:
             found = True
             break
-    
+
     if found:
         print(f"\n✅ PASS: Message found after node crash recovery!")
         print("   ACK-durability contract is VALID")
@@ -554,11 +552,11 @@ def run_simplified_test():
     """Run simplified durability test without container kill."""
     print("\n=== Simplified Durability Test ===")
     print("(Testing message storage without crash simulation)")
-    
+
     sender = f"simple_sender_{int(time.time())}"
     receiver = f"simple_receiver_{int(time.time())}"
     test_message = f"SIMPLE_TEST_{time.time()}"
-    
+
     print(f"\n1. Sending message from {sender} to {receiver}")
     try:
         sock = connect_plaintext()
@@ -568,30 +566,29 @@ def run_simplified_test():
     except Exception as e:
         print(f"  ❌ FAIL: Send failed: {e}")
         return False
-    
+
     print("\n2. Waiting for storage...")
-    time.sleep(1)
-    
+
     print(f"\n3. Connecting as receiver: {receiver}")
     try:
         sock = connect_plaintext()
         if not login(sock, receiver):
             print("  ❌ FAIL: Login failed")
             return False
-        
+
         # Receive messages using reliable message protocol
         messages = receive_offline_messages(sock, timeout=5)
         sock.close()
     except Exception as e:
         print(f"  ❌ FAIL: Receive failed: {e}")
         return False
-    
+
     # Check if test message is in any received message
     for msg in messages:
         if test_message.encode() in msg:
             print("\n✅ Message delivered to receiver")
             return True
-    
+
     print("\n❌ FAIL: Message not found")
     return False
 
@@ -614,7 +611,7 @@ def restore_cluster_state():
             log("[cleanup] Restoring cluster state (inline fallback)...")
             docker_dir = PROJECT_ROOT / "docker" / "global-cluster"
             compose_file = docker_dir / "docker-compose.yml"
-            
+
             subprocess.run(
                 ["docker", "compose", "-f", str(compose_file), "down", "--remove-orphans", "-v"],
                 cwd=str(docker_dir), capture_output=True, timeout=60
@@ -627,7 +624,7 @@ def restore_cluster_state():
             # AUDIT P4 FIX: Poll for container readiness instead of blind 60s
             from tests.suites.chaos_dist.utils import wait_for_container_running
             wait_for_container_running("core-east-1", timeout=90)
-            
+
             init_script = docker_dir / "init_cluster.sh"
             if init_script.exists():
                 subprocess.run(
@@ -641,10 +638,10 @@ def restore_cluster_state():
 
 def main():
     result = test_ack_implies_durability()
-    
+
     # Restore cluster state for subsequent tests
     restore_cluster_state()
-    
+
     print("\n" + "=" * 60)
     if result is True:
         print("RESULT: PASSED")

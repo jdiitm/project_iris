@@ -87,17 +87,17 @@ def send_message(sock, target, message):
     """
     target_bytes = target.encode('utf-8')
     msg_bytes = message.encode('utf-8')
-    
+
     # Increment sequence counter
     _seq_counter[0] += 1
     seq_no = _seq_counter[0]
-    
+
     # Protocol: 0x07 | TargetLen(16) | Target | SeqNo(64) | MsgLen(16) | Msg
-    packet = (bytes([0x07]) + 
+    packet = (bytes([0x07]) +
               len(target_bytes).to_bytes(2, 'big') + target_bytes +
               seq_no.to_bytes(8, 'big') +
               len(msg_bytes).to_bytes(2, 'big') + msg_bytes)
-    
+
     try:
         sock.sendall(packet)
         return True
@@ -118,41 +118,41 @@ def test_distributed_rate_limit():
     log("\n" + "=" * 60)
     log("DISTRIBUTED RATE LIMIT TEST (RFC NFR-17)")
     log("=" * 60)
-    
+
     # Check Docker is running
     if not check_docker_running():
         log("FAIL: Docker cluster not running")
         log("  Run 'make cluster-up' to start the Docker cluster")
         return False
-    
+
     # Find available edge ports
     available_ports = get_available_edge_ports()
     log(f"Available edge ports: {available_ports}")
-    
+
     if len(available_ports) < 2:
         log("FAIL: Need at least 2 edge nodes for distributed rate limit test")
         log(f"  Only found {len(available_ports)} nodes")
         return False
-    
+
     port_a = available_ports[0]
     port_b = available_ports[1]
     log(f"Using Edge A (port {port_a}) and Edge B (port {port_b})")
-    
+
     test_id = int(time.time())
     attacker = f"attacker_{test_id}"
     target = f"victim_{test_id}"
-    
+
     # Phase 1: Connect to Edge A and exhaust rate limit
     log(f"\n1. Connecting to Edge A (port {port_a}) as {attacker}")
     sock_a = tls_connect_and_login("localhost", port_a, attacker)
     if not sock_a:
         log("  FAIL: Could not connect to Edge A")
         return False
-    
+
     log(f"\n2. Sending {MESSAGES_TO_EXHAUST} messages to exhaust rate limit...")
     sent_a = 0
     rejected_a = 0
-    
+
     for i in range(MESSAGES_TO_EXHAUST):
         try:
             if send_message(sock_a, target, f"flood_a_{i}"):
@@ -165,21 +165,21 @@ def test_distributed_rate_limit():
         except Exception as e:
             log(f"  Error at msg {i}: {e}")
             break
-    
+
     log(f"   Edge A: sent {sent_a}, rejected {rejected_a}")
     sock_a.close()
-    
+
     # Phase 2: Connect to Edge B with SAME attacker identity
     log(f"\n3. Connecting to Edge B (port {port_b}) as SAME attacker {attacker}")
     sock_b = tls_connect_and_login("localhost", port_b, attacker)
     if not sock_b:
         log("  FAIL: Could not connect to Edge B")
         return False
-    
+
     log(f"\n4. Attempting {CROSS_NODE_TEST_MESSAGES} messages on Edge B...")
     sent_b = 0
     rejected_b = 0
-    
+
     for i in range(CROSS_NODE_TEST_MESSAGES):
         try:
             if send_message(sock_b, target, f"flood_b_{i}"):
@@ -191,17 +191,17 @@ def test_distributed_rate_limit():
         except Exception as e:
             log(f"  Error at msg {i}: {e}")
             break
-    
+
     log(f"   Edge B: sent {sent_b}, rejected {rejected_b}")
     sock_b.close()
-    
+
     # Analyze results
     log("\n" + "=" * 60)
     log("RESULTS")
     log("=" * 60)
     log(f"  Edge A (exhaust phase): sent={sent_a}, rejected={rejected_a}")
     log(f"  Edge B (cross-node test): sent={sent_b}, rejected={rejected_b}")
-    
+
     # Verdict (AUDIT MITIGATION: Strict pass criteria)
     # Total messages across all nodes must be bounded by 2x the global limit.
     # No more catch-all "return True" for inconclusive results.
@@ -211,7 +211,7 @@ def test_distributed_rate_limit():
     # With gossip lag tolerance: 3x = 30 messages
     # With connection overhead (150 exhaust + 50 cross): generous 200 limit
     GLOBAL_TOLERANCE = 200  # Max total messages before declaring bypass
-    
+
     if rejected_b > 0:
         log(f"\nPASS: Distributed rate limiting enforced")
         log(f"   {rejected_b} messages rejected on cross-node attempt")
@@ -251,18 +251,18 @@ def send_message_tracked(sock, target, message, track_rejection=True):
     """
     target_bytes = target.encode('utf-8')
     msg_bytes = message.encode('utf-8')
-    
+
     _seq_counter[0] += 1
     seq_no = _seq_counter[0]
-    
-    packet = (bytes([0x07]) + 
+
+    packet = (bytes([0x07]) +
               len(target_bytes).to_bytes(2, 'big') + target_bytes +
               seq_no.to_bytes(8, 'big') +
               len(msg_bytes).to_bytes(2, 'big') + msg_bytes)
-    
+
     try:
         sock.sendall(packet)
-        
+
         # Try to read response to check for rate limit error
         if track_rejection:
             sock.settimeout(0.5)
@@ -277,9 +277,9 @@ def send_message_tracked(sock, target, message, track_rejection=True):
                 pass  # No response = accepted
             except Exception:
                 pass
-        
+
         return (True, False, None)
-        
+
     except (socket.error, ssl.SSLError) as e:
         err_str = str(e).lower()
         if "rate" in err_str or "limit" in err_str or "rejected" in err_str:
@@ -305,41 +305,41 @@ def test_precise_rate_limit():
     log("PRECISE RATE LIMIT TEST (Audit Remediation)")
     log("=" * 60)
     log(f"Configured rate limit: {PRECISE_RATE_LIMIT} msg/sec")
-    
+
     # Check Docker is running
     if not check_docker_running():
         log("FAIL: Docker cluster not running")
         return False
-    
+
     # Find available edge ports
     available_ports = get_available_edge_ports()
     log(f"Available edge ports: {available_ports}")
-    
+
     if len(available_ports) < 2:
         log("FAIL: Need at least 2 edge nodes")
         return False
-    
+
     port_a = available_ports[0]
     port_b = available_ports[1]
     log(f"Using Edge A (port {port_a}) and Edge B (port {port_b})")
-    
+
     test_id = int(time.time())
     user = f"precise_test_{test_id}"
     target = f"target_{test_id}"
-    
+
     # Phase 1: Send exactly LIMIT messages on Edge A
     log(f"\n1. Connecting to Edge A as {user}")
     sock_a = tls_connect_and_login("localhost", port_a, user)
     if not sock_a:
         log("FAIL: Could not connect to Edge A")
         return False
-    
+
     log(f"\n2. Sending exactly {PRECISE_RATE_LIMIT} messages (should all succeed)...")
-    
+
     success_count = 0
     rejected_count = 0
     errors = []
-    
+
     for i in range(PRECISE_RATE_LIMIT):
         sent, rejected, error = send_message_tracked(sock_a, target, f"msg_{i}")
         if sent:
@@ -350,14 +350,14 @@ def test_precise_rate_limit():
                 errors.append(f"Early rejection at msg {i}")
         else:
             errors.append(f"Error at msg {i}: {error}")
-    
+
     log(f"   Sent: {success_count}, Rejected: {rejected_count}")
-    
+
     # Phase 2: Send message LIMIT+1 on Edge A (should be rejected)
     log(f"\n3. Sending message {PRECISE_RATE_LIMIT + 1} (should be REJECTED)...")
-    
+
     sent, rejected, error = send_message_tracked(sock_a, target, f"overflow_msg")
-    
+
     if rejected:
         log(f"   PASS: Message {PRECISE_RATE_LIMIT + 1} was rejected as expected")
         overflow_rejected_a = True
@@ -367,20 +367,20 @@ def test_precise_rate_limit():
     else:
         log(f"   Error: {error}")
         overflow_rejected_a = False
-    
+
     sock_a.close()
-    
+
     # Phase 3: Connect to Edge B with same user
     log(f"\n4. Connecting to Edge B (port {port_b}) as SAME user {user}")
     sock_b = tls_connect_and_login("localhost", port_b, user)
     if not sock_b:
         log("FAIL: Could not connect to Edge B")
         return False
-    
+
     log(f"\n5. Sending first message on Edge B (should be REJECTED if global limit)...")
-    
+
     sent, rejected, error = send_message_tracked(sock_b, target, f"cross_node_msg")
-    
+
     if rejected:
         log("   PASS: Message rejected on Edge B (global rate limit enforced)")
         cross_node_rejected = True
@@ -390,9 +390,9 @@ def test_precise_rate_limit():
     else:
         log(f"   Error: {error}")
         cross_node_rejected = False
-    
+
     sock_b.close()
-    
+
     # Results analysis
     log("\n" + "=" * 60)
     log("PRECISE TEST RESULTS")
@@ -401,12 +401,12 @@ def test_precise_rate_limit():
     log(f"  Early rejections: {rejected_count}")
     log(f"  Overflow rejected (Edge A): {overflow_rejected_a}")
     log(f"  Cross-node rejected (Edge B): {cross_node_rejected}")
-    
+
     # Determine verdict
     # Strict pass: overflow must be rejected AND cross-node must be rejected
     # Partial pass: overflow rejected but cross-node accepted (per-node limiting)
     # Fail: no rate limiting detected
-    
+
     if overflow_rejected_a and cross_node_rejected:
         log("\nPASS: Global rate limiting enforced with precision")
         log("RFC NFR-17: COMPLIANT (strict)")
@@ -441,38 +441,38 @@ def test_rate_limit_recovery():
     log("\n" + "=" * 60)
     log("RATE LIMIT RECOVERY TEST")
     log("=" * 60)
-    
+
     if not check_docker_running():
         log("FAIL: Docker cluster not running")
         return False
-    
+
     available_ports = get_available_edge_ports()
     if not available_ports:
         log("FAIL: No edge nodes available")
         return False
-    
+
     port = available_ports[0]
     test_id = int(time.time())
     user = f"recovery_test_{test_id}"
     target = f"target_{test_id}"
-    
+
     log(f"1. Connecting as {user}")
     sock = tls_connect_and_login("localhost", port, user)
     if not sock:
         log("FAIL: Could not connect")
         return False
-    
+
     # Exhaust limit
     log(f"\n2. Exhausting rate limit ({PRECISE_RATE_LIMIT + 50} messages)...")
     for i in range(PRECISE_RATE_LIMIT + 50):
         send_message_tracked(sock, target, f"exhaust_{i}", track_rejection=False)
-    
+
     sock.close()
-    
+
     # Wait for token bucket to refill (5 tokens/sec default, need at least 1)
     log("\n3. Waiting for rate limit window to reset (5 seconds)...")
     time.sleep(5)
-    
+
     # Open a fresh connection - the old socket is likely dead after rate limit violations
     log("\n4. Reconnecting and sending new message (should be accepted)...")
     sock = tls_connect_and_login("localhost", port, user)
@@ -480,11 +480,11 @@ def test_rate_limit_recovery():
         log("   WARN: Could not reconnect (server may still be rate-limiting)")
         log("   Rate limit recovery: INCONCLUSIVE")
         return True  # Not a definitive failure
-    
+
     sent, rejected, error = send_message_tracked(sock, target, "recovery_msg")
-    
+
     sock.close()
-    
+
     if sent:
         log("   PASS: Message accepted after window reset")
         log("   Rate limit recovery working correctly")
@@ -572,8 +572,6 @@ def test_botnet_flood_bounded():
                     total_rejected += 1
             except Exception:
                 pass
-        # Small delay to avoid pure spin
-        time.sleep(0.01)
 
     elapsed = time.time() - start_time
 
@@ -619,26 +617,26 @@ def main():
     log("#" * 60)
     log("This test requires a running Docker cluster.")
     log("Run 'make cluster-up' first if not already running.\n")
-    
+
     results = []
-    
+
     # Run original distributed test
     results.append(("Distributed Rate Limit", test_distributed_rate_limit()))
-    
+
     # Run precise counting test (Audit Remediation)
     results.append(("Precise Rate Limit", test_precise_rate_limit()))
-    
+
     # Run recovery test
     results.append(("Rate Limit Recovery", test_rate_limit_recovery()))
-    
+
     # Run botnet flood test (Audit Mitigation)
     results.append(("Botnet Flood Bounded", test_botnet_flood_bounded()))
-    
+
     # Summary
     log("\n" + "#" * 60)
     log("# SUMMARY")
     log("#" * 60)
-    
+
     passed = 0
     failed = 0
     for name, result in results:
@@ -648,9 +646,9 @@ def main():
             passed += 1
         else:
             failed += 1
-    
+
     log(f"\nTotal: {passed}/{len(results)} passed")
-    
+
     if failed > 0:
         log("# RESULT: SOME TESTS FAILED")
         return 1

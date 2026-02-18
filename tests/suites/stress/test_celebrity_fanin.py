@@ -25,7 +25,6 @@ import time
 import socket
 import subprocess
 import random
-import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
@@ -166,7 +165,6 @@ def test_functional_after_fanin():
         c = IrisClient()
         c.login("normal_after_fanin")
         c.send_msg("normal_target", "hello after fan-in")
-        time.sleep(0.3)
         c.close()
         log("  PASS: Normal messaging works after fan-in")
         return True

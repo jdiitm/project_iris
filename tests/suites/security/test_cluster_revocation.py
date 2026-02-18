@@ -11,7 +11,6 @@ In single-node mode, it validates local revocation only.
 
 import sys
 import os
-import time
 
 # Add project root to path for proper imports
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
@@ -24,20 +23,20 @@ from tests.utilities.helpers import unique_user
 def test_local_revocation():
     """Test that revocation works locally."""
     print("\n=== Test: Local Token Revocation ===")
-    
+
     # Login user
     client = IrisClient()
     user = unique_user("revoke")
-    
+
     try:
         client.login(user)
         print(f"  User '{user}' logged in")
-        
+
         # Revoke (if API available) - this is a placeholder
         # In production, this would call the revocation API
         print("  Note: Revocation API test requires auth enabled")
         print("  Skipping actual revocation (auth disabled in test env)")
-        
+
         client.close()
         print("✓ Local revocation test completed")
         return True
@@ -50,21 +49,21 @@ def test_local_revocation():
 def test_revocation_timing():
     """Validate that we can detect revocation within 60s SLA."""
     print("\n=== Test: Revocation Timing Check ===")
-    
+
     # This is a placeholder for the full cluster test
     # In a multi-node setup, this would:
     # 1. Login on Node A
     # 2. Revoke on Node A via admin API
     # 3. Try login on Node B
     # 4. Assert rejection within 60s
-    
+
     print("  Note: Full cluster revocation test requires:")
     print("    - auth_enabled = true")
     print("    - Multiple Edge nodes")
     print("    - Admin revocation API")
-    
+
     print("\n  Checking revocation mechanism exists in code...")
-    
+
     # Check that revocation code exists
     import subprocess
     result = subprocess.run(
@@ -73,7 +72,7 @@ def test_revocation_timing():
         text=True,
         cwd=os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
     )
-    
+
     if 'revoke_token' in result.stdout:
         print("  ✓ revoke_token function found in source")
         return True
@@ -87,15 +86,15 @@ def main():
     print(" RFC-001 FR-11: CLUSTER REVOCATION TEST")
     print(" Requirement: Revocation propagates ≤60s globally")
     print("=" * 60)
-    
+
     tests = [
         ("Local Revocation", test_local_revocation),
         ("Revocation Timing", test_revocation_timing),
     ]
-    
+
     passed = 0
     failed = 0
-    
+
     for name, test_fn in tests:
         try:
             if test_fn():
@@ -105,11 +104,11 @@ def main():
         except Exception as e:
             print(f"✗ {name} EXCEPTION: {e}")
             failed += 1
-    
+
     print("\n" + "=" * 60)
     print(f" RESULTS: {passed}/{passed + failed} tests passed")
     print("=" * 60)
-    
+
     if failed == 0:
         print("✓ CLUSTER REVOCATION: PASSED")
         return 0

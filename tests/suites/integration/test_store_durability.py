@@ -66,7 +66,7 @@ def run_erlang_test(code):
 def test_store_put_get():
     """Test basic put/get operations."""
     print("[TEST] Store put/get operations...")
-    
+
     success, stdout, stderr = run_erlang_test("""
         %% Setup: Start Mnesia and create test table
         application:stop(mnesia),
@@ -87,7 +87,7 @@ def test_store_put_get():
         
         io:format("PASS: put/get works correctly~n")
     """)
-    
+
     if success and "PASS" in stdout:
         print("  ✓ PASS")
         return True
@@ -98,7 +98,7 @@ def test_store_put_get():
 def test_store_durability_options():
     """Test different durability options."""
     print("[TEST] Store durability options...")
-    
+
     success, stdout, stderr = run_erlang_test("""
         %% Setup
         application:stop(mnesia),
@@ -121,7 +121,7 @@ def test_store_durability_options():
         
         io:format("PASS: durability options work correctly~n")
     """)
-    
+
     if success and "PASS" in stdout:
         print("  ✓ PASS")
         return True
@@ -132,7 +132,7 @@ def test_store_durability_options():
 def test_store_delete():
     """Test delete operations."""
     print("[TEST] Store delete operations...")
-    
+
     success, stdout, stderr = run_erlang_test("""
         %% Setup
         application:stop(mnesia),
@@ -154,7 +154,7 @@ def test_store_delete():
         
         io:format("PASS: delete works correctly~n")
     """)
-    
+
     if success and "PASS" in stdout:
         print("  ✓ PASS")
         return True
@@ -165,7 +165,7 @@ def test_store_delete():
 def test_store_batch_put():
     """Test batch put operations."""
     print("[TEST] Store batch put operations...")
-    
+
     success, stdout, stderr = run_erlang_test("""
         %% Setup
         application:stop(mnesia),
@@ -186,7 +186,7 @@ def test_store_batch_put():
         
         io:format("PASS: batch_put works correctly~n")
     """)
-    
+
     if success and "PASS" in stdout:
         print("  ✓ PASS")
         return True
@@ -199,26 +199,26 @@ def main():
     print("=" * 60)
     print("Test Suite: iris_store Integration Tests")
     print("=" * 60)
-    
+
     results = []
-    
+
     results.append(("put/get", test_store_put_get()))
     results.append(("durability options", test_store_durability_options()))
     results.append(("delete", test_store_delete()))
     results.append(("batch_put", test_store_batch_put()))
-    
+
     print("\n" + "=" * 60)
     print("Results:")
     passed = sum(1 for _, r in results if r)
     failed = sum(1 for _, r in results if not r)
-    
+
     for name, result in results:
         status = "✓ PASS" if result else "✗ FAIL"
         print(f"  {name}: {status}")
-    
+
     print(f"\nTotal: {passed} passed, {failed} failed")
     print("=" * 60)
-    
+
     if failed > 0:
         sys.exit(1)
     else:

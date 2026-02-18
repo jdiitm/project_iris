@@ -84,7 +84,6 @@ def test_shuffled_order():
                 sent += 1
             except Exception:
                 break
-            time.sleep(0.01)
 
         client.close()
 
@@ -124,9 +123,7 @@ def test_interleaved_users():
                     client.send_msg(target, f"user{idx}_msg{msg_idx}")
                 except Exception:
                     pass
-                time.sleep(0.005)
 
-        time.sleep(0.5)
         for c in clients:
             try:
                 c.close()

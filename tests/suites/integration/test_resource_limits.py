@@ -11,9 +11,7 @@ RFC Section 4.2: Maximum payload size 64KB
 import sys
 import os
 import time
-import socket
 import subprocess
-import struct
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 sys.path.insert(0, PROJECT_ROOT)
@@ -44,7 +42,7 @@ def run_erlang_test(code):
 
 def test_oom_kill():
     print("[TEST] Verifying OOM Kill Switch...")
-    
+
     success, stdout = run_erlang_test("""
         %% Start Ingress Guard
         iris_ingress_guard:start_link(),
@@ -84,7 +82,7 @@ def test_oom_kill():
                 io:format("PASS: Process was killed by system~n")
         end
     """)
-    
+
     if success and "PASS: Process was killed" in stdout:
         print("  ✓ PASS")
         return True
@@ -99,18 +97,18 @@ def test_payload_size_limit():
     Verify that messages exceeding 64KB are rejected by the server.
     """
     print("[TEST] Verifying 64KB Payload Size Limit (RFC Section 4.2)...")
-    
+
     # The protocol defines max message size. Let's verify the server rejects oversized messages.
-    
+
     try:
         sender = IrisClient()
         sender.login(f"payload_test_sender_{int(time.time())}")
     except Exception as e:
         print(f"  ✗ FAIL: Could not connect - {e}")
         return False
-    
+
     receiver = f"payload_test_receiver_{int(time.time())}"
-    
+
     # Test 1: 64KB message should succeed (boundary)
     print("  Testing 64KB boundary...")
     msg_64k = "x" * 65535  # 64KB - 1 byte (within limit)
@@ -120,20 +118,20 @@ def test_payload_size_limit():
     except Exception as e:
         print(f"    Warning: 64KB message failed - {e}")
         # Continue testing oversized
-    
+
     # Test 2: Try to send oversized message (>64KB)
     # Note: The protocol uses 16-bit length field for message, so max is 65535 bytes
     # To test rejection, we need to send a malformed packet or check protocol parser
-    
+
     print("  Testing oversized payload rejection...")
-    
+
     # The iris_proto limits are:
     # ?MAX_MSG_LEN = 65536 (64KB)
     # Messages larger than this should be rejected at the parser level
-    
+
     # Since IrisClient's send_msg uses 16-bit length, we can't send >65KB via it
     # Instead, test that the protocol constant exists and is enforced
-    
+
     # Check via Erlang that MAX_MSG_LEN is defined correctly
     result = subprocess.run(
         ["erl", "-pa", f"{PROJECT_ROOT}/ebin", "-noshell", "-eval",
@@ -141,7 +139,7 @@ def test_payload_size_limit():
         capture_output=True, text=True, timeout=10,
         cwd=PROJECT_ROOT
     )
-    
+
     if "65536" in result.stdout or "64" in result.stdout:
         print("    ✓ MAX_MSG_LEN is 64KB")
     else:
@@ -158,7 +156,7 @@ def test_payload_size_limit():
                     return False
         else:
             print(f"    Warning: Could not verify MAX_MSG_LEN (output: {result.stdout.strip()})")
-    
+
     # Test 3: Verify the decoder rejects oversized messages
     # We can't easily send >64KB via normal send, so we verify via unit test
     result2 = subprocess.run(
@@ -184,9 +182,9 @@ def test_payload_size_limit():
         capture_output=True, text=True, timeout=10,
         cwd=PROJECT_ROOT
     )
-    
+
     sender.close()
-    
+
     if "PASS" in result2.stdout:
         print("    ✓ Protocol rejects >64KB messages")
         print("  ✓ PASS: 64KB payload limit enforced")
@@ -204,19 +202,19 @@ def main():
     print("=" * 60)
     print(" RESOURCE LIMITS TEST SUITE")
     print("=" * 60)
-    
+
     results = []
-    
+
     # Test 1: OOM Kill Switch
     results.append(("OOM Kill Switch", test_oom_kill()))
-    
+
     # Test 2: Payload Size Limit
     results.append(("Payload Size Limit (64KB)", test_payload_size_limit()))
-    
+
     print("\n" + "=" * 60)
     print(" RESULTS")
     print("=" * 60)
-    
+
     passed = 0
     failed = 0
     for name, result in results:
@@ -226,9 +224,9 @@ def main():
             passed += 1
         else:
             failed += 1
-    
+
     print(f"\nTotal: {passed}/{len(results)} passed")
-    
+
     if failed > 0:
         print("[FAIL] Some tests failed")
         return 1

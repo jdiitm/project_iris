@@ -10,11 +10,9 @@ Tests cover:
 """
 
 import sys
-import time
 import socket
 import struct
 import os
-import ssl
 
 # Add project root to sys.path
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -78,28 +76,28 @@ def test_malformed_opcode():
     print("=" * 60)
     print("SECURITY TEST: Malformed Opcode")
     print("=" * 60)
-    
+
     try:
         s = get_connection()
-        
+
         # Send unknown opcode (0xFF)
         s.sendall(b'\xFF\x00\x00\x00garbage')
-        
+
         try:
             s.recv(1024)
         except:
             pass
-        
+
         s.close()
-        
+
         # Verify server still alive
         s2 = get_connection()
         login(s2, "verify_user")
         s2.close()
-        
+
         print("✓ Server survived malformed opcode")
         return True
-        
+
     except Exception as e:
         print(f"✗ Error: {e}")
         return False
@@ -110,21 +108,18 @@ def test_truncated_packet():
     print("\n" + "=" * 60)
     print("SECURITY TEST: Truncated Packet")
     print("=" * 60)
-    
+
     try:
         s = get_connection()
         login(s, "trunc_tester")
-        
+
         # Send message with header claiming 1000 bytes but only send 10
         # Uses opcode 0x07 (sequenced) — opcode 0x02 is REJECTED in v1.0
         target = b"target"
         s.sendall(b'\x07' + struct.pack('>H', len(target)) + target +
                   struct.pack('>Q', 999) + struct.pack('>H', 1000))
         s.sendall(b'only10byte')
-        
-        # P2-3: Cannot replace — no condition to poll (delay for server processing)
-        time.sleep(0.5)
-        
+
         # Server may close connection (which is valid security behavior)
         # or may wait for more data - either is acceptable
         try:
@@ -132,20 +127,20 @@ def test_truncated_packet():
         except (BrokenPipeError, ConnectionResetError, OSError):
             # Connection closed by server - this is GOOD security behavior
             pass
-        
+
         try:
             s.close()
         except:
             pass
-        
+
         # Key test: Verify server still alive and accepting new connections
         s2 = get_connection()
         login(s2, "verify_user2")
         s2.close()
-        
+
         print("✓ Server handled truncated packet gracefully")
         return True
-        
+
     except Exception as e:
         print(f"✗ Error: {e}")
         return False
@@ -156,15 +151,15 @@ def test_oversized_username():
     print("\n" + "=" * 60)
     print("SECURITY TEST: Oversized Username")
     print("=" * 60)
-    
+
     try:
         s = get_connection()
-        
+
         # Try to login with 10KB username (should be rejected)
         huge_user = "A" * 10000
         payload = b'\x01' + huge_user.encode('utf-8')
         s.sendall(payload)
-        
+
         try:
             resp = s.recv(1024)
             # Should either close connection or reject
@@ -173,17 +168,17 @@ def test_oversized_username():
                 return False
         except:
             pass  # Connection closed is acceptable
-        
+
         s.close()
-        
+
         # Verify server alive
         s2 = get_connection()
         login(s2, "normal_user")
         s2.close()
-        
+
         print("✓ Oversized username rejected")
         return True
-        
+
     except Exception as e:
         print(f"✗ Error: {e}")
         return False
@@ -194,32 +189,30 @@ def test_oversized_message():
     print("\n" + "=" * 60)
     print("SECURITY TEST: Oversized Message")
     print("=" * 60)
-    
+
     try:
         s = get_connection()
         login(s, "msg_tester")
-        
+
         # Try to send 100KB message (should be rejected/truncated)
         target = "victim"
         huge_msg = "B" * 100000
-        
+
         try:
             send_msg(s, target, huge_msg)
-            # P2-3: Cannot replace — no condition to poll (delay for server processing)
-            time.sleep(0.5)
         except:
             pass  # May fail, which is fine
-        
+
         s.close()
-        
+
         # Verify server alive
         s2 = get_connection()
         login(s2, "verify_user3")
         s2.close()
-        
+
         print("✓ Server survived oversized message")
         return True
-        
+
     except Exception as e:
         print(f"✗ Error: {e}")
         return False
@@ -234,13 +227,13 @@ def test_unauthenticated_send():
     print("\n" + "=" * 60)
     print("SECURITY TEST: Unauthenticated Send")
     print("=" * 60)
-    
+
     try:
         s = get_connection()
-        
+
         # DON'T login - try to send message directly
         send_msg(s, "target", "unauthorized_msg")
-        
+
         try:
             resp = s.recv(1024)
             # Should be ignored or connection closed
@@ -248,12 +241,12 @@ def test_unauthenticated_send():
                 print("⚠ Unauthenticated message might have been accepted")
         except:
             pass  # Expected - connection closed or timeout
-        
+
         s.close()
-        
+
         print("✓ Unauthenticated send handled")
         return True
-        
+
     except Exception as e:
         print(f"✗ Error: {e}")
         return False
@@ -264,25 +257,25 @@ def test_null_byte_injection():
     print("\n" + "=" * 60)
     print("SECURITY TEST: Null Byte Injection")
     print("=" * 60)
-    
+
     try:
         s = get_connection()
-        
+
         # Login with null bytes in username
         user_with_null = b'\x01admin\x00attacker'
         s.sendall(user_with_null)
-        
+
         resp = s.recv(1024)
         s.close()
-        
+
         # Verify server alive and not corrupted
         s2 = get_connection()
         login(s2, "clean_user")
         s2.close()
-        
+
         print("✓ Null byte injection handled safely")
         return True
-        
+
     except Exception as e:
         print(f"✗ Error: {e}")
         return False
@@ -297,10 +290,10 @@ def test_rapid_connection_flood():
     print("\n" + "=" * 60)
     print("SECURITY TEST: Rapid Connection Flood")
     print("=" * 60)
-    
+
     num_connections = 50
     sockets = []
-    
+
     try:
         # Open many TLS connections rapidly (server requires TLS)
         ctx = get_verified_ssl_context()
@@ -313,27 +306,24 @@ def test_rapid_connection_flood():
                 sockets.append(s)
             except:
                 pass  # Some may fail, that's fine
-        
+
         print(f"✓ Opened {len(sockets)} connections")
-        
+
         # Close them all
         for s in sockets:
             try:
                 s.close()
             except:
                 pass
-        
-        # P2-3: Cannot replace — no condition to poll (delay for connection cleanup)
-        time.sleep(0.5)
-        
+
         # Verify server still accepts connections
         s = get_connection()
         login(s, "post_flood_user")
         s.close()
-        
+
         print("✓ Server survived connection flood")
         return True
-        
+
     except Exception as e:
         print(f"✗ Error: {e}")
         return False
@@ -350,30 +340,30 @@ def test_message_flood():
     print("\n" + "=" * 60)
     print("SECURITY TEST: Message Flood")
     print("=" * 60)
-    
+
     try:
         s = get_connection()
         login(s, "flooder")
-        
+
         # Send 100 messages rapidly
         for i in range(100):
             try:
                 send_msg(s, "target", f"flood_{i}")
             except:
                 break
-        
+
         print("✓ Sent 100 messages rapidly")
-        
+
         s.close()
-        
+
         # Verify server alive
         s2 = get_connection()
         login(s2, "post_flood_user2")
         s2.close()
-        
+
         print("✓ Server survived message flood")
         return True
-        
+
     except Exception as e:
         print(f"✗ Error: {e}")
         return False
@@ -388,26 +378,24 @@ def test_empty_message():
     print("\n" + "=" * 60)
     print("SECURITY TEST: Empty Message")
     print("=" * 60)
-    
+
     try:
         s = get_connection()
         login(s, "empty_tester")
-        
+
         # Send empty message
         send_msg(s, "target", "")
-        
-        # P2-3: Cannot replace — no condition to poll (delay for server processing)
-        time.sleep(0.2)
+
         s.close()
-        
+
         # Verify server alive
         s2 = get_connection()
         login(s2, "verify_empty")
         s2.close()
-        
+
         print("✓ Empty message handled")
         return True
-        
+
     except Exception as e:
         print(f"✗ Error: {e}")
         return False
@@ -418,32 +406,30 @@ def test_binary_message():
     print("\n" + "=" * 60)
     print("SECURITY TEST: Binary Message"  )
     print("=" * 60)
-    
+
     try:
         s = get_connection()
         login(s, "binary_tester")
-        
+
         # Send binary data (all possible byte values) using opcode 0x07 (sequenced)
         binary_msg = bytes(range(256))
         target = "target"
         target_bytes = target.encode('utf-8')
-        
+
         packet = (b'\x07' + struct.pack('>H', len(target_bytes)) + target_bytes +
                   struct.pack('>Q', 1) + struct.pack('>H', len(binary_msg)) + binary_msg)
         s.sendall(packet)
-        
-        # P2-3: Cannot replace — no condition to poll (delay for server processing)
-        time.sleep(0.2)
+
         s.close()
-        
+
         # Verify server alive
         s2 = get_connection()
         login(s2, "verify_binary")
         s2.close()
-        
+
         print("✓ Binary message handled")
         return True
-        
+
     except Exception as e:
         print(f"✗ Error: {e}")
         return False
@@ -455,37 +441,37 @@ def test_binary_message():
 
 if __name__ == "__main__":
     results = []
-    
+
     # Protocol abuse
     results.append(("Malformed Opcode", test_malformed_opcode()))
     results.append(("Truncated Packet", test_truncated_packet()))
     results.append(("Oversized Username", test_oversized_username()))
     results.append(("Oversized Message", test_oversized_message()))
-    
+
     # Auth
     results.append(("Unauthenticated Send", test_unauthenticated_send()))
     results.append(("Null Byte Injection", test_null_byte_injection()))
-    
+
     # DoS
     results.append(("Connection Flood", test_rapid_connection_flood()))
     results.append(("Message Flood", test_message_flood()))
-    
+
     # Edge cases
     results.append(("Empty Message", test_empty_message()))
     results.append(("Binary Message", test_binary_message()))
-    
+
     print("\n" + "=" * 60)
     print("SECURITY TEST SUMMARY")
     print("=" * 60)
-    
+
     passed = sum(1 for _, r in results if r)
     total = len(results)
-    
+
     for name, result in results:
         status = "PASS" if result else "FAIL"
         print(f"  [{status}] {name}")
-    
+
     print(f"\n{passed}/{total} security tests passed")
-    
+
     sys.exit(0 if passed == total else 1)
 

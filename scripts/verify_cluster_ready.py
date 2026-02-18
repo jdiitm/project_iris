@@ -25,7 +25,7 @@ import subprocess
 import sys
 import time
 import threading
-from typing import List, Tuple, Optional
+from typing import List, Tuple
 
 # Core containers and their Erlang node names
 CORE_CONTAINERS = [
@@ -130,7 +130,7 @@ def get_mnesia_db_nodes() -> Tuple[int, List[str]]:
         # Use a unique probe name with timestamp to avoid conflicts
         import random
         probe_id = random.randint(10000, 99999)
-        
+
         # Simpler approach: use erl with proper hostname resolution
         cmd = (
             f'erl -noshell -sname probe{probe_id} -setcookie {COOKIE} '
@@ -149,20 +149,20 @@ def get_mnesia_db_nodes() -> Tuple[int, List[str]]:
             "end, "
             'halt(0)."'
         )
-        
+
         result = subprocess.run(
             ["docker", "exec", "core-east-1", "sh", "-c", cmd],
             capture_output=True,
             text=True,
             timeout=20
         )
-        
+
         output = result.stdout.strip()
         # Handle error cases
         if "pang" in output or "badrpc" in output:
             # Node connectivity issue - but if containers are healthy, trust init_cluster.sh
             return 0, []
-            
+
         if ":" in output:
             parts = output.split(":")
             try:
@@ -172,7 +172,7 @@ def get_mnesia_db_nodes() -> Tuple[int, List[str]]:
             except ValueError:
                 pass
         return 0, []
-    except Exception as e:
+    except Exception:
         return 0, []
 
 
@@ -186,7 +186,7 @@ def get_table_replica_count(table: str) -> int:
     try:
         import random
         probe_id = random.randint(10000, 99999)
-        
+
         cmd = (
             f'erl -noshell -sname replicas{probe_id} -setcookie {COOKIE} -eval "'
             f"pong = net_adm:ping('core_east_1@coreeast1'), "
@@ -200,7 +200,7 @@ def get_table_replica_count(table: str) -> int:
             "end, "
             'halt(0)."'
         )
-        
+
         result = subprocess.run(
             ["docker", "exec", "core-east-1", "sh", "-c", cmd],
             capture_output=True,
@@ -222,7 +222,7 @@ def test_cross_region_delivery(verbose: bool = False) -> bool:
     """
     west_port = 8087
     sydney_port = 8090
-    
+
     # Check ports are available
     if not check_port_listening("localhost", west_port):
         log(f"  West edge (port {west_port}) not listening", verbose)
@@ -230,26 +230,26 @@ def test_cross_region_delivery(verbose: bool = False) -> bool:
     if not check_port_listening("localhost", sydney_port):
         log(f"  Sydney edge (port {sydney_port}) not listening", verbose)
         return False
-    
+
     test_id = int(time.time() * 1000) % 100000
     sender_name = f"verify_west_{test_id}"
     receiver_name = f"verify_sydney_{test_id}"
     test_message = f"CROSS_REGION_VERIFY_{test_id}"
-    
+
     received = {"data": None}
-    
+
     def receiver_thread():
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.settimeout(10)
             sock.connect(("localhost", sydney_port))
-            
+
             # Login
             sock.sendall(bytes([0x01]) + receiver_name.encode())
             resp = sock.recv(1024)
             if b"LOGIN_OK" not in resp:
                 return
-            
+
             # Listen for messages
             sock.setblocking(False)
             start = time.time()
@@ -261,22 +261,22 @@ def test_cross_region_delivery(verbose: bool = False) -> bool:
                         break
                 except BlockingIOError:
                     time.sleep(0.05)
-            
+
             sock.close()
         except Exception:
             pass
-    
+
     # Start receiver
     recv_thread = threading.Thread(target=receiver_thread, daemon=True)
     recv_thread.start()
     time.sleep(0.5)
-    
+
     # Send message
     try:
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.settimeout(5)
         sock.connect(("localhost", west_port))
-        
+
         # Login
         sock.sendall(bytes([0x01]) + sender_name.encode())
         resp = sock.recv(1024)
@@ -284,7 +284,7 @@ def test_cross_region_delivery(verbose: bool = False) -> bool:
             log(f"  Sender login failed", verbose)
             sock.close()
             return False
-        
+
         # Send message to receiver
         target_bytes = receiver_name.encode()
         msg_bytes = test_message.encode()
@@ -298,10 +298,10 @@ def test_cross_region_delivery(verbose: bool = False) -> bool:
     except Exception as e:
         log(f"  Send failed: {e}", verbose)
         return False
-    
+
     # Wait for receiver
     recv_thread.join(timeout=6)
-    
+
     return received["data"] is not None
 
 
@@ -312,39 +312,39 @@ def verify_cluster(verbose: bool = True, quick: bool = False) -> bool:
     Returns True if cluster is ready for cross-region tests.
     """
     all_ok = True
-    
+
     log("=" * 60, verbose)
     log("Cluster Readiness Verification", verbose)
     log("=" * 60, verbose)
-    
+
     # 1. Check Docker
     log("\n1. Checking Docker availability...", verbose)
     if not check_docker_available():
         log("   FAIL: Docker not available", verbose)
         return False
     log("   OK: Docker is running", verbose)
-    
+
     # 2. Check core containers
     log("\n2. Checking core containers...", verbose)
     running_cores = get_running_cores()
     log(f"   Running: {len(running_cores)}/{len(CORE_CONTAINERS)} cores", verbose)
-    
+
     if len(running_cores) < MIN_CORES:
         log(f"   FAIL: Need at least {MIN_CORES} cores", verbose)
         all_ok = False
     else:
         for container, node in running_cores:
             log(f"     {container}: {node}", verbose)
-    
+
     # 3. Check edge containers
     log("\n3. Checking edge containers...", verbose)
     running_edges = get_running_edges()
     log(f"   Running: {len(running_edges)}/{len(EDGE_CONTAINERS)} edges", verbose)
-    
+
     if len(running_edges) < MIN_EDGES:
         log(f"   FAIL: Need at least {MIN_EDGES} edges", verbose)
         all_ok = False
-    
+
     # 4. Check edge ports
     log("\n4. Checking edge ports...", verbose)
     listening_edges = 0
@@ -354,18 +354,18 @@ def verify_cluster(verbose: bool = True, quick: bool = False) -> bool:
             log(f"     {container} (:{port}): listening", verbose)
         else:
             log(f"     {container} (:{port}): NOT listening", verbose)
-    
+
     if listening_edges < MIN_EDGES:
         log(f"   FAIL: Need at least {MIN_EDGES} edges listening", verbose)
         all_ok = False
-    
+
     # 5. Check Mnesia cluster
     # Note: The probe node approach has connectivity issues. If containers
     # are running and healthy, trust that init_cluster.sh verified Mnesia.
     log("\n5. Checking Mnesia cluster membership...", verbose)
     db_node_count, db_nodes = get_mnesia_db_nodes()
     log(f"   Mnesia db_nodes: {db_node_count}", verbose)
-    
+
     if db_node_count < MIN_CORES:
         # Don't fail if containers are healthy - probe may have connectivity issues
         if len(running_cores) >= MIN_CORES:
@@ -374,7 +374,7 @@ def verify_cluster(verbose: bool = True, quick: bool = False) -> bool:
         else:
             log(f"   FAIL: Mnesia cluster has fewer than {MIN_CORES} nodes", verbose)
             all_ok = False
-    
+
     # 6. Check table replication
     # Note: Same issue - probe may return 0 even when tables are replicated.
     log("\n6. Checking table replication...", verbose)
@@ -386,18 +386,18 @@ def verify_cluster(verbose: bool = True, quick: bool = False) -> bool:
         log(f"     {table}: {replicas} copies [{status}]", verbose)
         if replicas < MIN_REPLICAS:
             replication_issues += 1
-    
+
     # Only fail if ALL tables have issues AND containers aren't healthy
     if replication_issues == len(tables) and len(running_cores) < MIN_CORES:
         all_ok = False
-    
+
     # 7. Cross-region delivery test (skip if quick mode)
     if not quick:
         log("\n7. Testing cross-region message delivery...", verbose)
         # Only test if we have West and Sydney edges
         west_running = any(c == "edge-west-1" for c, _ in running_edges)
         sydney_running = any(c == "edge-sydney-1" for c, _ in running_edges)
-        
+
         if west_running and sydney_running:
             if test_cross_region_delivery(verbose):
                 log("   OK: Cross-region delivery working (West -> Sydney)", verbose)
@@ -408,7 +408,7 @@ def verify_cluster(verbose: bool = True, quick: bool = False) -> bool:
             log("   SKIP: West and/or Sydney edges not running", verbose)
     else:
         log("\n7. Skipping cross-region delivery test (quick mode)", verbose)
-    
+
     # Summary
     log("\n" + "=" * 60, verbose)
     if all_ok:
@@ -431,14 +431,14 @@ def main():
     parser.add_argument("--quick", action="store_true",
                         help="Quick check - skip cross-region delivery test")
     args = parser.parse_args()
-    
+
     verbose = not args.quiet
-    
+
     if not check_docker_available():
         if verbose:
             print("Docker not available")
         sys.exit(2)
-    
+
     if verify_cluster(verbose=verbose, quick=args.quick):
         sys.exit(0)
     else:

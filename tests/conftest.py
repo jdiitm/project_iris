@@ -29,6 +29,26 @@ import threading
 from typing import Optional
 
 # =============================================================================
+# Hypothesis Configuration (deterministic CI)
+# =============================================================================
+try:
+    from hypothesis import settings as hypothesis_settings, Verbosity
+    hypothesis_settings.register_profile(
+        "ci",
+        derandomize=True,
+        max_examples=100,
+        verbosity=Verbosity.quiet,
+    )
+    hypothesis_settings.register_profile(
+        "dev",
+        max_examples=50,
+    )
+    if os.environ.get("CI"):
+        hypothesis_settings.load_profile("ci")
+except ImportError:
+    pass
+
+# =============================================================================
 # Configuration
 # =============================================================================
 
@@ -49,12 +69,12 @@ class SeededRandom:
     
     Each test gets deterministic random values based on the master seed.
     """
-    
+
     def __init__(self, seed: int):
         self._seed = seed
         self._random = random.Random(seed)
         self._lock = threading.Lock()
-    
+
     def __getattr__(self, name):
         """Delegate to the underlying Random instance with thread safety."""
         attr = getattr(self._random, name)
@@ -64,12 +84,12 @@ class SeededRandom:
                     return attr(*args, **kwargs)
             return thread_safe_call
         return attr
-    
+
     def reset(self):
         """Reset the random state to initial seed."""
         with self._lock:
             self._random.seed(self._seed)
-    
+
     @property
     def seed(self) -> int:
         """Return the seed used for this random instance."""
@@ -97,7 +117,7 @@ def get_seeded_random() -> SeededRandom:
         name = ''.join(rng.choices(string.ascii_lowercase, k=8))
     """
     global _seeded_random
-    
+
     with _seeded_random_lock:
         if _seeded_random is None:
             _seeded_random = SeededRandom(MASTER_SEED)
@@ -124,11 +144,11 @@ class IDGenerator:
     
     IDs are of the form: "{prefix}_{counter:05d}"
     """
-    
+
     def __init__(self):
         self._counters: dict = {}
         self._lock = threading.Lock()
-    
+
     def get_id(self, prefix: str = "test") -> str:
         """
         Get the next ID for a given prefix.
@@ -144,7 +164,7 @@ class IDGenerator:
                 self._counters[prefix] = 0
             self._counters[prefix] += 1
             return f"{prefix}_{self._counters[prefix]:05d}"
-    
+
     def reset(self):
         """Reset all counters to zero."""
         with self._lock:
@@ -172,7 +192,7 @@ def get_test_id(prefix: str = "test") -> str:
         user_id2 = get_test_id("user")    # "user_00002"
     """
     global _id_generator
-    
+
     with _id_generator_lock:
         if _id_generator is None:
             _id_generator = IDGenerator()
@@ -182,7 +202,7 @@ def get_test_id(prefix: str = "test") -> str:
 def reset_test_ids():
     """Reset all ID counters to zero."""
     global _id_generator
-    
+
     with _id_generator_lock:
         if _id_generator is not None:
             _id_generator.reset()
@@ -199,11 +219,11 @@ class DeterministicUUID:
     UUIDs follow the format: 00000000-0000-4000-8000-{counter:012d}
     This is a valid UUID v4 format but with predictable values.
     """
-    
+
     def __init__(self, seed: int = 0):
         self._counter = seed
         self._lock = threading.Lock()
-    
+
     def uuid4(self) -> str:
         """
         Generate a deterministic UUID in v4 format.
@@ -214,12 +234,12 @@ class DeterministicUUID:
         with self._lock:
             self._counter += 1
             return f"00000000-0000-4000-8000-{self._counter:012d}"
-    
+
     @property
     def hex(self) -> str:
         """Generate a deterministic UUID and return just the hex portion."""
         return self.uuid4().replace("-", "")
-    
+
     def reset(self, seed: int = 0):
         """Reset counter to specified seed."""
         with self._lock:
@@ -243,7 +263,7 @@ def deterministic_uuid() -> str:
         uid2 = deterministic_uuid()  # "00000000-0000-4000-8000-000000000002"
     """
     global _uuid_generator
-    
+
     with _uuid_generator_lock:
         if _uuid_generator is None:
             _uuid_generator = DeterministicUUID(MASTER_SEED)
@@ -263,7 +283,7 @@ def deterministic_uuid_hex() -> str:
 def reset_deterministic_uuid():
     """Reset UUID generator to initial state."""
     global _uuid_generator
-    
+
     with _uuid_generator_lock:
         if _uuid_generator is not None:
             _uuid_generator.reset(MASTER_SEED)

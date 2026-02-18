@@ -21,14 +21,13 @@ Tier: 2 (Requires Docker cluster)
 """
 
 import socket
-import ssl
 import time
 import subprocess
 import sys
 import os
 import struct
 from pathlib import Path
-from typing import Optional, List, Dict
+from typing import List
 
 PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
@@ -143,14 +142,14 @@ def stop_region(region: str) -> bool:
     """Stop all containers in a region."""
     if region not in REGIONS:
         return False
-    
+
     all_containers = REGIONS[region]["cores"] + REGIONS[region]["edges"]
     success = True
-    
+
     for container in all_containers:
         if not stop_container(container):
             success = False
-    
+
     return success
 
 
@@ -158,14 +157,14 @@ def kill_region(region: str) -> bool:
     """SIGKILL all containers in a region (catastrophic failure)."""
     if region not in REGIONS:
         return False
-    
+
     all_containers = REGIONS[region]["cores"] + REGIONS[region]["edges"]
     success = True
-    
+
     for container in all_containers:
         if not kill_container(container):
             success = False
-    
+
     return success
 
 
@@ -192,24 +191,24 @@ def start_region(region: str) -> bool:
     """Start all containers in a region."""
     if region not in REGIONS:
         return False
-    
+
     all_containers = REGIONS[region]["cores"] + REGIONS[region]["edges"]
     success = True
-    
+
     # Start cores first, then edges
     for container in REGIONS[region]["cores"]:
         if not start_container(container):
             success = False
         time.sleep(2)  # Let core initialize
-    
+
     for container in REGIONS[region]["edges"]:
         if not start_container(container):
             success = False
-    
+
     # Reconnect edges to cores after region restart
     for core in REGIONS[region]["cores"]:
         _reconnect_edge_after_core_restart(core)
-    
+
     return success
 
 
@@ -217,7 +216,7 @@ def region_healthy(region: str) -> bool:
     """Check if all containers in region are running."""
     if region not in REGIONS:
         return False
-    
+
     all_containers = REGIONS[region]["cores"] + REGIONS[region]["edges"]
     return all(check_container_running(c) for c in all_containers)
 
@@ -225,7 +224,7 @@ def region_healthy(region: str) -> bool:
 def connect_tls(port: int, max_retries=5, retry_delay=2.0):
     """Create TLS connection to edge with retry logic."""
     context = get_verified_ssl_context()
-    
+
     last_err = None
     for attempt in range(max_retries):
         try:
@@ -248,7 +247,6 @@ def login(sock, username: str) -> bool:
     try:
         response = sock.recv(1024)
         if len(response) > 0:
-            time.sleep(0.05)  # Ensure server-side registration completes
             return True
         return False
     except socket.timeout:
@@ -264,15 +262,14 @@ def send_message(sock, target: str, content: str) -> bool:
     target_bytes = target.encode()
     msg_bytes = content.encode()
     _seq[0] += 1
-    
+
     packet = (bytes([0x07]) +
               struct.pack('>H', len(target_bytes)) + target_bytes +
               struct.pack('>Q', _seq[0]) +
               struct.pack('>H', len(msg_bytes)) + msg_bytes)
-    
+
     try:
         sock.sendall(packet)
-        time.sleep(0.01)  # Brief delay to ensure TCP flush
         return True  # Fire-and-forget - no ACK expected
     except Exception:
         return False
@@ -289,7 +286,7 @@ def fetch_offline_messages(port: int, username: str) -> List[bytes]:
         if not login(sock, username):
             sock.close()
             return []
-        
+
         # Offline messages arrive automatically after login
         messages = []
         sock.settimeout(5)
@@ -301,7 +298,7 @@ def fetch_offline_messages(port: int, username: str) -> List[bytes]:
                 messages.append(data)
         except socket.timeout:
             pass
-        
+
         sock.close()
         return messages
     except Exception as e:
@@ -372,97 +369,97 @@ def test_region_isolation_queuing():
     """
     log("\n=== Test: Region Isolation and Message Queuing ===")
     log("    RFC: Section 7.2/7.3")
-    
+
     target_region = "west"
     source_region = "east"
-    
+
     test_id = int(time.time())
     sender = f"region_sender_{test_id}"
     receiver = f"region_receiver_{test_id}"
-    
+
     NUM_MESSAGES = 20
-    
+
     # Verify initial state
     if not region_healthy(target_region):
         log_test("Region isolation", False, f"{target_region} region not healthy initially")
         return False
-    
+
     # Step 1: Stop target region
     log(f"  1. Stopping {target_region} region...")
     if not stop_region(target_region):
         log_test("Region isolation", False, f"Failed to stop {target_region}")
         return False
-    
+
     time.sleep(5)
-    
+
     if region_healthy(target_region):
         log_test("Region isolation", False, f"{target_region} still healthy after stop")
         return False
-    
+
     log(f"     {target_region} region stopped")
-    
+
     # Step 2: Send messages from source region to user in target region
     log(f"  2. Sending {NUM_MESSAGES} messages from {source_region} to {target_region} user...")
-    
+
     source_port = REGIONS[source_region]["edge_port"]
     sent_messages = []
-    
+
     try:
         sock = connect_tls(source_port)
         if not login(sock, sender):
             log_test("Region isolation", False, "Login failed")
             start_region(target_region)
             return False
-        
+
         for i in range(NUM_MESSAGES):
             msg = f"REGION_TEST_{test_id}_{i:03d}"
             if send_message(sock, receiver, msg):
                 sent_messages.append(msg)
-        
+
         sock.close()
     except Exception as e:
         log_test("Region isolation", False, f"Error sending: {e}")
         start_region(target_region)
         return False
-    
+
     log(f"     Sent {len(sent_messages)} messages (queued for offline user)")
-    
+
     # Step 3: Restart target region
     log(f"  3. Restarting {target_region} region...")
-    
+
     if not start_region(target_region):
         log_test("Region isolation", False, f"Failed to restart {target_region}")
         return False
-    
+
     log(f"  4. Waiting for region recovery (up to {RECOVERY_TIMEOUT}s)...")
-    
+
     if not wait_for_region_ready(target_region):
         log_test("Region isolation", False, f"{target_region} did not recover in time")
         return False
-    
+
     log(f"     {target_region} region recovered")
-    
+
     # AUDIT P4 FIX: Reduced from 10s
     # Additional wait for message delivery
     time.sleep(5)
-    
+
     # Step 4: Fetch messages as receiver (with retries for async storage)
     log(f"  5. Fetching messages as receiver...")
-    
+
     # Try both source and target regions, accumulating results.
     # Messages may be split across regions depending on routing path.
     source_port = REGIONS[source_region]["edge_port"]
     target_port = REGIONS[target_region]["edge_port"]
-    
+
     all_messages = []
     source_msgs = fetch_offline_messages_robust(source_port, receiver, sent_messages,
                                                 max_attempts=5, delay=3.0)
     all_messages.extend(source_msgs)
-    
+
     target_msgs = fetch_offline_messages_robust(target_port, receiver, sent_messages,
                                                 max_attempts=3, delay=3.0)
     all_messages.extend(target_msgs)
-    
+
     # Check for our messages across both ports
     received_count = 0
     for sent_msg in sent_messages:
@@ -470,9 +467,9 @@ def test_region_isolation_queuing():
             if sent_msg.encode() in msg_data:
                 received_count += 1
                 break
-    
+
     log(f"     Received {received_count}/{len(sent_messages)} messages")
-    
+
     # Step 5: Evaluate
     # In CI (Docker-in-Docker), message delivery during region outage
     # is variable. 50% threshold validates queuing works while allowing
@@ -504,99 +501,99 @@ def test_catastrophic_region_failure():
     """
     log("\n=== Test: Catastrophic Region Failure (SIGKILL) ===")
     log("    RFC: Section 7.3")
-    
+
     target_region = "west"
     source_region = "east"
-    
+
     test_id = int(time.time())
     sender = f"catastrophic_sender_{test_id}"
     receiver = f"catastrophic_receiver_{test_id}"
-    
+
     NUM_MESSAGES = 15
-    
+
     # Verify initial state
     if not region_healthy(target_region):
         log_test("Catastrophic failure", False, f"{target_region} not healthy initially")
         return False
-    
+
     # Step 1: SIGKILL target region
     log(f"  1. SIGKILL {target_region} region (catastrophic failure)...")
-    
+
     if not kill_region(target_region):
         log_test("Catastrophic failure", False, f"Failed to kill {target_region}")
         return False
-    
+
     time.sleep(5)
     log(f"     {target_region} region killed")
-    
+
     # Step 2: Send messages
     log(f"  2. Sending {NUM_MESSAGES} messages during outage...")
-    
+
     source_port = REGIONS[source_region]["edge_port"]
     sent_messages = []
-    
+
     try:
         sock = connect_tls(source_port)
         if not login(sock, sender):
             log_test("Catastrophic failure", False, "Login failed")
             start_region(target_region)
             return False
-        
+
         for i in range(NUM_MESSAGES):
             msg = f"CATASTROPHIC_MSG_{test_id}_{i:03d}"
             if send_message(sock, receiver, msg):
                 sent_messages.append(msg)
-        
+
         sock.close()
     except Exception as e:
         log_test("Catastrophic failure", False, f"Error: {e}")
         start_region(target_region)
         return False
-    
+
     log(f"     Sent {len(sent_messages)} messages")
-    
+
     # Step 3: Restart region
     log(f"  3. Restarting {target_region} region from crash...")
-    
+
     if not start_region(target_region):
         log_test("Catastrophic failure", False, f"Failed to restart {target_region}")
         return False
-    
+
     log(f"  4. Waiting for recovery...")
-    
+
     if not wait_for_region_ready(target_region, timeout=180):
         log_test("Catastrophic failure", False, "Region did not recover")
         return False
-    
+
     log(f"     Region recovered from catastrophic failure")
     # AUDIT P4 FIX: Reduced from 15s
     time.sleep(8)
-    
+
     # Step 4: Verify messages (with retries for async storage + WAL replay)
     # Try both source and target regions - messages may be split across them.
     log(f"  5. Verifying message delivery...")
-    
+
     source_port = REGIONS[source_region]["edge_port"]
     target_port = REGIONS[target_region]["edge_port"]
-    
+
     all_messages = []
     source_msgs = fetch_offline_messages_robust(source_port, receiver, sent_messages,
                                                 max_attempts=5, delay=3.0)
     all_messages.extend(source_msgs)
-    
+
     target_msgs = fetch_offline_messages_robust(target_port, receiver, sent_messages,
                                                 max_attempts=3, delay=3.0)
     all_messages.extend(target_msgs)
-    
+
     received_count = 0
     for sent_msg in sent_messages:
         for msg_data in all_messages:
             if sent_msg.encode() in msg_data:
                 received_count += 1
                 break
-    
+
     log(f"     Received {received_count}/{len(sent_messages)} messages")
-    
+
     # In CI (Docker-in-Docker), SIGKILL + restart recovery is variable.
     # 50% threshold validates recovery works; observed rates are 60-90%.
     if received_count >= len(sent_messages) * 0.5:
@@ -626,24 +623,24 @@ def test_multi_region_cross_queuing():
     """
     log("\n=== Test: Multi-Region Cross-Queuing ===")
     log("    RFC: Section 7.2")
-    
+
     target_region = "eu"
     test_id = int(time.time())
-    
+
     # Stop EU region
     log(f"  1. Stopping {target_region} region...")
-    
+
     if not stop_region(target_region):
         log_test("Multi-region queuing", False, f"Failed to stop {target_region}")
         return False
-    
+
     time.sleep(5)
-    
+
     # Send from East
     log(f"  2. Sending from East...")
     east_sender = f"east_sender_{test_id}"
     east_msgs = []
-    
+
     try:
         sock = connect_tls(REGIONS["east"]["edge_port"])
         login(sock, east_sender)
@@ -654,14 +651,14 @@ def test_multi_region_cross_queuing():
         sock.close()
     except Exception as e:
         log(f"     East send error: {e}")
-    
+
     log(f"     Sent {len(east_msgs)} from East")
-    
+
     # Send from West
     log(f"  3. Sending from West...")
     west_sender = f"west_sender_{test_id}"
     west_msgs = []
-    
+
     try:
         sock = connect_tls(REGIONS["west"]["edge_port"])
         login(sock, west_sender)
@@ -672,37 +669,37 @@ def test_multi_region_cross_queuing():
         sock.close()
     except Exception as e:
         log(f"     West send error: {e}")
-    
+
     log(f"     Sent {len(west_msgs)} from West")
-    
+
     # Restart EU
     log(f"  4. Restarting {target_region}...")
     start_region(target_region)
-    
+
     if not wait_for_region_ready(target_region):
         log_test("Multi-region queuing", False, "EU did not recover")
         return False
-    
+
     time.sleep(5)  # AUDIT P4: Reduced from 10s
-    
+
     # Fetch messages (with retries for async storage)
     log(f"  5. Verifying messages...")
-    
+
     all_expected = east_msgs + west_msgs
     messages = fetch_offline_messages_robust(
         REGIONS["east"]["edge_port"], f"eu_receiver_{test_id}",
         all_expected, max_attempts=5, delay=3.0)
-    
+
     east_received = sum(1 for m in east_msgs if any(m.encode() in d for d in messages))
     west_received = sum(1 for m in west_msgs if any(m.encode() in d for d in messages))
-    
+
     total_sent = len(east_msgs) + len(west_msgs)
     total_received = east_received + west_received
-    
+
     log(f"     East->EU: {east_received}/{len(east_msgs)}")
     log(f"     West->EU: {west_received}/{len(west_msgs)}")
     log(f"     Total: {total_received}/{total_sent}")
-    
+
     if total_received >= total_sent * 0.8:
         log_test("Multi-region queuing", True,
                 f"Cross-region queuing works - {total_received}/{total_sent}")
@@ -726,42 +723,42 @@ def main():
     log("- Message queuing during outage")
     log("- Recovery after catastrophic failure")
     log("- Cross-region message delivery")
-    
+
     # Check prerequisites
     if not check_docker_available():
         log("\nFAIL: Docker not available")
         sys.exit(1)
-    
+
     # Check at least 2 regions healthy
     healthy_regions = [r for r in REGIONS if region_healthy(r)]
     if len(healthy_regions) < 2:
         log(f"\nFAIL: Need at least 2 healthy regions, found: {healthy_regions}")
         log("Run 'make cluster-up' to start the Docker cluster")
         sys.exit(1)
-    
+
     log(f"\nHealthy regions: {healthy_regions}")
-    
+
     # Run tests
     test_region_isolation_queuing()
     test_catastrophic_region_failure()
     test_multi_region_cross_queuing()
-    
+
     # Summary
     log("\n" + "=" * 60)
     log("SUMMARY")
     log("=" * 60)
-    
+
     passed = sum(1 for _, p, _ in results if p)
     failed = sum(1 for _, p, _ in results if not p)
-    
+
     for name, p, msg in results:
         status = "PASS" if p else "FAIL"
         log(f"  [{status}] {name}")
-    
+
     log(f"\nTotal: {len(results)} tests")
     log(f"Passed: {passed}")
     log(f"Failed: {failed}")
-    
+
     if failed > 0:
         log("\nFAIL: Region outage tests FAILED")
         sys.exit(1)

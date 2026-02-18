@@ -34,7 +34,7 @@ project_root = os.path.abspath(os.path.join(current_dir, "../../.."))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
-from tests.framework.cluster import ClusterManager, get_cluster
+from tests.framework.cluster import ClusterManager
 
 # Configuration
 MESSI_USER = "messi"
@@ -86,7 +86,7 @@ def create_socket(port=8085, timeout=10.0):
         return s
     except Exception:
         pass
-    
+
     # Fallback to non-TLS (for local development without certs)
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -125,11 +125,11 @@ def send_burst(sender_id, count):
     sock = create_socket()
     if not sock:
         return 0
-    
+
     sent = 0
     try:
         login(sock, f"fan_{sender_id}")
-        
+
         for i in range(count):
             packet = make_packet(MESSI_USER, b"GOAL! " * 2, seq_no=i + 1)
             t0 = time.perf_counter()
@@ -149,16 +149,16 @@ def messi_consume(expected_count, timeout=10):
     if not sock:
         print("[FAIL] Messi cannot connect!")
         return 0
-    
+
     print(f"\n[MESSI] Coming online... Expecting ~{expected_count} messages.")
     start_t = time.time()
     received = 0
     total_bytes = 0
-    
+
     try:
         login(sock, MESSI_USER)
         sock.settimeout(5.0)
-        
+
         while time.time() - start_t < timeout:
             try:
                 data = sock.recv(65536)
@@ -172,7 +172,7 @@ def messi_consume(expected_count, timeout=10):
         print(f"[MESSI] Error: {e}")
     finally:
         sock.close()
-    
+
     duration = time.time() - start_t
     print(f"[MESSI] Received {received} messages ({total_bytes} bytes) in {duration:.2f}s")
     print(f"[MESSI] Speed: {received / max(duration, 0.001):.0f} msgs/sec")
@@ -182,36 +182,32 @@ def run_basic_mode(args):
     """Quick flood test."""
     total_expected = args.fans * args.msgs
     print(f"Scenario: {args.fans} fans × {args.msgs} msgs = {total_expected} total")
-    
+
     # Flood phase (messi offline)
     print("\n[1] FLOOD PHASE (Messi Offline)")
     start_flood = time.time()
-    
+
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.threads) as executor:
         chunk = max(1, args.fans // args.threads)
         futures = []
-        
+
         for i in range(args.threads):
             start_id = i * chunk
             end_id = (i + 1) * chunk if i < args.threads - 1 else args.fans
-            
+
             def task(s, e):
                 total = 0
                 for j in range(s, e):
                     total += send_burst(j, args.msgs)
                 return total
-            
+
             futures.append(executor.submit(task, start_id, end_id))
-        
+
         concurrent.futures.wait(futures)
-    
+
     flood_dur = time.time() - start_flood
     print(f"[1] Flood complete in {flood_dur:.2f}s ({total_expected / flood_dur:.0f} msgs/sec)")
-    
-    # Wait for queue drain
-    print("\n[1.5] Waiting 10s for queue drain...")
-    time.sleep(10)
-    
+
     # Receive phase
     print("\n[2] ONLINE BURST PHASE")
     messi_consume(total_expected)
@@ -225,12 +221,12 @@ def sender_worker(worker_id, stop_event):
     sock = create_socket()
     if not sock:
         return
-    
+
     local_sent = 0
     try:
         login(sock, f"fan_{worker_id}")
         seq = 0
-        
+
         while not stop_event.is_set():
             seq += 1
             packet = make_packet(MESSI_USER, b"G" * 10, seq_no=seq)
@@ -249,13 +245,13 @@ def messi_lifecycle_worker(stop_event, schedule):
     current_idx = 0
     state_start = time.time()
     sock = None
-    
+
     print(f"\n[MESSI] Lifecycle started")
-    
+
     while not stop_event.is_set() and current_idx < len(schedule):
         now = time.time()
         duration, state = schedule[current_idx]
-        
+
         if now - state_start > duration:
             if sock:
                 sock.close()
@@ -265,9 +261,9 @@ def messi_lifecycle_worker(stop_event, schedule):
             if current_idx < len(schedule):
                 print(f"[MESSI] Switching to {schedule[current_idx][1]}")
             continue
-        
+
         if state == 'OFFLINE':
-            time.sleep(1)
+            stop_event.wait(timeout=1)
         elif state == 'ONLINE':
             if not sock:
                 try:
@@ -278,7 +274,7 @@ def messi_lifecycle_worker(stop_event, schedule):
                         print("[MESSI] Logged in (Online)")
                 except:
                     time.sleep(1)
-            
+
             if sock:
                 try:
                     data = sock.recv(65536)
@@ -291,7 +287,7 @@ def messi_lifecycle_worker(stop_event, schedule):
                 except:
                     sock.close()
                     sock = None
-    
+
     if sock:
         sock.close()
     print("[MESSI] Lifecycle finished")
@@ -316,20 +312,20 @@ def run_lifecycle_mode(args):
         (30 * scale, 'ONLINE')
     ]
     total_time = sum(x[0] for x in schedule)
-    
+
     print(f"Schedule: {schedule}")
     print(f"Total duration: {total_time:.0f}s")
-    
+
     stop_event = threading.Event()
-    
+
     # Start monitor
     monitor = threading.Thread(target=monitor_worker, args=(stop_event,))
     monitor.start()
-    
+
     # Start Messi
     messi = threading.Thread(target=messi_lifecycle_worker, args=(stop_event, schedule))
     messi.start()
-    
+
     # Start fans
     print(f"Starting {args.fans} fan threads...")
     fans = []
@@ -337,29 +333,27 @@ def run_lifecycle_mode(args):
         t = threading.Thread(target=sender_worker, args=(i, stop_event), daemon=True)
         t.start()
         fans.append(t)
-        if i % 50 == 0:
-            time.sleep(0.05)
-    
+
     # Wait for test duration
     try:
-        time.sleep(total_time)
+        stop_event.wait(timeout=total_time)
     except KeyboardInterrupt:
         print("\nStopping...")
-    
+
     stop_event.set()
     messi.join()
     monitor.join()
-    
+
     # Results
     print("\n--- FINAL RESULTS ---")
     with STATS_LOCK:
         sent, recv = STATS['sent'], STATS['received']
-    
+
     print(f"Total Sent:     {sent}")
     print(f"Total Received: {recv}")
     loss_pct = (sent - recv) / sent * 100 if sent > 0 else 0
     print(f"Loss:           {sent - recv} ({loss_pct:.4f}%)")
-    
+
     if sent > 0 and loss_pct < 0.1:
         print("VERDICT: PASS (>99.9% reliability)")
     else:
@@ -387,7 +381,7 @@ def main():
     # Detect QUICK_MODE (set by run_all_tests.sh --quick) or CI
     is_quick = os.environ.get("QUICK_MODE") == "true"
     is_ci = os.environ.get("CI") == "true" or os.environ.get("GITHUB_ACTIONS") == "true"
-    
+
     # Scale defaults for quick/CI mode to avoid timeout
     if is_quick or is_ci:
         default_fans = 500
@@ -401,7 +395,7 @@ def main():
         default_fans = 5000
         default_msgs = 20
         default_threads = 50
-    
+
     parser = argparse.ArgumentParser(description='Messi Hotspot Stress Test')
     parser.add_argument('--mode', choices=['basic', 'lifecycle'], default='basic',
                         help='Test mode')
@@ -412,22 +406,22 @@ def main():
                         help='Time scale (lifecycle mode)')
     parser.add_argument('--skip-restart', action='store_true', help='Skip cluster restart')
     args = parser.parse_args()
-    
+
     # Ensure correct CWD
     os.chdir(project_root)
-    
+
     print(f"--- MESSI HOTSPOT TEST ({args.mode.upper()}) ---")
     print(f"Environment: {'quick' if is_quick else 'CI' if is_ci else 'full'}")
     print(f"Params: fans={args.fans}, msgs={args.msgs}, threads={args.threads}")
     init_csv()
-    
+
     result = 0
-    
+
     # Skip ClusterManager if server is already running (from run_all_tests.sh)
     # ClusterManager kills the running TLS server and starts a non-TLS one,
     # causing create_socket's TLS auto-detection to timeout (10s per connection).
     server_up = is_server_running()
-    
+
     if args.skip_restart or server_up:
         if server_up:
             print("[INFO] Server already running — skipping ClusterManager")
@@ -442,7 +436,7 @@ def main():
                 run_basic_mode(args)
             else:
                 result = run_lifecycle_mode(args)
-    
+
     return result
 
 if __name__ == "__main__":

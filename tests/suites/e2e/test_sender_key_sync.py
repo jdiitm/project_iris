@@ -20,7 +20,6 @@ Target: Offline members can decrypt messages after reconnect
 import subprocess
 import sys
 import os
-import time
 import random
 import string
 
@@ -71,7 +70,7 @@ def generate_id():
 def test_group_creation():
     """Test basic group creation with members."""
     print("\n1. Testing group creation...")
-    
+
     code = f'''
         %% Start iris_group if not running
         case whereis(iris_group) of
@@ -103,9 +102,9 @@ def test_group_creation():
         %% Cleanup
         iris_group:delete_group(GroupId, CreatorId)
     '''
-    
+
     success, stdout, stderr = run_erlang_command(code)
-    
+
     if success and "GROUP_OK" in stdout:
         print("   ✓ Group creation and membership working")
         return True
@@ -118,7 +117,7 @@ def test_group_creation():
 def test_sender_key_storage():
     """Test sender key storage and retrieval."""
     print("\n2. Testing sender key storage...")
-    
+
     code = f'''
         case whereis(iris_group) of
             undefined -> iris_group:start_link();
@@ -144,9 +143,9 @@ def test_sender_key_storage():
                 io:format("STORE_FAIL: ~p~n", [Error])
         end
     '''
-    
+
     success, stdout, stderr = run_erlang_command(code)
-    
+
     if success and "STORE_OK" in stdout:
         print("   ✓ Sender key storage working")
         return True
@@ -159,7 +158,7 @@ def test_sender_key_storage():
 def test_member_reconnect_sync():
     """Test that reconnecting member receives updated keys."""
     print("\n3. Testing member reconnect key sync...")
-    
+
     # Simpler test that verifies handle_member_reconnect exists and returns expected format
     code = f'''
         case whereis(iris_group) of
@@ -194,9 +193,9 @@ def test_member_reconnect_sync():
         %% Cleanup
         iris_group:delete_group(GroupId, CreatorId)
     '''
-    
+
     success, stdout, stderr = run_erlang_command(code)
-    
+
     if success and "SYNC_OK" in stdout:
         print("   ✓ Member reconnect key sync working")
         return True
@@ -215,7 +214,7 @@ def test_member_reconnect_sync():
 def test_get_sender_keys_since():
     """Test fetching sender keys updated since a timestamp."""
     print("\n4. Testing get_sender_keys_since...")
-    
+
     code = f'''
         case whereis(iris_group) of
             undefined -> iris_group:start_link();
@@ -248,9 +247,9 @@ def test_get_sender_keys_since():
             false -> io:format("SINCE_FAIL~n")
         end
     '''
-    
+
     success, stdout, stderr = run_erlang_command(code)
-    
+
     if success and "SINCE_OK" in stdout:
         print("   ✓ get_sender_keys_since working")
         return True
@@ -266,28 +265,28 @@ def main():
     print("=" * 60)
     print("Verifying: Offline members receive keys on reconnect")
     print("")
-    
+
     results = []
-    
+
     results.append(("Group creation", test_group_creation()))
     results.append(("Sender key storage", test_sender_key_storage()))
     results.append(("Member reconnect sync", test_member_reconnect_sync()))
     results.append(("get_sender_keys_since", test_get_sender_keys_since()))
-    
+
     # Summary
     print("\n" + "=" * 60)
     print("RESULTS")
     print("=" * 60)
-    
+
     passed = sum(1 for _, r in results if r)
     total = len(results)
-    
+
     for name, result in results:
         status = "✓ PASS" if result else "✗ FAIL"
         print(f"  {status}: {name}")
-    
+
     print(f"\n  Total: {passed}/{total} tests passed")
-    
+
     if passed == total:
         print("\n✅ PASS: Sender key sync verified")
         print("   AUDIT FIX: Offline members receive keys on reconnect")

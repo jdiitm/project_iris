@@ -9,7 +9,6 @@ Tier: 2 (requires running server)
 """
 import sys
 import os
-import time
 import struct
 import socket
 import traceback
@@ -50,7 +49,6 @@ def test_typing_flood_does_not_block_messages():
     try:
         sender.login("typing_flood_sender")
         receiver.login("typing_flood_receiver")
-        time.sleep(0.3)
 
         # Flood typing indicators (some may be silently dropped -- that's OK)
         # 100 exceeds the burst limit of 50, proving per-type isolation
@@ -59,9 +57,6 @@ def test_typing_flood_does_not_block_messages():
                 send_typing(sender, "typing_flood_receiver", start=True)
             except Exception:
                 pass  # Expected: some may be rate-limited
-
-        # Let the server finish processing the typing flood
-        time.sleep(2)
 
         # Drain any typing relay packets the receiver got
         drain_socket(receiver)
@@ -87,10 +82,8 @@ def test_server_healthy_after_typing_flood():
     client = IrisClient()
     try:
         client.login("health_check_rl")
-        time.sleep(0.2)
         # Basic message to self
         client.send_msg("health_check_rl", "health_check")
-        time.sleep(0.5)
         # If we got here without crash, server is healthy
         return True
     finally:

@@ -42,7 +42,7 @@ TRAFFIC_INTERVAL_MS = 100  # Send message every 100ms
 
 class TrafficMonitor:
     """Thread-safe traffic monitoring."""
-    
+
     def __init__(self):
         self.running = True
         self.success_count = 0
@@ -51,29 +51,29 @@ class TrafficMonitor:
         self.first_fail_time = None
         self.recovery_time = None
         self.lock = threading.Lock()
-    
+
     def record_success(self):
         with self.lock:
             now = time.time()
             self.success_count += 1
-            
+
             if self.first_fail_time is not None and self.recovery_time is None:
                 # First success after failures = recovery
                 self.recovery_time = now - self.first_fail_time
-            
+
             self.last_success_time = now
-    
+
     def record_failure(self):
         with self.lock:
             now = time.time()
             self.fail_count += 1
-            
+
             if self.first_fail_time is None:
                 self.first_fail_time = now
-    
+
     def stop(self):
         self.running = False
-    
+
     def get_recovery_time(self):
         with self.lock:
             return self.recovery_time
@@ -97,7 +97,6 @@ def login(sock, username):
     """Send login packet."""
     packet = bytes([0x01]) + username.encode()
     sock.sendall(packet)
-    time.sleep(0.1)
 
 
 # Sequence counter for RFC-compliant messaging
@@ -111,17 +110,17 @@ def send_and_wait(sock, target, message, timeout=2):
     """
     target_bytes = target.encode()
     msg_bytes = message.encode()
-    
+
     # Increment sequence counter
     _seq_counter[0] += 1
     seq_no = _seq_counter[0]
-    
+
     # Protocol: 0x07 | TargetLen(16) | Target | SeqNo(64) | MsgLen(16) | Msg
     packet = (bytes([0x07]) +
               len(target_bytes).to_bytes(2, 'big') + target_bytes +
               seq_no.to_bytes(8, 'big') +
               len(msg_bytes).to_bytes(2, 'big') + msg_bytes)
-    
+
     try:
         sock.settimeout(timeout)
         sock.sendall(packet)
@@ -139,13 +138,13 @@ def traffic_worker(monitor, sender_id):
     """Worker thread that sends traffic and monitors results."""
     receiver = f"failover_receiver_{sender_id}"
     sock = None
-    
+
     while monitor.running:
         try:
             if sock is None:
                 sock = connect()
                 login(sock, f"failover_sender_{sender_id}")
-            
+
             msg = f"FAILOVER_TEST_{time.time()}"
             if send_and_wait(sock, receiver, msg):
                 monitor.record_success()
@@ -153,7 +152,7 @@ def traffic_worker(monitor, sender_id):
                 monitor.record_failure()
                 sock.close()
                 sock = None
-        
+
         except socket.timeout:
             monitor.record_failure()
             if sock:
@@ -178,9 +177,7 @@ def traffic_worker(monitor, sender_id):
                 except Exception:
                     pass
             sock = None
-        
-        time.sleep(TRAFFIC_INTERVAL_MS / 1000)
-    
+
     if sock:
         try:
             sock.close()
@@ -220,17 +217,17 @@ def test_failover_time():
     print(f"Target: {SERVER_HOST}:{SERVER_PORT}")
     print(f"Container: {CONTAINER_NAME}")
     print(f"Target recovery time: ≤ {FAILOVER_TARGET_SECONDS}s")
-    
+
     # Check prerequisites
     if not check_docker_available():
         print("\n❌ FAIL: Docker not available - required for failover test")
         return False
-    
+
     if not check_container_exists(CONTAINER_NAME):
         print(f"\n❌ FAIL: Container {CONTAINER_NAME} not found")
         print("  Start cluster with: make cluster-up")
         return False
-    
+
     print("\n1. Starting traffic generator...")
     monitor = TrafficMonitor()
     worker_thread = threading.Thread(
@@ -238,23 +235,23 @@ def test_failover_time():
         args=(monitor, int(time.time()))
     )
     worker_thread.start()
-    
+
     # Let traffic stabilize
     print("   Waiting for traffic to stabilize (5s)...")
     time.sleep(5)
-    
+
     with monitor.lock:
         initial_success = monitor.success_count
         initial_fail = monitor.fail_count
-    
+
     print(f"   Initial: {initial_success} success, {initial_fail} fail")
-    
+
     if initial_success == 0:
         print("   ❌ FAIL: No successful traffic - server not responding")
         monitor.stop()
         worker_thread.join()
         return False
-    
+
     print(f"\n2. Killing primary core: {CONTAINER_NAME}")
     kill_time = time.time()
     if not kill_container(CONTAINER_NAME):
@@ -264,46 +261,46 @@ def test_failover_time():
         print("\nFAIL: Docker container operation failed")
         return False
     print("   ✅ Container killed")
-    
+
     print(f"\n3. Monitoring failover (timeout: {FAILOVER_TARGET_SECONDS + 30}s)...")
     max_wait = FAILOVER_TARGET_SECONDS + 30
     start_wait = time.time()
-    
+
     while time.time() - start_wait < max_wait:
         recovery = monitor.get_recovery_time()
         if recovery is not None:
             break
-        
+
         with monitor.lock:
             fails = monitor.fail_count - initial_fail
-        
+
         elapsed = time.time() - kill_time
         print(f"   Elapsed: {elapsed:.1f}s, Failures since kill: {fails}")
         time.sleep(2)
-    
+
     # Stop traffic
     monitor.stop()
     worker_thread.join()
-    
+
     # Get results
     recovery_time = monitor.get_recovery_time()
-    
+
     print("\n" + "=" * 60)
     print("RESULTS")
     print("=" * 60)
-    
+
     with monitor.lock:
         total_success = monitor.success_count
         total_fail = monitor.fail_count
-    
+
     print(f"  Total messages: {total_success + total_fail}")
     print(f"  Successful: {total_success}")
     print(f"  Failed: {total_fail}")
     print("")
-    
+
     if recovery_time is not None:
         print(f"  Recovery time: {recovery_time:.2f} seconds")
-        
+
         if recovery_time <= FAILOVER_TARGET_SECONDS:
             print(f"\n✅ PASS: Recovery ({recovery_time:.2f}s) ≤ {FAILOVER_TARGET_SECONDS}s")
             print("   RFC NFR-9: COMPLIANT")
@@ -332,13 +329,13 @@ def restore_cluster_state():
             capture_output=True,
             timeout=30
         )
-        
+
         if result.returncode == 0:
             print(f"[cleanup] Container {CONTAINER_NAME} restarted")
             # AUDIT P4 FIX: Reduced from 15s
             print("[cleanup] Waiting for container to stabilize...")
             time.sleep(8)
-            
+
             # Verify it's running
             check = subprocess.run(
                 ["docker", "inspect", "-f", "{{.State.Running}}", CONTAINER_NAME],
@@ -350,7 +347,7 @@ def restore_cluster_state():
                 print(f"[cleanup] Warning: Container may not be fully healthy")
         else:
             print(f"[cleanup] Warning: Could not restart container: {result.stderr.decode()}")
-            
+
     except subprocess.TimeoutExpired:
         print("[cleanup] Warning: Container restart timed out")
     except Exception as e:
@@ -359,10 +356,10 @@ def restore_cluster_state():
 
 def main():
     result = test_failover_time()
-    
+
     # Restore cluster state for subsequent tests
     restore_cluster_state()
-    
+
     print("\n" + "=" * 60)
     if result is True:
         print("RESULT: PASSED")

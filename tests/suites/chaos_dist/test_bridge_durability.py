@@ -46,7 +46,7 @@ def create_tls_socket(host: str, port: int, timeout: int = 10,
                       max_retries: int = 3, retry_delay: float = 2.0) -> socket.socket:
     """Create a TLS-wrapped socket connection with retry."""
     context = get_verified_ssl_context()
-    
+
     last_err = None
     for attempt in range(max_retries):
         try:
@@ -202,7 +202,7 @@ def get_bridge_queue_depth(container: str) -> int:
     """Query iris_region_bridge:get_queue_depth() on a container via RPC."""
     import random
     probe_id = random.randint(10000, 99999)
-    
+
     # Determine target node name based on container
     if "east-1" in container:
         target_node = "core_east_1@coreeast1"
@@ -218,7 +218,7 @@ def get_bridge_queue_depth(container: str) -> int:
         target_node = "core_eu_2@coreeu2"
     else:
         target_node = "core_east_1@coreeast1"
-    
+
     # Use RPC to query the actual running node
     cmd = f"""
     erl -noshell -sname probe{probe_id} -setcookie iris_secret -eval '
@@ -228,7 +228,7 @@ def get_bridge_queue_depth(container: str) -> int:
             _ -> io:format("0"), halt(0)
         end.'
     """
-    
+
     try:
         result = subprocess.run(
             ["docker", "exec", container, "sh", "-c", cmd],
@@ -248,7 +248,7 @@ def get_bridge_stats(container: str) -> Dict:
     """Query iris_region_bridge:get_stats() on a container via RPC."""
     import random
     probe_id = random.randint(10000, 99999)
-    
+
     # Determine target node name based on container
     if "east-1" in container:
         target_node = "core_east_1@coreeast1"
@@ -264,7 +264,7 @@ def get_bridge_stats(container: str) -> Dict:
         target_node = "core_eu_2@coreeu2"
     else:
         target_node = "core_east_1@coreeast1"
-    
+
     cmd = f"""
     erl -noshell -sname stats{probe_id} -setcookie iris_secret -eval '
         case rpc:call(\\'{target_node}\\', iris_region_bridge, get_stats, [], 5000) of
@@ -285,13 +285,13 @@ def get_bridge_stats(container: str) -> Dict:
                 halt(1)
         end.'
     """
-    
+
     try:
         result = subprocess.run(
             ["docker", "exec", container, "sh", "-c", cmd],
             capture_output=True, text=True, timeout=15
         )
-        
+
         stats = {}
         for part in result.stdout.strip().split():
             if "=" in part:
@@ -310,7 +310,7 @@ def check_disc_copies_replicated(container: str, table: str) -> Tuple[bool, int]
     """
     import random
     probe_id = random.randint(10000, 99999)
-    
+
     # Determine target node name based on container
     if "east-1" in container:
         target_node = "core_east_1@coreeast1"
@@ -326,7 +326,7 @@ def check_disc_copies_replicated(container: str, table: str) -> Tuple[bool, int]
         target_node = "core_eu_2@coreeu2"
     else:
         target_node = "core_east_1@coreeast1"
-    
+
     cmd = f"""
     erl -noshell -sname disccheck{probe_id} -setcookie iris_secret -eval '
         case rpc:call(\\'{target_node}\\', mnesia, table_info, [{table}, disc_copies], 5000) of
@@ -341,7 +341,7 @@ def check_disc_copies_replicated(container: str, table: str) -> Tuple[bool, int]
                 halt(1)
         end.'
     """
-    
+
     try:
         result = subprocess.run(
             ["docker", "exec", container, "sh", "-c", cmd],
@@ -370,28 +370,26 @@ def send_cross_region_message(port: int, sender: str, target: str, msg_id: str) 
     sock = None
     try:
         sock = create_tls_socket(SERVER_HOST, port, timeout=5)
-        
+
         # Login
         login_packet = bytes([0x01]) + sender.encode()
         sock.sendall(login_packet)
-        
+
         # Wait for LOGIN_OK
         sock.settimeout(3)
         login_response = sock.recv(1024)
         if b"LOGIN_OK" not in login_response:
             log(f"  Login failed for {sender}")
             return False
-        
-        time.sleep(0.05)  # Ensure server-side registration completes
-        
+
         # Send message to user in different region
         target_bytes = target.encode()
         msg_bytes = msg_id.encode()
-        
+
         # Increment sequence counter
         _bridge_seq_counter[0] += 1
         seq_no = _bridge_seq_counter[0]
-        
+
         # Protocol: 0x07 | TargetLen(16) | Target | SeqNo(64) | MsgLen(16) | Msg
         packet = (
             bytes([0x07]) +
@@ -399,10 +397,10 @@ def send_cross_region_message(port: int, sender: str, target: str, msg_id: str) 
             struct.pack('>Q', seq_no) +
             struct.pack('>H', len(msg_bytes)) + msg_bytes
         )
-        
+
         # Fire-and-forget: successful send = message accepted
         sock.sendall(packet)
-        
+
         # Brief pause to allow server to process, then check for errors
         sock.settimeout(0.5)
         try:
@@ -413,7 +411,7 @@ def send_cross_region_message(port: int, sender: str, target: str, msg_id: str) 
         except socket.timeout:
             # No response is expected - message accepted
             pass
-        
+
         return True
     except Exception as e:
         log(f"  Send error: {e}")
@@ -428,7 +426,7 @@ def send_cross_region_message(port: int, sender: str, target: str, msg_id: str) 
 
 class MessageReceiver:
     """Background receiver that tracks incoming messages."""
-    
+
     def __init__(self, host: str, port: int, username: str):
         self.host = host
         self.port = port
@@ -437,37 +435,37 @@ class MessageReceiver:
         self.received: Set[str] = set()
         self.running = False
         self.thread: Optional[threading.Thread] = None
-    
+
     def connect(self) -> bool:
         """Connect and login using TLS."""
         try:
             self.sock = create_tls_socket(self.host, self.port, timeout=TIMEOUT)
-            
+
             # Login
             packet = bytes([0x01]) + self.username.encode()
             self.sock.sendall(packet)
-            
+
             response = self.sock.recv(1024)
             return b"LOGIN_OK" in response or len(response) > 0
         except Exception as e:
             log(f"  Receiver connect error: {e}")
             return False
-    
+
     def start_listening(self):
         """Start background thread to receive messages."""
         self.running = True
         self.thread = threading.Thread(target=self._listen_loop, daemon=True)
         self.thread.start()
-    
+
     def _listen_loop(self):
         """Background loop to receive and track messages."""
         if self.sock is None:
             return
-        
+
         # Use short timeout instead of non-blocking (SSL compatible)
         self.sock.settimeout(0.1)
         buffer = b""
-        
+
         while self.running:
             try:
                 data = self.sock.recv(4096)
@@ -484,11 +482,11 @@ class MessageReceiver:
                 if self.running:
                     pass  # Ignore errors while running
                 break
-    
+
     def _parse_and_ack_messages(self, data: bytes) -> bytes:
         """Parse reliable messages, send ACKs, and extract message IDs."""
         idx = 0
-        
+
         while idx < len(data):
             opcode = data[idx]
             # Check for reliable message (opcode 17 decimal = 0x11, PROTOCOL_V1_FREEZE v1.1)
@@ -496,43 +494,43 @@ class MessageReceiver:
                 # Format: 0x11 | IdLen(16) | MsgId | MsgLen(32) | Msg
                 if idx + 3 > len(data):
                     break  # Need more data
-                
+
                 id_len = struct.unpack('>H', data[idx+1:idx+3])[0]
-                
+
                 if idx + 3 + id_len + 4 > len(data):
                     break  # Need more data
-                
+
                 msg_id = data[idx+3:idx+3+id_len]
                 msg_len = struct.unpack('>I', data[idx+3+id_len:idx+3+id_len+4])[0]
-                
+
                 if idx + 3 + id_len + 4 + msg_len > len(data):
                     break  # Need more data
-                
+
                 msg = data[idx+3+id_len+4:idx+3+id_len+4+msg_len]
-                
+
                 # Send ACK (opcode 0x03 | MsgId)
                 try:
                     ack_packet = bytes([0x03]) + msg_id
                     self.sock.sendall(ack_packet)
                 except Exception:
                     pass
-                
+
                 # Extract message content and track
                 self._extract_message_id(msg)
-                
+
                 idx += 3 + id_len + 4 + msg_len
             else:
                 # Skip unknown byte
                 idx += 1
-        
+
         # Return remaining unparsed data
         return data[idx:] if idx < len(data) else b""
-    
+
     def _extract_message_id(self, msg: bytes):
         """Extract BRIDGE_MSG_* IDs from message content."""
         try:
             text = msg.decode('utf-8', errors='ignore')
-            
+
             if "BRIDGE_MSG_" in text:
                 # Parse the full message ID (BRIDGE_MSG_timestamp_index)
                 start = text.find("BRIDGE_MSG_")
@@ -540,12 +538,12 @@ class MessageReceiver:
                 end = start
                 while end < len(text) and text[end] not in ' \x00\n\r':
                     end += 1
-                
+
                 full_id = text[start:end]
                 self.received.add(full_id)
         except Exception:
             pass
-    
+
     def stop(self):
         """Stop receiver."""
         self.running = False
@@ -556,10 +554,10 @@ class MessageReceiver:
                 self.sock.close()
             except Exception:
                 pass
-    
+
     def get_received_count(self) -> int:
         return len(self.received)
-    
+
     def get_received_ids(self) -> Set[str]:
         return set(self.received)
 
@@ -577,39 +575,39 @@ def test_bridge_table_replication() -> Tuple[bool, Dict]:
     log("\n" + "=" * 60)
     log("Test 0: Bridge Table Replication Check")
     log("=" * 60)
-    
+
     metrics = {
         "outbound_copies": 0,
         "dead_letter_copies": 0,
         "is_replicated": False
     }
-    
+
     # Check cross_region_outbound table
     log("\nChecking cross_region_outbound disc_copies...")
     replicated, copies = check_disc_copies_replicated(CORE_EAST_1, "cross_region_outbound")
     metrics["outbound_copies"] = copies
     log(f"  disc_copies count: {copies}")
-    
+
     if copies >= 2:
         log("  PASS: Outbound table replicated to multiple nodes")
     else:
         log("  WARN: Outbound table only on single node (may be dev setup)")
-    
+
     # Check cross_region_dead_letter table
     log("\nChecking cross_region_dead_letter disc_copies...")
     replicated2, copies2 = check_disc_copies_replicated(CORE_EAST_1, "cross_region_dead_letter")
     metrics["dead_letter_copies"] = copies2
     log(f"  disc_copies count: {copies2}")
-    
+
     if copies2 >= 2:
         log("  PASS: Dead letter table replicated to multiple nodes")
     else:
         log("  WARN: Dead letter table only on single node (may be dev setup)")
-    
+
     # In production with multiple core nodes, tables should be replicated
     # In single-node dev setup, this is expected to be 1
     metrics["is_replicated"] = copies >= 2 and copies2 >= 2
-    
+
     log("\nEvaluation:")
     if metrics["is_replicated"]:
         log("  PASS: Bridge tables properly replicated for durability")
@@ -631,7 +629,7 @@ def test_queue_survives_graceful_stop() -> Tuple[bool, Dict]:
     log("\n" + "=" * 60)
     log("Test 1: Queue Survives Graceful Stop")
     log("=" * 60)
-    
+
     test_id = f"graceful_{int(time.time())}"
     metrics = {
         "messages_sent": 0,
@@ -639,64 +637,61 @@ def test_queue_survives_graceful_stop() -> Tuple[bool, Dict]:
         "queue_after_restart": 0,
         "messages_survived": False
     }
-    
+
     # Phase 1: Queue messages for EU (will be queued in bridge)
     log("\nPhase 1: Queueing messages for cross-region delivery...")
-    
+
     eu_user = f"eu_durability_{test_id}"
-    
+
     for i in range(MESSAGE_COUNT):
         msg_id = f"BRIDGE_MSG_{test_id}_{i:03d}"
         sender = f"us_bridge_sender_{test_id}"
-        
+
         accepted = send_cross_region_message(EDGE_EAST_PORT, sender, eu_user, msg_id)
         if accepted:
             metrics["messages_sent"] += 1
-        
-        time.sleep(0.1)
-    
+
     log(f"  Sent {metrics['messages_sent']} messages")
-    
+
     # Check queue depth
-    time.sleep(2)
     metrics["queue_before_kill"] = get_bridge_queue_depth(CORE_EAST_1)
     log(f"  Queue depth before kill: {metrics['queue_before_kill']}")
-    
+
     # Phase 2: Gracefully stop core-east-1
     log("\nPhase 2: Gracefully stopping bridge node...")
-    
+
     if not stop_container_graceful(CORE_EAST_1, timeout=10):
         log("  FAIL: Could not stop container")
         return False, metrics
-    
+
     log(f"  Waiting {KILL_WAIT}s for node to be fully stopped...")
     time.sleep(KILL_WAIT)
-    
+
     # Phase 3: Restart and check queue
     log("\nPhase 3: Restarting bridge node...")
-    
+
     if not start_container(CORE_EAST_1):
         log("  FAIL: Could not restart container")
         return False, metrics
-    
+
     # Wait for recovery
     if not wait_for_container_healthy(CORE_EAST_1, RECOVERY_WAIT):
         log("  WARN: Container not healthy, but checking queue anyway...")
-    
+
     # AUDIT P4 FIX: Reduced from 20s, container health check covers recovery
     log("  Waiting for Mnesia recovery...")
     time.sleep(10)
-    
+
     # Reconnect edge to core after restart
     _reconnect_edge_after_core_restart(CORE_EAST_1)
-    
+
     # Check queue depth after restart
     metrics["queue_after_restart"] = get_bridge_queue_depth(CORE_EAST_1)
     log(f"  Queue depth after restart: {metrics['queue_after_restart']}")
-    
+
     # Evaluation
     log("\nEvaluation:")
-    
+
     # Messages should be preserved (queue depth should be similar)
     if metrics["queue_after_restart"] > 0:
         metrics["messages_survived"] = True
@@ -722,7 +717,7 @@ def test_queue_survives_hard_kill() -> Tuple[bool, Dict]:
     log("\n" + "=" * 60)
     log("Test 2: Queue Survives Hard Kill (SIGKILL)")
     log("=" * 60)
-    
+
     test_id = f"hardkill_{int(time.time())}"
     metrics = {
         "messages_sent": 0,
@@ -731,84 +726,82 @@ def test_queue_survives_hard_kill() -> Tuple[bool, Dict]:
         "messages_survived": False,
         "survival_rate": 0.0
     }
-    
+
     # Check if we have multiple core nodes for replication
     if not container_running(CORE_EAST_2):
         log("\nWARN: core-east-2 not running")
         log("      Hard kill durability requires multi-node replication")
         log("      Skipping this test (would likely fail without replication)")
         return None, metrics  # AUDIT MITIGATION P1-1: Skip, not pass
-    
+
     # Phase 1: Queue messages
     log("\nPhase 1: Queueing messages for cross-region delivery...")
-    
+
     eu_user = f"eu_hardkill_{test_id}"
-    
+
     for i in range(MESSAGE_COUNT):
         msg_id = f"BRIDGE_MSG_{test_id}_{i:03d}"
         sender = f"us_hardkill_sender_{test_id}"
-        
+
         accepted = send_cross_region_message(EDGE_EAST_PORT, sender, eu_user, msg_id)
         if accepted:
             metrics["messages_sent"] += 1
-        
-        time.sleep(0.1)
-    
+
     log(f"  Sent {metrics['messages_sent']} messages")
-    
+
     # Wait for replication to propagate
     log("  Waiting 5s for replication propagation...")
     time.sleep(5)
-    
+
     metrics["queue_before_kill"] = get_bridge_queue_depth(CORE_EAST_1)
     log(f"  Queue depth before kill: {metrics['queue_before_kill']}")
-    
+
     # Phase 2: Hard kill (SIGKILL) - no graceful shutdown
     log("\nPhase 2: Hard killing bridge node (SIGKILL)...")
-    
+
     if not kill_container_hard(CORE_EAST_1):
         log("  FAIL: Could not kill container")
         return False, metrics
-    
+
     log(f"  Waiting {KILL_WAIT}s...")
     time.sleep(KILL_WAIT)
-    
+
     # Phase 3: Check queue on surviving node
     log("\nPhase 3: Checking queue on surviving node (core-east-2)...")
-    
+
     queue_on_survivor = get_bridge_queue_depth(CORE_EAST_2)
     log(f"  Queue depth on core-east-2: {queue_on_survivor}")
-    
+
     # Phase 4: Restart killed node
     log("\nPhase 4: Restarting killed node...")
-    
+
     if not start_container(CORE_EAST_1):
         log("  FAIL: Could not restart container")
         return False, metrics
-    
+
     if not wait_for_container_healthy(CORE_EAST_1, RECOVERY_WAIT):
         log("  WARN: Container not fully healthy")
-    
+
     # AUDIT P4 FIX: Reduced from 20s
     log("  Waiting for Mnesia recovery and sync...")
     time.sleep(10)
-    
+
     # Reconnect edge to core after restart
     _reconnect_edge_after_core_restart(CORE_EAST_1)
-    
+
     metrics["queue_after_restart"] = get_bridge_queue_depth(CORE_EAST_1)
     log(f"  Queue depth after restart: {metrics['queue_after_restart']}")
-    
+
     # Evaluation
     log("\nEvaluation:")
-    
+
     # Check survival
     if metrics["queue_before_kill"] > 0:
         metrics["survival_rate"] = (
-            max(queue_on_survivor, metrics["queue_after_restart"]) / 
+            max(queue_on_survivor, metrics["queue_after_restart"]) /
             metrics["queue_before_kill"] * 100
         )
-    
+
     if queue_on_survivor > 0 or metrics["queue_after_restart"] > 0:
         metrics["messages_survived"] = True
         log(f"  PASS: Messages survived hard kill")
@@ -832,73 +825,71 @@ def test_eventual_delivery_after_recovery() -> Tuple[bool, Dict]:
     log("\n" + "=" * 60)
     log("Test 3: Eventual Delivery After Recovery")
     log("=" * 60)
-    
+
     test_id = f"delivery_{int(time.time())}"
     metrics = {
         "messages_sent": 0,
         "messages_received": 0,
         "delivery_rate": 0.0
     }
-    
+
     # Phase 1: Set up receiver in EU
     log("\nPhase 1: Setting up receiver in EU...")
-    
+
     eu_user = f"eu_delivery_{test_id}"
     receiver = MessageReceiver(SERVER_HOST, EDGE_EU_PORT, eu_user)
-    
+
     if not receiver.connect():
         log("  Cannot connect receiver to EU region")
         return False, metrics
-    
+
     receiver.start_listening()
     log(f"  Receiver ready: {eu_user}")
-    
+
     # Phase 2: Send messages through bridge
     log("\nPhase 2: Sending messages through bridge...")
-    
+
     sent_ids = set()
     for i in range(MESSAGE_COUNT):
         msg_id = f"BRIDGE_MSG_{test_id}_{i:03d}"
         sender = f"us_delivery_sender_{test_id}"
-        
+
         accepted = send_cross_region_message(EDGE_EAST_PORT, sender, eu_user, msg_id)
         if accepted:
             sent_ids.add(msg_id)
             metrics["messages_sent"] += 1
-        
-        time.sleep(0.1)
-    
+
     log(f"  Sent {metrics['messages_sent']} messages")
-    
+
     # Phase 3: Wait for delivery
     log(f"\nPhase 3: Waiting {DELIVERY_WAIT}s for delivery...")
-    
+
     for i in range(DELIVERY_WAIT):
         time.sleep(1)
         received = receiver.get_received_count()
         if (i + 1) % 10 == 0:
             log(f"    {i+1}s: Received {received}/{metrics['messages_sent']}")
-        
+
         if received >= metrics["messages_sent"]:
             break
-    
+
     # Phase 4: Collect results
     log("\nPhase 4: Collecting results...")
     receiver.stop()
-    
+
     received_ids = receiver.get_received_ids()
     metrics["messages_received"] = len(received_ids)
-    
+
     if metrics["messages_sent"] > 0:
         metrics["delivery_rate"] = metrics["messages_received"] / metrics["messages_sent"] * 100
-    
+
     log(f"  Sent: {metrics['messages_sent']}")
     log(f"  Received: {metrics['messages_received']}")
     log(f"  Delivery rate: {metrics['delivery_rate']:.1f}%")
-    
+
     # Evaluation
     log("\nEvaluation:")
-    
+
     if metrics["delivery_rate"] >= 80:
         log(f"  PASS: {metrics['delivery_rate']:.1f}% delivery rate")
         return True, metrics
@@ -923,45 +914,45 @@ def main():
     print("=" * 70)
     print("Tests that cross-region messages survive bridge node failure")
     print("")
-    
+
     # Prerequisites
     if not docker_available():
         print("SKIP:INFRA - Docker not available")
         return 2
-    
+
     if not container_running(CORE_EAST_1):
         print(f"SKIP:INFRA - {CORE_EAST_1} not running. Start with: make cluster-up")
         return 2
-    
+
     if not port_listening(EDGE_EAST_PORT):
         print(f"SKIP:INFRA - Edge port {EDGE_EAST_PORT} not listening")
         return 2
-    
+
     # Run tests
     results = []
     all_metrics = {}
-    
+
     try:
         # Test 0: Check replication setup
         passed, metrics = test_bridge_table_replication()
         results.append(("Bridge Table Replication", passed))
         all_metrics["replication"] = metrics
-        
+
         # Test 1: Graceful stop survival
         passed, metrics = test_queue_survives_graceful_stop()
         results.append(("Queue Survives Graceful Stop", passed))
         all_metrics["graceful"] = metrics
-        
+
         # Test 2: Hard kill survival (requires multi-node)
         passed, metrics = test_queue_survives_hard_kill()
         results.append(("Queue Survives Hard Kill", passed))
         all_metrics["hardkill"] = metrics
-        
+
         # Test 3: Eventual delivery
         passed, metrics = test_eventual_delivery_after_recovery()
         results.append(("Eventual Delivery After Recovery", passed))
         all_metrics["delivery"] = metrics
-        
+
     except KeyboardInterrupt:
         log("\nInterrupted by user")
         return 1
@@ -971,16 +962,16 @@ def main():
         if not container_running(CORE_EAST_1):
             start_container(CORE_EAST_1)
             wait_for_container_healthy(CORE_EAST_1, 60)
-    
+
     # Summary
     print("\n" + "=" * 70)
     print("SUMMARY")
     print("=" * 70)
-    
+
     passed_count = 0
     failed_count = 0
     skipped_count = 0
-    
+
     for name, result in results:
         if result is None:
             status = "SKIP"
@@ -992,9 +983,9 @@ def main():
             status = "FAIL"
             failed_count += 1
         print(f"  [{status}] {name}")
-    
+
     print(f"\nTotal: {passed_count} passed, {skipped_count} skipped, {failed_count} failed")
-    
+
     # Print key metrics
     print("\nKey Metrics:")
     if "replication" in all_metrics:
@@ -1009,7 +1000,7 @@ def main():
     if "delivery" in all_metrics:
         m = all_metrics["delivery"]
         print(f"  Delivery rate: {m.get('delivery_rate', 0):.1f}%")
-    
+
     if failed_count > 0:
         print(f"\nFAIL: {failed_count} test(s) failed")
         return 1

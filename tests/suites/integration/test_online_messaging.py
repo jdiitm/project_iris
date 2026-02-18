@@ -23,10 +23,8 @@ sys.path.insert(0, str(os.path.dirname(os.path.dirname(os.path.dirname(os.path.d
 
 from tests.framework import TestLogger, ClusterManager, MessageTracker
 from tests.framework.assertions import (
-    assert_message_delivered,
     assert_no_message_loss,
-    assert_no_duplicates,
-    wait_for_condition
+    assert_no_duplicates
 )
 from tests.utilities import IrisClient
 
@@ -43,42 +41,42 @@ def unique_user(prefix: str) -> str:
 
 def test_basic_message_delivery():
     """Test that a message sent from Alice reaches Bob."""
-    
+
     with TestLogger("test_basic_message_delivery", "integration") as log:
         tracker = MessageTracker()
-        
+
         log.info("setup", "Connecting Alice and Bob")
-        
+
         # Use unique usernames to prevent ETS race conditions
         alice_name = unique_user("alice")
         bob_name = unique_user("bob")
-        
+
         alice = IrisClient()
         alice.login(alice_name)
         log.connection_event("login", alice_name)
-        
+
         bob = IrisClient()
         bob.login(bob_name)
         log.connection_event("login", bob_name)
-        
+
         # Send message
         msg_id = f"msg_{int(time.time() * 1000)}"
         message = "Hello Bob!"
-        
+
         log.info("sending", f"Alice sending message to Bob: {msg_id}")
         tracker.record_sent(msg_id, bob_name, message)
         alice.send_msg(bob_name, message)
         log.message_sent(msg_id, bob_name, source_user=alice_name)
-        
+
         # Receive message
         try:
             start = time.monotonic()
             received = bob.recv_msg(timeout=5.0)
             latency_ms = (time.monotonic() - start) * 1000
-            
+
             tracker.record_received(msg_id)
             log.message_received(msg_id, latency_ms, source_user=alice_name)
-            
+
             # Validate content
             expected = message.encode('utf-8')
             if received == expected:
@@ -86,74 +84,74 @@ def test_basic_message_delivery():
             else:
                 log.error("validation", f"Content mismatch: expected {expected}, got {received}")
                 raise AssertionError(f"Message content mismatch")
-                
+
         except Exception as e:
             log.error("receive", f"Failed to receive message: {e}")
             raise
-        
+
         # Cleanup
         alice.close()
         bob.close()
         log.info("cleanup", "Connections closed")
-        
+
         # Assert correctness
         assert_no_message_loss(tracker)
         assert_no_duplicates(tracker)
-        
+
         summary = tracker.summary()
         log.metric("messages_sent", summary["sent"])
         log.metric("messages_received", summary["received"])
         log.metric("latency_avg_ms", summary["latency_avg_ms"], "ms")
-        
+
         log.info("result", "Test PASSED")
         return True
 
 
 def test_bidirectional_messaging():
     """Test that messages can flow in both directions."""
-    
+
     with TestLogger("test_bidirectional_messaging", "integration") as log:
         tracker = MessageTracker()
-        
+
         # Use unique usernames to prevent ETS race conditions
         alice_name = unique_user("alice_bi")
         bob_name = unique_user("bob_bi")
-        
+
         alice = IrisClient()
         alice.login(alice_name)
         log.connection_event("login", alice_name)
-        
+
         bob = IrisClient()
         bob.login(bob_name)
         log.connection_event("login", bob_name)
-        
+
         # Alice -> Bob
         msg1 = "Hello from Alice"
         msg1_id = "msg_a2b_1"
         tracker.record_sent(msg1_id, bob_name, msg1)
         alice.send_msg(bob_name, msg1)
         log.message_sent(msg1_id, bob_name, source_user=alice_name)
-        
+
         # Bob receives
         received = bob.recv_msg(timeout=5.0)
         tracker.record_received(msg1_id)
         log.message_received(msg1_id, 0, source_user=alice_name)
-        
+
         # Bob -> Alice
         msg2 = "Hello from Bob"
         msg2_id = "msg_b2a_1"
         tracker.record_sent(msg2_id, alice_name, msg2)
         bob.send_msg(alice_name, msg2)
         log.message_sent(msg2_id, alice_name, source_user=bob_name)
-        
+
         # Alice receives
         received = alice.recv_msg(timeout=5.0)
         tracker.record_received(msg2_id)
         log.message_received(msg2_id, 0, source_user=bob_name)
-        
+
         alice.close()
         bob.close()
-        
+
         assert_no_message_loss(tracker)
         log.info("result", "Test PASSED")
         return True
@@ -161,32 +159,32 @@ def test_bidirectional_messaging():
 
 def test_multi_message_sequence():
     """Test sending multiple messages in sequence."""
-    
+
     with TestLogger("test_multi_message_sequence", "integration") as log:
         tracker = MessageTracker()
         NUM_MESSAGES = 10
-        
+
         # Use unique usernames to prevent ETS race conditions
         sender_name = unique_user("sender_seq")
         receiver_name = unique_user("receiver_seq")
-        
+
         sender = IrisClient()
         sender.login(sender_name)
         log.connection_event("login", sender_name)
-        
+
         receiver = IrisClient()
         receiver.login(receiver_name)
         log.connection_event("login", receiver_name)
-        
+
         # Send multiple messages
         for i in range(NUM_MESSAGES):
             msg_id = f"seq_msg_{i}"
             tracker.record_sent(msg_id, receiver_name, f"Message {i}", sequence=i)
             sender.send_msg(receiver_name, f"Message {i}")
             log.message_sent(msg_id, receiver_name, source_user=sender_name)
-        
+
         log.info("sending_complete", f"Sent {NUM_MESSAGES} messages")
-        
+
         # Receive all messages
         received_count = 0
         for i in range(NUM_MESSAGES):
@@ -199,13 +197,13 @@ def test_multi_message_sequence():
             except Exception as e:
                 log.error("receive", f"Failed to receive message {i}: {e}")
                 break
-        
+
         sender.close()
         receiver.close()
-        
+
         log.metric("messages_sent", NUM_MESSAGES)
         log.metric("messages_received", received_count)
-        
+
         summary = tracker.summary()
         if summary["lost"] == 0:
             log.info("result", "Test PASSED")
@@ -218,28 +216,28 @@ def test_multi_message_sequence():
 def main():
     """Run all online messaging tests."""
     cluster = ClusterManager()
-    
+
     if not cluster.is_healthy():
         print("[SETUP] Starting cluster...")
         if not cluster.start():
             print("[ERROR] Failed to start cluster")
             return 1
-    
+
     tests = [
         test_basic_message_delivery,
         test_bidirectional_messaging,
         test_multi_message_sequence
     ]
-    
+
     passed = 0
     failed = 0
-    
+
     for test_fn in tests:
         try:
             print(f"\n{'='*60}")
             print(f"Running: {test_fn.__name__}")
             print('='*60)
-            
+
             if test_fn():
                 passed += 1
                 print(f"✓ PASSED: {test_fn.__name__}")
@@ -249,11 +247,11 @@ def main():
         except Exception as e:
             failed += 1
             print(f"✗ ERROR: {test_fn.__name__} - {e}")
-    
+
     print(f"\n{'='*60}")
     print(f"Results: {passed}/{passed+failed} passed")
     print('='*60)
-    
+
     return 0 if failed == 0 else 1
 
 

@@ -17,7 +17,6 @@ import os
 import sys
 import time
 import subprocess
-import json
 
 # Path setup
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
@@ -49,9 +48,9 @@ def erl_eval(code: str, timeout: int = 30) -> str:
     ]
     try:
         result = subprocess.run(
-            cmd, 
-            capture_output=True, 
-            text=True, 
+            cmd,
+            capture_output=True,
+            text=True,
             timeout=timeout,
             cwd=PROJECT_ROOT
         )
@@ -94,7 +93,7 @@ def start_mnesia_and_group():
 def test_group_creation():
     """Test: Create group and verify creator becomes admin."""
     log("=== Test: Group Creation ===")
-    
+
     code = """
     mnesia:create_schema([node()]),
     mnesia:start(),
@@ -120,9 +119,9 @@ def test_group_creation():
             io:format(\"FAIL: Unexpected result: ~p~n\", [Other])
     end.
     """
-    
+
     output = erl_eval(code)
-    
+
     if "PASS" in output:
         log("  ✓ Group created correctly")
         return True
@@ -134,7 +133,7 @@ def test_group_creation():
 def test_member_management():
     """Test: Add and remove members."""
     log("=== Test: Member Management ===")
-    
+
     code = """
     mnesia:create_schema([node()]),
     mnesia:start(),
@@ -165,9 +164,9 @@ def test_member_management():
             io:format(\"FAIL: ~p~n\", [Other])
     end.
     """
-    
+
     output = erl_eval(code)
-    
+
     if "PASS" in output:
         log("  ✓ Member add/remove works")
         return True
@@ -179,7 +178,7 @@ def test_member_management():
 def test_admin_promotion():
     """Test: Promote and demote admins."""
     log("=== Test: Admin Promotion ===")
-    
+
     code = """
     mnesia:create_schema([node()]),
     mnesia:start(),
@@ -208,9 +207,9 @@ def test_admin_promotion():
             io:format(\"FAIL: ~p~n\", [Other])
     end.
     """
-    
+
     output = erl_eval(code)
-    
+
     if "PASS" in output:
         log("  ✓ Admin promotion/demotion works")
         return True
@@ -222,7 +221,7 @@ def test_admin_promotion():
 def test_authorization():
     """Test: Non-admins cannot perform admin operations."""
     log("=== Test: Authorization ===")
-    
+
     code = """
     mnesia:create_schema([node()]),
     mnesia:start(),
@@ -254,9 +253,9 @@ def test_authorization():
         false -> io:format(\"FAIL: ~p ~p ~p ~p~n\", [R1, R2, R3, R4])
     end.
     """
-    
+
     output = erl_eval(code)
-    
+
     if "PASS" in output:
         log("  ✓ Authorization enforced correctly")
         return True
@@ -268,7 +267,7 @@ def test_authorization():
 def test_last_admin_protection():
     """Test: Cannot remove or demote the last admin."""
     log("=== Test: Last Admin Protection ===")
-    
+
     code = """
     mnesia:create_schema([node()]),
     mnesia:start(),
@@ -297,9 +296,9 @@ def test_last_admin_protection():
             io:format(\"FAIL: ~p~n\", [Other])
     end.
     """
-    
+
     output = erl_eval(code)
-    
+
     if "PASS" in output:
         log("  ✓ Last admin protection works")
         return True
@@ -311,7 +310,7 @@ def test_last_admin_protection():
 def test_sender_keys():
     """Test: Sender key storage and retrieval."""
     log("=== Test: Sender Keys ===")
-    
+
     code = """
     mnesia:create_schema([node()]),
     mnesia:start(),
@@ -352,9 +351,9 @@ def test_sender_keys():
             io:format(\"FAIL: ~p~n\", [Other])
     end.
     """
-    
+
     output = erl_eval(code)
-    
+
     if "PASS" in output:
         log("  ✓ Sender key operations work")
         return True
@@ -366,7 +365,7 @@ def test_sender_keys():
 def test_group_deletion():
     """Test: Group deletion removes all data."""
     log("=== Test: Group Deletion ===")
-    
+
     code = """
     mnesia:create_schema([node()]),
     mnesia:start(),
@@ -396,9 +395,9 @@ def test_group_deletion():
             io:format(\"FAIL: ~p~n\", [Other])
     end.
     """
-    
+
     output = erl_eval(code)
-    
+
     if "PASS" in output:
         log("  ✓ Group deletion removes all data")
         return True
@@ -415,10 +414,10 @@ def test_member_limit():
     The 257th member should be rejected.
     """
     log("=== Test: 256 Member Limit (RFC FR-19) ===")
-    
+
     # Note: Testing full 256 members would be slow, so we test the mechanism
     # by setting a lower limit in the test or verifying the boundary check exists
-    
+
     code = """
     mnesia:create_schema([node()]),
     mnesia:start(),
@@ -451,9 +450,9 @@ def test_member_limit():
             io:format("FAIL: ~p~n", [Other])
     end.
     """
-    
+
     output = erl_eval(code, timeout=60)
-    
+
     if "PASS" in output:
         log("  ✓ 256 member limit enforced")
         return True
@@ -499,9 +498,9 @@ def test_member_limit_boundary():
             io:format("FAIL: ~p~n", [Other])
     end.
     """
-    
+
     output = erl_eval(code, timeout=60)
-    
+
     if "PASS" in output:
         log("  ✓ Member addition mechanism works")
         return True
@@ -513,11 +512,11 @@ def test_member_limit_boundary():
 def test_list_groups():
     """Test: List groups for a user."""
     log("=== Test: List User Groups ===")
-    
+
     # Use unique user IDs to avoid stale data issues
     import random
     suffix = random.randint(100000, 999999)
-    
+
     code = f"""
     mnesia:create_schema([node()]),
     mnesia:start(),
@@ -546,9 +545,9 @@ def test_list_groups():
             io:format("FAIL: ~p~n", [Other])
     end.
     """
-    
+
     output = erl_eval(code)
-    
+
     if "PASS" in output:
         log("  ✓ User groups listed correctly")
         return True
@@ -560,17 +559,17 @@ def test_list_groups():
 def main():
     """Run group membership tests."""
     log(f"=== Group Membership Tests (profile={TEST_PROFILE}, seed={TEST_SEED}) ===")
-    
+
     if not check_erlang_available():
         log("[FAIL] Erlang not available - environment not properly configured")
         sys.exit(1)
-    
+
     if not check_module_compiled():
         log("[FAIL] iris_group.beam not found. Run 'make' first.")
         sys.exit(1)
-    
+
     results = []
-    
+
     results.append(("Group Creation", test_group_creation()))
     results.append(("Member Management", test_member_management()))
     results.append(("Admin Promotion", test_admin_promotion()))
@@ -580,7 +579,7 @@ def main():
     results.append(("Member Limit (RFC FR-19)", test_member_limit()))
     results.append(("Group Deletion", test_group_deletion()))
     results.append(("List User Groups", test_list_groups()))
-    
+
     log("\n=== Results ===")
     passed = 0
     failed = 0
@@ -591,9 +590,9 @@ def main():
             passed += 1
         else:
             failed += 1
-    
+
     log(f"\nTotal: {passed}/{len(results)} passed")
-    
+
     if failed > 0:
         log("[FAIL] Some tests failed")
         sys.exit(1)

@@ -38,7 +38,7 @@ class ResourceMonitor:
     Captures system resources at configurable intervals.
     Thread-safe, designed for background sampling.
     """
-    
+
     def __init__(
         self,
         sample_interval_seconds: float = 1.0,
@@ -51,7 +51,7 @@ class ResourceMonitor:
         self._thread: Optional[threading.Thread] = None
         self._start_time: float = 0
         self._lock = threading.Lock()
-    
+
     def _get_cpu_percent(self) -> float:
         """Get current CPU utilization percentage."""
         try:
@@ -81,12 +81,12 @@ class ResourceMonitor:
         except Exception:
             pass
         return 0.0
-    
+
     def _get_memory_info(self) -> tuple:
         """Get memory RSS and available in MB."""
         rss_mb = 0.0
         available_mb = 0.0
-        
+
         try:
             if sys.platform == "darwin":
                 # Get available memory from vm_stat
@@ -103,7 +103,7 @@ class ResourceMonitor:
                             pages = int(line.split(':')[1].strip().rstrip('.'))
                             available_mb = (pages * page_size) / (1024 * 1024)
                             break
-                
+
                 # Get beam.smp RSS
                 result = subprocess.run(
                     ["ps", "-o", "rss=", "-C", "beam.smp"],
@@ -121,7 +121,7 @@ class ResourceMonitor:
                         if line.startswith('MemAvailable:'):
                             available_mb = int(line.split()[1]) / 1024
                             break
-                
+
                 # Get beam.smp RSS from /proc
                 result = subprocess.run(
                     ["pgrep", "-f", "beam.smp"],
@@ -142,9 +142,9 @@ class ResourceMonitor:
                             pass
         except Exception:
             pass
-        
+
         return rss_mb, available_mb
-    
+
     def _get_disk_free_gb(self) -> float:
         """Get free disk space in GB."""
         try:
@@ -152,7 +152,7 @@ class ResourceMonitor:
             return (statvfs.f_frsize * statvfs.f_bavail) / (1024**3)
         except Exception:
             return 0.0
-    
+
     def _get_process_count(self) -> int:
         """Get count of beam.smp processes."""
         try:
@@ -165,7 +165,7 @@ class ResourceMonitor:
             return int(result.stdout.strip()) if result.returncode == 0 else 0
         except Exception:
             return 0
-    
+
     def _get_open_connections(self, port: int = 8085) -> int:
         """Get count of open TCP connections to a port."""
         try:
@@ -188,11 +188,11 @@ class ResourceMonitor:
             return max(0, int(result.stdout.strip()) - 1)  # Subtract header
         except Exception:
             return 0
-    
+
     def _take_sample(self) -> ResourceSample:
         """Take a single resource sample."""
         rss_mb, available_mb = self._get_memory_info()
-        
+
         return ResourceSample(
             timestamp=datetime.utcnow().isoformat() + "Z",
             elapsed_seconds=time.monotonic() - self._start_time,
@@ -203,7 +203,7 @@ class ResourceMonitor:
             process_count=self._get_process_count(),
             open_connections=self._get_open_connections()
         )
-    
+
     def _sampling_loop(self):
         """Background sampling loop."""
         while self._running:
@@ -211,46 +211,46 @@ class ResourceMonitor:
             with self._lock:
                 self.samples.append(sample)
             time.sleep(self.sample_interval)
-    
+
     def start(self):
         """Start background sampling."""
         if self._running:
             return
-        
+
         self._start_time = time.monotonic()
         self._running = True
         self._thread = threading.Thread(target=self._sampling_loop, daemon=True)
         self._thread.start()
-    
+
     def stop(self):
         """Stop background sampling."""
         self._running = False
         if self._thread:
             self._thread.join(timeout=2.0)
             self._thread = None
-    
+
     def sample_now(self) -> ResourceSample:
         """Take an immediate sample (synchronous)."""
         sample = self._take_sample()
         with self._lock:
             self.samples.append(sample)
         return sample
-    
+
     def get_samples(self) -> List[ResourceSample]:
         """Get all collected samples."""
         with self._lock:
             return list(self.samples)
-    
+
     def get_summary(self) -> Dict[str, Any]:
         """Get summary statistics from samples."""
         samples = self.get_samples()
         if not samples:
             return {}
-        
+
         cpu_values = [s.cpu_percent for s in samples]
         mem_values = [s.memory_rss_mb for s in samples]
         conn_values = [s.open_connections for s in samples]
-        
+
         return {
             "sample_count": len(samples),
             "duration_seconds": samples[-1].elapsed_seconds if samples else 0,
@@ -270,7 +270,7 @@ class ResourceMonitor:
                 "avg": sum(conn_values) / len(conn_values)
             }
         }
-    
+
     def save_to_file(self, filepath: Path):
         """Save samples to JSON file."""
         samples = self.get_samples()
@@ -280,11 +280,11 @@ class ResourceMonitor:
         }
         with open(filepath, 'w') as f:
             json.dump(data, f, indent=2)
-    
+
     def __enter__(self):
         self.start()
         return self
-    
+
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.stop()
         return False

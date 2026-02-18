@@ -612,8 +612,7 @@ is_revoked(TokenId) ->
 persist_revocation_sync(TokenId, Timestamp) ->
     try
         F = fun() -> mnesia:write({revoked_tokens, TokenId, Timestamp}) end,
-        case mnesia:activity(sync_transaction, F) of
-            ok -> ok;
+        case mnesia:sync_transaction(F) of
             {atomic, _} -> ok;
             {aborted, Reason} ->
                 logger:warning("Failed to persist revocation: ~p", [Reason]),

@@ -56,8 +56,7 @@ store_sync(User, Msg, Count) ->
     end,
     
     %% CRITICAL: sync_transaction waits for replication to ALL disc_copies nodes
-    case mnesia:activity(sync_transaction, F) of
-        ok -> ok;
+    case mnesia:sync_transaction(F) of
         {atomic, _} -> ok;
         {aborted, Reason} ->
             logger:error("Offline store failed for ~p: ~p", [User, Reason]),
@@ -119,8 +118,7 @@ store_with_seq(User, Msg, SeqNo) ->
         mnesia:write({offline_msg, Key, Timestamp, Msg})
     end,
     
-    case mnesia:activity(sync_transaction, F) of
-        ok -> ok;
+    case mnesia:sync_transaction(F) of
         {atomic, _} -> ok;
         {aborted, Reason} ->
             logger:error("Sequenced store failed for ~p: ~p", [User, Reason]),
@@ -161,8 +159,7 @@ store_batch_sync(User, Msgs, Count) ->
     end,
     
     %% CRITICAL: sync_transaction for durability
-    case mnesia:activity(sync_transaction, F) of
-        ok -> ok;
+    case mnesia:sync_transaction(F) of
         {atomic, _} -> ok;
         {aborted, Reason} ->
             logger:error("Offline batch store failed for ~p: ~p", [User, Reason]),
@@ -188,13 +185,11 @@ retrieve(User, Count) ->
         lists:append(Lists)
     end,
     
-    case mnesia:activity(transaction, F) of
+    case mnesia:transaction(F) of
         {atomic, Records} ->
             sort_and_extract(Records);
-        Records when is_list(Records) ->
-            sort_and_extract(Records);
-        Error ->
-            logger:error("Error retrieving offline msgs: ~p", [Error]),
+        {aborted, Reason} ->
+            logger:error("Error retrieving offline msgs: ~p", [Reason]),
             []
     end.
 

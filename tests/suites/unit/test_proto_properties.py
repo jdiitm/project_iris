@@ -86,20 +86,20 @@ def decode_reliable_message(data: bytes) -> Tuple[Optional[bytes], Optional[byte
     """Decode reliable message, return (msg_id, content) or (None, None)."""
     if len(data) < 7:  # min: opcode(1) + id_len(2) + content_len(4)
         return None, None
-    
+
     if data[0] != 0x11:
         return None, None
-    
+
     id_len = struct.unpack('>H', data[1:3])[0]
     if len(data) < 3 + id_len + 4:
         return None, None
-    
+
     msg_id = data[3:3+id_len]
     content_len = struct.unpack('>I', data[3+id_len:3+id_len+4])[0]
-    
+
     if len(data) < 3 + id_len + 4 + content_len:
         return None, None
-    
+
     content = data[3+id_len+4:3+id_len+4+content_len]
     return msg_id, content
 
@@ -117,18 +117,18 @@ def generate_msg_id() -> bytes:
 # =============================================================================
 
 if HYPOTHESIS_AVAILABLE:
-    
+
     @given(st.text(min_size=1, max_size=64, alphabet=st.characters(whitelist_categories=('L', 'N', 'P'))))
     @settings(max_examples=100)
     def test_login_roundtrip(username: str):
         """Property: Login packets preserve username."""
         encoded = encode_login(username)
-        
+
         # Verify structure
         assert encoded[0] == 0x01
         assert encoded[1:].decode('utf-8') == username
-    
-    
+
+
     @given(
         st.text(min_size=1, max_size=64, alphabet=st.characters(whitelist_categories=('L', 'N'))),
         st.binary(min_size=0, max_size=1000)
@@ -137,43 +137,43 @@ if HYPOTHESIS_AVAILABLE:
     def test_message_roundtrip(target: str, content: bytes):
         """Property: Message packets preserve target and content."""
         encoded = encode_message(target, content)
-        
+
         # Verify structure
         assert encoded[0] == 0x02
-        
+
         # Decode target
         target_len = struct.unpack('>H', encoded[1:3])[0]
         decoded_target = encoded[3:3+target_len].decode('utf-8')
         assert decoded_target == target
-        
+
         # Decode content
         content_len = struct.unpack('>H', encoded[3+target_len:5+target_len])[0]
         decoded_content = encoded[5+target_len:5+target_len+content_len]
         assert decoded_content == content
-    
-    
+
+
     @given(st.binary(min_size=1, max_size=100), st.binary(min_size=0, max_size=1000))
     @settings(max_examples=100)
     def test_reliable_message_roundtrip(msg_id: bytes, content: bytes):
         """Property: Reliable messages preserve ID and content."""
         encoded = encode_reliable_message(msg_id, content)
         decoded_id, decoded_content = decode_reliable_message(encoded)
-        
+
         assert decoded_id == msg_id
         assert decoded_content == content
-    
-    
+
+
     @given(st.integers(min_value=0, max_value=2**32-1))
     @settings(max_examples=100)
     def test_sequence_encoding(seq: int):
         """Property: Sequence numbers are correctly encoded as 32-bit big-endian."""
         encoded = encode_sequence_message(seq, "test", b"content")
-        
+
         # Extract sequence from packet
         decoded_seq = struct.unpack('>I', encoded[1:5])[0]
         assert decoded_seq == seq
-    
-    
+
+
     @given(st.integers(min_value=2**32-10, max_value=2**32-1))
     @settings(max_examples=20)
     def test_sequence_wraparound(seq: int):
@@ -181,7 +181,7 @@ if HYPOTHESIS_AVAILABLE:
         encoded = encode_sequence_message(seq, "test", b"content")
         decoded_seq = struct.unpack('>I', encoded[1:5])[0]
         assert decoded_seq == seq
-        
+
         # Test wraparound
         if seq < 2**32 - 1:
             next_seq = seq + 1
@@ -195,7 +195,7 @@ def test_msg_id_uniqueness():
     """Property: Generated message IDs are unique."""
     ids = [generate_msg_id() for _ in range(1000)]
     unique_ids = set(ids)
-    
+
     # All IDs should be unique
     assert len(unique_ids) == len(ids), f"Generated {len(ids)} IDs but only {len(unique_ids)} unique"
 
@@ -205,11 +205,11 @@ def test_msg_id_sortable():
     ids = []
     for _ in range(100):
         ids.append(generate_msg_id())
-        time.sleep(0.001)  # Small delay to ensure timestamp changes
-    
+        time.sleep(0.001)
+
     # IDs should be sortable (later IDs sort after earlier ones)
     sorted_ids = sorted(ids)
-    
+
     # At least 90% should maintain order (allowing for clock jitter)
     in_order = sum(1 for i, j in zip(ids, sorted_ids) if i == j)
     assert in_order >= 90, f"Only {in_order}% of IDs maintained order"
@@ -224,12 +224,12 @@ def test_binary_safety():
         bytes(range(256)),       # All byte values
         b'\x00\x01\x02\xff\xfe', # Mixed
     ]
-    
+
     for pattern in patterns:
         msg_id = generate_msg_id()
         encoded = encode_reliable_message(msg_id, pattern)
         decoded_id, decoded_content = decode_reliable_message(encoded)
-        
+
         assert decoded_id == msg_id
         assert decoded_content == pattern
 
@@ -241,7 +241,7 @@ def test_length_limits():
     encoded = encode_reliable_message(msg_id, b'')
     decoded_id, decoded_content = decode_reliable_message(encoded)
     assert decoded_content == b''
-    
+
     # Max uint16 target length (simulated, don't actually create 64K string)
     target = 'a' * 256
     content = b'x' * 1000
@@ -256,10 +256,10 @@ def test_length_limits():
 def run_basic_tests():
     """Run basic random tests without hypothesis."""
     print("\n=== Property-Based Tests (Basic Mode) ===\n")
-    
+
     passed = 0
     failed = 0
-    
+
     # Test 1: Login roundtrip
     print("Testing: Login roundtrip...", end=" ")
     try:
@@ -273,7 +273,7 @@ def run_basic_tests():
     except Exception as e:
         print(f"✗ FAIL: {e}")
         failed += 1
-    
+
     # Test 2: Message roundtrip
     print("Testing: Message roundtrip...", end=" ")
     try:
@@ -281,7 +281,7 @@ def run_basic_tests():
             target = ''.join(random.choices('abcdefghijklmnopqrstuvwxyz', k=random.randint(1, 32)))
             content = bytes([random.randint(0, 255) for _ in range(random.randint(0, 500))])
             encoded = encode_message(target, content)
-            
+
             target_len = struct.unpack('>H', encoded[1:3])[0]
             decoded_target = encoded[3:3+target_len].decode('utf-8')
             assert decoded_target == target
@@ -290,7 +290,7 @@ def run_basic_tests():
     except Exception as e:
         print(f"✗ FAIL: {e}")
         failed += 1
-    
+
     # Test 3: Reliable message roundtrip
     print("Testing: Reliable message roundtrip...", end=" ")
     try:
@@ -306,7 +306,7 @@ def run_basic_tests():
     except Exception as e:
         print(f"✗ FAIL: {e}")
         failed += 1
-    
+
     # Test 4: Sequence encoding
     print("Testing: Sequence encoding...", end=" ")
     try:
@@ -319,7 +319,7 @@ def run_basic_tests():
     except Exception as e:
         print(f"✗ FAIL: {e}")
         failed += 1
-    
+
     # Test 5: Message ID uniqueness
     print("Testing: Message ID uniqueness...", end=" ")
     try:
@@ -329,7 +329,7 @@ def run_basic_tests():
     except Exception as e:
         print(f"✗ FAIL: {e}")
         failed += 1
-    
+
     # Test 6: Binary safety
     print("Testing: Binary safety...", end=" ")
     try:
@@ -339,7 +339,7 @@ def run_basic_tests():
     except Exception as e:
         print(f"✗ FAIL: {e}")
         failed += 1
-    
+
     # Test 7: Length limits
     print("Testing: Length limits...", end=" ")
     try:
@@ -349,12 +349,12 @@ def run_basic_tests():
     except Exception as e:
         print(f"✗ FAIL: {e}")
         failed += 1
-    
+
     print(f"\n=== Summary ===")
     print(f"Total: {passed + failed}")
     print(f"Passed: {passed}")
     print(f"Failed: {failed}")
-    
+
     return failed == 0
 
 
@@ -371,7 +371,7 @@ def main():
         except ImportError:
             # Fall back to running tests directly
             print("\n=== Property-Based Tests (Hypothesis) ===\n")
-            
+
             tests = [
                 test_login_roundtrip,
                 test_message_roundtrip,
@@ -383,10 +383,10 @@ def main():
                 test_binary_safety,
                 test_length_limits,
             ]
-            
+
             passed = 0
             failed = 0
-            
+
             for test in tests:
                 name = test.__name__
                 print(f"Testing: {name}...", end=" ")
@@ -397,12 +397,12 @@ def main():
                 except Exception as e:
                     print(f"✗ FAIL: {e}")
                     failed += 1
-            
+
             print(f"\n=== Summary ===")
             print(f"Total: {passed + failed}")
             print(f"Passed: {passed}")
             print(f"Failed: {failed}")
-            
+
             return 0 if failed == 0 else 1
     else:
         return 0 if run_basic_tests() else 1

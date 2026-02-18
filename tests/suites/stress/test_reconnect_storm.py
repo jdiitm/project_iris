@@ -25,10 +25,7 @@ import os
 import sys
 import time
 import socket
-import ssl
 import random
-import struct
-import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
@@ -130,7 +127,6 @@ def test_reconnect_burst():
     log("  Disconnecting all clients...")
     for _, c in clients:
         disconnect_client(c)
-    time.sleep(1)
 
     # Phase 3: Reconnect all
     log("  Reconnecting all clients...")
@@ -187,7 +183,6 @@ def test_reconnect_with_pending():
         recv_client = IrisClient()
         recv_client.login(receiver)
         disconnect_client(recv_client)
-        time.sleep(0.5)
 
         # Send messages while receiver is offline
         send_client = IrisClient()
@@ -199,12 +194,10 @@ def test_reconnect_with_pending():
                 pass
             time.sleep(0.02)
         send_client.close()
-        time.sleep(0.5)
 
         # Reconnect receiver and attempt to catch up
         recv_client2 = IrisClient()
         recv_client2.login(receiver)
-        time.sleep(1)
 
         # Try to receive pending messages
         received = 0
@@ -245,7 +238,6 @@ def test_server_survives_storm():
         c = IrisClient()
         c.login("legit_after_storm")
         c.send_msg("target_after_storm", "hello after storm")
-        time.sleep(0.3)
         c.close()
         log("  PASS: Legitimate client works after storm")
         return True

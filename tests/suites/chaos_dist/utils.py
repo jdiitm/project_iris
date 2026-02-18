@@ -41,9 +41,9 @@ def get_tls_context() -> ssl.SSLContext:
     global _tls_context_cache
     if _tls_context_cache is not None:
         return _tls_context_cache
-    
+
     context = get_verified_ssl_context()
-    
+
     _tls_context_cache = context
     return context
 
@@ -97,17 +97,17 @@ def create_tls_socket(host: str, port: int, timeout: int = DEFAULT_TIMEOUT) -> s
         socket.error: If connection fails
     """
     context = get_tls_context()
-    
+
     raw_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     raw_sock.settimeout(timeout)
-    
+
     tls_sock = context.wrap_socket(raw_sock, server_hostname=host)
     tls_sock.connect((host, port))
-    
+
     return tls_sock
 
 
-def tls_connect_and_login(host: str, port: int, username: str, 
+def tls_connect_and_login(host: str, port: int, username: str,
                           timeout: int = DEFAULT_TIMEOUT) -> Optional[ssl.SSLSocket]:
     """
     Connect via TLS and perform login handshake.
@@ -126,28 +126,23 @@ def tls_connect_and_login(host: str, port: int, username: str,
     """
     try:
         sock = create_tls_socket(host, port, timeout)
-        
+
         # Send login packet: opcode 0x01 + username
         packet = bytes([0x01]) + username.encode('utf-8')
         sock.sendall(packet)
-        
+
         # Wait for response (with timeout)
         sock.settimeout(timeout)
         response = sock.recv(1024)
-        
+
         if b"LOGIN_OK" in response:
-            # Small delay to ensure server-side registration completes
-            # This prevents race conditions where messages are sent before
-            # the recipient is fully registered in the presence table
-            import time
-            time.sleep(0.05)
             return sock
         else:
             # Login failed - log the response for debugging
             print(f"  Login failed for {username}: {response!r}")
             sock.close()
             return None
-            
+
     except ssl.SSLError as e:
         print(f"  TLS error for {username}: {e}")
         return None
@@ -182,15 +177,15 @@ def tls_send_message(sock: ssl.SSLSocket, target: str, message: str) -> Tuple[bo
     """
     import time
     start = time.time()
-    
+
     try:
         target_bytes = target.encode('utf-8')
         msg_bytes = message.encode('utf-8')
-        
+
         # Increment sequence counter
         _tls_seq_counter[0] += 1
         seq_no = _tls_seq_counter[0]
-        
+
         # Message packet: 0x07 | target_len(2) | target | seq_no(8) | msg_len(2) | msg
         packet = (
             bytes([0x07]) +
@@ -198,12 +193,12 @@ def tls_send_message(sock: ssl.SSLSocket, target: str, message: str) -> Tuple[bo
             struct.pack('>Q', seq_no) +
             struct.pack('>H', len(msg_bytes)) + msg_bytes
         )
-        
+
         sock.sendall(packet)
         latency = (time.time() - start) * 1000
         return True, latency
-        
-    except Exception as e:
+
+    except Exception:
         latency = (time.time() - start) * 1000
         return False, latency
 
@@ -240,17 +235,17 @@ def tls_connect_and_login_with_retry(host: str, port: int, username: str,
         ssl.SSLSocket if login successful, None if all retries exhausted
     """
     import time
-    
+
     last_error = None
     for attempt in range(max_retries + 1):
         if attempt > 0:
             print(f"  Retry {attempt}/{max_retries} for {username}...")
             time.sleep(retry_delay)
-        
+
         sock = tls_connect_and_login(host, port, username, timeout)
         if sock:
             return sock
-    
+
     print(f"  All {max_retries + 1} login attempts failed for {username}")
     return None
 

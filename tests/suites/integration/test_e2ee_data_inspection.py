@@ -18,7 +18,6 @@ import sys
 import os
 import struct
 import socket
-import ssl
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
@@ -136,8 +135,6 @@ def test_e2ee_data_not_plaintext():
         e2ee_packet = build_e2ee_packet(receiver_name, ciphertext)
         sender.sock.sendall(e2ee_packet)
         log(f"  Sent E2EE message ({len(e2ee_packet)} bytes) via opcode 0x23")
-
-        time.sleep(1.0)
 
         # Receive raw data on receiver side
         try:
