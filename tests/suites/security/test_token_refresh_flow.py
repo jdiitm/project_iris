@@ -18,7 +18,6 @@ Pattern: follows test_jwt_security.py using raw TLS socket.
 import sys
 import os
 import socket
-import ssl
 import struct
 import time
 

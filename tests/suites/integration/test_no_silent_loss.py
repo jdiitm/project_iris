@@ -18,9 +18,7 @@ Target: 100% message tracking (delivered + offline = sent)
 import subprocess
 import sys
 import os
-import time
 import random
-import string
 
 # Determinism: seed from environment
 TEST_SEED = int(os.environ.get("TEST_SEED", 42))
@@ -62,7 +60,7 @@ def run_erlang_command(code, timeout=TIMEOUT):
 def test_metrics_tracking():
     """Test that routing metrics are being tracked."""
     print("\n1. Testing routing metrics tracking...")
-    
+
     code = '''
         %% Initialize metrics ETS if needed
         case ets:info(iris_router_metrics) of
@@ -100,9 +98,9 @@ def test_metrics_tracking():
             false -> io:format("TRACKING_FAIL~n")
         end
     '''
-    
+
     success, stdout, stderr = run_erlang_command(code)
-    
+
     if success and "TRACKING_OK" in stdout:
         print("   ✓ Routing metrics tracking verified")
         return True
@@ -115,7 +113,7 @@ def test_metrics_tracking():
 def test_offline_fallback_guarantee():
     """Test that offline storage is always used as fallback."""
     print("\n2. Testing offline fallback guarantee...")
-    
+
     code = '''
         %% Verify that store_offline_guaranteed function exists
         case erlang:function_exported(iris_async_router, route, 3) of
@@ -133,9 +131,9 @@ def test_offline_fallback_guarantee():
         
         io:format("FALLBACK_INFRA_OK~n")
     '''
-    
+
     success, stdout, stderr = run_erlang_command(code)
-    
+
     if success and "ROUTE_API_OK" in stdout and "FALLBACK_INFRA_OK" in stdout:
         print("   ✓ Offline fallback infrastructure verified")
         return True
@@ -151,7 +149,7 @@ def test_offline_fallback_guarantee():
 def test_no_silent_drops():
     """Verify the principle: sent = success + offline + explicit_failure."""
     print("\n3. Testing no silent drops principle...")
-    
+
     code = '''
         %% Principle verification:
         %% Every message must be in one of these states:
@@ -205,9 +203,9 @@ def test_no_silent_drops():
         
         ets:delete(test_metrics)
     '''
-    
+
     success, stdout, stderr = run_erlang_command(code)
-    
+
     if success and "NO_SILENT_DROPS" in stdout:
         print("   ✓ No silent drops - all messages tracked")
         return True
@@ -223,27 +221,27 @@ def main():
     print("=" * 60)
     print("Verifying: All messages are tracked (delivered OR offline)")
     print("")
-    
+
     results = []
-    
+
     results.append(("Metrics tracking", test_metrics_tracking()))
     results.append(("Offline fallback", test_offline_fallback_guarantee()))
     results.append(("No silent drops", test_no_silent_drops()))
-    
+
     # Summary
     print("\n" + "=" * 60)
     print("RESULTS")
     print("=" * 60)
-    
+
     passed = sum(1 for _, r in results if r)
     total = len(results)
-    
+
     for name, result in results:
         status = "✓ PASS" if result else "✗ FAIL"
         print(f"  {status}: {name}")
-    
+
     print(f"\n  Total: {passed}/{total} tests passed")
-    
+
     if passed == total:
         print("\n✅ PASS: No silent message loss verified")
         print("   AUDIT FIX: All routing failures tracked")

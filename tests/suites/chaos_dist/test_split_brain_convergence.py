@@ -20,11 +20,8 @@ Pattern: follows test_split_brain.py using Docker network manipulation.
 
 import os
 import sys
-import socket
 import subprocess
 import time
-import struct
-from typing import Optional, List, Tuple
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
@@ -36,7 +33,6 @@ from tests.suites.chaos_dist.utils import (
     tls_send_message,
     tls_connect_and_login_with_retry,
     close_socket,
-    create_tls_socket,
     wait_for_cluster_ready,
 )
 from tests.utilities.helpers import wait_until
@@ -172,14 +168,14 @@ def test_convergence_after_partition():
         # Get baseline connectivity before partition
         baseline_east = get_connected_nodes(EAST_CORE)
         baseline_west = get_connected_nodes(WEST_CORE)
-        
+
         def _partition_detected():
             east_nodes_str = get_connected_nodes(EAST_CORE)
             west_nodes_str = get_connected_nodes(WEST_CORE)
             # Partition detected when connectivity changes (nodes see fewer connections)
             # Check that the node lists have changed from baseline
             return east_nodes_str != baseline_east or west_nodes_str != baseline_west
-        
+
         wait_until(_partition_detected, timeout=10, interval=0.5, description="partition detection")
 
         log(f"East connected: {get_connected_nodes(EAST_CORE)}")

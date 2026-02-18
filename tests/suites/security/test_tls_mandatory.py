@@ -12,7 +12,6 @@ This test validates that the server enforces TLS when configured to do so.
 import socket
 import ssl
 import sys
-import time
 import os
 
 # Add project root to path for helpers
@@ -34,28 +33,28 @@ def test_plaintext_rejected():
     FAIL: Server accepts plaintext and responds with data
     """
     print("\n=== Test 1: Plaintext Connection Must Be Rejected ===")
-    
+
     try:
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.settimeout(TIMEOUT)
         sock.connect((SERVER_HOST, SERVER_PORT))
-        
+
         # Send plaintext login attempt
         packet = bytes([0x01]) + b"test_plaintext_user"
         sock.sendall(packet)
-        
+
         # Wait for response
         try:
             sock.settimeout(2)  # Short timeout for response
             response = sock.recv(1024)
-            
+
             if len(response) > 0:
                 # Check if response looks like SSL alert (starts with 0x15 for alert)
                 if response[0] == 0x15:
                     print("  ✅ PASS: Server sent TLS alert (rejecting plaintext)")
                     sock.close()
                     return True
-                
+
                 # Check if it's LOGIN_OK or similar (plaintext accepted - BAD)
                 if b"LOGIN" in response or response[0:1] == b'\x03':
                     print(f"  ❌ FAIL: Server accepted plaintext connection!")
@@ -63,13 +62,13 @@ def test_plaintext_rejected():
                     print("     RFC VIOLATION: NFR-14 requires TLS to be mandatory")
                     sock.close()
                     return False
-                
+
                 # Unknown response - might be garbage from SSL mismatch
                 print(f"  ⚠️ Server sent {len(response)} bytes (possibly SSL error data)")
                 print(f"     First bytes: {response[:20].hex()}")
                 sock.close()
                 return True  # SSL error data is acceptable
-                
+
         except socket.timeout:
             print("  ✅ PASS: No response (server waiting for TLS handshake)")
             sock.close()
@@ -80,10 +79,10 @@ def test_plaintext_rejected():
         except ssl.SSLError as e:
             print(f"  ✅ PASS: SSL error (expected for plaintext): {e}")
             return True
-            
+
         sock.close()
         return True
-        
+
     except ConnectionRefusedError:
         print("  ✅ PASS: Connection refused")
         return True
@@ -112,24 +111,24 @@ def test_tls_connection_works():
     FAIL: TLS connection refused or handshake fails
     """
     print("\n=== Test 2: TLS Connection Must Be Accepted ===")
-    
+
     try:
         context = get_unverified_ssl_context()  # Unverified: testing rejection/attack scenario
-        
+
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.settimeout(TIMEOUT)
-        
+
         tls_sock = context.wrap_socket(sock, server_hostname=SERVER_HOST)
         tls_sock.connect((SERVER_HOST, SERVER_PORT))
-        
+
         print(f"  ✅ TLS handshake successful")
         print(f"     Protocol: {tls_sock.version()}")
         print(f"     Cipher: {tls_sock.cipher()[0]}")
-        
+
         # Send login
         packet = bytes([0x01]) + b"test_tls_user"
         tls_sock.sendall(packet)
-        
+
         try:
             tls_sock.settimeout(2)
             response = tls_sock.recv(1024)
@@ -141,10 +140,10 @@ def test_tls_connection_works():
             print("  ⚠️ No response (server may not echo)")
             tls_sock.close()
             return True  # TLS worked, even if no response
-            
+
         tls_sock.close()
         return True
-        
+
     except ssl.SSLError as e:
         print(f"  ❌ FAIL: TLS handshake failed: {e}")
         return False
@@ -167,7 +166,7 @@ def check_server_available():
             return True
         except:
             return False
-    
+
     return wait_until(_try_connect, timeout=3, interval=1, description="server available")
 
 
@@ -177,27 +176,27 @@ def check_ssl_available():
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.settimeout(2)
         sock.connect((SERVER_HOST, SERVER_PORT))
-        
+
         # Send a TLS ClientHello to see how server responds
         # A TLS server will respond with ServerHello
         # A plaintext server will likely return garbage or close
-        
+
         # Minimal TLS 1.2 ClientHello
         client_hello = bytes([
             0x16, 0x03, 0x01, 0x00, 0x05,  # Record header
             0x01, 0x00, 0x00, 0x01, 0x00   # ClientHello start
         ])
         sock.sendall(client_hello)
-        
+
         sock.settimeout(2)
         response = sock.recv(5)  # TLS record header
         sock.close()
-        
+
         # TLS response starts with 0x16 (handshake) or 0x15 (alert)
         if len(response) >= 1 and response[0] in (0x15, 0x16):
             return True  # Server speaks TLS
         return False  # Server not speaking TLS
-        
+
     except Exception:
         return False
 
@@ -207,17 +206,17 @@ def main():
     print("RFC NFR-14: TLS Mandatory Enforcement Test")
     print("=" * 60)
     print(f"Target: {SERVER_HOST}:{SERVER_PORT}")
-    
+
     # Wait for TLS config to be fully loaded
     wait_until(check_ssl_available, timeout=5, interval=0.5, description="TLS config loaded")
-    
+
     print("\nChecking server availability...")
     if not check_server_available():
         print("  ✗ FAIL: Server not reachable - cannot validate TLS enforcement")
         print("\nTo run: start server with TLS config")
         sys.exit(1)
     print("  Server is reachable")
-    
+
     # Check if server actually has TLS enabled
     print("\nProbing server for TLS support...")
     if not check_ssl_available():
@@ -230,26 +229,26 @@ def main():
         print("  TLS is MANDATORY - start server with: erl -config config/test_tls ...")
         sys.exit(1)  # No skips - TLS must be enabled
     print("  Server has TLS enabled ✓")
-    
+
     results = []
-    
+
     # Test 1: Plaintext must be rejected
     results.append(("Plaintext Rejected", test_plaintext_rejected()))
-    
+
     # Test 2: TLS must work
     results.append(("TLS Accepted", test_tls_connection_works()))
-    
+
     print("\n" + "=" * 60)
     print("RESULTS:")
     print("=" * 60)
-    
+
     all_passed = True
     for name, passed in results:
         status = "✅ PASS" if passed else "❌ FAIL"
         print(f"  {status}: {name}")
         if not passed:
             all_passed = False
-    
+
     if all_passed:
         print("\n✅ All TLS enforcement tests passed")
         print("   RFC NFR-14 compliance: VERIFIED")

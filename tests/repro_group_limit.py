@@ -8,7 +8,6 @@ by iris_group.erl, despite iris_limits.erl defining the limit as 10,000.
 
 import sys
 import os
-import time
 import subprocess
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -22,9 +21,9 @@ def erl_eval(code):
     ]
     try:
         result = subprocess.run(
-            cmd, 
-            capture_output=True, 
-            text=True, 
+            cmd,
+            capture_output=True,
+            text=True,
             timeout=300,  # 5 minutes for adding 1000+ members
             cwd=PROJECT_ROOT
         )
@@ -34,7 +33,7 @@ def erl_eval(code):
 
 def run_test():
     print("=== Testing Broadcast Group Limit ===")
-    
+
     code = """
     mnesia:create_schema([node()]),
     mnesia:start(),
@@ -64,10 +63,10 @@ def run_test():
             io:format("ERROR: Unexpected result: ~p~n", [Other])
     end.
     """
-    
+
     output = erl_eval(code)
     print(output)
-    
+
     if "PASS: 1001st member rejected" in output:
         print("\n[SUCCESS] Reproduced: Limit is 1000 (iris_group incorrect)")
         return True

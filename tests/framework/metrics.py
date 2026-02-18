@@ -8,7 +8,7 @@ Produces summary statistics suitable for CI reporting.
 import json
 import statistics
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
 
@@ -19,13 +19,13 @@ class DerivedMetrics:
     test_id: str
     timestamp: str
     duration_seconds: float = 0.0
-    
+
     # Message metrics
     messages_sent: int = 0
     messages_received: int = 0
     messages_lost: int = 0
     messages_duplicated: int = 0
-    
+
     # Latency metrics (milliseconds)
     latency_p50_ms: float = 0.0
     latency_p90_ms: float = 0.0
@@ -33,18 +33,18 @@ class DerivedMetrics:
     latency_min_ms: float = 0.0
     latency_max_ms: float = 0.0
     latency_avg_ms: float = 0.0
-    
+
     # Throughput
     throughput_msgs_per_sec: float = 0.0
-    
+
     # Error metrics
     error_count: int = 0
     error_rate_pct: float = 0.0
-    
+
     # Connection metrics
     connections_opened: int = 0
     connections_closed: int = 0
-    
+
     # Custom metrics
     extra: Dict[str, Any] = field(default_factory=dict)
 
@@ -76,16 +76,16 @@ def percentile(values: List[float], p: float) -> float:
 def derive_metrics(log_path: Path) -> DerivedMetrics:
     """Derive metrics from a log file."""
     events = parse_log_file(log_path)
-    
+
     if not events:
         return DerivedMetrics(
             test_id="unknown",
             timestamp=datetime.utcnow().isoformat() + "Z"
         )
-    
+
     # Extract test_id from first event
     test_id = events[0].get("test_id", "unknown")
-    
+
     # Initialize counters
     messages_sent = 0
     messages_received = 0
@@ -95,13 +95,13 @@ def derive_metrics(log_path: Path) -> DerivedMetrics:
     errors = 0
     connections_opened = 0
     connections_closed = 0
-    
+
     start_time = None
     end_time = None
-    
+
     for event in events:
         event_type = event.get("event_type", "")
-        
+
         # Track time range
         if "wall_time" in event:
             try:
@@ -111,45 +111,45 @@ def derive_metrics(log_path: Path) -> DerivedMetrics:
                 end_time = ts
             except Exception:
                 pass
-        
+
         # Message sent
         if event_type == "message_sent":
             messages_sent += 1
             msg_id = event.get("message_id")
             if msg_id:
                 message_ids_sent.add(msg_id)
-        
+
         # Message received
         elif event_type == "message_received":
             messages_received += 1
             msg_id = event.get("message_id")
             if msg_id:
                 message_ids_received.add(msg_id)
-            
+
             # Track latency
             latency = event.get("latency_ms")
             if latency is not None:
                 latencies.append(latency)
-        
+
         # Message acknowledged
         elif event_type == "message_acked":
             latency = event.get("latency_ms")
             if latency is not None:
                 latencies.append(latency)
-        
+
         # Errors
         elif event.get("error_type"):
             errors += 1
-        
+
         # Connections
         elif event_type == "connection_login":
             connections_opened += 1
         elif event_type == "connection_disconnect":
             connections_closed += 1
-    
+
     # Calculate derived values
     lost = len(message_ids_sent - message_ids_received)
-    
+
     # Find duplicates (messages received multiple times)
     receive_counts: Dict[str, int] = {}
     for event in events:
@@ -158,19 +158,19 @@ def derive_metrics(log_path: Path) -> DerivedMetrics:
             if msg_id:
                 receive_counts[msg_id] = receive_counts.get(msg_id, 0) + 1
     duplicates = sum(1 for count in receive_counts.values() if count > 1)
-    
+
     # Duration
     duration = 0.0
     if start_time and end_time:
         duration = (end_time - start_time).total_seconds()
-    
+
     # Throughput
     throughput = messages_sent / duration if duration > 0 else 0.0
-    
+
     # Error rate
     total_ops = messages_sent + messages_received
     error_rate = (errors / total_ops * 100) if total_ops > 0 else 0.0
-    
+
     return DerivedMetrics(
         test_id=test_id,
         timestamp=datetime.utcnow().isoformat() + "Z",
@@ -196,14 +196,14 @@ def derive_metrics(log_path: Path) -> DerivedMetrics:
 def process_run_directory(run_dir: Path) -> Dict[str, DerivedMetrics]:
     """Process all log files in a test run directory."""
     results = {}
-    
+
     for log_file in run_dir.rglob("*.jsonl"):
         try:
             metrics = derive_metrics(log_file)
             results[str(log_file.relative_to(run_dir))] = metrics
         except Exception as e:
             print(f"Error processing {log_file}: {e}")
-    
+
     return results
 
 
@@ -217,15 +217,15 @@ def aggregate_metrics(metrics_list: List[DerivedMetrics]) -> Dict[str, Any]:
     """Aggregate metrics across multiple tests."""
     if not metrics_list:
         return {}
-    
+
     total_sent = sum(m.messages_sent for m in metrics_list)
     total_received = sum(m.messages_received for m in metrics_list)
     total_lost = sum(m.messages_lost for m in metrics_list)
     total_errors = sum(m.error_count for m in metrics_list)
     total_duration = sum(m.duration_seconds for m in metrics_list)
-    
+
     all_latencies_p99 = [m.latency_p99_ms for m in metrics_list if m.latency_p99_ms > 0]
-    
+
     return {
         "tests_count": len(metrics_list),
         "total_messages_sent": total_sent,
@@ -242,13 +242,13 @@ def aggregate_metrics(metrics_list: List[DerivedMetrics]) -> Dict[str, Any]:
 
 if __name__ == "__main__":
     import sys
-    
+
     if len(sys.argv) < 2:
         print("Usage: python metrics.py <log_file_or_directory>")
         sys.exit(1)
-    
+
     path = Path(sys.argv[1])
-    
+
     if path.is_file():
         metrics = derive_metrics(path)
         print(json.dumps(asdict(metrics), indent=2))

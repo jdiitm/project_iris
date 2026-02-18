@@ -60,7 +60,7 @@ def log_test(name: str, passed: bool, message: str = ""):
 def connect_tls():
     """Create TLS connection to server."""
     context = get_unverified_ssl_context()  # Unverified: testing rejection/attack scenario
-    
+
     raw_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     raw_sock.settimeout(TIMEOUT)
     raw_sock.connect((HOST, PORT))
@@ -87,8 +87,8 @@ def send_plaintext_message(sock, target, message):
     """
     target_bytes = target.encode('utf-8')
     msg_bytes = message.encode('utf-8')
-    
-    packet = (bytes([0x02]) + 
+
+    packet = (bytes([0x02]) +
               struct.pack('>H', len(target_bytes)) + target_bytes +
               struct.pack('>H', len(msg_bytes)) + msg_bytes)
     sock.sendall(packet)
@@ -112,7 +112,7 @@ def parse_error_response(data):
     """
     if len(data) < 3:
         return None
-    
+
     if data[0] == 0xFE:
         msg_len = struct.unpack('>H', data[1:3])[0]
         if len(data) >= 3 + msg_len:
@@ -148,14 +148,14 @@ def test_plaintext_rejected():
     - Message is NOT delivered to recipient
     """
     log("\n=== Test: Plaintext Message Rejection (RFC v1.0 Compliance) ===")
-    
+
     if not check_server_available():
         log_test("Plaintext rejection", False, "Server not available")
         return False
-    
+
     sender_sock = None
     receiver_sock = None
-    
+
     try:
         # Connect sender
         sender_sock = connect_tls()
@@ -164,7 +164,7 @@ def test_plaintext_rejected():
             log_test("Plaintext rejection", False, "Sender login failed")
             return False
         log(f"  Sender logged in: {sender_name}")
-        
+
         # Connect receiver (to verify message is NOT delivered)
         receiver_sock = connect_tls()
         receiver_name = f"plaintext_receiver_{int(time.time())}"
@@ -172,25 +172,25 @@ def test_plaintext_rejected():
             log_test("Plaintext rejection", False, "Receiver login failed")
             return False
         log(f"  Receiver logged in: {receiver_name}")
-        
+
         # Send plaintext message (SHOULD BE REJECTED)
         log("  Sending PLAINTEXT message (opcode 0x02)...")
         test_message = f"PLAINTEXT_TEST_{time.time()}"
         send_plaintext_message(sender_sock, receiver_name, test_message)
-        
+
         # Wait for response from server
         time.sleep(0.5)
         response = recv_with_timeout(sender_sock, timeout=3.0)
-        
+
         # Check for error response
         error_msg = parse_error_response(response)
-        
+
         if error_msg:
             log(f"  Server returned error: {error_msg}")
             if "e2ee_required" in error_msg.lower() or "e2ee" in error_msg.lower():
-                log_test("Plaintext rejection", True, 
+                log_test("Plaintext rejection", True,
                         f"Server correctly rejected with: {error_msg}")
-                
+
                 # Verify message was NOT delivered to receiver
                 receiver_sock.settimeout(1.0)
                 try:
@@ -205,13 +205,13 @@ def test_plaintext_rejected():
                 except socket.timeout:
                     log_test("Message not delivered", True,
                             "No message received by receiver (correct)")
-                
+
                 return True
             else:
                 log_test("Plaintext rejection", False,
                         f"Unexpected error message: {error_msg}")
                 return False
-        
+
         # Check if connection was closed (also acceptable rejection)
         try:
             sender_sock.sendall(b'\x00')  # Try to send ping
@@ -224,10 +224,10 @@ def test_plaintext_rejected():
             log_test("Plaintext rejection", True,
                     "Server closed connection (acceptable rejection)")
             return True
-        
+
         # If we get here, message might have been accepted (RFC VIOLATION!)
         log("  WARNING: No explicit rejection received, checking if message was delivered...")
-        
+
         # Check if receiver got the message
         receiver_sock.settimeout(2.0)
         try:
@@ -244,7 +244,7 @@ def test_plaintext_rejected():
             log_test("Plaintext rejection", False,
                     "No rejection response and no delivery - server behavior unclear")
             return False
-        
+
     except Exception as e:
         log_test("Plaintext rejection", False, f"Exception: {type(e).__name__}: {e}")
         return False
@@ -273,31 +273,31 @@ def test_multiple_plaintext_rejected():
     not just the first one.
     """
     log("\n=== Test: Multiple Plaintext Attempts Rejected ===")
-    
+
     if not check_server_available():
         log_test("Multiple plaintext rejection", False, "Server not available")
         return False
-    
+
     sock = None
-    
+
     try:
         sock = connect_tls()
         username = f"multi_plaintext_{int(time.time())}"
         if not login(sock, username):
             log_test("Multiple plaintext rejection", False, "Login failed")
             return False
-        
+
         log(f"  Logged in as: {username}")
-        
+
         # Try to send 3 plaintext messages
         rejections = 0
         for i in range(3):
             send_plaintext_message(sock, f"target_{i}", f"plaintext_msg_{i}")
             time.sleep(0.2)
-            
+
             response = recv_with_timeout(sock, timeout=1.0)
             error_msg = parse_error_response(response)
-            
+
             if error_msg and "e2ee" in error_msg.lower():
                 rejections += 1
                 log(f"    Attempt {i+1}: Rejected (correct)")
@@ -311,7 +311,7 @@ def test_multiple_plaintext_rejected():
                     break
             else:
                 log(f"    Attempt {i+1}: Unexpected response")
-        
+
         if rejections >= 1:
             log_test("Multiple plaintext rejection", True,
                     f"{rejections}/3 attempts properly rejected")
@@ -320,7 +320,7 @@ def test_multiple_plaintext_rejected():
             log_test("Multiple plaintext rejection", False,
                     "No rejections detected - RFC VIOLATION")
             return False
-            
+
     except Exception as e:
         log_test("Multiple plaintext rejection", False, f"Exception: {type(e).__name__}: {e}")
         return False
@@ -343,50 +343,50 @@ def test_cbor_messages_accepted():
     While plaintext is rejected, legitimate message protocols must work.
     """
     log("\n=== Test: CBOR/Sequenced Messages Accepted ===")
-    
+
     if not check_server_available():
         log_test("CBOR messages accepted", False, "Server not available")
         return False
-    
+
     sock = None
-    
+
     try:
         sock = connect_tls()
         username = f"cbor_test_{int(time.time())}"
         if not login(sock, username):
             log_test("CBOR messages accepted", False, "Login failed")
             return False
-        
+
         log(f"  Logged in as: {username}")
-        
+
         # Send a sequenced message (opcode 0x07) - should be accepted
         target = f"cbor_receiver_{int(time.time())}"
         message = b"CBOR_TEST_MESSAGE"
         seq_no = 1
-        
+
         target_bytes = target.encode('utf-8')
-        payload = (bytes([0x07]) + 
+        payload = (bytes([0x07]) +
                    struct.pack('>H', len(target_bytes)) + target_bytes +
                    struct.pack('>Q', seq_no) +
                    struct.pack('>H', len(message)) + message)
         sock.sendall(payload)
         log("  Sent sequenced message (opcode 0x07)")
-        
+
         time.sleep(0.3)
         response = recv_with_timeout(sock, timeout=2.0)
-        
+
         # Check for rejection (should NOT happen)
         error_msg = parse_error_response(response)
         if error_msg and "e2ee" in error_msg.lower():
             log_test("CBOR messages accepted", False,
                     f"Sequenced message wrongly rejected: {error_msg}")
             return False
-        
+
         # No error = message was accepted (correct)
         log_test("CBOR messages accepted", True,
                 "Sequenced message (0x07) accepted correctly")
         return True
-        
+
     except Exception as e:
         log_test("CBOR messages accepted", False, f"Exception: {type(e).__name__}: {e}")
         return False
@@ -408,28 +408,28 @@ def main():
     log("=" * 60)
     log("\nThis test verifies that v1.0 REJECTS plaintext messages (0x02)")
     log("and only accepts E2EE (0x23) or CBOR (0x10) protocols.")
-    
+
     # Run tests
     test_plaintext_rejected()
     test_multiple_plaintext_rejected()
     test_cbor_messages_accepted()
-    
+
     # Summary
     log("\n" + "=" * 60)
     log("SUMMARY")
     log("=" * 60)
-    
+
     passed = sum(1 for _, p, _ in results if p)
     failed = sum(1 for _, p, _ in results if not p)
-    
+
     for name, p, msg in results:
         status = "PASS" if p else "FAIL"
         log(f"  [{status}] {name}")
-    
+
     log(f"\nTotal: {len(results)} tests")
     log(f"Passed: {passed}")
     log(f"Failed: {failed}")
-    
+
     if failed > 0:
         log("\nFAIL: Plaintext rejection tests FAILED")
         log("RFC-001-AMENDMENT-001 Section 7 VIOLATION DETECTED")

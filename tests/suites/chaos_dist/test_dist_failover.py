@@ -24,7 +24,7 @@ PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 from dataclasses import dataclass
-from typing import List, Tuple
+from typing import List
 
 # Configuration
 SERVER_HOST = os.environ.get("IRIS_HOST", "localhost")
@@ -52,13 +52,13 @@ class Metrics:
         self.acked = 0
         self.errors = 0
         self.lock = threading.Lock()
-        
+
     def update(self, s=0, a=0, e=0):
         with self.lock:
             self.sent += s
             self.acked += a
             self.errors += e
-            
+
     def reset(self):
         with self.lock:
             s, a, e = self.sent, self.acked, self.errors
@@ -66,7 +66,7 @@ class Metrics:
             self.acked = 0
             self.errors = 0
             return s, a, e
-            
+
     def get(self):
         with self.lock:
             return self.sent, self.acked, self.errors
@@ -152,9 +152,9 @@ def test_basic_connectivity() -> TestResult:
         sock = connect_and_login(SERVER_HOST, SERVER_PORT, "test_basic")
         success = send_message(sock, b"echo_service", b"hello")
         sock.close()
-        
+
         if success:
-            return TestResult("Basic Connectivity", True, "Connection and messaging OK", 
+            return TestResult("Basic Connectivity", True, "Connection and messaging OK",
                             (time.time() - start) * 1000)
         else:
             return TestResult("Basic Connectivity", False, "Message send failed",
@@ -167,25 +167,25 @@ def test_basic_connectivity() -> TestResult:
 def test_node_kill_recovery() -> TestResult:
     """Test 2: Node kill and recovery behavior."""
     start = time.time()
-    
+
     if not docker_cmd(f"docker inspect {CORE_CONTAINER} 2>/dev/null"):
         return TestResult("Node Kill/Recovery", None, "SKIPPED: Container not found",
                         (time.time() - start) * 1000)
-    
+
     try:
         # Pre-kill: establish baseline
         sock = connect_and_login(SERVER_HOST, SERVER_PORT, "test_kill")
         baseline_ok = send_message(sock, b"echo_service", b"baseline")
         sock.close()
-        
+
         if not baseline_ok:
             return TestResult("Node Kill/Recovery", False, "Baseline failed",
                             (time.time() - start) * 1000)
-        
+
         # Kill core
         docker_cmd(f"docker kill {CORE_CONTAINER}")
         time.sleep(2)
-        
+
         # During outage: expect failures (this is correct behavior)
         outage_errors = 0
         for _ in range(3):
@@ -196,18 +196,18 @@ def test_node_kill_recovery() -> TestResult:
                 sock.close()
             except:
                 outage_errors += 1
-        
+
         # Restart core
         docker_cmd(f"docker start {CORE_CONTAINER}")
         if not wait_container_healthy(CORE_CONTAINER, timeout=60):
             return TestResult("Node Kill/Recovery", False, "Container didn't become healthy",
                             (time.time() - start) * 1000)
-        
+
         # Extra recovery time for Mnesia tables to reload
         time.sleep(5)
         reconnect_edge_to_core()
         time.sleep(3)
-        
+
         # Post-recovery: should work again
         recovery_ok = False
         for attempt in range(5):
@@ -220,15 +220,15 @@ def test_node_kill_recovery() -> TestResult:
                     break
             except:
                 time.sleep(1)
-        
+
         if recovery_ok:
-            return TestResult("Node Kill/Recovery", True, 
+            return TestResult("Node Kill/Recovery", True,
                             f"Recovered after kill (outage errors: {outage_errors})",
                             (time.time() - start) * 1000)
         else:
             return TestResult("Node Kill/Recovery", False, "Failed to recover after restart",
                             (time.time() - start) * 1000)
-            
+
     except Exception as e:
         # Try to restore container
         docker_cmd(f"docker start {CORE_CONTAINER}")
@@ -239,10 +239,10 @@ def test_node_kill_recovery() -> TestResult:
 def test_concurrent_connections() -> TestResult:
     """Test 3: Multiple concurrent connections during stress."""
     start = time.time()
-    
+
     results = []
     threads = []
-    
+
     def worker(worker_id):
         try:
             sock = connect_and_login(SERVER_HOST, SERVER_PORT, f"concurrent_{worker_id}")
@@ -253,25 +253,25 @@ def test_concurrent_connections() -> TestResult:
                 time.sleep(0.05)
             sock.close()
             results.append(success)
-        except Exception as e:
+        except Exception:
             results.append(0)
-    
+
     # Start 5 concurrent workers, 10 messages each = 50 messages total
     for i in range(5):
         t = threading.Thread(target=worker, args=(i,))
         t.start()
         threads.append(t)
-    
+
     for t in threads:
         t.join(timeout=10)
-    
+
     total = sum(results)
     expected = 50
     success_rate = (total / expected) * 100 if expected > 0 else 0
-    
+
     # Allow 80% success rate (some may fail due to timing)
     passed = success_rate >= 80
-    
+
     return TestResult("Concurrent Connections", passed,
                      f"{total}/{expected} messages delivered ({success_rate:.0f}%)",
                      (time.time() - start) * 1000)
@@ -280,10 +280,10 @@ def test_concurrent_connections() -> TestResult:
 def test_rapid_reconnect() -> TestResult:
     """Test 4: Rapid connect/disconnect cycles."""
     start = time.time()
-    
+
     successes = 0
     attempts = 20
-    
+
     for i in range(attempts):
         try:
             sock = connect_and_login(SERVER_HOST, SERVER_PORT, f"rapid_{i}")
@@ -292,10 +292,10 @@ def test_rapid_reconnect() -> TestResult:
             sock.close()
         except:
             pass
-    
+
     success_rate = (successes / attempts) * 100
     passed = success_rate >= 80
-    
+
     return TestResult("Rapid Reconnect", passed,
                      f"{successes}/{attempts} cycles succeeded ({success_rate:.0f}%)",
                      (time.time() - start) * 1000)
@@ -304,31 +304,31 @@ def test_rapid_reconnect() -> TestResult:
 def test_container_pause_resume() -> TestResult:
     """Test 5: Network partition simulation via container pause."""
     start = time.time()
-    
+
     if not docker_cmd(f"docker inspect {CORE_CONTAINER} 2>/dev/null"):
         return TestResult("Pause/Resume", None, "SKIPPED: Container not found",
                         (time.time() - start) * 1000)
-    
+
     try:
         # Baseline
         sock = connect_and_login(SERVER_HOST, SERVER_PORT, "test_pause")
         baseline = send_message(sock, b"echo_service", b"pre_pause")
         sock.close()
-        
+
         if not baseline:
             return TestResult("Pause/Resume", False, "Baseline failed",
                             (time.time() - start) * 1000)
-        
+
         # Pause (simulates network partition)
         docker_cmd(f"docker pause {CORE_CONTAINER}")
         time.sleep(2)
-        
+
         # Unpause
         docker_cmd(f"docker unpause {CORE_CONTAINER}")
         time.sleep(2)
         reconnect_edge_to_core()
         time.sleep(1)
-        
+
         # Should recover
         recovered = False
         for _ in range(3):
@@ -341,14 +341,14 @@ def test_container_pause_resume() -> TestResult:
                     break
             except:
                 time.sleep(1)
-        
+
         if recovered:
             return TestResult("Pause/Resume", True, "Recovered after unpause",
                             (time.time() - start) * 1000)
         else:
             return TestResult("Pause/Resume", False, "Failed to recover after unpause",
                             (time.time() - start) * 1000)
-            
+
     except Exception as e:
         docker_cmd(f"docker unpause {CORE_CONTAINER}")
         return TestResult("Pause/Resume", False, f"Error: {e}",
@@ -366,9 +366,9 @@ def main():
     print(f"Target: {SERVER_HOST}:{SERVER_PORT}")
     print(f"Core Container: {CORE_CONTAINER}")
     print()
-    
+
     results: List[TestResult] = []
-    
+
     # Run tests
     tests = [
         ("1/5", test_basic_connectivity),
@@ -377,12 +377,12 @@ def main():
         ("4/5", test_rapid_reconnect),
         ("5/5", test_container_pause_resume),
     ]
-    
+
     for label, test_fn in tests:
         print(f"\n[{label}] Running: {test_fn.__doc__.split(chr(10))[0].strip()}")
         result = test_fn()
         results.append(result)
-        
+
         if result.passed is None:
             status = "⏭ SKIP"
         elif result.passed:
@@ -390,17 +390,17 @@ def main():
         else:
             status = "❌ FAIL"
         print(f"  {status}: {result.details} ({result.duration_ms:.0f}ms)")
-    
+
     # Summary
     print("\n" + "=" * 60)
     print("SUMMARY")
     print("=" * 60)
-    
+
     passed = sum(1 for r in results if r.passed is True)
     skipped = sum(1 for r in results if r.passed is None)
     failed = sum(1 for r in results if r.passed is False)
     total = len(results)
-    
+
     for r in results:
         if r.passed is None:
             status = "⏭"
@@ -409,13 +409,13 @@ def main():
         else:
             status = "❌"
         print(f"  {status} {r.name}: {r.details}")
-    
+
     print()
     print(f"Passed: {passed}/{total}, Skipped: {skipped}, Failed: {failed}")
-    
+
     # Restore cluster state for subsequent tests
     restore_cluster_state()
-    
+
     # AUDIT MITIGATION P1-1: Use exit code 2 for skip, not 0
     if failed > 0:
         print(f"\n❌ {failed} TEST(S) FAILED")
@@ -436,7 +436,7 @@ def restore_cluster_state():
     and basic connectivity is restored - does NOT do full Mnesia re-init.
     """
     print("[cleanup] Light-weight cluster recovery...")
-    
+
     # Just ensure the core container is started
     try:
         subprocess.run(
@@ -445,10 +445,10 @@ def restore_cluster_state():
         )
         # Wait for it to be healthy
         wait_container_healthy(CORE_CONTAINER, timeout=30)
-        
+
         # Reconnect edge to core
         reconnect_edge_to_core()
-        
+
         print("[cleanup] Core container restarted and reconnected")
     except Exception as e:
         print(f"[cleanup] Warning: Light-weight recovery failed: {e}")

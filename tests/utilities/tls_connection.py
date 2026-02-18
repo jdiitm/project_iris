@@ -85,7 +85,7 @@ def get_ssl_context(verify: bool = True, client_cert: bool = False) -> ssl.SSLCo
         return ctx
 
 
-def connect_tls(host: str, port: int, timeout: int = DEFAULT_TIMEOUT, 
+def connect_tls(host: str, port: int, timeout: int = DEFAULT_TIMEOUT,
                 verify: bool = True) -> ssl.SSLSocket:
     """
     Create a TLS connection to an edge node.
@@ -104,13 +104,13 @@ def connect_tls(host: str, port: int, timeout: int = DEFAULT_TIMEOUT,
         ssl.SSLError: If TLS handshake fails
     """
     context = get_ssl_context(verify=verify)
-    
+
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.settimeout(timeout)
-    
+
     tls_sock = context.wrap_socket(sock, server_hostname=host)
     tls_sock.connect((host, port))
-    
+
     return tls_sock
 
 
@@ -137,7 +137,7 @@ def connect_auto(host: str, port: int, timeout: int = DEFAULT_TIMEOUT,
         except (ssl.SSLError, ConnectionRefusedError, OSError):
             # TLS failed, try plaintext
             pass
-    
+
     # Plaintext connection
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.settimeout(timeout)

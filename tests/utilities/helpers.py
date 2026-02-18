@@ -144,7 +144,7 @@ def unique_suffix() -> str:
 # Tests wait only as long as needed, with bounded total wait time.
 # =============================================================================
 
-from typing import Callable, Optional, Any
+from typing import Callable, Any
 
 
 def wait_until(

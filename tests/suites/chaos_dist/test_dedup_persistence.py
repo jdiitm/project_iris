@@ -41,7 +41,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from tests.framework.wait import wait_for, poll_until, WaitTimeout
+from tests.framework.wait import wait_for, WaitTimeout
 from tests.utilities.tls_connection import get_verified_ssl_context
 
 # Test configuration
@@ -60,7 +60,7 @@ def log(msg):
 def connect_tls():
     """Create TLS connection to Iris edge."""
     context = get_verified_ssl_context()
-    
+
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.settimeout(TIMEOUT)
     tls_sock = context.wrap_socket(sock, server_hostname=SERVER_HOST)
@@ -83,7 +83,7 @@ def connect_auto(max_retries: int = 5, retry_delay: float = 2.0):
             return connect_tls()
         except Exception as e:
             last_err = e
-        
+
         # Fall back to plaintext
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -92,7 +92,7 @@ def connect_auto(max_retries: int = 5, retry_delay: float = 2.0):
             return sock
         except Exception as e:
             last_err = e
-    
+
     raise ConnectionError(f"Failed to connect after {max_retries} attempts: {last_err}")
 
 
@@ -120,28 +120,28 @@ def send_message_with_id(sock, target, message, msg_id):
     target_bytes = target.encode() if isinstance(target, str) else target
     msg_bytes = message.encode() if isinstance(message, str) else message
     msg_id_bytes = msg_id.encode() if isinstance(msg_id, str) else msg_id
-    
+
     # Build reliable message packet with explicit ID
     # Protocol: 0x10 | IdLen(16) | MsgId | MsgLen(32) | Msg
     # But we need to include target - use compound message format
     # Actually, let's use opcode 0x07 with the msg_id embedded in the message
     # for easier tracking, since that's what the server dedup checks
-    
+
     # Embed msg_id in message content for tracking
     full_msg = f"{msg_id}:{message}".encode()
-    
+
     # Use opcode 0x07 (sequenced message)
     # Protocol: 0x07 | TargetLen(16) | Target | SeqNo(64) | MsgLen(16) | Msg
     # Use msg_id hash as sequence number for consistent dedup
     seq_no = hash(msg_id) & 0xFFFFFFFFFFFFFFFF
-    
+
     packet = (bytes([0x07]) +
               struct.pack('>H', len(target_bytes)) + target_bytes +
               struct.pack('>Q', seq_no) +
               struct.pack('>H', len(full_msg)) + full_msg)
-    
+
     sock.sendall(packet)
-    
+
     # Wait for ACK
     try:
         response = sock.recv(1024)
@@ -163,7 +163,7 @@ def receive_offline_messages(sock, timeout=10):
     sock.settimeout(1.0)
     end_time = time.time() + timeout
     buffer = b""
-    
+
     while time.time() < end_time:
         try:
             data = sock.recv(4096)
@@ -179,7 +179,7 @@ def receive_offline_messages(sock, timeout=10):
             continue
         except Exception:
             break
-    
+
     return messages
 
 
@@ -190,44 +190,44 @@ def parse_and_ack_messages(sock, data):
     """
     messages = []
     idx = 0
-    
+
     while idx < len(data):
         if idx >= len(data):
             break
-            
+
         opcode = data[idx]
-        
+
         # Check for reliable message (opcode 17 = 0x11, PROTOCOL_V1_FREEZE v1.1)
         if opcode == 17:
             # Format: 0x11 | IdLen(16) | MsgId | MsgLen(32) | Msg
             if idx + 3 > len(data):
                 break
-            
+
             id_len = struct.unpack('>H', data[idx+1:idx+3])[0]
-            
+
             if idx + 3 + id_len + 4 > len(data):
                 break
-            
+
             msg_id = data[idx+3:idx+3+id_len]
             msg_len = struct.unpack('>I', data[idx+3+id_len:idx+3+id_len+4])[0]
-            
+
             if idx + 3 + id_len + 4 + msg_len > len(data):
                 break
-            
+
             msg = data[idx+3+id_len+4:idx+3+id_len+4+msg_len]
-            
+
             # Send ACK
             try:
                 ack_packet = bytes([0x03]) + msg_id
                 sock.sendall(ack_packet)
             except Exception:
                 pass
-            
+
             messages.append(msg)
             idx += 3 + id_len + 4 + msg_len
         else:
             idx += 1
-    
+
     remaining = data[idx:] if idx < len(data) else b""
     return remaining, messages
 
@@ -309,7 +309,7 @@ def ensure_cluster_healthy():
         return _ensure(max_attempts=3)
     except ImportError:
         pass
-    
+
     # Fallback: just check containers are running
     for container in ["core-east-1", "edge-east-1"]:
         result = subprocess.run(
@@ -348,32 +348,32 @@ def test_dedup_survives_sigkill():
     log("\n" + "=" * 60)
     log("DEDUP PERSISTENCE TEST (RFC NFR-11)")
     log("=" * 60)
-    
+
     # Check prerequisites
     if not check_docker_available():
         log("FAIL: Docker not available")
         log("This test requires Docker cluster")
         return False
-    
+
     if not check_container_exists(CONTAINER_NAME):
         log(f"FAIL: Container {CONTAINER_NAME} not found")
         log("Start cluster with: make cluster-up")
         return False
-    
+
     # Ensure cluster is healthy
     log("\n1. Ensuring cluster is healthy...")
     if not ensure_cluster_healthy():
         log("FAIL: Could not establish healthy cluster")
         return False
     log("  Cluster is healthy")
-    
+
     # Generate unique test identifiers
     test_id = int(time.time() * 1000)
     sender = f"dedup_sender_{test_id}"
     receiver = f"dedup_receiver_{test_id}"
     msg_id = f"DEDUP_TEST_{uuid.uuid4().hex[:12]}"
     test_message = f"Test message for dedup persistence"
-    
+
     log(f"\n2. Connecting as sender: {sender}")
     try:
         sock = connect_auto()
@@ -383,29 +383,29 @@ def test_dedup_survives_sigkill():
     except Exception as e:
         log(f"FAIL: Connection failed: {e}")
         return False
-    
+
     log(f"\n3. Sending message with ID: {msg_id}")
     log(f"   Target: {receiver} (offline)")
     log(f"   Message: {test_message}")
-    
+
     ack_received = send_message_with_id(sock, receiver, test_message, msg_id)
     sock.close()
-    
+
     if not ack_received:
         log("  WARNING: No ACK received, continuing anyway...")
     else:
         log("  ACK received - dedup state should be written")
-    
+
     # CRITICAL: Kill immediately after ACK
     # RFC NFR-11 requires dedup state to be durable at ACK time
     log(f"\n4. SIGKILL core node: {CONTAINER_NAME}")
     log("   (Simulating power loss immediately after ACK)")
-    
+
     if not kill_container(CONTAINER_NAME):
         log("FAIL: Could not kill container")
         return False
     log("  Container killed")
-    
+
     log("\n5. Waiting for node to be fully dead...")
     def container_is_stopped():
         result = subprocess.run(
@@ -418,20 +418,20 @@ def test_dedup_survives_sigkill():
                  description=f"{CONTAINER_NAME} to stop")
     except WaitTimeout:
         log("  WARNING: Container may not be fully stopped, continuing...")
-    
+
     log(f"\n6. Starting container: {CONTAINER_NAME}")
     if not start_container(CONTAINER_NAME):
         log("FAIL: Could not start container")
         return False
-    
+
     log(f"\n7. Waiting for recovery (up to {RECOVERY_TIMEOUT}s)...")
     if not wait_for_container_healthy(CONTAINER_NAME, RECOVERY_TIMEOUT):
         log("  Container not healthy, but continuing...")
-    
+
     # Wait for Mnesia recovery by polling core health + edge connectivity
     log("  Waiting for Mnesia recovery...")
     reconnect_edge_to_core()
-    
+
     # Poll for edge TLS listener to be ready (replaces fixed sleep + retry loop)
     log("  Waiting for edge TLS to accept connections...")
     def edge_tls_ready():
@@ -449,10 +449,10 @@ def test_dedup_survives_sigkill():
     except WaitTimeout:
         log("FAIL: Edge TLS listener not ready after core recovery")
         return False
-    
+
     log(f"\n8. Sending SAME message ID again (retry scenario)")
     log(f"   This simulates client retry after server crash")
-    
+
     retry_count = 0
     for attempt in range(5):
         try:
@@ -467,19 +467,19 @@ def test_dedup_survives_sigkill():
             else:
                 log(f"FAIL: Could not reconnect: {e}")
                 return False
-    
+
     # Send the retry (same msg_id)
     retry_ack = send_message_with_id(sock, receiver, test_message, msg_id)
     sock.close()
-    
+
     log(f"   Retry sent, ACK received: {retry_ack}")
-    
+
     # Brief pause for server-side processing
     time.sleep(0.5)
-    
+
     log(f"\n9. Logging in as receiver: {receiver}")
     log("   Checking how many copies of the message were delivered")
-    
+
     for attempt in range(5):
         try:
             sock = connect_auto()
@@ -493,12 +493,12 @@ def test_dedup_survives_sigkill():
             else:
                 log(f"FAIL: Could not connect as receiver: {e}")
                 return False
-    
+
     messages = receive_offline_messages(sock, timeout=15)
     sock.close()
-    
+
     log(f"   Received {len(messages)} message(s)")
-    
+
     # Count how many times our test message appears
     msg_count = 0
     for msg in messages:
@@ -506,11 +506,11 @@ def test_dedup_survives_sigkill():
         if msg_id in msg_str:
             msg_count += 1
             log(f"   Found message: {msg_str[:60]}...")
-    
+
     log("\n" + "=" * 60)
     log("RESULTS")
     log("=" * 60)
-    
+
     if msg_count == 0:
         log("FAIL: Message not delivered at all!")
         log("This indicates a durability issue, not dedup")
@@ -539,43 +539,43 @@ def test_dedup_without_crash():
     log("\n" + "=" * 60)
     log("BASELINE: Dedup Without Crash")
     log("=" * 60)
-    
+
     test_id = int(time.time() * 1000)
     sender = f"dedup_baseline_sender_{test_id}"
     receiver = f"dedup_baseline_receiver_{test_id}"
     msg_id = f"BASELINE_{uuid.uuid4().hex[:12]}"
     test_message = "Baseline dedup test"
-    
+
     try:
         # Send message twice with same ID
         sock = connect_auto()
         if not login(sock, sender):
             log("FAIL: Login failed")
             return False
-        
+
         log("  Sending message first time...")
         send_message_with_id(sock, receiver, test_message, msg_id)
-        
+
         # CRITICAL: Wait for first message to be written to Mnesia
         # The dedup check requires the first write to complete before second arrives
         time.sleep(0.5)
-        
+
         log("  Sending message second time (same ID)...")
         send_message_with_id(sock, receiver, test_message, msg_id)
         sock.close()
-        
+
         # Wait for processing to complete
         time.sleep(2)
-        
+
         # Check receiver
         sock = connect_auto()
         login(sock, receiver)
         messages = receive_offline_messages(sock, timeout=5)
         sock.close()
-        
+
         # Count occurrences
         msg_count = sum(1 for m in messages if msg_id.encode() in m or msg_id in str(m))
-        
+
         if msg_count == 0:
             log(f"  WARN: No messages received (server may not be processing)")
             log(f"        This is not a dedup failure, but an infrastructure issue")
@@ -587,7 +587,7 @@ def test_dedup_without_crash():
             log(f"  FAIL: Received {msg_count} copies! Dedup NOT working!")
             log(f"        This is a server-side dedup bug (RFC NFR-11)")
             return False  # This is a real failure - dedup should work without crash
-            
+
     except Exception as e:
         log(f"FAIL: {e}")
         return False
@@ -600,13 +600,13 @@ def main():
     log("#" * 60)
     log("This test requires a running Docker cluster.")
     log("Run 'make cluster-up' first if not already running.\n")
-    
+
     # Run baseline first
     baseline_ok = test_dedup_without_crash()
-    
+
     # Run main crash test
     result = test_dedup_survives_sigkill()
-    
+
     # Print result BEFORE cleanup (cleanup should not affect test result)
     log("\n" + "#" * 60)
     if result:
@@ -616,7 +616,7 @@ def main():
         log("# RESULT: FAILED")
         log("# RFC NFR-11 VIOLATION DETECTED")
     log("#" * 60)
-    
+
     # Restore cluster state (best effort - don't fail test if cleanup fails)
     # When running with --docker-core, the test runner handles cluster lifecycle
     skip_cleanup = os.environ.get("SKIP_TEST_CLEANUP", "").lower() in ("1", "true", "yes")
@@ -625,7 +625,7 @@ def main():
             restore_cluster_state()
         except Exception as e:
             log(f"[cleanup] Warning: Cleanup failed but test result is preserved: {e}")
-    
+
     return 0 if result else 1
 
 

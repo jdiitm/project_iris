@@ -15,7 +15,6 @@ is wired to iris_auth:exchange_refresh_token/1.
 import sys
 import os
 import socket
-import ssl
 import struct
 import time
 import uuid

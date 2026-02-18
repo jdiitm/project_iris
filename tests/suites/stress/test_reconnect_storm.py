@@ -25,10 +25,7 @@ import os
 import sys
 import time
 import socket
-import ssl
 import random
-import struct
-import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))

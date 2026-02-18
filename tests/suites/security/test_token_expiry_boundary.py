@@ -27,7 +27,6 @@ Tier: 1 (Security)
 import sys
 import os
 import socket
-import ssl
 import struct
 import time
 

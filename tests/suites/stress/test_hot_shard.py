@@ -107,7 +107,7 @@ def create_socket(host, port, timeout=10.0):
         return create_tls_socket(host, port, timeout=timeout)
     except Exception:
         pass
-    
+
     # Fallback to non-TLS (for local development without certs)
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     s.settimeout(timeout)
@@ -136,7 +136,7 @@ def generate_hot_shard_usernames(count: int, target_shard: int = 0, shard_count:
     usernames = []
     prefix = f"hotshard{target_shard}_"
     suffix = 0
-    
+
     while len(usernames) < count:
         candidate = f"{prefix}{suffix}"
         if phash2(candidate.encode(), shard_count) == target_shard:
@@ -144,7 +144,7 @@ def generate_hot_shard_usernames(count: int, target_shard: int = 0, shard_count:
         suffix += 1
         if suffix > count * 1000:  # Safety limit
             break
-    
+
     return usernames
 
 
@@ -155,7 +155,7 @@ def generate_cold_shard_usernames(count: int, avoid_shard: int = 0, shard_count:
     usernames = []
     prefix = "coldshard_"
     suffix = 0
-    
+
     while len(usernames) < count:
         candidate = f"{prefix}{suffix}"
         if phash2(candidate.encode(), shard_count) != avoid_shard:
@@ -163,7 +163,7 @@ def generate_cold_shard_usernames(count: int, avoid_shard: int = 0, shard_count:
         suffix += 1
         if suffix > count * 100:  # Safety limit
             break
-    
+
     return usernames
 
 
@@ -171,11 +171,11 @@ def connect_and_login(username: str, timeout: float = TIMEOUT) -> Optional[socke
     """Connect to server and login."""
     try:
         sock = create_socket(SERVER_HOST, SERVER_PORT, timeout=timeout)
-        
+
         # Login
         packet = bytes([0x01]) + username.encode()
         sock.sendall(packet)
-        
+
         response = sock.recv(1024)
         if b"LOGIN_OK" in response:
             return sock
@@ -205,15 +205,15 @@ def send_message(sock: socket.socket, target: str, message: str) -> Tuple[bool, 
     Fire-and-forget semantics - server queues for delivery.
     """
     start_time = time.time()
-    
+
     try:
         target_bytes = target.encode()
         msg_bytes = message.encode()
-        
+
         # Increment sequence counter
         _hot_shard_seq_counter[0] += 1
         seq_no = _hot_shard_seq_counter[0]
-        
+
         # Protocol: 0x07 | TargetLen(16) | Target | SeqNo(64) | MsgLen(16) | Msg
         packet = (
             bytes([0x07]) +
@@ -221,13 +221,13 @@ def send_message(sock: socket.socket, target: str, message: str) -> Tuple[bool, 
             struct.pack('>Q', seq_no) +
             struct.pack('>H', len(msg_bytes)) + msg_bytes
         )
-        
+
         sock.sendall(packet)
         latency_ms = (time.time() - start_time) * 1000
-        
+
         # Fire-and-forget: successful send = success
         return True, latency_ms
-            
+
     except socket.timeout:
         return False, (time.time() - start_time) * 1000
     except (ConnectionError, BrokenPipeError, OSError):
@@ -268,13 +268,13 @@ def get_mailbox_lengths() -> dict:
             halt(0).
             """
         ]
-        
+
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
-        
+
         # Parse the output (simple extraction)
         output = result.stdout.strip()
         mailboxes = {}
-        
+
         # Very basic parsing - in production you'd use proper Erlang term parsing
         if "iris_shard" in output:
             # Extract numbers after each process name
@@ -282,9 +282,9 @@ def get_mailbox_lengths() -> dict:
             matches = re.findall(r'\{(\w+),(\d+)\}', output)
             for name, length in matches:
                 mailboxes[name] = int(length)
-        
+
         return mailboxes
-        
+
     except Exception as e:
         log(f"Warning: Could not query mailboxes: {e}")
         return {}
@@ -308,33 +308,33 @@ def run_hot_shard_test() -> TestResult:
     log(f"Hot users: {CONFIG['hot_users']}, Cold users: {CONFIG['cold_users']}")
     log(f"Messages per user: {CONFIG['messages_per_user']}")
     log(f"Max mailbox threshold: {CONFIG['max_mailbox_threshold']}")
-    
+
     # Generate usernames
     log("Generating hot-shard usernames...")
     hot_usernames = generate_hot_shard_usernames(CONFIG['hot_users'])
     log(f"  Generated {len(hot_usernames)} hot-shard usernames")
-    
+
     log("Generating cold-shard usernames...")
     cold_usernames = generate_cold_shard_usernames(CONFIG['cold_users'])
     log(f"  Generated {len(cold_usernames)} cold-shard usernames")
-    
+
     # Create a target user for messages
     target_user = "hotshard_target_0"
-    
+
     hot_latencies = []
     cold_latencies = []
     errors = 0
     max_mailbox = 0
-    
+
     hot_connected = 0
     cold_connected = 0
     hot_sent = 0
     cold_sent = 0
-    
+
     # Mailbox monitoring thread
     mailbox_stop = threading.Event()
     mailbox_max = [0]  # Use list for mutability in closure
-    
+
     def monitor_mailboxes():
         while not mailbox_stop.is_set():
             mailboxes = get_mailbox_lengths()
@@ -344,15 +344,15 @@ def run_hot_shard_test() -> TestResult:
                 if current_max > CONFIG['max_mailbox_threshold'] // 2:
                     log(f"  Warning: Mailbox length {current_max}")
             time.sleep(0.5)
-    
+
     monitor_thread = threading.Thread(target=monitor_mailboxes, daemon=True)
     monitor_thread.start()
-    
+
     try:
         # Phase 1: Connect hot-shard users
         log("Phase 1: Connecting hot-shard users...")
         hot_sockets = []
-        
+
         with ThreadPoolExecutor(max_workers=50) as executor:
             futures = {executor.submit(connect_and_login, u): u for u in hot_usernames}
             for future in as_completed(futures, timeout=60):
@@ -363,13 +363,13 @@ def run_hot_shard_test() -> TestResult:
                         hot_connected += 1
                 except Exception:
                     errors += 1
-        
+
         log(f"  Connected {hot_connected}/{len(hot_usernames)} hot-shard users")
-        
+
         # Phase 2: Connect cold-shard users (control group)
         log("Phase 2: Connecting cold-shard users...")
         cold_sockets = []
-        
+
         with ThreadPoolExecutor(max_workers=50) as executor:
             futures = {executor.submit(connect_and_login, u): u for u in cold_usernames}
             for future in as_completed(futures, timeout=30):
@@ -380,12 +380,12 @@ def run_hot_shard_test() -> TestResult:
                         cold_connected += 1
                 except Exception:
                     errors += 1
-        
+
         log(f"  Connected {cold_connected}/{len(cold_usernames)} cold-shard users")
-        
+
         # Phase 3: Send messages from all users
         log("Phase 3: Sending messages (hot and cold simultaneously)...")
-        
+
         def send_messages_from_sock(sock: socket.socket, is_hot: bool, msg_count: int) -> List[Tuple[bool, float]]:
             results = []
             for i in range(msg_count):
@@ -393,22 +393,22 @@ def run_hot_shard_test() -> TestResult:
                 success, latency = send_message(sock, target_user, msg)
                 results.append((success, latency, is_hot))
             return results
-        
+
         with ThreadPoolExecutor(max_workers=100) as executor:
             futures = []
-            
+
             # Submit hot-shard messages
             for sock in hot_sockets:
                 futures.append(executor.submit(
                     send_messages_from_sock, sock, True, CONFIG['messages_per_user']
                 ))
-            
+
             # Submit cold-shard messages
             for sock in cold_sockets:
                 futures.append(executor.submit(
                     send_messages_from_sock, sock, False, CONFIG['messages_per_user']
                 ))
-            
+
             # Collect results with generous timeout
             # Each user sends messages_per_user messages, allow 2s per message as buffer
             result_timeout = max(60, CONFIG['messages_per_user'] * 2 + CONFIG['duration_seconds'])
@@ -431,13 +431,13 @@ def run_hot_shard_test() -> TestResult:
                 except Exception as e:
                     log(f"  Error: {e}")
                     errors += 1
-        
+
         log(f"  Hot: {hot_sent} sent, Cold: {cold_sent} sent, Errors: {errors}")
-        
+
     finally:
         # Stop mailbox monitoring
         mailbox_stop.set()
-        
+
         # Close all sockets
         for sock in hot_sockets:
             try:
@@ -449,7 +449,7 @@ def run_hot_shard_test() -> TestResult:
                 sock.close()
             except Exception:
                 pass
-    
+
     return TestResult(
         hot_users_connected=hot_connected,
         cold_users_connected=cold_connected,
@@ -465,26 +465,26 @@ def run_hot_shard_test() -> TestResult:
 def analyze_results(result: TestResult) -> bool:
     """Analyze test results and determine pass/fail."""
     log("\n=== Results Analysis ===")
-    
+
     passed = True
-    
+
     # Calculate latency statistics
     if result.hot_latencies_ms:
         hot_p50 = sorted(result.hot_latencies_ms)[len(result.hot_latencies_ms) // 2]
         hot_p99 = sorted(result.hot_latencies_ms)[int(len(result.hot_latencies_ms) * 0.99)]
         log(f"Hot-shard latency: P50={hot_p50:.1f}ms, P99={hot_p99:.1f}ms")
-        
+
         if hot_p99 > CONFIG['max_latency_p99_ms']:
             log(f"  FAIL: P99 latency {hot_p99:.1f}ms exceeds threshold {CONFIG['max_latency_p99_ms']}ms")
             passed = False
         else:
             log(f"  PASS: P99 latency within threshold")
-    
+
     if result.cold_latencies_ms:
         cold_p50 = sorted(result.cold_latencies_ms)[len(result.cold_latencies_ms) // 2]
         cold_p99 = sorted(result.cold_latencies_ms)[int(len(result.cold_latencies_ms) * 0.99)]
         log(f"Cold-shard latency: P50={cold_p50:.1f}ms, P99={cold_p99:.1f}ms")
-    
+
     # Check mailbox threshold
     log(f"Max mailbox observed: {result.max_mailbox_observed}")
     if result.max_mailbox_observed > CONFIG['max_mailbox_threshold']:
@@ -492,29 +492,29 @@ def analyze_results(result: TestResult) -> bool:
         passed = False
     else:
         log(f"  PASS: Mailbox within threshold")
-    
+
     # Check error rate
     total_attempted = (result.hot_users_connected * CONFIG['messages_per_user'] +
                        result.cold_users_connected * CONFIG['messages_per_user'])
     error_rate = result.errors / max(total_attempted, 1)
     log(f"Error rate: {error_rate:.2%} ({result.errors}/{total_attempted})")
-    
+
     if error_rate > 0.01:  # 1% threshold
         log(f"  FAIL: Error rate exceeds 1%")
         passed = False
     else:
         log(f"  PASS: Error rate acceptable")
-    
+
     # Fairness check: hot-shard shouldn't be more than 3x slower than cold-shard
     if result.hot_latencies_ms and result.cold_latencies_ms:
         hot_avg = sum(result.hot_latencies_ms) / len(result.hot_latencies_ms)
         cold_avg = sum(result.cold_latencies_ms) / len(result.cold_latencies_ms)
         slowdown = hot_avg / max(cold_avg, 0.001)
         log(f"Hot/Cold latency ratio: {slowdown:.2f}x")
-        
+
         if slowdown > 3.0:
             log(f"  WARNING: Hot shard significantly slower than cold (>3x)")
-    
+
     return passed
 
 
@@ -524,7 +524,7 @@ def main():
     print("Hot-Shard Stress Test")
     print("Per PRINCIPAL_AUDIT_REPORT.md Section 3.3")
     print("=" * 70)
-    
+
     def _run_test():
         """Run the hot-shard test logic."""
         # Check prerequisites

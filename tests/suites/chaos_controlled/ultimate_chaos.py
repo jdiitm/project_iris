@@ -66,7 +66,7 @@ def create_socket(host, port, timeout=5.0):
         return create_tls_socket(host, port, timeout=timeout)
     except Exception:
         pass
-    
+
     # Fallback to non-TLS (for local development without certs)
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     s.settimeout(timeout)
@@ -112,7 +112,7 @@ def setup_ip_aliases():
     if result.returncode != 0:
         log("[INIT] Skipping IP aliases (sudo not available)")
         return
-    
+
     for i in range(1, 21):
         run_cmd(f"sudo -n ifconfig lo:{i} 127.0.0.{i} up 2>/dev/null", ignore_fail=True)
 
@@ -121,7 +121,7 @@ def cleanup_ip_aliases():
     result = subprocess.run("sudo -n true", shell=True, capture_output=True)
     if result.returncode != 0:
         return
-    
+
     log("[CLEAN] Cleaning IP aliases...")
     for i in range(1, 21):
         run_cmd(f"sudo -n ifconfig lo:{i} down 2>/dev/null", ignore_fail=True)
@@ -184,26 +184,26 @@ def monitor_system(duration, tag, interval=3):
             proc_count = get_process_count()
             mem_mb = get_memory_mb()
             sent, recv = get_load_stats()
-            
+
             metrics.total_sent = sent
             metrics.total_recv = recv
-            
+
             # Track peaks
             if isinstance(proc_count, int):
                 if metrics.baseline_procs is None:
                     metrics.baseline_procs = proc_count
                 metrics.peak_procs = max(metrics.peak_procs, proc_count)
             metrics.peak_mem = max(metrics.peak_mem, mem_mb)
-            
+
             # Calculate delta
             delta = ""
             if isinstance(proc_count, int) and metrics.baseline_procs:
                 d = proc_count - metrics.baseline_procs
                 delta = f" ({'+' if d >= 0 else ''}{d})"
-            
+
             elapsed = time.time() - start
             log(f"[{tag}] {elapsed:.0f}s | Procs: {proc_count}{delta} | Mem: {mem_mb:.0f}MB | Msgs: {sent} sent, {recv} recv")
-            
+
         except Exception as e:
             log(f"[{tag}] Monitoring error: {e}")
 
@@ -242,12 +242,12 @@ def run_combined_chaos(edge_node: str, duration: int = 30):
     """
     import random
     import threading
-    
+
     log(f"[COMBINED CHAOS] Starting {duration}s of simultaneous failure injection")
-    
+
     chaos_active = True
     errors = []
-    
+
     def chaos_thread_corruption():
         """Continuously send corrupted packets."""
         nonlocal chaos_active, errors
@@ -260,7 +260,7 @@ def run_combined_chaos(edge_node: str, duration: int = 30):
             except:
                 pass
             time.sleep(random.uniform(0.01, 0.1))
-    
+
     def chaos_thread_connection_storm():
         """Rapidly open/close connections."""
         nonlocal chaos_active, errors
@@ -272,7 +272,7 @@ def run_combined_chaos(edge_node: str, duration: int = 30):
             except:
                 pass
             time.sleep(random.uniform(0.001, 0.01))
-    
+
     def chaos_thread_process_killer():
         """Periodically kill random worker processes."""
         nonlocal chaos_active, errors
@@ -284,7 +284,7 @@ def run_combined_chaos(edge_node: str, duration: int = 30):
             except:
                 pass
             time.sleep(random.uniform(1, 3))
-    
+
     def chaos_thread_slow_consumer():
         """Simulate slow consumers (read slowly, cause backpressure)."""
         nonlocal chaos_active, errors
@@ -304,7 +304,7 @@ def run_combined_chaos(edge_node: str, duration: int = 30):
                 sock.close()
             except:
                 pass
-    
+
     # Start all chaos threads
     threads = []
     thread_funcs = [
@@ -313,14 +313,14 @@ def run_combined_chaos(edge_node: str, duration: int = 30):
         chaos_thread_process_killer,
         chaos_thread_slow_consumer,
     ]
-    
+
     for func in thread_funcs:
         t = threading.Thread(target=func, daemon=True)
         t.start()
         threads.append(t)
-    
+
     log(f"[COMBINED CHAOS] {len(threads)} chaos threads active")
-    
+
     # Monitor during chaos
     start = time.time()
     samples = []
@@ -329,29 +329,29 @@ def run_combined_chaos(edge_node: str, duration: int = 30):
             procs = get_process_count()
             mem = get_memory_mb()
             samples.append((procs, mem))
-            
+
             elapsed = time.time() - start
             if isinstance(procs, int):
                 log(f"[COMBINED CHAOS] {elapsed:.0f}s | Procs: {procs} | Mem: {mem:.0f}MB")
         except:
             pass
         time.sleep(3)
-    
+
     # Stop chaos
     chaos_active = False
     log("[COMBINED CHAOS] Stopping chaos threads...")
     time.sleep(1)
-    
+
     # Verify system survived (with retry — server may need a moment to recover)
     log("[COMBINED CHAOS] Verifying system health...")
-    
+
     for attempt in range(5):
         try:
             sock = create_socket("localhost", 8085, timeout=5)
             sock.sendall(bytes([0x01]) + f"post_chaos_verify_{attempt}".encode())
             resp = sock.recv(1024)
             sock.close()
-            
+
             if b"LOGIN_OK" in resp:
                 log(f"[COMBINED CHAOS] PASS: System responsive after combined chaos (attempt {attempt + 1})")
                 return True
@@ -361,7 +361,7 @@ def run_combined_chaos(edge_node: str, duration: int = 30):
             log(f"[COMBINED CHAOS] Attempt {attempt + 1}: {e}")
         if attempt < 4:
             time.sleep(2)
-    
+
     log("[COMBINED CHAOS] FAIL: Cannot connect after 5 attempts")
     return False
 
@@ -374,41 +374,41 @@ def main():
     # Check if running under test runner (cluster already managed)
     running_under_test_runner = os.environ.get("IRIS_TEST_RUNNER") == "1"
     manage_cluster = not running_under_test_runner
-    
+
     print_section(f"PROJECT IRIS: ULTIMATE CHAOS ({CONFIG['user_count']} USERS)")
     log(f"Profile: {TEST_PROFILE}")
     log(f"Duration: {CONFIG['duration']}s")
     log(f"Max memory: {CONFIG['max_memory_mb']}MB")
     if not manage_cluster:
         log("Cluster management: External (test runner)")
-    
+
     # 0. Prep
     setup_ip_aliases()
-    
+
     if manage_cluster:
         subprocess.run("pkill -9 beam.smp", shell=True, capture_output=True)
         subprocess.run("pkill -9 epmd", shell=True, capture_output=True)
         time.sleep(2)
-        
+
         # Build
         erl_path = "erl"  # Use PATH-resolved erl (CI installs via erlef/setup-beam, not /usr/bin)
         suffix = os.environ.get("IRIS_NODE_SUFFIX", "")
         make_cmd = f"NODE_SUFFIX={suffix} make ERL={erl_path}"
-        
+
         log("Building project...")
         run_cmd(f"{make_cmd} all")
-        subprocess.run("erlc -o ebin test_utils/chaos_resources.erl test_utils/chaos_monkey.erl test_utils/iris_extreme_gen.erl", 
+        subprocess.run("erlc -o ebin test_utils/chaos_resources.erl test_utils/chaos_monkey.erl test_utils/iris_extreme_gen.erl",
                       shell=True, capture_output=True)
-        
+
         # Start nodes
         log("Starting core node...")
         run_cmd(f"{make_cmd} start_core")
         time.sleep(3)
-        
+
         log("Starting edge node...")
         run_cmd(f"{make_cmd} start_edge1")
         time.sleep(3)
-        
+
         # Wait for edge to be ready
         log("Waiting for nodes to be ready...")
         edge_name = get_node_name("iris_edge1")
@@ -439,80 +439,80 @@ def main():
         except Exception as e:
             log(f"FATAL: Cannot connect to cluster: {e}")
             sys.exit(1)
-    
+
     processes = []
-    
+
     try:
         # ================================================================
         # PHASE 1: Ramp Up with extreme_load mode
         # ================================================================
         print_section("PHASE 1: RAMP UP")
         log(f"Starting {CONFIG['user_count']} users with extreme_load mode")
-        
+
         load_cmd = f"erl +P 2000000 -setcookie iris_secret -sname loader -hidden -noshell -pa ebin -eval \"iris_extreme_gen:start({CONFIG['user_count']}, {CONFIG['duration'] + 60}, extreme_load), timer:sleep(infinity).\""
         processes.append(run_cmd(load_cmd, async_run=True))
-        
+
         time.sleep(2)
         monitor_system(CONFIG['ramp_time'], "RAMP-UP")
-        
+
         # ================================================================
         # PHASE 2: Protocol Corruption
         # ================================================================
         print_section("PHASE 2: PROTOCOL CORRUPTION")
-        
+
         # Start chaos with corrupt_pids mode
         log("[CHAOS] Starting PID Corruption (garbage messages)...")
         run_cmd(f"erl -setcookie iris_secret -sname monkey_corrupt -hidden -noshell -pa ebin -eval \"rpc:call('{EDGE_FULL}', chaos_monkey, start, [100, corrupt_pids]), init:stop().\"")
-        
+
         # Kill system processes periodically
         log("[CHAOS] Starting System Sniper (kill router)...")
         run_cmd(f"erl -setcookie iris_secret -sname monkey_sniper -hidden -noshell -pa ebin -eval \"rpc:call('{EDGE_FULL}', chaos_monkey, kill_system, [5000, [iris_router, iris_router_worker]]), init:stop().\"")
-        
+
         monitor_system(CONFIG['chaos_time'], "CHAOS")
-        
+
         # ================================================================
         # PHASE 3: Combined Chaos (Jepsen-style)
         # ================================================================
         print_section("PHASE 3: COMBINED CHAOS (Jepsen-style)")
-        
+
         combined_duration = min(CONFIG['chaos_time'], 30)  # Cap at 30s for combined
         combined_passed = run_combined_chaos(EDGE_FULL, combined_duration)
-        
+
         if not combined_passed:
             log("WARN: Combined chaos test reported failure")
-        
+
         # ================================================================
         # PHASE 4: Recovery
         # ================================================================
         print_section("PHASE 4: RECOVERY")
-        
+
         log("[CHAOS] Stopping chaos monkey...")
         run_cmd(f"erl -setcookie iris_secret -sname monkey_stop -hidden -noshell -pa ebin -eval \"rpc:call('{EDGE_FULL}', chaos_monkey, stop, []), init:stop().\"")
 
-        
+
         monitor_system(CONFIG['recovery_time'], "RECOVERY")
-        
+
         # ================================================================
         # METRICS SUMMARY
         # ================================================================
         print_section("METRICS SUMMARY")
-        
+
         log(f"Baseline processes: {metrics.baseline_procs}")
         log(f"Peak processes: {metrics.peak_procs}")
         log(f"Peak memory: {metrics.peak_mem:.1f} MB")
         log(f"Total messages sent: {metrics.total_sent}")
         log(f"Total messages received: {metrics.total_recv}")
-        
+
         proc_delta = metrics.peak_procs - (metrics.baseline_procs or metrics.peak_procs)
         log(f"Process growth: +{proc_delta}")
-        
+
         # ================================================================
         # ASSERTIONS
         # ================================================================
         print_section("ASSERTIONS")
-        
+
         passed = True
-        
+
         # Assertion 1: System still responsive
         final_procs = get_process_count()
         if not isinstance(final_procs, int) or final_procs == 0:
@@ -520,7 +520,7 @@ def main():
             passed = False
         else:
             log(f"PASS: System responsive (procs: {final_procs})")
-        
+
         # Assertion 2: Process count healthy (no crash, no major leak)
         # Note: A minimal Erlang node has ~30-50 processes, so < 20 indicates a crash
         if isinstance(final_procs, int):
@@ -532,7 +532,7 @@ def main():
                 passed = False
             else:
                 log(f"PASS: Process count normal ({final_procs})")
-        
+
         # Assertion 3: Load generator sent messages
         # NOTE: During extreme chaos, the load generator's Erlang node may also
         # lose connectivity — this validates the generator, not the SUT.
@@ -542,7 +542,7 @@ def main():
             log("WARN: No messages sent - load generator may have been disrupted by chaos")
         else:
             log(f"PASS: Sent {metrics.total_sent} messages")
-        
+
         # Assertion 4: Message receipt
         if metrics.total_sent > 0:
             if metrics.total_recv == 0:
@@ -550,7 +550,7 @@ def main():
             else:
                 rate = (metrics.total_recv / metrics.total_sent) * 100
                 log(f"PASS: Received {metrics.total_recv} messages ({rate:.1f}%)")
-        
+
         # Assertion 5: Post-chaos connectivity (best-effort — chaos kills
         # processes indiscriminately including TCP acceptors, which may not
         # auto-recover without external restart. WARN only, not a hard failure.)
@@ -558,12 +558,12 @@ def main():
         for attempt in range(3):
             try:
                 sock = create_socket("localhost", 8085, timeout=5)
-                
+
                 test_user = f"chaos_verify_{int(time.time())}_{attempt}"
                 sock.sendall(bytes([0x01]) + test_user.encode())
                 resp = sock.recv(1024)
                 sock.close()
-                
+
                 if b"LOGIN_OK" in resp:
                     log(f"PASS: Post-chaos login successful (attempt {attempt + 1})")
                     post_chaos_ok = True
@@ -574,7 +574,7 @@ def main():
                 time.sleep(2)
         if not post_chaos_ok:
             log("WARN: Post-chaos connection failed (expected with extreme chaos — TCP acceptor may be killed)")
-        
+
         # Assertion 6: Memory within bounds
         # Force full GC on all processes before measuring — chaos leaves garbage
         # that Erlang's incremental GC may not have reclaimed within recovery_time.
@@ -586,7 +586,7 @@ def main():
             passed = False
         else:
             log(f"PASS: Memory {final_mem:.0f}MB within bounds")
-        
+
         # Assertion 7: Process growth indicates load
         # Zero or negative growth with 100+ users MAY indicate load wasn't applied
         # BUT: if messages were sent/received, load was applied successfully
@@ -603,17 +603,17 @@ def main():
             log(f"WARN: Process growth only +{proc_delta}")
         else:
             log(f"PASS: Process growth (+{proc_delta}) indicates load")
-        
+
         # ================================================================
         # RESULT
         # ================================================================
         print_section("RESULT")
-        
+
         if passed:
             log("ALL ASSERTIONS PASSED")
         else:
             log("SOME ASSERTIONS FAILED")
-        
+
     finally:
         # Cleanup
         log("Cleaning up...")
@@ -623,12 +623,12 @@ def main():
                     p.kill()
                 except Exception:
                     pass  # Cleanup - OK to ignore
-        
+
         if manage_cluster:
             subprocess.run("pkill -9 beam.smp", shell=True, capture_output=True)
             subprocess.run("pkill -9 epmd", shell=True, capture_output=True)
         cleanup_ip_aliases()
-    
+
     if not passed:
         sys.exit(1)
     sys.exit(0)

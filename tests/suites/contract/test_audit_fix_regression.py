@@ -11,7 +11,6 @@ Tier: 0 (Contract — no running server needed)
 import sys
 import os
 import time
-import re
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 

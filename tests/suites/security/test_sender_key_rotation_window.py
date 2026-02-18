@@ -15,7 +15,6 @@ even when interleaved with member removal operations.
 import os
 import sys
 import socket
-import ssl
 import struct
 import time
 from pathlib import Path
@@ -140,7 +139,7 @@ def test_group_message_during_member_removal():
         if resp and len(resp) > 3 and resp[0] == 0x31:
             gid_len = struct.unpack('>H', resp[1:3])[0]
             group_id = resp[3:3+gid_len]
-        
+
         if group_id is None:
             # Try to use the group name as ID
             group_id = group_name.encode('utf-8')

@@ -14,7 +14,6 @@ Tier: 1 (Integration)
 
 import os
 import sys
-import struct
 import subprocess
 import random
 import string

@@ -17,7 +17,6 @@ Tests:
 import os
 import sys
 import socket
-import ssl
 import struct
 import time
 from pathlib import Path

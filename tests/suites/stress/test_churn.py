@@ -25,7 +25,7 @@ project_root = os.path.abspath(os.path.join(current_dir, "../../.."))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
-from tests.framework.cluster import ClusterManager, get_cluster
+from tests.framework.cluster import ClusterManager
 
 # ============================================================================
 # Utilities
@@ -43,7 +43,7 @@ def create_socket(host, port, timeout=5.0):
         return create_tls_socket(host, port, timeout=timeout)
     except Exception:
         pass
-    
+
     # Fallback to non-TLS (for local development without certs)
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     s.settimeout(timeout)
@@ -86,7 +86,7 @@ def get_tcp_connections(port=8085):
         return len(lines)
     except Exception:
         pass
-    
+
     try:
         # Fallback to netstat
         result = subprocess.run(
@@ -115,7 +115,7 @@ def verify_edge_alive(port=8085, timeout=2):
         except socket.timeout:
             sock.close()
             return True  # Connection works, just no response
-    except Exception as e:
+    except Exception:
         return False
 
 def get_extreme_gen_stats():
@@ -138,25 +138,25 @@ def main():
         "smoke": {"base": 100, "churn": 50, "cycles": 2},      # Quick validation
         "full":  {"base": 500000, "churn": 50000, "cycles": 3} # Production scale
     }
-    
+
     profile_name = os.environ.get("TEST_PROFILE", "smoke")
     if profile_name not in PROFILES:
         log(f"ERROR: Unknown profile '{profile_name}'. Available: {list(PROFILES.keys())}")
         sys.exit(1)
-    
+
     profile = PROFILES[profile_name]
-    
+
     parser = argparse.ArgumentParser(description='Churn Stress Test')
     parser.add_argument('--base', type=int, default=profile["base"], help='Base stable users')
     parser.add_argument('--churn', type=int, default=profile["churn"], help='Churning users per cycle')
     parser.add_argument('--cycles', type=int, default=profile["cycles"], help='Number of churn cycles')
     parser.add_argument('--profile', type=str, default=profile_name, help='Test profile (smoke/full)')
     args = parser.parse_args()
-    
+
     log(f"[Profile: {args.profile}] base={args.base}, churn={args.churn}, cycles={args.cycles}")
-    
+
     os.chdir(project_root)
-    
+
     # If server is already running (e.g. started by run_all_tests.sh), use it directly.
     # ClusterManager.force_stop() would kill the externally-managed TLS server.
     server_running = False
@@ -185,55 +185,55 @@ def main():
             log("CRITICAL: Edge node not responding on port 8085!")
             sys.exit(1)
         log("Edge node verified alive on port 8085")
-        
+
         procs = []
         initial_conns = get_tcp_connections(8085)
         log(f"Initial TCP connections: {initial_conns}")
-        
+
         try:
             # 1. Establish Base Load
             log(f"[*] Establishing base load ({args.base} users)...")
             cmd_base = f"erl +P 2000000 -setcookie iris_secret -sname gen_base -hidden -noshell -pa ebin -eval \"iris_extreme_gen:start({args.base}, 3600, normal), timer:sleep(infinity).\""
             p_base = run_cmd(cmd_base, bg=True)
             procs.append(p_base)
-            
+
             # Wait for base to connect - use TCP connection count
             log("Waiting for base connections to establish...")
             time.sleep(15)  # Give more time for connections to establish
-            
+
             base_conns = get_tcp_connections(8085)
             log(f"Base loaded. TCP connections: {base_conns}")
-            
+
             # Verify edge is still alive
             if not verify_edge_alive():
                 log("CRITICAL: Edge died during base load!")
                 sys.exit(1)
-            
+
             # 2. Churn Cycles
             for i in range(args.cycles):
                 log(f"\n--- Cycle {i+1}/{args.cycles} ---")
-                
+
                 # Verify edge is alive before churn
                 if not verify_edge_alive():
                     log("CRITICAL: Edge died before churn cycle!")
                     sys.exit(1)
-                
+
                 # CONNECT STORM
                 log(f"[*] Connect Storm (+{args.churn} users)...")
                 cmd_churn = f"erl +P 2000000 -setcookie iris_secret -sname gen_churn_{i} -hidden -noshell -pa ebin -eval \"iris_extreme_gen:start({args.churn}, 3600, normal), timer:sleep(infinity).\""
                 p_churn = run_cmd(cmd_churn, bg=True)
                 procs.append(p_churn)
-                
+
                 # Allow ramp up
                 time.sleep(15)
                 peak_conns = get_tcp_connections(8085)
                 log(f"Peak TCP connections: {peak_conns}")
-                
+
                 # Verify edge still alive at peak
                 if not verify_edge_alive():
                     log("CRITICAL: Edge died during connect storm!")
                     sys.exit(1)
-                
+
                 # DISCONNECT STORM
                 log("[*] Disconnect Storm (Kill churn generator)...")
                 try:
@@ -241,23 +241,23 @@ def main():
                 except:
                     pass
                 procs.remove(p_churn)
-                
+
                 # Allow cleanup
                 time.sleep(10)
                 trough_conns = get_tcp_connections(8085)
                 log(f"Post-Disconnect TCP connections: {trough_conns}")
-                
+
                 # Stability Check - edge must still be responsive
                 if not verify_edge_alive():
                     log("CRITICAL: Edge crashed during disconnect storm!")
                     sys.exit(1)
-                
+
                 log(f"Cycle {i+1} complete. Edge stable.")
-            
+
             log("\n=== CHURN TEST PASSED ===")
             log(f"Successfully completed {args.cycles} churn cycles")
             log("Edge remained stable throughout all connect/disconnect storms")
-                    
+
         except KeyboardInterrupt:
             log("Aborted.")
         finally:

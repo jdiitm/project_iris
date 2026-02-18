@@ -20,7 +20,7 @@ from tests.utilities.tls_connection import get_unverified_ssl_context
 def test_server_responds():
     """Basic check that server is running."""
     print("\n=== Test: Server Availability ===")
-    
+
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         s.settimeout(5)
@@ -48,22 +48,22 @@ def test_tls_mode_check():
     bytes are NOT a valid application-level response.
     """
     print("\n=== Test: TLS Mode Detection ===")
-    
+
     tls_works = False
     plaintext_works = False
-    
+
     # Step 1: Try TLS connection (should succeed if server has TLS)
     try:
         context = get_unverified_ssl_context()  # Unverified: testing rejection/attack scenario
-        
+
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         s.settimeout(5)
-        
+
         with context.wrap_socket(s, server_hostname='localhost') as tls_sock:
             tls_sock.connect(('localhost', 8085))
             tls_sock.sendall(b'\x01tls_probe_user')
             response = tls_sock.recv(1024)
-            
+
             if response and b"LOGIN_OK" in response:
                 print("  TLS connection: LOGIN_OK received")
                 tls_works = True
@@ -74,14 +74,14 @@ def test_tls_mode_check():
         print(f"  TLS connection: handshake failed ({e})")
     except Exception as e:
         print(f"  TLS connection: error ({e})")
-    
+
     # Step 2: Try raw TCP + login (should NOT succeed if TLS is enforced)
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         s.settimeout(3)
         s.connect(('localhost', 8085))
         s.sendall(b'\x01plaintext_probe_user')
-        
+
         try:
             response = s.recv(1024)
             # Only classify as "plaintext works" if we get a valid LOGIN_OK.
@@ -96,11 +96,11 @@ def test_tls_mode_check():
             print("  Plaintext connection: timeout (server waiting for TLS ClientHello)")
         except Exception:
             print("  Plaintext connection: rejected")
-        
+
         s.close()
     except Exception as e:
         print(f"  Plaintext connection: error ({e})")
-    
+
     # Classify
     if tls_works:
         if plaintext_works:
@@ -122,19 +122,19 @@ def main():
     print(" RFC-001 TLS ENFORCEMENT TEST")
     print(" Reference: NFR-14, NFR-15")
     print("=" * 60)
-    
+
     # Check server is running
     if not test_server_responds():
         print("\n✗ FAIL: Server not running")
         return 1
-    
+
     # Check TLS mode
     mode = test_tls_mode_check()
-    
+
     print("\n" + "=" * 60)
     print(" SUMMARY")
     print("=" * 60)
-    
+
     if mode == "tls":
         print("✓ TLS ENFORCEMENT: COMPLIANT")
         print("  Server is running with TLS enabled")

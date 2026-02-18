@@ -78,7 +78,7 @@ def test_epoch_increments_during_partition():
             return current_epoch > initial_epoch
         except:
             return False
-    
+
     wait_until(_epoch_incremented, timeout=20, interval=1, description="epoch increment on partition")
 
     # Check epoch on the MINORITY side where quorum was lost

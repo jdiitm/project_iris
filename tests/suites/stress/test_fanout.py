@@ -98,19 +98,19 @@ class FanOutResult:
     total_latency_ms: float
     latencies_ms: List[float]
     errors: List[str]
-    
+
     @property
     def loss_rate(self) -> float:
         if self.messages_sent == 0:
             return 0.0
         return (self.messages_sent - self.messages_received) / self.messages_sent
-    
+
     @property
     def p50_latency_ms(self) -> float:
         if not self.latencies_ms:
             return 0.0
         return statistics.median(self.latencies_ms)
-    
+
     @property
     def p99_latency_ms(self) -> float:
         if not self.latencies_ms:
@@ -122,7 +122,7 @@ class FanOutResult:
 
 class IrisClient:
     """Simple Iris protocol client with TLS auto-detection."""
-    
+
     def __init__(self, host: str, port: int):
         self.host = host
         self.port = port
@@ -132,7 +132,7 @@ class IrisClient:
         self.received_messages: List[Tuple[str, float]] = []  # (msg_id, recv_time)
         self._running = False
         self._recv_thread: Optional[threading.Thread] = None
-    
+
     def connect(self) -> bool:
         """Connect to server with TLS auto-detection."""
         # Try TLS first (standard for CI and production)
@@ -142,28 +142,28 @@ class IrisClient:
             return True
         except Exception:
             pass
-        
+
         # Fallback to non-TLS (for local development without certs)
         try:
             self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.sock.settimeout(TIMEOUT)
             self.sock.connect((self.host, self.port))
             return True
-        except Exception as e:
+        except Exception:
             return False
-    
+
     def login(self, username: str) -> bool:
         """Login to server."""
         self.username = username
         packet = bytes([0x01]) + username.encode()
         self.sock.sendall(packet)
-        
+
         try:
             response = self.sock.recv(1024)
             return b"LOGIN_OK" in response
         except:
             return False
-    
+
     def send_message(self, target: str, message: str) -> bool:
         """
         Send message to target user.
@@ -172,13 +172,13 @@ class IrisClient:
         """
         target_bytes = target.encode()
         msg_bytes = message.encode()
-        
+
         # Use instance sequence counter
         if not hasattr(self, '_seq_counter'):
             self._seq_counter = 0
         self._seq_counter += 1
         seq_no = self._seq_counter
-        
+
         # Protocol: 0x07 | TargetLen(16) | Target | SeqNo(64) | MsgLen(16) | Msg
         packet = (
             bytes([0x07]) +
@@ -186,25 +186,25 @@ class IrisClient:
             struct.pack('>Q', seq_no) +
             struct.pack('>H', len(msg_bytes)) + msg_bytes
         )
-        
+
         try:
             self.sock.sendall(packet)
             return True
         except:
             return False
-    
+
     def start_receiving(self):
         """Start background thread to receive messages."""
         self._running = True
         self._recv_thread = threading.Thread(target=self._receive_loop, daemon=True)
         self._recv_thread.start()
-    
+
     def stop_receiving(self):
         """Stop receiving messages."""
         self._running = False
         if self._recv_thread:
             self._recv_thread.join(timeout=2)
-    
+
     def _receive_loop(self):
         """Background receive loop.
         
@@ -213,12 +213,12 @@ class IrisClient:
         to avoid breaking the loop on TLS connections.
         """
         self.sock.setblocking(False)
-        
+
         while self._running:
             try:
                 data = self.sock.recv(4096)
                 recv_time = time.time()
-                
+
                 if data:
                     self.buffer += data
                     self._parse_messages(recv_time)
@@ -229,12 +229,12 @@ class IrisClient:
                 time.sleep(0.001)
             except Exception:
                 break
-    
+
     def _parse_messages(self, recv_time: float):
         """Parse received messages from buffer."""
         while len(self.buffer) >= 1:
             opcode = self.buffer[0]
-            
+
             if opcode == 0x11:  # Reliable message (PROTOCOL_V1_FREEZE v1.1)
                 if len(self.buffer) < 3:
                     break
@@ -244,10 +244,10 @@ class IrisClient:
                 msg_len = struct.unpack('>I', self.buffer[3+id_len:3+id_len+4])[0]
                 if len(self.buffer) < 3 + id_len + 4 + msg_len:
                     break
-                
+
                 msg_id = self.buffer[3:3+id_len].decode('utf-8', errors='ignore')
                 msg_content = self.buffer[3+id_len+4:3+id_len+4+msg_len]
-                
+
                 # Extract fan-out message ID from content
                 if b"FANOUT_" in msg_content:
                     try:
@@ -255,24 +255,24 @@ class IrisClient:
                         self.received_messages.append((fanout_id, recv_time))
                     except:
                         pass
-                
+
                 # Send ACK
                 try:
                     ack = bytes([0x03]) + self.buffer[3:3+id_len]
                     self.sock.sendall(ack)
                 except:
                     pass
-                
+
                 self.buffer = self.buffer[3 + id_len + 4 + msg_len:]
-            
+
             elif opcode == 0x03:  # ACK
                 self.buffer = self.buffer[1:]  # Just skip ACKs
-            
+
             elif opcode == 0xFF:  # Rate-limit response: 0xFF | RetryAfter(32)
                 if len(self.buffer) < 5:
                     break
                 self.buffer = self.buffer[5:]
-            
+
             elif opcode == 0xFE:  # Error response: 0xFE | ReasonLen(16) | Reason
                 if len(self.buffer) < 3:
                     break
@@ -281,11 +281,11 @@ class IrisClient:
                 if len(self.buffer) < total:
                     break
                 self.buffer = self.buffer[total:]
-            
+
             else:
                 # Unknown opcode, skip one byte
                 self.buffer = self.buffer[1:]
-    
+
     def close(self):
         """Close connection."""
         self.stop_receiving()
@@ -296,7 +296,7 @@ class IrisClient:
                 pass
 
 
-def run_fanout_test(test_name: str, num_recipients: int, target_rate: int, 
+def run_fanout_test(test_name: str, num_recipients: int, target_rate: int,
                    max_latency_ms: float, max_loss: float = 0.01) -> Tuple[bool, FanOutResult]:
     """
     Run a fan-out test.
@@ -319,36 +319,36 @@ def run_fanout_test(test_name: str, num_recipients: int, target_rate: int,
     print(f"  Max latency: {max_latency_ms}ms")
     print(f"  Max loss: {max_loss*100:.1f}%")
     print()
-    
+
     test_id = unique_user("fanout")
     errors = []
     latencies = []
-    
+
     # Create sender
     sender = IrisClient(SERVER_HOST, SERVER_PORT)
     if not sender.connect():
         return False, FanOutResult(num_recipients, 0, 0, 0, [], ["Sender connection failed"])
-    
+
     sender_name = f"snd_{test_id}"
     if not sender.login(sender_name):
         sender.close()
         return False, FanOutResult(num_recipients, 0, 0, 0, [], ["Sender login failed"])
-    
+
     print(f"  ✓ Sender connected")
-    
+
     # Create recipients with thread pool
     recipients: List[IrisClient] = []
     send_times = {}  # msg_id -> send_time
-    
+
     print(f"  Connecting {num_recipients} recipients...", end="", flush=True)
-    
+
     def create_recipient(i: int) -> Optional[IrisClient]:
         client = IrisClient(SERVER_HOST, SERVER_PORT)
         if client.connect() and client.login(f"rcv_{test_id}_{i}"):
             client.start_receiving()
             return client
         return None
-    
+
     # Connect recipients in parallel
     with ThreadPoolExecutor(max_workers=min(50, num_recipients)) as executor:
         futures = [executor.submit(create_recipient, i) for i in range(num_recipients)]
@@ -356,50 +356,50 @@ def run_fanout_test(test_name: str, num_recipients: int, target_rate: int,
             client = future.result()
             if client:
                 recipients.append(client)
-    
+
     print(f" {len(recipients)}/{num_recipients} connected")
-    
+
     if len(recipients) < num_recipients * 0.9:
         errors.append(f"Only {len(recipients)}/{num_recipients} recipients connected")
-    
+
     # Wait for all recipients to be ready
     time.sleep(0.5)
-    
+
     # Send messages to all recipients
     print(f"  Sending messages...", end="", flush=True)
-    
+
     interval = 1.0 / target_rate if target_rate > 0 else 0
     start_time = time.time()
     messages_sent = 0
-    
+
     for i, recipient in enumerate(recipients):
         msg_id = f"FANOUT_{test_id}_{i}"
         message = f"FANOUT_{test_id}_{i}_payload"
-        
+
         send_times[str(i)] = time.time()
         if sender.send_message(recipient.username, message):
             messages_sent += 1
-        
+
         # Rate limiting (but allow burst for burst test)
         if interval > 0 and target_rate < 10000:
             elapsed = time.time() - start_time
             expected = (i + 1) * interval
             if elapsed < expected:
                 time.sleep(expected - elapsed)
-    
+
     send_complete_time = time.time()
     print(f" {messages_sent} sent in {(send_complete_time - start_time)*1000:.1f}ms")
-    
+
     # Wait for delivery
     wait_time = max(0.5, max_latency_ms / 1000 * 2)
     print(f"  Waiting {wait_time:.1f}s for delivery...", end="", flush=True)
     time.sleep(wait_time)
-    
+
     # Collect results
     messages_received = 0
     for recipient in recipients:
         messages_received += len(recipient.received_messages)
-        
+
         # Calculate latencies
         for msg_id, recv_time in recipient.received_messages:
             try:
@@ -409,19 +409,19 @@ def run_fanout_test(test_name: str, num_recipients: int, target_rate: int,
                     latencies.append(latency)
             except:
                 pass
-    
+
     print(f" {messages_received} received")
-    
+
     # Calculate total latency (first send to last receive)
     total_latency = 0
     if latencies:
         total_latency = max(latencies)
-    
+
     # Cleanup
     sender.close()
     for r in recipients:
         r.close()
-    
+
     # Build result
     result = FanOutResult(
         recipients=num_recipients,
@@ -431,33 +431,33 @@ def run_fanout_test(test_name: str, num_recipients: int, target_rate: int,
         latencies_ms=latencies,
         errors=errors
     )
-    
+
     # Evaluate pass/fail
     passed = True
-    
+
     print(f"\n  Results:")
     print(f"    Messages sent:     {result.messages_sent}")
     print(f"    Messages received: {result.messages_received}")
     print(f"    Loss rate:         {result.loss_rate*100:.2f}%")
     print(f"    Total latency:     {result.total_latency_ms:.2f}ms")
-    
+
     if result.latencies_ms:
         print(f"    P50 latency:       {result.p50_latency_ms:.2f}ms")
         print(f"    P99 latency:       {result.p99_latency_ms:.2f}ms")
-    
+
     # Check thresholds
     if result.loss_rate > max_loss:
         print(f"    ✗ Loss rate {result.loss_rate*100:.2f}% exceeds {max_loss*100:.1f}%")
         passed = False
     else:
         print(f"    ✓ Loss rate within threshold")
-    
+
     if result.total_latency_ms > max_latency_ms:
         print(f"    ✗ Latency {result.total_latency_ms:.2f}ms exceeds {max_latency_ms}ms")
         passed = False
     else:
         print(f"    ✓ Latency within threshold")
-    
+
     return passed, result
 
 

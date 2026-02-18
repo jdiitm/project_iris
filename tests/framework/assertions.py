@@ -26,7 +26,6 @@ CLOCK MONOTONICITY NOTE (Audit Finding 3, Phase 5b):
 
 import time
 from typing import Set, List, Dict, Callable, Any, Optional
-from collections import defaultdict
 
 # AUDIT MITIGATION P1-1: Standard exit code for infrastructure skip.
 # Tests MUST use this instead of exit(0) when skipping due to missing infra.
@@ -43,14 +42,14 @@ class MessageTracker:
     - Duplicate detection
     - Order tracking
     """
-    
+
     def __init__(self):
         self.sent: Dict[str, Dict[str, Any]] = {}  # msg_id -> {timestamp, target, payload}
         self.received: Dict[str, Dict[str, Any]] = {}  # msg_id -> {timestamp, count}
         self.receive_order: List[str] = []  # Order of received message IDs
         self._lock_sent = False
         self._lock_received = False
-    
+
     def record_sent(
         self,
         message_id: str,
@@ -65,11 +64,11 @@ class MessageTracker:
             "payload": payload,
             "sequence": sequence
         }
-    
+
     def record_received(self, message_id: str):
         """Record a received message."""
         timestamp = time.monotonic_ns()
-        
+
         if message_id in self.received:
             self.received[message_id]["count"] += 1
             self.received[message_id]["timestamps"].append(timestamp)
@@ -79,13 +78,13 @@ class MessageTracker:
                 "timestamps": [timestamp],
                 "count": 1
             }
-        
+
         self.receive_order.append(message_id)
-    
+
     def get_lost_messages(self) -> Set[str]:
         """Get message IDs that were sent but not received."""
         return set(self.sent.keys()) - set(self.received.keys())
-    
+
     def get_duplicates(self) -> Dict[str, int]:
         """Get message IDs received more than once with counts."""
         return {
@@ -93,11 +92,11 @@ class MessageTracker:
             for msg_id, info in self.received.items()
             if info["count"] > 1
         }
-    
+
     def get_unexpected(self) -> Set[str]:
         """Get message IDs received but not sent."""
         return set(self.received.keys()) - set(self.sent.keys())
-    
+
     def get_latencies_ms(self) -> List[float]:
         """Calculate latencies for delivered messages in milliseconds."""
         latencies = []
@@ -108,7 +107,7 @@ class MessageTracker:
                 latency_ms = (recv_ts - send_ts) / 1_000_000
                 latencies.append(latency_ms)
         return latencies
-    
+
     def is_order_preserved(self) -> bool:
         """Check if receive order matches send sequence order."""
         # Get sequence numbers for received messages
@@ -116,19 +115,19 @@ class MessageTracker:
         for msg_id in self.receive_order:
             if msg_id in self.sent and self.sent[msg_id].get("sequence") is not None:
                 received_sequences.append(self.sent[msg_id]["sequence"])
-        
+
         # Check if monotonically increasing
         for i in range(1, len(received_sequences)):
             if received_sequences[i] < received_sequences[i-1]:
                 return False
         return True
-    
+
     def summary(self) -> Dict[str, Any]:
         """Get a summary of message tracking."""
         lost = self.get_lost_messages()
         dups = self.get_duplicates()
         latencies = self.get_latencies_ms()
-        
+
         return {
             "sent": len(self.sent),
             "received": len(self.received),
@@ -159,7 +158,7 @@ def assert_message_delivered(
         if message_id in tracker.received:
             return True
         time.sleep(poll_interval)
-    
+
     raise AssertionError(f"Message {message_id} not delivered within {timeout_seconds}s")
 
 
@@ -173,7 +172,7 @@ def assert_no_message_loss(
     total_sent = len(tracker.sent)
     lost = tracker.get_lost_messages()
     lost_pct = (len(lost) / total_sent * 100) if total_sent > 0 else 0
-    
+
     if lost_pct > allowed_loss_pct:
         raise AssertionError(
             f"Message loss {lost_pct:.2f}% exceeds threshold {allowed_loss_pct}%. "
@@ -214,11 +213,11 @@ def assert_latency_under(
     latencies = sorted(tracker.get_latencies_ms())
     if not latencies:
         return True  # No messages to check
-    
+
     idx = int(len(latencies) * percentile / 100)
     idx = min(idx, len(latencies) - 1)
     actual_latency = latencies[idx]
-    
+
     if actual_latency > max_latency_ms:
         raise AssertionError(
             f"P{percentile} latency {actual_latency:.2f}ms exceeds threshold {max_latency_ms}ms"
@@ -245,7 +244,7 @@ def wait_for_condition(
         except Exception:
             pass
         time.sleep(poll_interval)
-    
+
     raise TimeoutError(f"Condition '{description}' not met within {timeout_seconds}s")
 
 
@@ -268,12 +267,12 @@ class AssertionReport:
     """
     Collects assertion results for reporting.
     """
-    
+
     def __init__(self):
         self.assertions: List[Dict[str, Any]] = []
         self.passed = 0
         self.failed = 0
-    
+
     def add(self, name: str, passed: bool, details: str = ""):
         """Add an assertion result."""
         self.assertions.append({
@@ -285,7 +284,7 @@ class AssertionReport:
             self.passed += 1
         else:
             self.failed += 1
-    
+
     def run(self, name: str, assertion_fn: Callable[[], bool], **kwargs) -> bool:
         """Run an assertion and record the result."""
         try:
@@ -298,11 +297,11 @@ class AssertionReport:
         except Exception as e:
             self.add(name, False, f"Unexpected error: {e}")
             return False
-    
+
     def all_passed(self) -> bool:
         """Check if all assertions passed."""
         return self.failed == 0
-    
+
     def summary(self) -> Dict[str, Any]:
         """Get assertion report summary."""
         return {

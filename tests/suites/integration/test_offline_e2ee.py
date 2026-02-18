@@ -18,7 +18,6 @@ import sys
 import time
 import socket
 import struct
-import subprocess
 import hashlib
 import hmac
 
@@ -56,7 +55,7 @@ class MockE2EESession:
     
     Note: This is NOT cryptographically secure - it's for testing message flow.
     """
-    
+
     def __init__(self, username: str, seed: int = TEST_SEED):
         self.username = username
         self.seed = seed
@@ -65,12 +64,12 @@ class MockE2EESession:
         self._signed_prekey = self._derive_key(f"spk_{username}")
         self._one_time_prekeys = [self._derive_key(f"opk_{username}_{i}") for i in range(5)]
         self._sessions = {}  # peer -> session_key
-    
+
     def _derive_key(self, input_str: str) -> bytes:
         """Derive a mock 32-byte key from input string."""
         h = hashlib.sha256(f"{self.seed}:{input_str}".encode())
         return h.digest()
-    
+
     def get_prekey_bundle(self) -> dict:
         """Return the public key bundle for this user."""
         return {
@@ -79,7 +78,7 @@ class MockE2EESession:
             "prekey_signature": self._derive_key(f"sig_{self.username}"),
             "one_time_prekeys": self._one_time_prekeys[:3],  # Provide 3 OPKs
         }
-    
+
     def create_initial_message(self, recipient: str, plaintext: str) -> tuple:
         """
         Create initial E2EE message for a new session.
@@ -89,24 +88,24 @@ class MockE2EESession:
         # Mock session key derivation
         session_key = self._derive_key(f"session_{self.username}_{recipient}")
         self._sessions[recipient] = session_key
-        
+
         # Mock encryption (XOR with key - NOT SECURE, just for testing)
         plaintext_bytes = plaintext.encode('utf-8')
         key_stream = (session_key * ((len(plaintext_bytes) // 32) + 1))[:len(plaintext_bytes)]
         ciphertext = bytes(p ^ k for p, k in zip(plaintext_bytes, key_stream))
-        
+
         # Add MAC for integrity
         mac = hmac.new(session_key, ciphertext, hashlib.sha256).digest()[:16]
-        
+
         header = {
             "msg_type": "initial",
             "dh_pub": self._derive_key(f"ephemeral_{self.username}_{recipient}"),
             "prev_chain_len": 0,
             "msg_num": 0,
         }
-        
+
         return header, ciphertext + mac
-    
+
     def create_ratchet_message(self, recipient: str, plaintext: str, msg_num: int) -> tuple:
         """
         Create a message in an established session (ratchet step).
@@ -115,27 +114,27 @@ class MockE2EESession:
         """
         if recipient not in self._sessions:
             return self.create_initial_message(recipient, plaintext)
-        
+
         session_key = self._sessions[recipient]
         # Simulate ratchet step
         ratchet_key = self._derive_key(f"ratchet_{session_key.hex()}_{msg_num}")
-        
+
         # Mock encryption
         plaintext_bytes = plaintext.encode('utf-8')
         key_stream = (ratchet_key * ((len(plaintext_bytes) // 32) + 1))[:len(plaintext_bytes)]
         ciphertext = bytes(p ^ k for p, k in zip(plaintext_bytes, key_stream))
-        
+
         mac = hmac.new(ratchet_key, ciphertext, hashlib.sha256).digest()[:16]
-        
+
         header = {
             "msg_type": "ratchet",
             "dh_pub": self._derive_key(f"ratchet_pub_{recipient}_{msg_num}"),
             "prev_chain_len": msg_num - 1 if msg_num > 0 else 0,
             "msg_num": msg_num,
         }
-        
+
         return header, ciphertext + mac
-    
+
     def decrypt_message(self, sender: str, header: dict, ciphertext: bytes) -> str:
         """
         Decrypt a received E2EE message.
@@ -152,20 +151,20 @@ class MockE2EESession:
             session_key = self._sessions[sender]
             msg_num = header.get("msg_num", 0)
             session_key = self._derive_key(f"ratchet_{session_key.hex()}_{msg_num}")
-        
+
         # Verify MAC
         mac_len = 16
         received_mac = ciphertext[-mac_len:]
         ciphertext_only = ciphertext[:-mac_len]
-        
+
         expected_mac = hmac.new(session_key, ciphertext_only, hashlib.sha256).digest()[:16]
         if not hmac.compare_digest(received_mac, expected_mac):
             raise ValueError("MAC verification failed")
-        
+
         # Decrypt
         key_stream = (session_key * ((len(ciphertext_only) // 32) + 1))[:len(ciphertext_only)]
         plaintext_bytes = bytes(c ^ k for c, k in zip(ciphertext_only, key_stream))
-        
+
         return plaintext_bytes.decode('utf-8')
 
 
@@ -173,11 +172,11 @@ def encode_e2ee_msg(recipient: bytes, header: dict, ciphertext: bytes) -> bytes:
     """Encode E2EE message to wire format (opcode 0x23)."""
     # Simple CBOR-like encoding for header (just enough to test)
     header_bytes = encode_simple_map(header)
-    
+
     recipient_len = len(recipient)
     header_len = len(header_bytes)
     cipher_len = len(ciphertext)
-    
+
     return (
         b'\x23' +  # Opcode
         struct.pack('>H', recipient_len) +
@@ -196,13 +195,13 @@ def encode_simple_map(d: dict) -> bytes:
     for k, v in d.items():
         items.append(encode_cbor_item(k))
         items.append(encode_cbor_item(v))
-    
+
     n = len(d)
     if n < 24:
         header = bytes([0xa0 | n])
     else:
         header = bytes([0xb8, n])
-    
+
     return header + b''.join(items)
 
 
@@ -263,14 +262,14 @@ def test_offline_e2ee_single_message():
     4. Bob receives and decrypts the message
     """
     log("=== Test: Single E2EE message to offline user ===")
-    
+
     # Use unique usernames for test isolation
     alice_name = unique_user("alice_e2ee")
     bob_name = unique_user("bob_e2ee")
-    
+
     alice = MockE2EESession(alice_name)
     bob = MockE2EESession(bob_name)
-    
+
     # Step 1: Bob logs in then logs out (goes offline)
     log("Step 1: Bob logs in briefly then disconnects")
     bob_client = IrisClient(host=EDGE_HOST, port=EDGE_PORT)
@@ -278,48 +277,48 @@ def test_offline_e2ee_single_message():
     time.sleep(0.5)
     bob_client.close()
     log("Bob is now offline")
-    
+
     # Step 2: Alice sends E2EE message while Bob is offline
     log("Step 2: Alice sends E2EE message to offline Bob")
     alice_client = IrisClient(host=EDGE_HOST, port=EDGE_PORT)
     alice_client.login(alice_name)
-    
+
     # Create E2EE message
     plaintext = "Hello Bob! This is a secret message."
     header, ciphertext = alice.create_initial_message(bob_name, plaintext)
-    
+
     # Send using standard message format (E2EE is encrypted payload)
     # The server just sees opaque bytes, encryption is end-to-end
     message_content = f"E2EE:{header['msg_num']}:{ciphertext.hex()}"
     alice_client.send_msg(bob_name, message_content)
     log(f"Alice sent E2EE message ({len(message_content)} bytes)")
-    
+
     alice_client.close()
-    
+
     # Wait for message to be stored
     time.sleep(1.0)
-    
+
     # Step 3: Bob comes back online
     log("Step 3: Bob comes back online")
     bob_client = IrisClient(host=EDGE_HOST, port=EDGE_PORT)
     bob_client.login(bob_name)
-    
+
     # Step 4: Bob receives the offline message
     log("Step 4: Bob receives offline E2EE message")
     try:
         bob_client.sock.settimeout(MESSAGE_TIMEOUT)
         received = bob_client.recv_msg(timeout=MESSAGE_TIMEOUT)
-        
+
         if received and "E2EE:" in str(received):
             log(f"Bob received offline message: {received[:50]}...")
-            
+
             # Parse and decrypt (in real impl, this uses iris_ratchet)
             parts = received.split(":", 2)
             if len(parts) == 3:
                 msg_num = int(parts[1])
                 ciphertext_hex = parts[2]
                 ciphertext_recv = bytes.fromhex(ciphertext_hex)
-                
+
                 # Mock decryption
                 decrypted = bob.decrypt_message(
                     alice_name,
@@ -327,7 +326,7 @@ def test_offline_e2ee_single_message():
                     ciphertext_recv
                 )
                 log(f"Bob decrypted message: {decrypted}")
-                
+
                 if decrypted == plaintext:
                     log("[PASS] Decrypted message matches original")
                     bob_client.close()
@@ -342,12 +341,12 @@ def test_offline_e2ee_single_message():
                 log("[PASS] Offline message was stored and delivered")
                 bob_client.close()
                 return True
-                
+
     except socket.timeout:
         log("[FAIL] Timeout waiting for offline message")
     except Exception as e:
         log(f"[ERROR] {e}")
-    
+
     bob_client.close()
     return False
 
@@ -359,23 +358,23 @@ def test_offline_e2ee_multiple_messages():
     Validates that all messages are queued and delivered in order.
     """
     log("=== Test: Multiple E2EE messages to offline user ===")
-    
+
     # Use unique usernames for test isolation
     alice_name = unique_user("alice_multi")
     bob_name = unique_user("bob_multi")
-    
+
     alice = MockE2EESession(alice_name)
-    
+
     # Bob logs in briefly then disconnects
     bob_client = IrisClient(host=EDGE_HOST, port=EDGE_PORT)
     bob_client.login(bob_name)
     time.sleep(0.3)
     bob_client.close()
-    
+
     # Alice sends multiple messages
     alice_client = IrisClient(host=EDGE_HOST, port=EDGE_PORT)
     alice_client.login(alice_name)
-    
+
     messages_sent = []
     for i in range(MAX_OFFLINE_MESSAGES):
         plaintext = f"Secret message #{i}"
@@ -384,14 +383,14 @@ def test_offline_e2ee_multiple_messages():
         alice_client.send_msg(bob_name, content)
         messages_sent.append(plaintext)
         log(f"Sent message #{i}")
-    
+
     alice_client.close()
     time.sleep(1.0)
-    
+
     # Bob comes back online
     bob_client = IrisClient(host=EDGE_HOST, port=EDGE_PORT)
     bob_client.login(bob_name)
-    
+
     messages_received = 0
     try:
         bob_client.sock.settimeout(MESSAGE_TIMEOUT)
@@ -407,11 +406,11 @@ def test_offline_e2ee_multiple_messages():
                 break
     except Exception as e:
         log(f"Error receiving: {e}")
-    
+
     bob_client.close()
-    
+
     log(f"Received {messages_received}/{MAX_OFFLINE_MESSAGES} messages")
-    
+
     # Allow some loss for smoke profile due to timing
     min_expected = MAX_OFFLINE_MESSAGES // 2 if TEST_PROFILE == "smoke" else MAX_OFFLINE_MESSAGES - 1
     if messages_received >= min_expected:
@@ -429,35 +428,35 @@ def test_offline_e2ee_ordering():
     RFC FR-5 requires FIFO ordering per sender.
     """
     log("=== Test: E2EE message ordering ===")
-    
+
     # Use unique usernames for test isolation
     alice_name = unique_user("alice_order")
     bob_name = unique_user("bob_order")
-    
+
     # Bob offline
     bob_client = IrisClient(host=EDGE_HOST, port=EDGE_PORT)
     bob_client.login(bob_name)
     time.sleep(0.3)
     bob_client.close()
-    
+
     # Alice sends numbered messages
     alice_client = IrisClient(host=EDGE_HOST, port=EDGE_PORT)
     alice_client.login(alice_name)
-    
+
     sequence = []
     for i in range(5):
         content = f"ORDER:{i}"
         alice_client.send_msg(bob_name, content)
         sequence.append(i)
         time.sleep(0.1)  # Small delay to ensure ordering
-    
+
     alice_client.close()
     time.sleep(0.5)
-    
+
     # Bob receives
     bob_client = IrisClient(host=EDGE_HOST, port=EDGE_PORT)
     bob_client.login(bob_name)
-    
+
     received_order = []
     try:
         bob_client.sock.settimeout(MESSAGE_TIMEOUT)
@@ -476,17 +475,17 @@ def test_offline_e2ee_ordering():
                 break
     except Exception as e:
         log(f"Error: {e}")
-    
+
     bob_client.close()
-    
+
     log(f"Received order: {received_order}")
-    
+
     # Check if order is preserved
     if len(received_order) == 0:
         log("[FAIL] No messages received - ordering cannot be verified")
         return False  # Zero messages is a failure, not a pass
     elif len(received_order) >= 3:
-        is_ordered = all(received_order[i] <= received_order[i+1] 
+        is_ordered = all(received_order[i] <= received_order[i+1]
                         for i in range(len(received_order)-1))
         if is_ordered:
             log(f"[PASS] Message ordering preserved ({len(received_order)} messages)")
@@ -496,7 +495,7 @@ def test_offline_e2ee_ordering():
             return False
     else:
         # 1-2 messages received - partial but still check ordering
-        is_ordered = all(received_order[i] <= received_order[i+1] 
+        is_ordered = all(received_order[i] <= received_order[i+1]
                         for i in range(len(received_order)-1)) if len(received_order) > 1 else True
         if is_ordered:
             log(f"[PASS] Message ordering preserved ({len(received_order)} messages, partial delivery)")
@@ -514,17 +513,17 @@ def test_e2ee_encryption_decryption():
     depending on offline message delivery.
     """
     log("=== Test: E2EE Encryption/Decryption ===")
-    
+
     alice = MockE2EESession("alice_crypto")
     bob = MockE2EESession("bob_crypto")
-    
+
     # Alice creates initial message for Bob
     plaintext = "Hello Bob! This is a secret message."
     header, ciphertext = alice.create_initial_message("bob_crypto", plaintext)
-    
+
     log(f"  Original: {plaintext}")
     log(f"  Encrypted: {len(ciphertext)} bytes")
-    
+
     # Bob decrypts
     try:
         decrypted = bob.decrypt_message(
@@ -533,7 +532,7 @@ def test_e2ee_encryption_decryption():
             ciphertext
         )
         log(f"  Decrypted: {decrypted}")
-        
+
         if decrypted == plaintext:
             log("  ✓ Encryption/decryption successful")
             return True
@@ -550,19 +549,19 @@ def test_e2ee_mac_verification():
     Test: MAC verification catches tampered messages.
     """
     log("=== Test: E2EE MAC Verification ===")
-    
+
     alice = MockE2EESession("alice_mac")
     bob = MockE2EESession("bob_mac")
-    
+
     plaintext = "Tamper test message"
     header, ciphertext = alice.create_initial_message("bob_mac", plaintext)
-    
+
     # Tamper with ciphertext
     tampered = bytearray(ciphertext)
     if len(tampered) > 10:
         tampered[10] ^= 0xFF  # Flip bits
     tampered = bytes(tampered)
-    
+
     try:
         bob.decrypt_message("alice_mac", header, tampered)
         log("  ✗ Tampered message was accepted!")
@@ -583,24 +582,24 @@ def test_e2ee_ratchet_progression():
     Test: Ratchet correctly advances for multiple messages.
     """
     log("=== Test: E2EE Ratchet Progression ===")
-    
+
     alice = MockE2EESession("alice_ratchet")
     bob = MockE2EESession("bob_ratchet")
-    
+
     messages = ["msg1", "msg2", "msg3"]
-    
+
     # Alice sends initial message
     header0, cipher0 = alice.create_initial_message("bob_ratchet", messages[0])
-    
+
     # Alice sends ratchet messages
     header1, cipher1 = alice.create_ratchet_message("bob_ratchet", messages[1], 1)
     header2, cipher2 = alice.create_ratchet_message("bob_ratchet", messages[2], 2)
-    
+
     # All ciphertexts should be different
     if cipher0 == cipher1 or cipher1 == cipher2:
         log("  ✗ Ciphertexts are not unique")
         return False
-    
+
     log("  ✓ All ciphertexts are unique")
     return True
 
@@ -608,20 +607,20 @@ def test_e2ee_ratchet_progression():
 def main():
     """Run E2EE tests."""
     log(f"Starting E2EE Tests (profile={TEST_PROFILE}, seed={TEST_SEED})")
-    
+
     results = []
-    
+
     # Core E2EE crypto tests (don't depend on server)
     results.append(("E2EE Encryption/Decryption", test_e2ee_encryption_decryption()))
     results.append(("E2EE MAC Verification", test_e2ee_mac_verification()))
     results.append(("E2EE Ratchet Progression", test_e2ee_ratchet_progression()))
-    
+
     # Online tests (require edge server)
     if check_edge_running():
         results.append(("E2EE Ordering", test_offline_e2ee_ordering()))
     else:
         log("[INFO] Edge not running - skipping server-dependent tests")
-    
+
     log("\n=== Results ===")
     passed = 0
     failed = 0
@@ -632,9 +631,9 @@ def main():
             passed += 1
         else:
             failed += 1
-    
+
     log(f"\nTotal: {passed}/{len(results)} passed")
-    
+
     if failed > 0:
         log("[FAIL] Some tests failed")
         sys.exit(1)

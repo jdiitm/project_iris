@@ -21,7 +21,6 @@ NO SKIPS, NO FALLBACKS - binary pass/fail only.
 import sys
 import os
 import socket
-import ssl
 import struct
 import time
 

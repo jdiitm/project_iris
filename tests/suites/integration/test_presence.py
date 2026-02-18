@@ -24,7 +24,6 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(_
 sys.path.insert(0, PROJECT_ROOT)
 
 from tests.framework import TestLogger, ClusterManager
-from tests.framework.wait import wait_for
 from tests.utilities import IrisClient
 
 
@@ -53,18 +52,18 @@ def parse_status_response(data: bytes) -> dict:
     # Response: 0x06 | ULen(16) | User | StatusByte | LastSeen(64)
     if len(data) < 4:
         return {"error": "too short"}
-    
+
     if data[0] != 0x06:
         return {"error": f"wrong opcode: {data[0]}"}
-    
+
     u_len = struct.unpack('>H', data[1:3])[0]
     if len(data) < 3 + u_len + 1 + 8:
         return {"error": "incomplete packet"}
-    
+
     user = data[3:3+u_len].decode('utf-8')
     status_byte = data[3+u_len]
     last_seen = struct.unpack('>Q', data[3+u_len+1:3+u_len+9])[0]
-    
+
     return {
         "user": user,
         "online": status_byte == 1,
@@ -74,115 +73,115 @@ def parse_status_response(data: bytes) -> dict:
 
 def test_online_user_status():
     """Test that online users show as online."""
-    
+
     with TestLogger("test_online_user_status", "integration") as log:
-        
+
         # Target user comes online
         target_user = f"status_target_{int(time.time())}"
         target = create_client_with_retry()
         target.login(target_user)
         log.connection_event("login", target_user)
-        
+
         # Query status (poll instead of blind sleep)
         querier = create_client_with_retry()
         querier.login(f"querier_{int(time.time())}")
         log.connection_event("login", "querier")
-        
+
         # Poll for status with retries
         result = False
         start_time = time.monotonic()
         max_wait = 10.0
-        
+
         while time.monotonic() - start_time < max_wait:
             try:
                 # Send status query
                 query_packet = create_get_status_packet(target_user)
                 querier.sock.sendall(query_packet)
-                
+
                 querier.sock.settimeout(2.0)
                 response = querier.sock.recv(1024)
-                
+
                 status = parse_status_response(response)
                 log.info("status_received", f"Status: {status}")
-                
+
                 if status.get("online"):
                     log.info("validation", f"{target_user} correctly shows as online")
                     result = True
                     break
-                    
+
             except socket.timeout:
                 pass
             except Exception as e:
                 log.info("retry", f"Query failed ({e}), retrying...")
-            
+
             time.sleep(0.5)
-        
+
         if not result:
             log.error("validation", f"{target_user} failed to show as online after {max_wait}s")
-        
+
         target.close()
         querier.close()
-        
+
         if result:
             log.info("result", "Test PASSED")
         else:
             log.error("result", "Test FAILED")
-        
+
         return result
 
 
 def test_offline_user_status():
     """Test that offline users show as offline with last-seen time."""
-    
+
     with TestLogger("test_offline_user_status", "integration") as log:
-        
+
         # User comes online then goes offline
         target_user = f"offline_target_{int(time.time())}"
         target = create_client_with_retry()
         target.login(target_user)
         log.connection_event("login", target_user)
-        
+
         # Go offline
         target.close()
         log.connection_event("disconnect", target_user)
-        
+
         # Query status from fresh client with retries
         querier = create_client_with_retry()
         querier.login(f"querier_off_{int(time.time())}")
-        
+
         result = False
         start_time = time.monotonic()
         max_wait = 10.0
-        
+
         while time.monotonic() - start_time < max_wait:
             try:
                 query_packet = create_get_status_packet(target_user)
                 querier.sock.sendall(query_packet)
-                
+
                 querier.sock.settimeout(2.0)
                 response = querier.sock.recv(1024)
-                
+
                 status = parse_status_response(response)
                 log.info("status_received", f"Status: {status}")
-                
+
                 # User should be offline (online=False or not present)
                 if not status.get("online", True):
                     log.info("validation", f"{target_user} correctly shows as offline")
                     result = True
                     break
-                    
+
             except socket.timeout:
                 pass
             except Exception as e:
                 log.info("retry", f"Query failed ({e}), retrying...")
-            
+
             time.sleep(0.5)
-        
+
         if not result:
             log.error("validation", f"{target_user} still shows as online after {max_wait}s")
-        
+
         querier.close()
-        
+
         if result:
             log.info("result", "Test PASSED")
         return result
@@ -190,47 +189,47 @@ def test_offline_user_status():
 
 def test_presence_cache():
     """Test that presence is cached and served efficiently."""
-    
+
     with TestLogger("test_presence_cache", "integration") as log:
-        
+
         target_user = f"cache_target_{int(time.time())}"
         target = create_client_with_retry()
         target.login(target_user)
         log.connection_event("login", target_user)
-        
+
         # Query same user multiple times (no sleep — poll directly)
         querier = create_client_with_retry()
         querier.login(f"cache_querier_{int(time.time())}")
-        
+
         NUM_QUERIES = 5
         latencies = []
-        
+
         for i in range(NUM_QUERIES):
             query_packet = create_get_status_packet(target_user)
-            
+
             start = time.monotonic()
             querier.sock.sendall(query_packet)
-            
+
             try:
                 querier.sock.settimeout(5.0)
                 response = querier.sock.recv(1024)
                 latency_ms = (time.monotonic() - start) * 1000
                 latencies.append(latency_ms)
-                
+
                 status = parse_status_response(response)
                 log.info("query", f"Query {i+1}: {latency_ms:.2f}ms - {status}")
-                
+
             except Exception as e:
                 log.error("query", f"Query {i+1} failed: {e}")
-        
+
         target.close()
         querier.close()
-        
+
         if latencies:
             avg_latency = sum(latencies) / len(latencies)
             log.metric("avg_latency_ms", avg_latency, "ms")
             log.metric("queries_complete", len(latencies))
-            
+
             # Cached queries should be fast
             if avg_latency < 50:  # 50ms threshold for cached response
                 log.info("result", f"Test PASSED - avg latency {avg_latency:.2f}ms")
@@ -238,7 +237,7 @@ def test_presence_cache():
             else:
                 log.warn("result", f"Slow responses - avg {avg_latency:.2f}ms")
                 return True  # Still pass, just warn
-        
+
         log.error("result", "No successful queries")
         return False
 
@@ -260,71 +259,71 @@ def test_presence_propagation_sla():
     NO SKIPS, NO FALLBACKS - binary pass/fail only.
     """
     with TestLogger("test_presence_propagation_sla", "integration") as log:
-        
+
         log.info("sla", f"Testing presence propagation SLA: ≤{PRESENCE_PROPAGATION_SLA_SECONDS}s")
-        
+
         # Set up observer first (to be ready to receive updates)
         observer = create_client_with_retry()
         observer_user = f"sla_observer_{int(time.time())}"
         observer.login(observer_user)
         log.connection_event("login", observer_user)
-        
+
         # Target user - we'll measure how long until observer sees them
         target_user = f"sla_target_{int(time.time())}"
-        
+
         # Record start time BEFORE target logs in
         start_time = time.monotonic()
-        
+
         # Target comes online
         target = create_client_with_retry()
         target.login(target_user)
         login_time = time.monotonic()
         log.connection_event("login", target_user)
         log.info("timing", f"Target login at T+{login_time - start_time:.3f}s")
-        
+
         # Now poll until observer sees target as online
         propagation_time = None
         poll_interval = 0.5  # Check every 500ms
         max_wait = 60.0  # Wait up to 60s (2x SLA)
-        
+
         while time.monotonic() - start_time < max_wait:
             try:
                 query_packet = create_get_status_packet(target_user)
                 observer.sock.sendall(query_packet)
-                
+
                 observer.sock.settimeout(2.0)
                 response = observer.sock.recv(1024)
-                
+
                 status = parse_status_response(response)
-                
+
                 if status.get("online"):
                     propagation_time = time.monotonic() - login_time
                     log.info("sla_met", f"Presence propagated in {propagation_time:.3f}s")
                     break
-                    
+
             except socket.timeout:
                 pass
             except Exception as e:
                 log.info("poll_error", f"Query error: {e}")
-            
+
             time.sleep(poll_interval)
-        
+
         # Cleanup
         target.close()
         observer.close()
-        
+
         # SLA Assertion
         if propagation_time is None:
             log.error("sla_violation", f"Presence never propagated (waited {max_wait}s)")
             log.error("result", "FAIL: RFC FR-6/FR-7 SLA VIOLATED (no propagation)")
             return False
         elif propagation_time <= PRESENCE_PROPAGATION_SLA_SECONDS:
-            log.info("sla_pass", 
+            log.info("sla_pass",
                     f"RFC FR-6/FR-7: Presence propagation {propagation_time:.2f}s ≤ {PRESENCE_PROPAGATION_SLA_SECONDS}s")
             log.info("result", "PASS: Presence SLA met")
             return True
         else:
-            log.error("sla_violation", 
+            log.error("sla_violation",
                      f"Presence propagation {propagation_time:.2f}s > {PRESENCE_PROPAGATION_SLA_SECONDS}s SLA")
             log.error("result", "FAIL: RFC FR-6/FR-7 SLA VIOLATED")
             return False
@@ -338,89 +337,89 @@ def test_last_seen_update_sla():
     and visible to observers within 30 seconds.
     """
     with TestLogger("test_last_seen_update_sla", "integration") as log:
-        
+
         log.info("sla", f"Testing last_seen update SLA: ≤{PRESENCE_PROPAGATION_SLA_SECONDS}s")
-        
+
         # Target comes online first
         target_user = f"lastseen_target_{int(time.time())}"
         target = create_client_with_retry()
         target.login(target_user)
         log.connection_event("login", target_user)
-        
+
         # Observer (poll for propagation instead of blind sleep)
         observer = create_client_with_retry()
         observer_user = f"lastseen_observer_{int(time.time())}"
         observer.login(observer_user)
         log.connection_event("login", observer_user)
-        
+
         # Verify target shows as online (poll with retry)
         query_packet = create_get_status_packet(target_user)
         observer.sock.sendall(query_packet)
         observer.sock.settimeout(3.0)
         response = observer.sock.recv(1024)
         initial_status = parse_status_response(response)
-        
+
         if not initial_status.get("online"):
             log.error("setup", "Target not showing as online - cannot test last_seen")
             observer.close()
             target.close()
             return False
-        
+
         log.info("setup", "Target verified online, measuring offline propagation...")
-        
+
         # Record time before disconnect
         disconnect_start = time.monotonic()
-        
+
         # Target goes offline
         target.close()
         log.connection_event("disconnect", target_user)
-        
+
         # Poll until last_seen is updated (shows offline)
         propagation_time = None
         max_wait = 60.0
         poll_interval = 0.5
-        
+
         while time.monotonic() - disconnect_start < max_wait:
             try:
                 query_packet = create_get_status_packet(target_user)
                 observer.sock.sendall(query_packet)
-                
+
                 observer.sock.settimeout(2.0)
                 response = observer.sock.recv(1024)
-                
+
                 status = parse_status_response(response)
-                
+
                 # Check if offline (last_seen updated)
                 if not status.get("online", True):
                     propagation_time = time.monotonic() - disconnect_start
-                    log.info("offline_detected", 
+                    log.info("offline_detected",
                             f"User shows offline after {propagation_time:.3f}s")
-                    
+
                     # Verify last_seen is recent
                     last_seen = status.get("last_seen", 0)
                     if last_seen > 0:
                         log.info("last_seen", f"Last seen timestamp: {last_seen}")
                     break
-                    
+
             except socket.timeout:
                 pass
             except Exception as e:
                 log.info("poll_error", f"Query error: {e}")
-            
+
             time.sleep(poll_interval)
-        
+
         observer.close()
-        
+
         # SLA Assertion
         if propagation_time is None:
             log.error("sla_violation", f"Offline status never propagated (waited {max_wait}s)")
             return False
         elif propagation_time <= PRESENCE_PROPAGATION_SLA_SECONDS:
-            log.info("sla_pass", 
+            log.info("sla_pass",
                     f"RFC FR-7: Last seen updated in {propagation_time:.2f}s ≤ {PRESENCE_PROPAGATION_SLA_SECONDS}s")
             return True
         else:
-            log.error("sla_violation", 
+            log.error("sla_violation",
                      f"Last seen update {propagation_time:.2f}s > {PRESENCE_PROPAGATION_SLA_SECONDS}s SLA")
             return False
 
@@ -428,13 +427,13 @@ def test_last_seen_update_sla():
 def main():
     """Run all presence tests."""
     cluster = ClusterManager()
-    
+
     if not cluster.is_healthy():
         print("[SETUP] Starting cluster...")
         if not cluster.start():
             print("[ERROR] Failed to start cluster")
             return 1
-    
+
     tests = [
         test_online_user_status,
         test_offline_user_status,
@@ -442,16 +441,16 @@ def main():
         test_presence_propagation_sla,  # RFC FR-6/FR-7: 30s SLA
         test_last_seen_update_sla,       # RFC FR-7: Last seen SLA
     ]
-    
+
     passed = 0
     failed = 0
-    
+
     for test_fn in tests:
         try:
             print(f"\n{'='*60}")
             print(f"Running: {test_fn.__name__}")
             print('='*60)
-            
+
             if test_fn():
                 passed += 1
                 print(f"✓ PASSED: {test_fn.__name__}")
@@ -463,11 +462,11 @@ def main():
             print(f"✗ ERROR: {test_fn.__name__} - {e}")
             import traceback
             traceback.print_exc()
-    
+
     print(f"\n{'='*60}")
     print(f"Results: {passed}/{passed+failed} passed")
     print('='*60)
-    
+
     return 0 if failed == 0 else 1
 
 

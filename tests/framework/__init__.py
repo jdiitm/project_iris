@@ -18,7 +18,7 @@ from .resource_monitor import ResourceMonitor
 
 __all__ = [
     "TestLogger",
-    "get_logger", 
+    "get_logger",
     "ClusterManager",
     "MessageTracker",
     "assert_message_delivered",

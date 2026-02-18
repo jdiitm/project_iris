@@ -19,7 +19,6 @@ Target: 50K+ admission checks/sec on typical hardware
 import subprocess
 import sys
 import os
-import time
 
 # Add project root to sys.path
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -73,7 +72,7 @@ def run_erlang_benchmark(check_count):
         io:format("RESULT: ~w checks in ~.1f ms = ~w checks/sec~n", 
                   [{check_count}, DurationMs, trunc(Rate)])
     '''
-    
+
     full_code = f"""
         cd {project_root} && \\
         erl -noshell -sname flow_bench_$RANDOM@localhost -setcookie iris_secret -eval '
@@ -87,14 +86,14 @@ def run_erlang_benchmark(check_count):
         halt(0).
         '
     """
-    
+
     result = subprocess.run(
         ["bash", "-c", full_code],
         capture_output=True,
         text=True,
         timeout=TIMEOUT
     )
-    
+
     return result.returncode == 0, result.stdout, result.stderr
 
 
@@ -112,22 +111,22 @@ def main():
     print("\n" + "=" * 60)
     print("Flow Controller Scale Test (AUDIT FIX)")
     print("=" * 60)
-    
+
     # Detect smoke vs full profile
     is_smoke = os.environ.get("TEST_PROFILE", "smoke") == "smoke"
     target_rate = SMOKE_TARGET_RATE if is_smoke else FULL_TARGET_RATE
-    
+
     print(f"Profile: {'smoke' if is_smoke else 'full'}")
     print(f"Target: {target_rate:,} admission checks/sec")
     print("")
-    
+
     # Run benchmark with increasing load
     rates = []
-    
+
     for count in TEST_COUNTS:
         print(f"Running benchmark with {count:,} checks...", end=" ", flush=True)
         success, stdout, stderr = run_erlang_benchmark(count)
-        
+
         if success:
             rate = parse_rate(stdout)
             rates.append((count, rate))
@@ -139,23 +138,23 @@ def main():
             if stderr:
                 print(f"  Error: {stderr[:200]}")
             rates.append((count, 0))
-    
+
     # Results
     print("\n" + "=" * 60)
     print("RESULTS")
     print("=" * 60)
-    
+
     for count, rate in rates:
         status = "✓" if rate >= target_rate else "✗"
         print(f"  {status} {count:,} checks: {rate:,} checks/sec")
-    
+
     # Use the largest successful test as the final result
     successful_rates = [r for _, r in rates if r > 0]
     final_rate = max(successful_rates) if successful_rates else 0
-    
+
     print(f"\nPeak Rate: {final_rate:,} checks/sec")
     print(f"Target:    {target_rate:,} checks/sec")
-    
+
     if final_rate >= target_rate:
         print(f"\n✅ PASS: Flow controller can handle {final_rate:,} checks/sec")
         print("   AUDIT FIX verified: ETS-based admission is performant")

@@ -29,9 +29,7 @@ import sys
 import os
 import time
 import random
-import string
 import socket
-import struct
 import subprocess
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))

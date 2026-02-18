@@ -51,7 +51,7 @@ def collect_rfc_requirements() -> set:
 def collect_test_references() -> set:
     """Collect all RFC tags referenced in tests."""
     tags = set()
-    
+
     # Python tests
     if TESTS_DIR.exists():
         for test_file in TESTS_DIR.rglob("*.py"):
@@ -59,7 +59,7 @@ def collect_test_references() -> set:
                 tags.update(extract_rfc_tags(test_file.read_text()))
             except Exception:
                 pass
-    
+
     # Erlang tests
     if TEST_UTILS_DIR.exists():
         for test_file in TEST_UTILS_DIR.glob("*.erl"):
@@ -67,7 +67,7 @@ def collect_test_references() -> set:
                 tags.update(extract_rfc_tags(test_file.read_text()))
             except Exception:
                 pass
-    
+
     return tags
 
 
@@ -93,13 +93,13 @@ def check_rfc_coverage():
     rfc_tags = collect_rfc_requirements()
     test_tags = collect_test_references()
     src_tags = collect_src_references()
-    
+
     all_code_refs = test_tags | src_tags
-    
+
     # Find gaps
     untested = rfc_tags - test_tags  # In RFC but not in tests
     orphaned = all_code_refs - rfc_tags  # In code but not in RFC
-    
+
     return {
         'rfc_requirements': sorted(rfc_tags),
         'test_references': sorted(test_tags),
@@ -130,16 +130,16 @@ def check_diff_compliance(base: str = "HEAD~1"):
         )
         if result.returncode != 0:
             return True, f"Could not get diff: {result.stderr}"
-        
+
         changed = result.stdout.strip().split('\n')
         changed = [f for f in changed if f]  # Filter empty
-        
+
         rfc_changed = any('docs/rfc' in f for f in changed)
         tests_changed = any('tests/' in f or 'test_utils/' in f for f in changed)
-        
+
         if rfc_changed and not tests_changed:
             return False, "RFC docs changed without test updates"
-        
+
         return True, "OK"
     except Exception as e:
         return True, f"Could not check diff: {e}"
@@ -150,29 +150,29 @@ def print_report(report: dict):
     print("\n" + "=" * 60)
     print(" RFC COMPLIANCE REPORT")
     print("=" * 60)
-    
+
     print(f"\nRFC Requirements Found: {len(report['rfc_requirements'])}")
     print(f"Test References Found:  {len(report['test_references'])}")
     print(f"Coverage:               {report['coverage_pct']:.1f}%")
-    
+
     if report['tested']:
         print(f"\n[OK] Tested Requirements ({len(report['tested'])}):")
         for tag in report['tested'][:10]:
             print(f"  - {tag}")
         if len(report['tested']) > 10:
             print(f"  ... and {len(report['tested']) - 10} more")
-    
+
     if report['untested']:
         print(f"\n[WARN] Untested Requirements ({len(report['untested'])}):")
         for tag in report['untested']:
             print(f"  - {tag}")
-    
+
     if report['orphaned']:
         print(f"\n[ERROR] Orphaned References ({len(report['orphaned'])}):")
         print("  (Referenced in code but not defined in RFC docs)")
         for tag in report['orphaned']:
             print(f"  - {tag}")
-    
+
     print("\n" + "=" * 60)
 
 
@@ -182,45 +182,45 @@ def main():
     parser.add_argument("--diff", type=str, help="Check diff against base ref")
     parser.add_argument("--strict", action="store_true", help="Fail on any issues")
     parser.add_argument("--quiet", action="store_true", help="Minimal output")
-    
+
     args = parser.parse_args()
-    
+
     exit_code = 0
-    
+
     if args.check or not args.diff:
         report = check_rfc_coverage()
-        
+
         if not args.quiet:
             print_report(report)
-        
+
         # Orphaned references are errors
         if report['orphaned']:
             if not args.quiet:
                 print("\n[FAIL] Found orphaned RFC references in code")
             exit_code = 1
-        
+
         # Untested requirements are warnings (errors in strict mode)
         if report['untested'] and args.strict:
             if not args.quiet:
                 print("\n[FAIL] Found untested RFC requirements (strict mode)")
             exit_code = 1
-    
+
     if args.diff:
         passed, message = check_diff_compliance(args.diff)
-        
+
         if not args.quiet:
             print(f"\nDiff Compliance: {message}")
-        
+
         if not passed:
             if not args.quiet:
                 print("[WARN] RFC docs changed without test updates")
             # Non-blocking warning (exit 2)
             if exit_code == 0:
                 exit_code = 2
-    
+
     if exit_code == 0 and not args.quiet:
         print("\n[PASS] RFC compliance check passed")
-    
+
     return exit_code
 
 

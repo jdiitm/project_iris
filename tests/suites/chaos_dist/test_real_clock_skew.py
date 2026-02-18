@@ -18,18 +18,13 @@ Tier: 2 (Docker chaos tests)
 """
 
 import sys
-import os
 import time
-import socket
-import ssl
-import struct
 import subprocess
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from tests.suites.chaos_dist.utils import create_tls_socket, tls_connect_and_login
 
 
 def log(msg):
@@ -55,7 +50,7 @@ def inject_faketime(container, offset_seconds):
     Returns True if successful, False otherwise.
     """
     sign = "+" if offset_seconds >= 0 else ""
-    
+
     # Try common libfaketime paths (Alpine vs Debian)
     for lib_path in [
         "/usr/lib/faketime/libfaketime.so.1",
@@ -79,7 +74,7 @@ def inject_faketime(container, offset_seconds):
                     return True, lib_path
         except Exception:
             continue
-    
+
     return False, None
 
 
@@ -97,7 +92,7 @@ def get_hlc_timestamp_direct(container, lib_path=None, offset_seconds=0):
         "io:format(\"HLC:~p~n\", [Int]), "
         "init:stop()."
     )
-    
+
     if lib_path and offset_seconds != 0:
         sign = "+" if offset_seconds >= 0 else ""
         # Use single quotes around -eval arg in sh -c to avoid double-quote conflicts
@@ -116,7 +111,7 @@ def get_hlc_timestamp_direct(container, lib_path=None, offset_seconds=0):
             "erl", "-noshell", "-pa", "/app/ebin",
             "-eval", erl_eval,
         ]
-    
+
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
         stdout = result.stdout.strip()

@@ -24,7 +24,6 @@ import os
 import time
 import uuid
 import socket
-import ssl
 import struct
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))

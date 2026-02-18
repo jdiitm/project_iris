@@ -17,7 +17,6 @@ verifying ordering is preserved.
 import os
 import sys
 import socket
-import ssl
 import struct
 import time
 from pathlib import Path

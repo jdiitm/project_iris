@@ -94,12 +94,10 @@ flush(Buffer) ->
             mnesia:write({user_status, User, Timestamp})
         end, ok, Buffer)
     end,
-    case mnesia:activity(sync_transaction, F) of
-        ok -> ok;
-        {atomic, ok} -> ok;
-        {atomic, Result} -> io:format("Batch Write Result: ~p~n", [Result]);
-        {aborted, Reason} -> io:format("Batch Write Aborted: ~p~n", [Reason]);
-        Err -> io:format("Batch Write Error: ~p~n", [Err])
+    case mnesia:sync_transaction(F) of
+        {atomic, _} -> ok;
+        {aborted, Reason} ->
+            logger:error("Status batch write aborted: ~p", [Reason])
     end.
 
 reset_state(State) ->

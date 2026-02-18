@@ -13,12 +13,10 @@ This test manages its own cluster via ClusterManager for test isolation.
 import socket
 import ssl
 import time
-import threading
-import statistics
 import sys
 import os
 from dataclasses import dataclass
-from typing import List, Tuple
+from typing import List
 from pathlib import Path
 
 # Add project root to path
@@ -61,7 +59,7 @@ class MetricResult:
     unit: str
     threshold: float
     passed: bool
-    
+
     def __str__(self):
         status = "✅" if self.passed else "❌"
         return f"{status} {self.name}: {self.value:.2f} {self.unit} (threshold: {self.threshold} {self.unit})"
@@ -91,46 +89,46 @@ def measure_connection_overhead() -> MetricResult:
     Note: This is approximate - actual measurement needs server-side metrics.
     """
     print(f"\n[1/3] Measuring Connection Overhead ({NUM_CONNECTIONS} connections)...")
-    
+
     connections = []
     errors = 0
-    
+
     start_time = time.time()
     for i in range(NUM_CONNECTIONS):
         try:
             sock = connect_and_login(f"perf_conn_{i}")
             connections.append(sock)
-        except Exception as e:
+        except Exception:
             errors += 1
             if errors > NUM_CONNECTIONS * 0.1:  # >10% failure
                 break
-    
+
     duration = time.time() - start_time
     successful = len(connections)
-    
+
     # Connection rate
     conn_rate = successful / duration if duration > 0 else 0
     print(f"  Opened {successful} connections in {duration:.2f}s ({conn_rate:.0f} conn/s)")
-    
+
     if errors > 0:
         print(f"  ⚠️ {errors} connection errors")
-    
+
     # Hold connections briefly to measure steady state
     time.sleep(1)
-    
+
     # Cleanup
     for sock in connections:
         try:
             sock.close()
         except:
             pass
-    
+
     # Estimate overhead based on connection success rate
     # (Actual memory measurement would need server-side instrumentation)
     estimated_overhead_kb = 10  # Erlang processes are ~2-10KB each
-    
+
     passed = successful >= NUM_CONNECTIONS * 0.9  # 90% success rate
-    
+
     return MetricResult(
         name="Connection Capacity",
         value=successful,
@@ -147,18 +145,18 @@ def measure_throughput() -> MetricResult:
     Method: Send N messages as fast as possible, measure rate.
     """
     print(f"\n[2/3] Measuring Throughput ({NUM_MESSAGES} messages)...")
-    
+
     try:
         sock = connect_and_login("perf_throughput")
     except Exception as e:
         print(f"  ❌ Connection failed: {e}")
         return MetricResult("Throughput", 0, "msg/s", MIN_THROUGHPUT_MSG_SEC, False)
-    
+
     target = b"echo_service"
     sent = 0
-    
+
     start_time = time.time()
-    
+
     for i in range(NUM_MESSAGES):
         try:
             payload = f"throughput_msg_{i}".encode()
@@ -174,17 +172,17 @@ def measure_throughput() -> MetricResult:
         except Exception as e:
             print(f"  Send error at msg {i}: {e}")
             break
-    
+
     duration = time.time() - start_time
     throughput = sent / duration if duration > 0 else 0
-    
+
     print(f"  Sent {sent} messages in {duration:.2f}s")
     print(f"  Throughput: {throughput:.0f} msg/s")
-    
+
     sock.close()
-    
+
     passed = throughput >= MIN_THROUGHPUT_MSG_SEC
-    
+
     return MetricResult(
         name="Throughput",
         value=throughput,
@@ -201,7 +199,7 @@ def measure_latency() -> MetricResult:
     Method: Send message to self, measure time until delivery.
     """
     print(f"\n[3/3] Measuring Latency ({NUM_LATENCY_SAMPLES} samples)...")
-    
+
     try:
         # Connect as both sender and receiver (same user)
         sock = connect_and_login("perf_latency_user")
@@ -209,10 +207,10 @@ def measure_latency() -> MetricResult:
     except Exception as e:
         print(f"  ❌ Connection failed: {e}")
         return MetricResult("P99 Latency", 999, "ms", MAX_P99_LATENCY_MS, False)
-    
+
     latencies = []
     target = b"perf_latency_user"  # Send to self
-    
+
     for i in range(NUM_LATENCY_SAMPLES):
         try:
             payload = f"latency_{i}_{time.time()}".encode()
@@ -222,12 +220,12 @@ def measure_latency() -> MetricResult:
                       len(target).to_bytes(2, 'big') + target +
                       seq_no.to_bytes(8, 'big') +
                       len(payload).to_bytes(2, 'big') + payload)
-            
+
             start = time.time()
             sock.setblocking(True)
             sock.settimeout(1)
             sock.sendall(packet)
-            
+
             # Try to receive (message to self should be delivered)
             try:
                 sock.recv(1024)
@@ -237,29 +235,29 @@ def measure_latency() -> MetricResult:
                 # No echo - server doesn't echo to self, measure send latency only
                 latency_ms = (time.time() - start) * 1000
                 latencies.append(latency_ms)
-                
-        except Exception as e:
+
+        except Exception:
             pass  # Skip failed samples
-        
+
         time.sleep(0.01)  # Small delay between samples
-    
+
     sock.close()
-    
+
     if len(latencies) < NUM_LATENCY_SAMPLES * 0.5:
         print(f"  ⚠️ Only {len(latencies)} successful samples")
         return MetricResult("P99 Latency", 999, "ms", MAX_P99_LATENCY_MS, False)
-    
+
     # Calculate percentiles
     latencies.sort()
     p50 = latencies[len(latencies) // 2]
     p99_idx = int(len(latencies) * 0.99)
     p99 = latencies[min(p99_idx, len(latencies) - 1)]
-    
+
     print(f"  Samples: {len(latencies)}")
     print(f"  P50: {p50:.2f}ms, P99: {p99:.2f}ms")
-    
+
     passed = p99 <= MAX_P99_LATENCY_MS
-    
+
     return MetricResult(
         name="P99 Latency",
         value=p99,
@@ -299,7 +297,7 @@ def main():
     print(f"  Connections: {NUM_CONNECTIONS}")
     print(f"  Throughput: >{MIN_THROUGHPUT_MSG_SEC} msg/s")
     print(f"  P99 Latency: <{MAX_P99_LATENCY_MS}ms")
-    
+
     # Check if server is already running (managed by run_all_tests.sh).
     # If so, skip ClusterManager to avoid killing the existing TLS server.
     if not check_server():
@@ -311,25 +309,25 @@ def main():
             sys.exit(1)
     else:
         print("[SETUP] Server already running — using existing server")
-    
+
     results: List[MetricResult] = []
-    
+
     # Run measurements
     results.append(measure_connection_overhead())
     results.append(measure_throughput())
     results.append(measure_latency())
-    
+
     # Summary
     print("\n" + "=" * 60)
     print("RESULTS")
     print("=" * 60)
-    
+
     all_passed = True
     for result in results:
         print(f"  {result}")
         if not result.passed:
             all_passed = False
-    
+
     if all_passed:
         print("\n✅ All performance metrics within thresholds")
         sys.exit(0)

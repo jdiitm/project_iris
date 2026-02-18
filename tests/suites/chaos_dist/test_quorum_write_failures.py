@@ -23,7 +23,6 @@ Tier: 2 (Docker chaos)
 import os
 import sys
 import socket
-import ssl
 import subprocess
 import time
 import struct

@@ -18,7 +18,6 @@ import os
 import sys
 import time
 import socket
-import ssl
 import struct
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))

@@ -73,7 +73,7 @@ def create_socket(host, port, timeout=10.0):
         return create_tls_socket(host, port, timeout=timeout)
     except Exception:
         pass
-    
+
     # Fallback to non-TLS (for local development without certs)
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     s.settimeout(timeout)
@@ -102,21 +102,21 @@ def hotspot_worker(idx, duration):
         s = create_socket(HOST, PORT, timeout=10)
         s.sendall(packet_login(f"fan_{idx}"))
         resp = s.recv(1024)
-        
+
         if b"LOGIN_OK" not in resp:
             with stats_lock:
                 stats["errors"] += 1
                 stats["error_details"].append(f"Worker {idx}: login failed")
             s.close()
             return
-        
+
         end_time = time.time() + duration
         while time.time() < end_time:
             start = time.time()
             s.sendall(packet_get_status(TARGET_HOTSPOT))
             resp = s.recv(1024)
             lat = (time.time() - start) * 1000
-            
+
             if len(resp) > 0 and resp[0] == 6:
                 with stats_lock:
                     stats["hotspot_reqs"] += 1
@@ -127,7 +127,7 @@ def hotspot_worker(idx, duration):
                     stats["error_details"].append(f"Worker {idx}: bad response opcode")
                 break
         s.close()
-    except socket.timeout as e:
+    except socket.timeout:
         with stats_lock:
             stats["errors"] += 1
             stats["error_details"].append(f"Worker {idx}: socket timeout")
@@ -144,29 +144,29 @@ def global_worker(idx, duration, hotspot_ratio=0.10):
     """Worker that mixes hotspot and random queries."""
     # Per-worker random instance for thread safety
     worker_random = random.Random(TEST_SEED + idx)
-    
+
     try:
         s = create_socket(HOST, PORT, timeout=10)
         s.sendall(packet_login(f"user_{idx}"))
         resp = s.recv(1024)
-        
+
         if b"LOGIN_OK" not in resp:
             with stats_lock:
                 stats["errors"] += 1
                 stats["error_details"].append(f"Worker {idx}: login failed")
             s.close()
             return
-        
+
         end_time = time.time() + duration
         while time.time() < end_time:
             is_hotspot = worker_random.random() < hotspot_ratio
             target = TARGET_HOTSPOT if is_hotspot else f"friend_{worker_random.randint(0, 1000000)}"
-            
+
             start = time.time()
             s.sendall(packet_get_status(target))
             resp = s.recv(1024)
             lat = (time.time() - start) * 1000
-            
+
             if len(resp) > 0:
                 with stats_lock:
                     if is_hotspot:
@@ -181,7 +181,7 @@ def global_worker(idx, duration, hotspot_ratio=0.10):
                     stats["error_details"].append(f"Worker {idx}: empty response")
                 break
         s.close()
-    except socket.timeout as e:
+    except socket.timeout:
         with stats_lock:
             stats["errors"] += 1
             stats["error_details"].append(f"Worker {idx}: socket timeout")
@@ -207,9 +207,9 @@ def run_test(args) -> int:
     """
     log(f"--- PRESENCE STRESS TEST ({args.mode.upper()}) ---")
     log(f"Workers: {args.workers}, Duration: {args.duration}s, Seed: {TEST_SEED}")
-    
+
     passed = True
-    
+
     # Check cluster is running
     try:
         test_sock = create_socket(HOST, PORT, timeout=5)
@@ -217,9 +217,9 @@ def run_test(args) -> int:
     except Exception as e:
         log(f"FAIL: Could not connect to server - {e}")
         return 1
-    
+
     log("PASS: Server is running")
-    
+
     # Login the hotspot user
     try:
         s = create_socket(HOST, PORT, timeout=10)
@@ -233,44 +233,44 @@ def run_test(args) -> int:
     except Exception as e:
         log(f"FAIL: Hotspot user login error - {e}")
         return 1
-    
+
     # Select worker function
     if args.mode == "hotspot":
         worker_fn = lambda idx: hotspot_worker(idx, args.duration)
     else:
         worker_fn = lambda idx: global_worker(idx, args.duration, args.hotspot_ratio)
-    
+
     # Start workers
     threads = []
     start_global = time.time()
-    
+
     for i in range(args.workers):
         t = threading.Thread(target=worker_fn, args=(i,))
         t.daemon = True
         t.start()
         threads.append(t)
-    
+
     for t in threads:
         t.join()
-    
+
     total_time = time.time() - start_global
     s.close()
-    
+
     # Calculate results
     h_reqs = stats["hotspot_reqs"]
     r_reqs = stats["random_reqs"]
     total_reqs = h_reqs + r_reqs
     errors = stats["errors"]
     total_attempts = total_reqs + errors
-    
+
     h_avg = statistics.mean(stats["hotspot_lats"]) if stats["hotspot_lats"] else 0
     r_avg = statistics.mean(stats["random_lats"]) if stats["random_lats"] else 0
-    
+
     h_p99 = 0
     if stats["hotspot_lats"]:
         sorted_lats = sorted(stats["hotspot_lats"])
         h_p99 = sorted_lats[int(0.99 * len(sorted_lats))] if len(sorted_lats) > 0 else 0
-    
+
     log("\n--- METRICS ---")
     log(f"Total Requests:     {total_reqs}")
     log(f"Duration:           {total_time:.2f}s")
@@ -279,25 +279,25 @@ def run_test(args) -> int:
     log(f"Hotspot Requests:   {h_reqs} (avg: {h_avg:.2f}ms, p99: {h_p99:.2f}ms)")
     if args.mode == "global":
         log(f"Random Requests:    {r_reqs} (avg: {r_avg:.2f}ms)")
-    
+
     # Show error details (first 5)
     if stats["error_details"]:
         log("\nError details (first 5):")
         for detail in stats["error_details"][:5]:
             log(f"  - {detail}")
-    
+
     # ================================================================
     # ASSERTIONS
     # ================================================================
     log("\n=== ASSERTIONS ===")
-    
+
     # Assertion 1: Total requests > 0
     if total_reqs == 0:
         log("FAIL: No requests completed successfully")
         passed = False
     else:
         log(f"PASS: {total_reqs} requests completed")
-    
+
     # Assertion 2: Minimum throughput (per worker)
     min_expected = args.workers * MIN_OPS_PER_WORKER
     if total_reqs < min_expected:
@@ -305,7 +305,7 @@ def run_test(args) -> int:
         passed = False
     else:
         log(f"PASS: Throughput {total_reqs} >= {min_expected} minimum")
-    
+
     # Assertion 3: Error rate
     error_rate = errors / total_attempts if total_attempts > 0 else 0
     if error_rate > MAX_ERROR_RATE:
@@ -313,14 +313,14 @@ def run_test(args) -> int:
         passed = False
     else:
         log(f"PASS: Error rate {error_rate:.1%} <= {MAX_ERROR_RATE:.0%}")
-    
+
     # Assertion 4: Hotspot latency P99
     if h_p99 > MAX_HOTSPOT_P99_MS:
         log(f"FAIL: Hotspot P99 latency {h_p99:.1f}ms > {MAX_HOTSPOT_P99_MS}ms threshold")
         passed = False
     else:
         log(f"PASS: Hotspot P99 latency {h_p99:.1f}ms <= {MAX_HOTSPOT_P99_MS}ms")
-    
+
     # Final result
     log("\n=== RESULT ===")
     if passed:
@@ -340,11 +340,11 @@ def main() -> int:
                         help='Test mode')
     parser.add_argument('--workers', type=int, default=10, help='Number of worker threads')
     parser.add_argument('--duration', type=int, default=15, help='Test duration (seconds)')
-    parser.add_argument('--hotspot-ratio', type=float, default=0.10, 
+    parser.add_argument('--hotspot-ratio', type=float, default=0.10,
                         help='Ratio of hotspot queries in global mode')
     parser.add_argument('--skip-restart', action='store_true', help='Skip cluster restart (ignored)')
     args = parser.parse_args()
-    
+
     # If server is already running (e.g. started by run_all_tests.sh), use it directly.
     # ClusterManager.force_stop() would kill the externally-managed TLS server.
     try:

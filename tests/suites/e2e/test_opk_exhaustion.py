@@ -20,7 +20,6 @@ Target: Graceful degradation to SPK-only mode
 import subprocess
 import sys
 import os
-import time
 
 # Add project root to sys.path
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -35,7 +34,7 @@ def run_erlang_command(code, timeout=TIMEOUT):
     """Run Erlang code and return output."""
     # Write code to temp file to avoid shell escaping issues
     import tempfile
-    
+
     erlang_code = '''
 try
     application:ensure_all_started(mnesia),
@@ -47,17 +46,17 @@ catch
 end,
 halt(0).
 '''
-    
+
     # Write to temp file
     with tempfile.NamedTemporaryFile(mode='w', suffix='.erl', delete=False) as f:
         f.write(erlang_code)
         temp_file = f.name
-    
+
     try:
         # Run erl with -s option or eval from file
         result = subprocess.run(
-            ["erl", "-pa", "ebin", "-noshell", 
-             "-sname", f"test_opk_{os.getpid()}", 
+            ["erl", "-pa", "ebin", "-noshell",
+             "-sname", f"test_opk_{os.getpid()}",
              "-setcookie", "iris_secret",
              "-eval", erlang_code],
             capture_output=True,
@@ -74,7 +73,7 @@ halt(0).
 def test_low_opk_alert():
     """Test that low OPK pool triggers alert."""
     print("\n1. Testing low OPK pool alert (NFR-24)...")
-    
+
     code = '''
         UserId = <<"test_low_opk_user">>,
         
@@ -113,9 +112,9 @@ def test_low_opk_alert():
                 io:format("LOW_OPK_UNEXPECTED: ~p remaining~n", [Remaining])
         end
     '''
-    
+
     success, stdout, stderr = run_erlang_command(code)
-    
+
     if success and "LOW_OPK_OK" in stdout:
         print("   ✓ Low OPK alert threshold working")
         return True
@@ -128,7 +127,7 @@ def test_low_opk_alert():
 def test_spk_fallback_mode():
     """Test SPK-only fallback when OPKs exhausted."""
     print("\n2. Testing SPK-only fallback mode...")
-    
+
     code = '''
         UserId = <<"test_spk_fallback_user">>,
         
@@ -185,9 +184,9 @@ def test_spk_fallback_mode():
         %% Cleanup
         iris_keys:delete_user_keys(UserId)
     '''
-    
+
     success, stdout, stderr = run_erlang_command(code)
-    
+
     if success and "SPK_FALLBACK_OK" in stdout:
         print("   ✓ SPK fallback mode working")
         return True
@@ -200,7 +199,7 @@ def test_spk_fallback_mode():
 def test_x3dh_without_opk():
     """Test that X3DH handshake works without OPK."""
     print("\n3. Testing X3DH without OPK (SPK-only mode)...")
-    
+
     code = '''
         %% In SPK-only mode, X3DH still works but with reduced forward secrecy
         %% The handshake uses: DH1 = DH(IK_A, SPK_B), DH2 = DH(EK_A, IK_B), DH3 = DH(EK_A, SPK_B)
@@ -237,9 +236,9 @@ def test_x3dh_without_opk():
                 io:format("X3DH_SPK_ONLY_FAIL: Secrets dont match~n")
         end
     '''
-    
+
     success, stdout, stderr = run_erlang_command(code)
-    
+
     if success and "X3DH_SPK_ONLY_OK" in stdout:
         print("   ✓ X3DH works in SPK-only mode")
         return True
@@ -252,7 +251,7 @@ def test_x3dh_without_opk():
 def test_opk_refill():
     """Test OPK pool refill functionality."""
     print("\n4. Testing OPK pool refill...")
-    
+
     code = '''
         UserId = <<"test_refill_user">>,
         
@@ -295,9 +294,9 @@ def test_opk_refill():
         
         iris_keys:delete_user_keys(UserId)
     '''
-    
+
     success, stdout, stderr = run_erlang_command(code)
-    
+
     if success and "REFILL_OK" in stdout:
         print("   ✓ OPK pool refill working")
         return True
@@ -323,7 +322,7 @@ def test_spk_fallback_full_conversation():
     5. Verify all decrypt correctly
     """
     print("\n5. Testing full conversation in SPK-only mode (degraded-but-functional)...")
-    
+
     code = '''
         AliceId = <<"alice_spk_only_test">>,
         BobId = <<"bob_spk_only_test">>,
@@ -436,9 +435,9 @@ def test_spk_fallback_full_conversation():
         iris_keys:delete_user_keys(AliceId),
         iris_keys:delete_user_keys(BobId)
     '''
-    
+
     success, stdout, stderr = run_erlang_command(code, timeout=60)
-    
+
     if success and "SPK_FALLBACK_CONVERSATION_OK" in stdout:
         print("   ✓ Full conversation works in SPK-only degraded mode")
         print("   ✓ NFR-24 degraded-but-functional: VERIFIED")
@@ -457,29 +456,29 @@ def main():
     print("=" * 60)
     print("Target: Graceful fallback to SPK-only X3DH")
     print("")
-    
+
     results = []
-    
+
     results.append(("Low OPK alert", test_low_opk_alert()))
     results.append(("SPK fallback mode", test_spk_fallback_mode()))
     results.append(("X3DH without OPK", test_x3dh_without_opk()))
     results.append(("OPK refill", test_opk_refill()))
     results.append(("SPK fallback full conversation", test_spk_fallback_full_conversation()))
-    
+
     # Summary
     print("\n" + "=" * 60)
     print("RESULTS")
     print("=" * 60)
-    
+
     passed = sum(1 for _, r in results if r)
     total = len(results)
-    
+
     for name, result in results:
         status = "✓ PASS" if result else "✗ FAIL"
         print(f"  {status}: {name}")
-    
+
     print(f"\n  Total: {passed}/{total} tests passed")
-    
+
     if passed == total:
         print("\n✅ PASS: OPK exhaustion handling verified")
         print("   NFR-24: Low OPK alert and graceful fallback working")

@@ -212,8 +212,7 @@ repair_async(Table, Key, Value, FailedNodes) ->
 do_replica_write(Node, Table, Key, Value, _Timeout) when Node == node() ->
     %% Local write - use Mnesia directly
     F = fun() -> mnesia:write({Table, Key, Value}) end,
-    try mnesia:activity(sync_transaction, F) of
-        ok -> {ok, Node};
+    try mnesia:sync_transaction(F) of
         {atomic, _} -> {ok, Node};
         {aborted, Reason} -> {error, Node, Reason}
     catch
@@ -233,7 +232,10 @@ do_replica_write(Node, Table, Key, Value, Timeout) ->
 %% Called via RPC on remote nodes
 local_sync_write(Table, Key, Value) ->
     F = fun() -> mnesia:write({Table, Key, Value}) end,
-    mnesia:activity(sync_transaction, F).
+    case mnesia:sync_transaction(F) of
+        {atomic, ok} -> ok;
+        {aborted, Reason} -> {error, Reason}
+    end.
 
 %% =============================================================================
 %% Internal: Replica Read

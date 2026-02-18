@@ -17,7 +17,6 @@ import os
 import sys
 import time
 import socket
-import ssl
 import struct
 import json
 import hmac
@@ -101,7 +100,7 @@ def connect_and_auth(user, token):
 
         tls_sock.close()
         return resp
-    except Exception as e:
+    except Exception:
         return None
 
 

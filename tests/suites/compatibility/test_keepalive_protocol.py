@@ -17,7 +17,6 @@ Pattern: follows test_protocol_versions.py using raw TLS socket.
 import sys
 import os
 import socket
-import ssl
 import struct
 import time
 
@@ -25,7 +24,6 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(o
 sys.path.insert(0, PROJECT_ROOT)
 
 from pathlib import Path
-from tests.utilities.iris_client import IrisClient
 from tests.utilities.tls_connection import get_verified_ssl_context
 
 CA_CERT = Path(PROJECT_ROOT) / "certs" / "ca.pem"

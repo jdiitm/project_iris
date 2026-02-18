@@ -18,7 +18,6 @@ Pattern: follows test_resilience.py using raw TLS socket and IrisClient.
 import sys
 import os
 import socket
-import ssl
 import struct
 import time
 import uuid

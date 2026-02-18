@@ -19,7 +19,6 @@ Pattern: follows test_protocol_versions.py using raw TLS socket.
 import sys
 import os
 import socket
-import ssl
 import struct
 import time
 

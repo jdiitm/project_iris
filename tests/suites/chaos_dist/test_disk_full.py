@@ -31,7 +31,6 @@ import time
 import subprocess
 import sys
 import os
-import struct
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
@@ -116,12 +115,12 @@ def check_server_health(max_retries=3, retry_delay=5):
                     time.sleep(retry_delay)
                     continue
                 return False
-            
+
             # Login successful - server is healthy
             sock.close()
             log(f"  Server health check passed (attempt {attempt + 1})")
             return True
-            
+
         except Exception as e:
             if attempt < max_retries - 1:
                 log(f"  Health check attempt {attempt + 1} failed ({e}), retrying in {retry_delay}s...")
@@ -129,7 +128,7 @@ def check_server_health(max_retries=3, retry_delay=5):
             else:
                 log(f"  Health check failed after {max_retries} attempts: {e}")
                 return False
-    
+
     return False
 
 
@@ -167,12 +166,12 @@ def get_container_disk_usage(container_name):
 def fill_disk(container_name, fill_file="/var/lib/mnesia/fillfile"):
     """Fill disk in container to trigger ENOSPC."""
     log(f"  Filling disk in {container_name}...")
-    
+
     # Get available space first
     usage = get_container_disk_usage(container_name)
     if usage:
         log(f"  Current usage: {usage['use_percent']} ({usage['available']} available)")
-    
+
     # Create large file to fill disk (use dd for reliability)
     # Fill in chunks to avoid timeout
     try:
@@ -184,7 +183,7 @@ def fill_disk(container_name, fill_file="/var/lib/mnesia/fillfile"):
             text=True,
             timeout=120
         )
-        
+
         # Then try to fill remaining space with smaller writes
         for _ in range(10):
             subprocess.run(
@@ -193,7 +192,7 @@ def fill_disk(container_name, fill_file="/var/lib/mnesia/fillfile"):
                 capture_output=True,
                 timeout=30
             )
-        
+
         # Verify disk is nearly full
         usage = get_container_disk_usage(container_name)
         if usage:
@@ -206,7 +205,7 @@ def fill_disk(container_name, fill_file="/var/lib/mnesia/fillfile"):
                 log(f"  Warning: Only filled to {pct}%")
                 return True  # Continue test anyway
         return True
-        
+
     except subprocess.TimeoutExpired:
         log("  Fill operation timed out")
         return False
@@ -224,12 +223,12 @@ def free_disk(container_name, fill_file="/var/lib/mnesia/fillfile"):
             capture_output=True,
             timeout=30
         )
-        
+
         # Verify space freed
         usage = get_container_disk_usage(container_name)
         if usage:
             log(f"  After cleanup: {usage['use_percent']} ({usage['available']} available)")
-        
+
         return True
     except Exception as e:
         log(f"  Error freeing disk: {e}")
@@ -243,7 +242,7 @@ def free_disk(container_name, fill_file="/var/lib/mnesia/fillfile"):
 def connect_tls(max_retries=5, retry_delay=2.0):
     """Create TLS connection to Iris edge with retry logic."""
     context = get_verified_ssl_context()
-    
+
     last_err = None
     for attempt in range(max_retries):
         try:
@@ -285,15 +284,15 @@ def send_message(sock, target, message):
     """
     target_bytes = target.encode()
     msg_bytes = message.encode()
-    
+
     _seq_counter[0] += 1
     seq_no = _seq_counter[0]
-    
+
     packet = (bytes([0x07]) +
               len(target_bytes).to_bytes(2, 'big') + target_bytes +
               seq_no.to_bytes(8, 'big') +
               len(msg_bytes).to_bytes(2, 'big') + msg_bytes)
-    
+
     try:
         sock.sendall(packet)
         return True, b'sent'  # Fire-and-forget - success if send completes
@@ -306,7 +305,7 @@ def receive_messages(sock, timeout=5):
     messages = []
     sock.settimeout(1.0)
     end_time = time.time() + timeout
-    
+
     while time.time() < end_time:
         try:
             data = sock.recv(4096)
@@ -318,7 +317,7 @@ def receive_messages(sock, timeout=5):
             continue
         except Exception:
             break
-    
+
     return messages
 
 
@@ -334,71 +333,71 @@ def test_disk_full_graceful_rejection():
     Expected behavior: Graceful rejection (error response), NOT crash.
     """
     log("\n=== Test: Disk Full Graceful Rejection ===")
-    
+
     # MANDATORY: Docker must be available
     if not check_docker_available():
-        log_test("Disk full rejection", False, 
+        log_test("Disk full rejection", False,
                 "FAIL: Docker not available - this test requires Docker")
         return False
-    
+
     if not check_container_running(CONTAINER_NAME):
         log_test("Disk full rejection", False,
                 f"FAIL: Container {CONTAINER_NAME} not running - run 'make cluster-up'")
         return False
-    
+
     test_id = int(time.time())
     sender_user = f"diskfull_sender_{test_id}"
     receiver_user = f"diskfull_receiver_{test_id}"
-    
+
     try:
         # Step 1: Establish baseline - send message before filling disk
         log("  1. Establishing baseline (message before disk full)...")
-        
+
         sock = connect_tls()
         if not login(sock, sender_user):
             log_test("Disk full rejection", False, "Login failed")
             return False
-        
+
         baseline_msg = f"baseline_message_{test_id}"
         ack_received, response = send_message(sock, receiver_user, baseline_msg)
-        
+
         if not ack_received:
             log_test("Disk full rejection", False, "Baseline message failed - server issue")
             sock.close()
             return False
-        
+
         log(f"     Baseline message sent successfully")
         sock.close()
-        
+
         # Step 2: Fill disk
         log("  2. Filling disk to trigger ENOSPC...")
         if not fill_disk(CONTAINER_NAME):
             log_test("Disk full rejection", False, "Failed to fill disk")
             return False
-        
+
         # Give system time to recognize disk state
         time.sleep(2)
-        
+
         # Step 3: Attempt to send message when disk is full
         log("  3. Attempting message send with full disk...")
-        
+
         try:
             sock2 = connect_tls()
             if not login(sock2, sender_user):
                 log("     Connection/login still works (good)")
-            
+
             diskfull_msg = f"diskfull_message_{test_id}"
             ack_received2, response2 = send_message(sock2, receiver_user, diskfull_msg)
-            
+
             # Expected: Either error response OR connection remains stable
             # NOT expected: Server crash, connection drop without response
-            
+
             if ack_received2:
                 log("     Message accepted (server may buffer or replica has space)")
                 # This is acceptable if replicas have space
             else:
                 log("     Message rejected (expected under disk full)")
-            
+
             # Key assertion: Server didn't crash - we can still communicate
             try:
                 test_packet = bytes([0x04]) + b"test"  # Status query
@@ -408,41 +407,41 @@ def test_disk_full_graceful_rejection():
                 log("     Server still responsive after disk-full write attempt")
             except Exception as e:
                 log(f"     Server responsiveness check: {e}")
-            
+
             sock2.close()
-            
+
         except (socket.error, ssl.SSLError) as e:
             log(f"     Connection error during disk-full test: {e}")
             # This might be acceptable if server is rejecting connections
-        
+
         # Step 4: Verify existing data not corrupted
         log("  4. Verifying existing data integrity...")
-        
+
         # Re-establish connection
         sock3 = connect_tls()
         if login(sock3, receiver_user):
             # Try to receive the baseline message
             messages = receive_messages(sock3, timeout=5)
-            
+
             baseline_found = any(baseline_msg.encode() in msg for msg in messages)
             if baseline_found:
                 log("     Baseline message intact (data not corrupted)")
             else:
                 log("     Baseline message not found in immediate receive")
                 # This might be timing - not necessarily corruption
-        
+
         sock3.close()
-        
-        log_test("Disk full rejection", True, 
+
+        log_test("Disk full rejection", True,
                 "Server handled disk-full gracefully without crash")
         return True
-        
+
     except Exception as e:
         log_test("Disk full rejection", False, f"Exception: {e}")
         import traceback
         traceback.print_exc()
         return False
-        
+
     finally:
         # Always cleanup - free disk space
         free_disk(CONTAINER_NAME)
@@ -455,67 +454,67 @@ def test_disk_full_recovery():
     Expected: After freeing space, normal operations resume.
     """
     log("\n=== Test: Disk Full Recovery ===")
-    
+
     if not check_docker_available():
         log_test("Disk full recovery", False,
                 "FAIL: Docker not available - this test requires Docker")
         return False
-    
+
     if not check_container_running(CONTAINER_NAME):
         log_test("Disk full recovery", False,
                 f"FAIL: Container {CONTAINER_NAME} not running")
         return False
-    
+
     test_id = int(time.time())
     sender_user = f"recovery_sender_{test_id}"
     receiver_user = f"recovery_receiver_{test_id}"
-    
+
     try:
         # Step 1: Fill disk
         log("  1. Filling disk...")
         if not fill_disk(CONTAINER_NAME):
             log_test("Disk full recovery", False, "Failed to fill disk")
             return False
-        
+
         time.sleep(2)
-        
+
         # Step 2: Free disk
         log("  2. Freeing disk space...")
         if not free_disk(CONTAINER_NAME):
             log_test("Disk full recovery", False, "Failed to free disk")
             return False
-        
+
         # Give system time to recover
         time.sleep(3)
-        
+
         # Step 3: Verify normal operation
         log("  3. Verifying normal operation after recovery...")
-        
+
         sock = connect_tls()
         if not login(sock, sender_user):
             log_test("Disk full recovery", False, "Login failed after recovery")
             return False
-        
+
         recovery_msg = f"recovery_test_message_{test_id}"
         ack_received, response = send_message(sock, receiver_user, recovery_msg)
-        
+
         if not ack_received:
-            log_test("Disk full recovery", False, 
+            log_test("Disk full recovery", False,
                     "Message send failed after disk recovery")
             sock.close()
             return False
-        
+
         log("     Message sent successfully after recovery")
         sock.close()
-        
+
         log_test("Disk full recovery", True,
                 "System recovered and accepts writes after disk freed")
         return True
-        
+
     except Exception as e:
         log_test("Disk full recovery", False, f"Exception: {e}")
         return False
-        
+
     finally:
         free_disk(CONTAINER_NAME)
 
@@ -527,23 +526,23 @@ def test_disk_full_no_corruption():
     RFC: No data corruption under any failure mode.
     """
     log("\n=== Test: Disk Full No Corruption ===")
-    
+
     if not check_docker_available():
         log_test("Disk full no corruption", False,
                 "FAIL: Docker not available - this test requires Docker")
         return False
-    
+
     if not check_container_running(CONTAINER_NAME):
         log_test("Disk full no corruption", False,
                 f"FAIL: Container {CONTAINER_NAME} not running")
         return False
-    
+
     test_id = int(time.time())
-    
+
     try:
         # Step 1: Store known data before disk full
         log("  1. Storing test data before disk full...")
-        
+
         # Use Erlang to directly verify Mnesia state
         verify_cmd = f'''
         docker exec {CONTAINER_NAME} erl -pa /app/ebin -noshell -eval '
@@ -562,33 +561,33 @@ def test_disk_full_no_corruption():
             halt(0).
         ' 2>/dev/null
         '''
-        
+
         result = subprocess.run(
             ["bash", "-c", verify_cmd],
             capture_output=True,
             text=True,
             timeout=30
         )
-        
+
         if "DATA_STORED_OK" not in result.stdout and "STORE_ERROR" not in result.stdout:
             log("     Note: Direct Mnesia test not available, using protocol test")
-        
+
         # Also store via protocol
         sock = connect_tls()
         sender = f"corruption_sender_{test_id}"
         receiver = f"corruption_receiver_{test_id}"
-        
+
         if login(sock, sender):
             test_data = f"CORRUPTION_CHECK_DATA_{test_id}"
             send_message(sock, receiver, test_data)
             log(f"     Stored via protocol: {test_data}")
         sock.close()
-        
+
         # Step 2: Fill disk
         log("  2. Filling disk...")
         fill_disk(CONTAINER_NAME)
         time.sleep(2)
-        
+
         # Step 3: Attempt writes (may fail)
         log("  3. Attempting writes under disk-full (may fail)...")
         try:
@@ -599,23 +598,23 @@ def test_disk_full_no_corruption():
             sock2.close()
         except Exception:
             pass  # Expected to potentially fail
-        
+
         # Step 4: Free disk and verify original data
         log("  4. Freeing disk and verifying data integrity...")
         free_disk(CONTAINER_NAME)
         time.sleep(2)
-        
+
         # Verify via protocol
         sock3 = connect_tls()
         if login(sock3, receiver):
             messages = receive_messages(sock3, timeout=5)
-            
+
             # Check if our original test data is intact
             original_found = any(
-                f"CORRUPTION_CHECK_DATA_{test_id}".encode() in msg 
+                f"CORRUPTION_CHECK_DATA_{test_id}".encode() in msg
                 for msg in messages
             )
-            
+
             if original_found:
                 log("     Original data verified intact")
                 log_test("Disk full no corruption", True,
@@ -629,16 +628,16 @@ def test_disk_full_no_corruption():
                         "No corruption detected (data may need sync)")
                 sock3.close()
                 return True
-        
+
         sock3.close()
         log_test("Disk full no corruption", True,
                 "Disk-full event completed without detected corruption")
         return True
-        
+
     except Exception as e:
         log_test("Disk full no corruption", False, f"Exception: {e}")
         return False
-        
+
     finally:
         free_disk(CONTAINER_NAME)
 
@@ -654,51 +653,51 @@ def main():
     log("\nThis test validates graceful handling of storage exhaustion.")
     log("REQUIRES: Docker cluster running")
     log("")
-    
+
     # Pre-flight checks - FAIL if infrastructure missing
     if not check_docker_available():
         log("FAIL: Docker not available")
         log("This test REQUIRES Docker - no fallback mode available")
         sys.exit(1)
-    
+
     if not check_container_running(CONTAINER_NAME):
         log(f"FAIL: Container {CONTAINER_NAME} not running")
         log("Run 'make cluster-up' to start the Docker cluster")
         sys.exit(1)
-    
+
     log(f"Container {CONTAINER_NAME}: Running")
     usage = get_container_disk_usage(CONTAINER_NAME)
     if usage:
         log(f"Initial disk usage: {usage['use_percent']}")
-    
+
     # Verify server is healthy before running chaos tests
     log("\nVerifying server health before chaos tests...")
     if not check_server_health(max_retries=5, retry_delay=10):
         log("FAIL: Server not responding - cluster may not be fully initialized")
         log("Wait for cluster to stabilize or check container logs")
         sys.exit(1)
-    
+
     # Run tests
     test_disk_full_graceful_rejection()
     test_disk_full_recovery()
     test_disk_full_no_corruption()
-    
+
     # Summary
     log("\n" + "=" * 60)
     log("SUMMARY")
     log("=" * 60)
-    
+
     passed = sum(1 for _, p, _ in results if p)
     failed = sum(1 for _, p, _ in results if not p)
-    
+
     for name, p, msg in results:
         status = "PASS" if p else "FAIL"
         log(f"  [{status}] {name}")
-    
+
     log(f"\nTotal: {len(results)} tests")
     log(f"Passed: {passed}")
     log(f"Failed: {failed}")
-    
+
     if failed > 0:
         log("\nFAIL: Disk-full chaos tests FAILED")
         sys.exit(1)

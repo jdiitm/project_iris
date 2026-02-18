@@ -113,12 +113,9 @@ do_put(guaranteed, Table, Key, Value, Opts) ->
     Parent = self(),
     Ref = make_ref(),
     Pid = spawn(fun() ->
-        Result = try
-            case mnesia:activity(sync_transaction, F) of
-                ok -> ok;
-                {atomic, _} -> ok;
-                {aborted, Reason} -> {error, Reason}
-            end
+        Result = try mnesia:sync_transaction(F) of
+            {atomic, _} -> ok;
+            {aborted, Reason} -> {error, Reason}
         catch
             Class:Error -> {error, {Class, Error}}
         end,
@@ -234,8 +231,7 @@ delete(Table, Key, Opts) ->
 
 do_delete(guaranteed, Table, Key) ->
     F = fun() -> mnesia:delete({Table, Key}) end,
-    case mnesia:activity(sync_transaction, F) of
-        ok -> ok;
+    case mnesia:sync_transaction(F) of
         {atomic, _} -> ok;
         {aborted, Reason} -> {error, Reason}
     end;
@@ -283,8 +279,7 @@ do_batch_put(guaranteed, Table, KeyValuePairs) ->
             mnesia:write({Table, Key, Value})
         end, KeyValuePairs)
     end,
-    case mnesia:activity(sync_transaction, F) of
-        ok -> ok;
+    case mnesia:sync_transaction(F) of
         {atomic, _} -> ok;
         {aborted, Reason} -> {error, Reason}
     end;
@@ -398,8 +393,7 @@ append_inbox(UserID, Message, Opts) ->
 
 do_append_inbox(guaranteed, Record) ->
     F = fun() -> mnesia:write(Record) end,
-    case mnesia:activity(sync_transaction, F) of
-        ok -> ok;
+    case mnesia:sync_transaction(F) of
         {atomic, _} -> ok;
         {aborted, Reason} -> 
             logger:error("Inbox append failed: ~p", [Reason]),
@@ -463,9 +457,8 @@ do_scan_inbox(transaction, UserID, AfterOffset, Limit, IncludeMetadata) ->
         EndUserID = next_user_id(UserID),
         collect_inbox_messages_tx(StartKey, EndUserID, Limit, IncludeMetadata, [])
     end,
-    case mnesia:activity(transaction, F) of
+    case mnesia:transaction(F) of
         {atomic, Messages} -> {ok, Messages};
-        Messages when is_list(Messages) -> {ok, Messages};
         {aborted, Reason} -> {error, Reason}
     end.
 

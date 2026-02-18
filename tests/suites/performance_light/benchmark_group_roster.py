@@ -21,7 +21,6 @@ import os
 import sys
 import time
 import socket
-import ssl
 import struct
 import statistics
 import uuid
@@ -30,7 +29,6 @@ from pathlib import Path
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 sys.path.insert(0, PROJECT_ROOT)
 
-from tests.utilities import IrisClient
 from tests.utilities.tls_connection import get_verified_ssl_context
 
 # Configuration

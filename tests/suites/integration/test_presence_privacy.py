@@ -17,9 +17,6 @@ Pattern: follows test_auth_flow.py using IrisClient.
 
 import sys
 import os
-import socket
-import ssl
-import struct
 import time
 import uuid
 

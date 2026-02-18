@@ -18,14 +18,12 @@ REQUIRES: Docker global cluster running (docker/global-cluster/)
 """
 
 import socket
-import ssl
 import time
 import statistics
 import sys
 import os
 import threading
 import subprocess
-import shutil
 from pathlib import Path
 
 # Add project root to sys.path
@@ -43,7 +41,7 @@ CA_CERT = Path(project_root) / "certs" / "ca.pem"
 def create_tls_socket(host: str, port: int, timeout: int = 10) -> socket.socket:
     """Create a TLS-wrapped socket connection."""
     context = get_verified_ssl_context()
-    
+
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.settimeout(timeout)
     tls_sock = context.wrap_socket(sock, server_hostname=host)
@@ -103,11 +101,11 @@ def check_cluster_running():
 def start_docker_cluster():
     """Attempt to start the Docker global cluster."""
     print("[Docker] Attempting to start global cluster...")
-    
+
     if not os.path.exists(DOCKER_COMPOSE_FILE):
         print(f"[Docker] Compose file not found: {DOCKER_COMPOSE_FILE}")
         return False
-    
+
     try:
         # Stop any existing cluster first
         subprocess.run(
@@ -116,7 +114,7 @@ def start_docker_cluster():
             capture_output=True,
             timeout=60
         )
-        
+
         # Start the cluster
         result = subprocess.run(
             ["docker", "compose", "-f", DOCKER_COMPOSE_FILE, "up", "-d"],
@@ -125,13 +123,13 @@ def start_docker_cluster():
             text=True,
             timeout=180
         )
-        
+
         if result.returncode != 0:
             print(f"[Docker] Failed to start: {result.stderr}")
             return False
-        
+
         print("[Docker] Cluster starting, waiting for edges...")
-        
+
         # Wait for edges to come up
         for i in range(60):  # 60 seconds max
             if check_cluster_running():
@@ -143,7 +141,7 @@ def start_docker_cluster():
         else:
             print("[Docker] Timeout waiting for cluster containers")
             return False
-        
+
         # Initialize cross-region replication (calls init_cluster.sh)
         # Use reinit_cluster_replication which has retry logic
         print("[Docker] Initializing cross-region replication...")
@@ -151,10 +149,10 @@ def start_docker_cluster():
             print("[Docker] Replication initialized successfully!")
         else:
             print("[Docker] Initial replication setup had issues, will retry during test...")
-        
+
         print("[Docker] Cluster is ready!")
         return True
-        
+
     except subprocess.TimeoutExpired:
         print("[Docker] Timeout starting cluster")
         return False
@@ -189,7 +187,7 @@ def reinit_cluster_replication(max_attempts=3, do_full_restart=False):
     if do_full_restart:
         print("[Reinit] Performing FULL cluster restart (clearing Mnesia state)...")
         compose_file = os.path.join(DOCKER_COMPOSE_DIR, "docker-compose.yml")
-        
+
         # Stop and remove volumes
         subprocess.run(
             ["docker", "compose", "-f", compose_file, "down", "--remove-orphans", "-v"],
@@ -198,7 +196,7 @@ def reinit_cluster_replication(max_attempts=3, do_full_restart=False):
             timeout=120
         )
         time.sleep(5)
-        
+
         # Start fresh
         result = subprocess.run(
             ["docker", "compose", "-f", compose_file, "up", "-d"],
@@ -209,21 +207,21 @@ def reinit_cluster_replication(max_attempts=3, do_full_restart=False):
         if result.returncode != 0:
             print("[Reinit] Failed to restart cluster")
             return False
-        
+
         # Wait for containers
         print("[Reinit] Waiting for containers to be healthy (60s)...")
         time.sleep(60)
-    
+
     print(f"[Reinit] Attempting to reinitialize cluster replication (up to {max_attempts} attempts)...")
-    
+
     init_script = os.path.join(DOCKER_COMPOSE_DIR, "init_cluster.sh")
     if not os.path.exists(init_script):
         print(f"[Reinit] Init script not found: {init_script}")
         return False
-    
+
     for attempt in range(max_attempts):
         print(f"[Reinit] Attempt {attempt + 1}/{max_attempts}...")
-        
+
         try:
             result = subprocess.run(
                 ["bash", init_script],
@@ -232,7 +230,7 @@ def reinit_cluster_replication(max_attempts=3, do_full_restart=False):
                 text=True,
                 timeout=300  # Increased timeout for robustness
             )
-            
+
             if result.returncode == 0:
                 print("[Reinit] Replication reinitialized successfully")
                 # Wait for replication to settle
@@ -247,7 +245,7 @@ def reinit_cluster_replication(max_attempts=3, do_full_restart=False):
                 if attempt < max_attempts - 1:
                     print(f"[Reinit] Waiting 10s before retry...")
                     time.sleep(10)
-                
+
         except subprocess.TimeoutExpired:
             print("[Reinit] Timeout running init script")
             if attempt < max_attempts - 1:
@@ -256,14 +254,14 @@ def reinit_cluster_replication(max_attempts=3, do_full_restart=False):
             print(f"[Reinit] Error: {e}")
             if attempt < max_attempts - 1:
                 time.sleep(5)
-    
+
     print(f"[Reinit] Failed after {max_attempts} attempts")
     return False
 
 
 class LatencyReceiver:
     """Receiver that tracks message arrival times."""
-    
+
     def __init__(self, host, port, username):
         self.host = host
         self.port = port
@@ -272,7 +270,7 @@ class LatencyReceiver:
         self.received = {}  # msg_id -> receive_time
         self.running = False
         self.thread = None
-    
+
     def connect(self):
         self.sock = create_tls_socket(self.host, self.port, timeout=TIMEOUT)
         # Login
@@ -281,12 +279,12 @@ class LatencyReceiver:
         if b"LOGIN_OK" not in resp:
             raise Exception(f"Login failed: {resp}")
         print(f"  ✓ Receiver logged in as {self.username}")
-    
+
     def start_listening(self):
         self.running = True
         self.thread = threading.Thread(target=self._listen_loop, daemon=True)
         self.thread.start()
-    
+
     def _listen_loop(self):
         self.sock.setblocking(False)
         buffer = b""
@@ -313,28 +311,28 @@ class LatencyReceiver:
                 time.sleep(0.001)
             except Exception:
                 pass
-    
+
     def stop(self):
         self.running = False
         if self.thread:
             self.thread.join(timeout=2)
         if self.sock:
             self.sock.close()
-    
+
     def get_received(self):
         return dict(self.received)
 
 
 class LatencySender:
     """Sender that tracks message send times."""
-    
+
     def __init__(self, host, port, username):
         self.host = host
         self.port = port
         self.username = username
         self.sock = None
         self.sent = {}  # msg_id -> send_time
-    
+
     def connect(self):
         self.sock = create_tls_socket(self.host, self.port, timeout=TIMEOUT)
         # Login
@@ -343,7 +341,7 @@ class LatencySender:
         if b"LOGIN_OK" not in resp:
             raise Exception(f"Login failed: {resp}")
         print(f"  ✓ Sender logged in as {self.username}")
-    
+
     def send_message(self, target, msg_id):
         """
         Send message and record send time.
@@ -352,28 +350,28 @@ class LatencySender:
         """
         target_bytes = target.encode()
         msg_bytes = msg_id.encode()
-        
+
         # Get next sequence number (use class-level counter)
         if not hasattr(self, '_seq_counter'):
             self._seq_counter = 0
         self._seq_counter += 1
         seq_no = self._seq_counter
-        
+
         # Protocol: 0x07 | TargetLen(16) | Target | SeqNo(64) | MsgLen(16) | Msg
         packet = (bytes([0x07]) +
                   len(target_bytes).to_bytes(2, 'big') + target_bytes +
                   seq_no.to_bytes(8, 'big') +
                   len(msg_bytes).to_bytes(2, 'big') + msg_bytes)
-        
+
         send_time = time.time()
         self.sock.sendall(packet)
         self.sent[msg_id] = send_time
         return send_time
-    
+
     def close(self):
         if self.sock:
             self.sock.close()
-    
+
     def get_sent(self):
         return dict(self.sent)
 
@@ -397,46 +395,46 @@ def main():
     print(f"Target: P99 ≤ {P99_TARGET_MS}ms")
     print(f"Messages: {MESSAGE_COUNT}")
     print("")
-    
+
     # Check if Docker cluster is running or can be started
     cluster_started_by_us = False
-    
+
     if not check_cluster_running():
         print("[Check] Docker global cluster not running on required ports")
         print(f"        West (8087): {check_port_listening(EDGE_WEST_HOST, EDGE_WEST_PORT)}")
         print(f"        Sydney (8090): {check_port_listening(EDGE_SYDNEY_HOST, EDGE_SYDNEY_PORT)}")
-        
+
         # Check if we should try to start Docker
         auto_start = os.environ.get("IRIS_AUTO_START_DOCKER", "true").lower() == "true"
-        
+
         if not auto_start:
             print("\nSKIP:INFRA - Docker cluster not running and auto-start disabled")
             print("       Set IRIS_AUTO_START_DOCKER=true to auto-start")
             print("       Or manually run: make cluster-up")
             sys.exit(2)  # Exit 2 = skip
-        
+
         if not check_docker_available():
             print("\nSKIP:INFRA - Docker not available on this system")
             print("       This test requires the Docker global cluster")
             print("       See: docker/global-cluster/README.md")
             sys.exit(2)  # Exit 2 = skip
-        
+
         if not start_docker_cluster():
             print("\nSKIP:INFRA - Failed to start Docker cluster")
             print("       Try running manually: cd docker/global-cluster && docker compose up -d")
             sys.exit(2)  # Exit 2 = skip
-        
+
         cluster_started_by_us = True
     else:
         print("[Check] Docker global cluster is running ✓")
-    
+
     try:
         # Try latency test with retry on replication failure
         # Use escalating recovery: first try reinit, then full restart
         max_attempts = 4
         for attempt in range(max_attempts):
             result = run_latency_test(attempt + 1, max_attempts)
-            
+
             if result == "pass":
                 sys.exit(0)
             elif result == "fail":
@@ -444,12 +442,12 @@ def main():
             elif result == "retry":
                 if attempt < max_attempts - 1:
                     print(f"\n[Retry] Attempting to reinitialize replication...")
-                    
+
                     # Escalating recovery: after 2 failed attempts, do full restart
                     do_full = (attempt >= 2)
                     if do_full:
                         print("[Retry] Multiple failures - escalating to full cluster restart...")
-                    
+
                     if reinit_cluster_replication(max_attempts=3, do_full_restart=do_full):
                         print(f"[Retry] Retrying test (attempt {attempt + 2}/{max_attempts})...")
                         continue
@@ -480,9 +478,9 @@ def run_latency_test(attempt=1, max_attempts=1):
     ts = int(time.time() * 1000) % 100000 + attempt * 1000  # Unique per attempt
     sender_name = f"west_{ts}"
     receiver_name = f"sydney_{ts}"
-    
+
     print(f"\n--- Attempt {attempt}/{max_attempts} ---")
-    
+
     # Step 1: Connect receiver FIRST (so it's online when messages arrive)
     print("\n1. Connecting receiver to Sydney...")
     receiver = LatencyReceiver(EDGE_SYDNEY_HOST, EDGE_SYDNEY_PORT, receiver_name)
@@ -491,10 +489,10 @@ def run_latency_test(attempt=1, max_attempts=1):
     except Exception as e:
         print(f"  ❌ Cannot connect to Sydney: {e}")
         return "retry"
-    
+
     receiver.start_listening()
     time.sleep(0.5)  # Let receiver settle
-    
+
     # Step 2: Connect sender to US West
     print("\n2. Connecting sender to US West...")
     sender = LatencySender(EDGE_WEST_HOST, EDGE_WEST_PORT, sender_name)
@@ -504,7 +502,7 @@ def run_latency_test(attempt=1, max_attempts=1):
         print(f"  ❌ Cannot connect to West: {e}")
         receiver.stop()
         return "retry"
-    
+
     # Step 3: Send messages
     print(f"\n3. Sending {MESSAGE_COUNT} messages (West → Sydney)...")
     for i in range(MESSAGE_COUNT):
@@ -513,35 +511,35 @@ def run_latency_test(attempt=1, max_attempts=1):
         if (i + 1) % 10 == 0:
             print(f"   Sent {i + 1}/{MESSAGE_COUNT}")
         time.sleep(0.05)  # 50ms between messages
-    
+
     # Step 4: Wait for delivery
     print("\n4. Waiting for messages to arrive in Sydney...")
     time.sleep(3)
-    
+
     # Step 5: Collect results
     receiver.stop()
     sender.close()
-    
+
     sent_times = sender.get_sent()
     recv_times = receiver.get_received()
-    
+
     print(f"\n   Sent: {len(sent_times)} messages")
     print(f"   Received: {len(recv_times)} messages")
-    
+
     # Calculate latencies
     latencies = []
     for msg_id, send_time in sent_times.items():
         if msg_id in recv_times:
             latency_ms = (recv_times[msg_id] - send_time) * 1000
             latencies.append(latency_ms)
-    
+
     print(f"   Matched: {len(latencies)} messages")
-    
+
     # Results
     print("\n" + "=" * 60)
     print("RESULTS")
     print("=" * 60)
-    
+
     if len(latencies) == 0:
         print("\n❌ No messages delivered from West to Sydney!")
         print("   Cross-region routing is NOT working.")
@@ -554,16 +552,16 @@ def run_latency_test(attempt=1, max_attempts=1):
         print("   2. Cores are meshed together (Mnesia cluster)")
         print("   3. User registration is replicating across cores")
         return "retry"  # Signal to retry with reinitialization
-    
+
     delivery_rate = len(latencies) / MESSAGE_COUNT * 100
-    
+
     p50 = calculate_percentile(latencies, 50)
     p90 = calculate_percentile(latencies, 90)
     p99 = calculate_percentile(latencies, 99)
     avg = statistics.mean(latencies)
     min_lat = min(latencies)
     max_lat = max(latencies)
-    
+
     print(f"\n  Delivery Rate: {len(latencies)}/{MESSAGE_COUNT} ({delivery_rate:.1f}%)")
     print(f"\n  Latency Statistics:")
     print(f"    Min:  {min_lat:.2f} ms")
@@ -572,9 +570,9 @@ def run_latency_test(attempt=1, max_attempts=1):
     print(f"    P90:  {p90:.2f} ms")
     print(f"    P99:  {p99:.2f} ms")
     print(f"    Max:  {max_lat:.2f} ms")
-    
+
     print("\n" + "-" * 60)
-    
+
     if p99 <= P99_TARGET_MS:
         print(f"✅ PASS: P99 latency {p99:.2f}ms ≤ {P99_TARGET_MS}ms")
         print("   RFC NFR-3: COMPLIANT")

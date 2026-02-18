@@ -30,13 +30,10 @@ Tier: 2 (Requires Docker cluster)
 """
 
 import socket
-import ssl
 import time
 import subprocess
 import sys
 import os
-import struct
-import threading
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
@@ -111,12 +108,12 @@ def check_server_health(max_retries=5, retry_delay=10):
                     time.sleep(retry_delay)
                     continue
                 return False
-            
+
             # Login successful - server is healthy
             sock.close()
             log(f"  Server health check passed (attempt {attempt + 1})")
             return True
-            
+
         except Exception as e:
             if attempt < max_retries - 1:
                 log(f"  Health check attempt {attempt + 1} failed ({e}), retrying in {retry_delay}s...")
@@ -124,14 +121,14 @@ def check_server_health(max_retries=5, retry_delay=10):
             else:
                 log(f"  Health check failed after {max_retries} attempts: {e}")
                 return False
-    
+
     return False
 
 
 def connect_tls(max_retries=5, retry_delay=2.0):
     """Create TLS connection to Iris edge with retry logic."""
     context = get_verified_ssl_context()
-    
+
     last_err = None
     for attempt in range(max_retries):
         try:
@@ -173,16 +170,16 @@ def send_message_fire_and_forget(sock, target, message):
     """
     target_bytes = target.encode()
     msg_bytes = message.encode()
-    
+
     _seq_counter[0] += 1
     seq_no = _seq_counter[0]
-    
+
     # Protocol: 0x07 | TargetLen(16) | Target | SeqNo(64) | MsgLen(16) | Msg
     packet = (bytes([0x07]) +
               len(target_bytes).to_bytes(2, 'big') + target_bytes +
               seq_no.to_bytes(8, 'big') +
               len(msg_bytes).to_bytes(2, 'big') + msg_bytes)
-    
+
     send_time = time.time()
     try:
         sock.sendall(packet)
@@ -274,11 +271,11 @@ def fetch_offline_messages(username: str) -> list:
         if not login(sock, username):
             sock.close()
             return []
-        
+
         # Offline messages arrive automatically after login
         messages = []
         sock.settimeout(5)
-        
+
         try:
             while True:
                 data = sock.recv(4096)
@@ -287,7 +284,7 @@ def fetch_offline_messages(username: str) -> list:
                 messages.append(data)
         except socket.timeout:
             pass
-        
+
         sock.close()
         return messages
     except Exception as e:
@@ -340,26 +337,26 @@ def test_ack_disconnect_race():
     """
     log("\n=== Test: Send-Disconnect-Crash Durability ===")
     log("    RFC: Section 6.3, NFR-8 (RPO=0)")
-    
+
     if not check_docker_available():
         log_test("ACK-disconnect race", False, "Docker not available")
         return False
-    
+
     if not check_container_running(CONTAINER_NAME):
         log_test("ACK-disconnect race", False, f"Container {CONTAINER_NAME} not running")
         return False
-    
+
     # Generate unique test identifiers
     test_id = int(time.time() * 1000)
     sender = f"race_sender_{test_id}"
     receiver = f"race_receiver_{test_id}"
     test_message = f"RACE_TEST_MSG_{test_id}"
-    
+
     log(f"  1. Test setup:")
     log(f"     Sender: {sender}")
     log(f"     Receiver: {receiver} (offline)")
     log(f"     Message: {test_message}")
-    
+
     # Step 1: Connect as sender
     log(f"  2. Connecting as sender...")
     try:
@@ -370,31 +367,31 @@ def test_ack_disconnect_race():
     except Exception as e:
         log_test("ACK-disconnect race", False, f"Connection failed: {e}")
         return False
-    
+
     log(f"     Connected and logged in")
-    
+
     # Step 2: Send message (fire-and-forget protocol)
     log(f"  3. Sending message to offline user...")
     sent, send_time = send_message_fire_and_forget(sock, receiver, test_message)
-    
+
     if not sent:
         log_test("ACK-disconnect race", False, "Failed to send message")
         sock.close()
         return False
-    
+
     log(f"     Message sent at {send_time:.6f}")
-    
+
     # Step 3: Brief delay to allow TCP to transmit, then close socket
     # Note: Without this delay, TCP might not have flushed the data before close
     # We're testing server durability, not TCP transmission
     time.sleep(0.01)  # 10ms for TCP flush
-    
+
     log(f"  4. Closing socket (simulating disconnect after send)...")
     disconnect_time = time.time()
     sock.close()
     log(f"     Socket closed at {disconnect_time:.6f}")
     log(f"     Time since send: {(disconnect_time - send_time) * 1000:.2f}ms")
-    
+
     # Step 4: Wait briefly for server to process, then SIGKILL within race window
     # Give server a small window to process the message before crash
     process_delay = 0.05  # 50ms for server to start processing
@@ -402,45 +399,45 @@ def test_ack_disconnect_race():
     total_delay = process_delay + kill_delay
     log(f"  5. Waiting {total_delay*1000:.0f}ms then SIGKILL...")
     time.sleep(total_delay)
-    
+
     kill_time = time.time()
     log(f"     Sending SIGKILL to {CONTAINER_NAME}...")
-    
+
     if not sigkill_container(CONTAINER_NAME):
         log_test("ACK-disconnect race", False, "Failed to kill container")
         return False
-    
+
     log(f"     Container killed at {kill_time:.6f}")
     log(f"     Total time since send: {(kill_time - send_time) * 1000:.2f}ms")
-    
+
     # Step 5: Wait for container to fully stop
     log(f"  6. Waiting for container to stop...")
     time.sleep(3)
-    
+
     # Step 6: Restart container
     log(f"  7. Restarting container...")
     if not start_container(CONTAINER_NAME):
         log_test("ACK-disconnect race", False, "Failed to restart container")
         return False
-    
+
     # Step 7: Wait for server to be ready
     log(f"  8. Waiting for server recovery (up to {RECOVERY_TIMEOUT}s)...")
     if not wait_for_container_ready(CONTAINER_NAME):
         log_test("ACK-disconnect race", False, "Container did not restart in time")
         return False
-    
+
     reconnect_edge_to_core()
-    
+
     if not wait_for_server_ready():
         log_test("ACK-disconnect race", False, "Server did not become ready")
         return False
-    
+
     log(f"     Server recovered")
-    
+
     # Step 8: Connect as receiver and fetch messages
     log(f"  9. Connecting as receiver to verify message durability...")
     messages = fetch_offline_messages(receiver)
-    
+
     # Step 9: Check if our message survived
     log(f"  10. Checking for message...")
     message_found = False
@@ -448,7 +445,7 @@ def test_ack_disconnect_race():
         if test_message.encode() in msg_data:
             message_found = True
             break
-    
+
     if message_found:
         log(f"     Message FOUND - ACK was after durable write")
         log_test("ACK-disconnect race", True,
@@ -479,35 +476,35 @@ def test_rapid_ack_disconnect_cycles():
     Note: The Iris protocol uses fire-and-forget messaging without explicit ACKs.
     """
     log("\n=== Test: Rapid Send-Disconnect Cycles ===")
-    
+
     if not check_docker_available():
         log_test("Rapid ACK-disconnect", False, "Docker not available")
         return False
-    
+
     if not check_container_running(CONTAINER_NAME):
         log_test("Rapid ACK-disconnect", False, f"Container {CONTAINER_NAME} not running")
         return False
-    
+
     # Ensure server is fully healthy after previous subtest's crash/restart
     if not check_server_health(max_retries=5, retry_delay=5):
         log_test("Rapid ACK-disconnect", False, "Server not healthy after previous restart")
         return False
-    
+
     NUM_MESSAGES = 10
     test_id = int(time.time() * 1000)
     sender = f"rapid_sender_{test_id}"
     receiver = f"rapid_receiver_{test_id}"
-    
+
     log(f"  1. Sending {NUM_MESSAGES} messages rapidly...")
-    
+
     sent_messages = []
-    
+
     try:
         sock = connect_tls()
         if not login(sock, sender):
             log_test("Rapid ACK-disconnect", False, "Login failed")
             return False
-        
+
         for i in range(NUM_MESSAGES):
             msg = f"RAPID_MSG_{test_id}_{i}"
             sent, _ = send_message_fire_and_forget(sock, receiver, msg)
@@ -516,54 +513,54 @@ def test_rapid_ack_disconnect_cycles():
                 log(f"     Message {i+1}/{NUM_MESSAGES} sent")
             else:
                 log(f"     Message {i+1}/{NUM_MESSAGES} FAILED to send")
-        
+
         # Give server time to durably write all messages
         # NFR-8 (RPO=0) requires messages to survive crash AFTER they're accepted
         # With 10 messages and sync Mnesia transactions (~100ms each in CI),
         # 2s provides sufficient margin for all writes to complete durably.
         time.sleep(2.0)
         sock.close()
-        
+
     except Exception as e:
         log_test("Rapid ACK-disconnect", False, f"Error: {e}")
         return False
-    
+
     log(f"  2. Sent {len(sent_messages)} messages")
-    
+
     # Kill server - messages should already be durable from the 500ms wait above
     log(f"  3. SIGKILL server...")
     time.sleep(0.1)  # 100ms additional buffer
     sigkill_container(CONTAINER_NAME)
     time.sleep(3)
-    
+
     # Restart
     log(f"  4. Restarting server...")
     start_container(CONTAINER_NAME)
-    
+
     if not wait_for_container_ready(CONTAINER_NAME):
         log_test("Rapid ACK-disconnect", False, "Container did not restart")
         return False
-    
+
     reconnect_edge_to_core()
-    
+
     if not wait_for_server_ready():
         log_test("Rapid ACK-disconnect", False, "Server did not become ready")
         return False
-    
+
     # Verify all messages (with retries for WAL replay)
     log(f"  5. Verifying messages...")
     messages = fetch_offline_messages_robust(receiver, sent_messages,
                                              max_attempts=3, delay=3.0)
-    
+
     messages_found = 0
     for msg in sent_messages:
         for msg_data in messages:
             if msg.encode() in msg_data:
                 messages_found += 1
                 break
-    
+
     log(f"     Found {messages_found}/{len(sent_messages)} messages")
-    
+
     if messages_found == len(sent_messages):
         log_test("Rapid ACK-disconnect", True,
                 f"All {messages_found} ACKed messages survived crash")
@@ -588,77 +585,77 @@ def test_zero_delay_disconnect():
     Note: The Iris protocol uses fire-and-forget messaging without explicit ACKs.
     """
     log("\n=== Test: Zero-Delay Send-Disconnect ===")
-    
+
     if not check_docker_available():
         log_test("Zero-delay disconnect", False, "Docker not available")
         return False
-    
+
     if not check_container_running(CONTAINER_NAME):
         log_test("Zero-delay disconnect", False, f"Container {CONTAINER_NAME} not running")
         return False
-    
+
     # Ensure server is fully healthy after previous subtest's crash/restart
     if not check_server_health(max_retries=5, retry_delay=5):
         log_test("Zero-delay disconnect", False, "Server not healthy after previous restart")
         return False
-    
+
     test_id = int(time.time() * 1000)
     sender = f"zero_sender_{test_id}"
     receiver = f"zero_receiver_{test_id}"
     test_message = f"ZERO_DELAY_MSG_{test_id}"
-    
+
     log(f"  1. Connecting and sending message...")
-    
+
     try:
         sock = connect_tls()
         if not login(sock, sender):
             log_test("Zero-delay disconnect", False, "Login failed")
             return False
-        
+
         # Send message
         target_bytes = receiver.encode()
         msg_bytes = test_message.encode()
         _seq_counter[0] += 1
         seq_no = _seq_counter[0]
-        
+
         packet = (bytes([0x07]) +
                   len(target_bytes).to_bytes(2, 'big') + target_bytes +
                   seq_no.to_bytes(8, 'big') +
                   len(msg_bytes).to_bytes(2, 'big') + msg_bytes)
-        
+
         sock.sendall(packet)
-        
+
         # IMMEDIATELY close - zero delay after send
         sock.close()
-        
+
         log(f"     Sent message, immediately disconnected")
-        
+
     except Exception as e:
         log_test("Zero-delay disconnect", False, f"Error: {e}")
         return False
-    
+
     # Kill and restart
     log(f"  2. SIGKILL and restart...")
     sigkill_container(CONTAINER_NAME)
     time.sleep(3)
     start_container(CONTAINER_NAME)
-    
+
     if not wait_for_container_ready(CONTAINER_NAME):
         log_test("Zero-delay disconnect", False, "Container did not restart")
         return False
-    
+
     reconnect_edge_to_core()
-    
+
     if not wait_for_server_ready():
         log_test("Zero-delay disconnect", False, "Server did not become ready")
         return False
-    
+
     # Verify
     log(f"  3. Verifying message...")
     messages = fetch_offline_messages(receiver)
-    
+
     message_found = any(test_message.encode() in m for m in messages)
-    
+
     if message_found:
         log_test("Zero-delay disconnect", True,
                 "Message survived zero-delay disconnect + crash")
@@ -681,48 +678,48 @@ def main():
     log("\nThis test validates that ACK is sent AFTER durable write,")
     log("even when client disconnects immediately after ACK.")
     log("\nRequires Docker cluster to be running.")
-    
+
     # Check prerequisites
     if not check_docker_available():
         log("\nFAIL: Docker not available")
         log("Run 'make cluster-up' to start the Docker cluster")
         sys.exit(1)
-    
+
     if not check_container_running(CONTAINER_NAME):
         log(f"\nFAIL: Container {CONTAINER_NAME} not running")
         log("Run 'make cluster-up' to start the Docker cluster")
         sys.exit(1)
-    
+
     log(f"\nUsing container: {CONTAINER_NAME}")
-    
+
     # Verify server is healthy before running chaos tests
     log("\nVerifying server health before ACK tests...")
     if not check_server_health(max_retries=5, retry_delay=10):
         log("FAIL: Server not responding with ACKs - cluster may not be fully initialized")
         log("Wait for cluster to stabilize or check container logs")
         sys.exit(1)
-    
+
     # Run tests
     test_ack_disconnect_race()
     test_rapid_ack_disconnect_cycles()
     test_zero_delay_disconnect()
-    
+
     # Summary
     log("\n" + "=" * 60)
     log("SUMMARY")
     log("=" * 60)
-    
+
     passed = sum(1 for _, p, _ in results if p)
     failed = sum(1 for _, p, _ in results if not p)
-    
+
     for name, p, msg in results:
         status = "PASS" if p else "FAIL"
         log(f"  [{status}] {name}")
-    
+
     log(f"\nTotal: {len(results)} tests")
     log(f"Passed: {passed}")
     log(f"Failed: {failed}")
-    
+
     if failed > 0:
         log("\nFAIL: ACK-disconnect race tests FAILED")
         log("RFC VIOLATION: ACK may be sent before durable write")

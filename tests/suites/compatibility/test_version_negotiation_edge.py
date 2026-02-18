@@ -21,7 +21,6 @@ Tier: 1 (Compatibility)
 import sys
 import os
 import socket
-import ssl
 import struct
 import time
 

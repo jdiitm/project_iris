@@ -55,18 +55,18 @@ def check_module_compiled():
 def run_all_ratchet_eunit_tests():
     """Run all iris_ratchet_tests EUnit tests."""
     log("=== Test 1: Double Ratchet EUnit Suite ===")
-    
+
     cmd = [
         "erl", "-pa", "ebin", "-pa", "test_utils", "-noshell",
         "-eval", "case eunit:test(iris_ratchet_tests, [verbose]) of ok -> halt(0); error -> halt(1) end."
     ]
-    
+
     try:
         result = subprocess.run(
             cmd, capture_output=True, text=True, timeout=TIMEOUT, cwd=project_root,
             errors='replace'
         )
-        
+
         # Check for test results in output
         if result.returncode == 0:
             log("  ✓ All iris_ratchet_tests passed")
@@ -82,7 +82,7 @@ def run_all_ratchet_eunit_tests():
                 if line.strip():
                     log(f"    {line}")
             return False
-            
+
     except subprocess.TimeoutExpired:
         log("  ✗ EUnit tests timed out")
         return False
@@ -99,7 +99,7 @@ def test_post_compromise_100_advances():
     """
     log("=== Test 2: PCS - 100 Ratchet Advances ===")
     log("  Verifying chain key evolution over 100 bidirectional exchanges...")
-    
+
     # Create temp Erlang module for PCS test
     pcs_code = '''
 -module(pcs_100_test).
@@ -154,36 +154,36 @@ advance_100({A, B}, N) ->
     {ok, _, A2} = iris_ratchet:decrypt(Ct2, Hdr2, A1),
     advance_100({A2, B2}, N + 1).
 '''
-    
+
     erl_file = os.path.join(project_root, "ebin", "pcs_100_test.erl")
     beam_file = os.path.join(project_root, "ebin", "pcs_100_test.beam")
-    
+
     try:
         # Write temp module
         with open(erl_file, 'w') as f:
             f.write(pcs_code)
-        
+
         # Compile
         compile_result = subprocess.run(
             ["erlc", "-o", os.path.join(project_root, "ebin"), erl_file],
             capture_output=True, text=True, timeout=30, errors='replace'
         )
-        
+
         if compile_result.returncode != 0:
             log(f"  ✗ Compile error: {compile_result.stderr}")
             return False
-        
+
         # Run test
         run_cmd = [
             "erl", "-pa", "ebin", "-noshell",
             "-eval", "case pcs_100_test:run() of ok -> halt(0); _ -> halt(1) end."
         ]
-        
+
         result = subprocess.run(
             run_cmd, capture_output=True, text=True, timeout=TIMEOUT, cwd=project_root,
             errors='replace'
         )
-        
+
         if result.returncode == 0 and "PCS_PASS" in result.stdout:
             log("  ✓ Root key evolved after 100 bidirectional exchanges")
             log("    - Session keys are completely different from initial state")
@@ -192,7 +192,7 @@ advance_100({A, B}, N) ->
         else:
             log(f"  ✗ PCS test failed: {result.stdout.strip()}")
             return False
-            
+
     except Exception as e:
         log(f"  ✗ Error: {e}")
         return False
@@ -208,7 +208,7 @@ advance_100({A, B}, N) ->
 def test_attacker_old_keys_invalid():
     """Test: Verify attacker with old keys cannot decrypt new messages."""
     log("=== Test 3: Attacker's Old Keys Invalid ===")
-    
+
     attacker_code = '''
 -module(attacker_test).
 -export([run/0]).
@@ -264,25 +264,25 @@ advance_n({A, B}, N) ->
     {ok, _, A2} = iris_ratchet:decrypt(C2, H2, A1),
     advance_n({A2, B2}, N - 1).
 '''
-    
+
     erl_file = os.path.join(project_root, "ebin", "attacker_test.erl")
     beam_file = os.path.join(project_root, "ebin", "attacker_test.beam")
-    
+
     try:
         with open(erl_file, 'w') as f:
             f.write(attacker_code)
-        
+
         subprocess.run(
             ["erlc", "-o", os.path.join(project_root, "ebin"), erl_file],
             capture_output=True, timeout=30
         )
-        
+
         result = subprocess.run(
             ["erl", "-pa", "ebin", "-noshell",
              "-eval", "case attacker_test:run() of ok -> halt(0); _ -> halt(1) end."],
             capture_output=True, text=True, timeout=TIMEOUT, cwd=project_root
         )
-        
+
         if result.returncode == 0 and "ATTACKER_BLOCKED" in result.stdout:
             log("  ✓ Attacker with old state cannot decrypt new messages")
             log("    - After 50 DH ratchet advances, old keys are invalid")
@@ -295,7 +295,7 @@ advance_n({A, B}, N) ->
                 return True
             log(f"  ✗ Security test failed: {result.stdout.strip()}")
             return False
-            
+
     except Exception as e:
         log(f"  ✗ Error: {e}")
         return False
@@ -324,7 +324,7 @@ def test_adversarial_pcs():
     log("=== Test 4: Adversarial PCS - Full State Compromise ===")
     log("  Simulating attacker who captures complete session state at message 50")
     log("  Then attempts to decrypt messages 51-100")
-    
+
     adversarial_code = '''
 -module(adversarial_pcs_test).
 -export([run/0]).
@@ -443,36 +443,36 @@ exchange_n_messages({A, B}, N, Acc) ->
     
     exchange_n_messages({A2, B2}, N - 1, NewAcc).
 '''
-    
+
     erl_file = os.path.join(project_root, "ebin", "adversarial_pcs_test.erl")
     beam_file = os.path.join(project_root, "ebin", "adversarial_pcs_test.beam")
-    
+
     try:
         with open(erl_file, 'w') as f:
             f.write(adversarial_code)
-        
+
         # Compile
         compile_result = subprocess.run(
             ["erlc", "-o", os.path.join(project_root, "ebin"), erl_file],
             capture_output=True, text=True, timeout=30
         )
-        
+
         if compile_result.returncode != 0:
             log(f"  ✗ Compilation failed: {compile_result.stderr}")
             return False
-        
+
         # Run
         result = subprocess.run(
             ["erl", "-pa", "ebin", "-noshell",
              "-eval", "case adversarial_pcs_test:run() of ok -> halt(0); _ -> halt(1) end."],
             capture_output=True, text=True, timeout=120, cwd=project_root
         )
-        
+
         # Log output for debugging
         for line in result.stdout.split('\n'):
             if line.strip():
                 log(f"    {line}")
-        
+
         if result.returncode == 0 and "ADVERSARIAL_PCS_PASS" in result.stdout:
             log("  ✓ Adversarial PCS test PASSED")
             log("    - Attacker with stolen state cannot decrypt future messages")
@@ -483,7 +483,7 @@ exchange_n_messages({A, B}, N, Acc) ->
             if result.stderr:
                 log(f"    stderr: {result.stderr}")
             return False
-            
+
     except subprocess.TimeoutExpired:
         log("  ✗ Test timed out (>120s)")
         return False
@@ -508,41 +508,41 @@ def main():
     log("")
     log("Test Criteria: 'Advance ratchet 100 times, verify old session keys invalid'")
     log("")
-    
+
     # Prerequisites
     if not check_erlang_available():
         log("[FAIL] Erlang not available - environment not properly configured")
         sys.exit(1)
-    
+
     if not check_module_compiled():
         log("[FAIL] iris_ratchet.beam not found. Run 'make' first.")
         sys.exit(1)
-    
+
     results = []
-    
+
     # Run tests
     results.append(("Double Ratchet EUnit Suite", run_all_ratchet_eunit_tests()))
     results.append(("PCS - 100 Ratchet Advances", test_post_compromise_100_advances()))
     results.append(("Attacker's Old Keys Invalid", test_attacker_old_keys_invalid()))
     results.append(("Adversarial PCS - Full Compromise", test_adversarial_pcs()))
-    
+
     # Summary
     log("")
     log("=" * 70)
     log("RESULTS")
     log("=" * 70)
-    
+
     passed = sum(1 for _, r in results if r)
     total = len(results)
-    
+
     for name, result in results:
         status = "PASS" if result else "FAIL"
         symbol = "✓" if result else "✗"
         log(f"  {symbol} {status}: {name}")
-    
+
     log("")
     log(f"Total: {passed}/{total} tests passed")
-    
+
     if passed == total:
         log("")
         log("=" * 70)

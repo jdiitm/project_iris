@@ -52,9 +52,9 @@ def erl_eval(code: str, timeout: int = 60) -> str:
     ]
     try:
         result = subprocess.run(
-            cmd, 
-            capture_output=True, 
-            text=True, 
+            cmd,
+            capture_output=True,
+            text=True,
             timeout=timeout,
             cwd=PROJECT_ROOT
         )
@@ -78,7 +78,7 @@ def check_modules_compiled() -> bool:
 def test_small_group_fanout():
     """Test: Small group uses serial delivery strategy."""
     log(f"=== Test: Small Group Fan-out ({SMALL_GROUP_SIZE} members) ===")
-    
+
     code = f"""
     mnesia:create_schema([node()]),
     mnesia:start(),
@@ -108,9 +108,9 @@ def test_small_group_fanout():
             io:format("FAIL: ~p~n", [Other])
     end.
     """
-    
+
     output = erl_eval(code)
-    
+
     if "PASS" in output:
         log("  ✓ Small group uses serial strategy")
         return True
@@ -122,7 +122,7 @@ def test_small_group_fanout():
 def test_medium_group_fanout():
     """Test: Medium group uses parallel batch strategy."""
     log(f"=== Test: Medium Group Fan-out ({MEDIUM_GROUP_SIZE} members) ===")
-    
+
     code = f"""
     mnesia:create_schema([node()]),
     mnesia:start(),
@@ -156,9 +156,9 @@ def test_medium_group_fanout():
             io:format("FAIL: Expected ~p, got ~p~n", [ExpectedStrategy, Strategy])
     end.
     """
-    
+
     output = erl_eval(code)
-    
+
     if "PASS" in output:
         log("  ✓ Medium group uses correct strategy")
         return True
@@ -170,7 +170,7 @@ def test_medium_group_fanout():
 def test_large_group_fanout():
     """Test: Large group uses worker pool strategy."""
     log(f"=== Test: Large Group Fan-out ({LARGE_GROUP_SIZE} members) ===")
-    
+
     code = f"""
     mnesia:create_schema([node()]),
     mnesia:start(),
@@ -205,9 +205,9 @@ def test_large_group_fanout():
             io:format("FAIL: Expected ~p, got ~p~n", [ExpectedStrategy, Strategy])
     end.
     """
-    
+
     output = erl_eval(code)
-    
+
     if "PASS" in output:
         log("  ✓ Large group uses correct strategy")
         return True
@@ -219,7 +219,7 @@ def test_large_group_fanout():
 def test_fanout_stats():
     """Test: Fan-out provides accurate delivery stats."""
     log("=== Test: Fan-out Delivery Stats ===")
-    
+
     code = """
     mnesia:create_schema([node()]),
     mnesia:start(),
@@ -250,9 +250,9 @@ def test_fanout_stats():
             io:format(\"FAIL: ~p~n\", [Other])
     end.
     """
-    
+
     output = erl_eval(code)
-    
+
     if "PASS" in output:
         log("  ✓ Delivery stats accurate")
         return True
@@ -264,7 +264,7 @@ def test_fanout_stats():
 def test_batch_fanout():
     """Test: Batch message delivery."""
     log(f"=== Test: Batch Fan-out ({BURST_MESSAGES} messages) ===")
-    
+
     code = f"""
     %% Start Mnesia (schema created by iris_group if needed)
     mnesia:start(),
@@ -301,9 +301,9 @@ def test_batch_fanout():
             io:format("FAIL: ~p (duration: ~p, stat_duration: ~p)~n", [Other, Duration, StatDuration])
     end.
     """
-    
+
     output = erl_eval(code)
-    
+
     if "PASS" in output:
         log("  ✓ Batch delivery works")
         return True
@@ -315,19 +315,19 @@ def test_batch_fanout():
 def main():
     """Run group fan-out stress tests."""
     log(f"=== Group Fan-out Stress Tests (profile={TEST_PROFILE}, seed={TEST_SEED}) ===")
-    
+
     if not check_modules_compiled():
         log("[FAIL] Required modules not compiled. Run 'make' first.")
         sys.exit(1)
-    
+
     results = []
-    
+
     results.append(("Small Group Fan-out", test_small_group_fanout()))
     results.append(("Medium Group Fan-out", test_medium_group_fanout()))
     results.append(("Large Group Fan-out", test_large_group_fanout()))
     results.append(("Fan-out Stats", test_fanout_stats()))
     results.append(("Batch Fan-out", test_batch_fanout()))
-    
+
     log("\n=== Results ===")
     passed = 0
     failed = 0
@@ -338,9 +338,9 @@ def main():
             passed += 1
         else:
             failed += 1
-    
+
     log(f"\nTotal: {passed}/{len(results)} passed")
-    
+
     if failed > 0:
         log("[FAIL] Some tests failed")
         sys.exit(1)

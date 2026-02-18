@@ -32,7 +32,6 @@ import os
 import socket
 import ssl
 import time
-import hashlib
 import base64
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))

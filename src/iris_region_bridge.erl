@@ -152,16 +152,16 @@ do_send_cross_region(TargetRegion, UserId, Msg, Opts) ->
     },
     
     %% Durable write before returning OK
-    case mnesia:activity(sync_transaction, fun() ->
+    case mnesia:sync_transaction(fun() ->
         mnesia:write(?OUTBOUND_TABLE, Record, write)
     end) of
-        ok -> 
+        {atomic, _} -> 
             %% G-3 FIX: Atomically increment depth counter for this region
             incr_depth(TargetRegion),
             %% Notify bridge to drain
             gen_server:cast(?SERVER, drain_now),
             ok;
-        {error, Reason} ->
+        {aborted, Reason} ->
             logger:error("Failed to queue cross-region message: ~p", [Reason]),
             {error, Reason}
     end.

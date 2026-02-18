@@ -22,14 +22,12 @@ Tier: 1 (Security)
 import sys
 import os
 import socket
-import ssl
 import time
-import threading
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 sys.path.insert(0, PROJECT_ROOT)
 
-from tests.utilities import IrisClient, unique_user
+from tests.utilities import IrisClient
 from tests.utilities.tls_connection import get_unverified_ssl_context
 
 SERVER_HOST = os.environ.get("IRIS_HOST", "localhost")
