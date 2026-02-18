@@ -213,8 +213,6 @@ def run_split_brain(args) -> bool:
         p_load = run_cmd(f"erl -setcookie iris_secret -sname gen_load -hidden -noshell -pa ebin -eval \"iris_extreme_gen:start({args.users}, {args.duration + 60}, extreme_load), timer:sleep(infinity).\"", bg=True)
         procs.append(p_load)
 
-        time.sleep(3)  # Let connections establish
-
         # Start distribution chaos
         log("[*] Starting distribution chaos (disconnect random node every 5s)...")
         run_cmd(f"erl -setcookie iris_secret -sname chaos_dist -hidden -noshell -pa ebin -eval \"rpc:call('{node}', chaos_dist, start, [5000]), init:stop().\"")
@@ -262,8 +260,6 @@ def run_split_brain(args) -> bool:
 
         # Stop chaos
         run_cmd(f"erl -setcookie iris_secret -sname chaos_stop -hidden -noshell -pa ebin -eval \"rpc:call('{node}', chaos_dist, stop, []), init:stop().\"", ignore_fail=True)
-
-        time.sleep(3)  # Allow recovery
 
         # ================================================================
         # ASSERTIONS
@@ -514,8 +510,6 @@ def run_disk(args) -> bool:
             except Exception:
                 pass
 
-        time.sleep(2)  # Allow Mnesia to settle
-
         # ================================================================
         # ASSERTIONS
         # ================================================================
@@ -626,8 +620,6 @@ def run_backpressure(args) -> bool:
         # Stop chaos monkey
         run_cmd(f"erl -setcookie iris_secret -sname chaos_stop -hidden -noshell -pa ebin -eval \"rpc:call('{node}', chaos_monkey, stop, []), init:stop().\"", ignore_fail=True)
 
-        time.sleep(2)  # Allow recovery
-
         # ================================================================
         # ASSERTIONS
         # ================================================================
@@ -695,7 +687,6 @@ def run_offline_verify(args) -> bool:
         log(f"[*] Filling storage for {args.users} users ({fill_duration}s)...")
         p_fill = run_cmd(f"erl +P 2000000 -setcookie iris_secret -sname filler -hidden -noshell -pa ebin -eval \"iris_extreme_gen:start({args.users}, {fill_duration + 30}, extreme_load), timer:sleep(infinity).\"", bg=True)
 
-        time.sleep(fill_duration)
         if p_fill:
             try:
                 p_fill.kill()
@@ -735,8 +726,6 @@ def run_offline_verify(args) -> bool:
 
         # Stop chaos
         run_cmd(f"erl -setcookie iris_secret -sname chaos_stop -hidden -noshell -pa ebin -eval \"rpc:call('{node}', chaos_monkey, stop, []), init:stop().\"", ignore_fail=True)
-
-        time.sleep(3)  # Allow recovery
 
         # ================================================================
         # ASSERTIONS

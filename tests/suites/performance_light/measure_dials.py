@@ -239,8 +239,6 @@ def measure_latency() -> MetricResult:
         except Exception:
             pass  # Skip failed samples
 
-        time.sleep(0.01)  # Small delay between samples
-
     sock.close()
 
     if len(latencies) < NUM_LATENCY_SAMPLES * 0.5:

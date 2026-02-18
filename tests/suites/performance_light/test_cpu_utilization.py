@@ -159,7 +159,6 @@ def measure_load_cpu(connections, msg_rate, duration):
                 target = f"cpu_user_{(i + 1) % len(connections)}"
                 if send_message(sock, target, f"test_{messages_sent[0]}"):
                     messages_sent[0] += 1
-                time.sleep(interval / len(connections))
 
     sampler = threading.Thread(target=sample_cpu)
     sender = threading.Thread(target=send_messages)

@@ -208,10 +208,6 @@ def run_basic_mode(args):
     flood_dur = time.time() - start_flood
     print(f"[1] Flood complete in {flood_dur:.2f}s ({total_expected / flood_dur:.0f} msgs/sec)")
 
-    # Wait for queue drain
-    print("\n[1.5] Waiting 10s for queue drain...")
-    time.sleep(10)
-
     # Receive phase
     print("\n[2] ONLINE BURST PHASE")
     messi_consume(total_expected)
@@ -267,7 +263,7 @@ def messi_lifecycle_worker(stop_event, schedule):
             continue
 
         if state == 'OFFLINE':
-            time.sleep(1)
+            stop_event.wait(timeout=1)
         elif state == 'ONLINE':
             if not sock:
                 try:
@@ -337,12 +333,10 @@ def run_lifecycle_mode(args):
         t = threading.Thread(target=sender_worker, args=(i, stop_event), daemon=True)
         t.start()
         fans.append(t)
-        if i % 50 == 0:
-            time.sleep(0.05)
 
     # Wait for test duration
     try:
-        time.sleep(total_time)
+        stop_event.wait(timeout=total_time)
     except KeyboardInterrupt:
         print("\nStopping...")
 

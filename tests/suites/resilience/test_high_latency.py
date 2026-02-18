@@ -151,7 +151,6 @@ def test_stall_and_resume():
 
         # Send before stall
         client.send_msg(target, "pre_stall_msg")
-        time.sleep(0.2)
 
         # Stall for 5 seconds
         log("  Stalling for 5 seconds...")

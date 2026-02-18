@@ -259,7 +259,6 @@ def test_duplicate_detection():
         for i in range(10):
             msg_content = f"{msg_id}:attempt_{i}"
             sender.send_msg(receiver_name, msg_content)
-            time.sleep(0.05)
 
         sender.close()
 
@@ -328,7 +327,6 @@ def test_false_positive_rate():
                 log(f"    Sent {i}/{num_messages}...")
 
         sender.close()
-        time.sleep(1)  # Allow processing
 
         # Get final stats
         final_stats = get_dedup_stats()

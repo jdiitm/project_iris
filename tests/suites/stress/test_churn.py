@@ -197,10 +197,6 @@ def main():
             p_base = run_cmd(cmd_base, bg=True)
             procs.append(p_base)
 
-            # Wait for base to connect - use TCP connection count
-            log("Waiting for base connections to establish...")
-            time.sleep(15)  # Give more time for connections to establish
-
             base_conns = get_tcp_connections(8085)
             log(f"Base loaded. TCP connections: {base_conns}")
 
@@ -224,8 +220,6 @@ def main():
                 p_churn = run_cmd(cmd_churn, bg=True)
                 procs.append(p_churn)
 
-                # Allow ramp up
-                time.sleep(15)
                 peak_conns = get_tcp_connections(8085)
                 log(f"Peak TCP connections: {peak_conns}")
 
@@ -242,8 +236,6 @@ def main():
                     pass
                 procs.remove(p_churn)
 
-                # Allow cleanup
-                time.sleep(10)
                 trough_conns = get_tcp_connections(8085)
                 log(f"Post-Disconnect TCP connections: {trough_conns}")
 

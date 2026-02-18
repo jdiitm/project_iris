@@ -184,12 +184,10 @@ def sender_worker(region_id, sender_id):
                 time.sleep(0.05) # Rate limit per sender
 
             s.close()
-            time.sleep(random.uniform(0.1, 0.5)) # Offline gap
 
         except Exception:
             with stats_lock:
                 stats["errors"] += 1
-            time.sleep(1)
 
 def vip_receiver():
     # VIP Receiver Churn
@@ -224,10 +222,9 @@ def vip_receiver():
                 stats["vip_received"] += c
 
             msg_buffer = b"" # Reset buffer for next session
-            time.sleep(random.uniform(1, 3)) # Stay offline
 
         except Exception:
-            time.sleep(1)
+            pass
 
 def verify_results():
     log("--- Verifying Results ---")

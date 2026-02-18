@@ -251,8 +251,6 @@ def main():
             if conns >= target_conns:
                 log(f"Target connection count reached! ({conns} >= {target_conns})")
                 target_reached = True
-                # Hold for stability verification
-                time.sleep(10)
                 # Final check
                 if verify_edge_alive():
                     log("Edge stable at target load.")

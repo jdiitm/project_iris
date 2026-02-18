@@ -243,7 +243,6 @@ def test_ordering_with_skew():
 
         for msg in messages:
             sender.send_message(receiver_name, msg)
-            time.sleep(0.05)  # Small delay to ensure ordering
 
         # Receive and verify order
         received = []
@@ -331,7 +330,6 @@ def test_dedup_with_skew():
 
         for i in range(3):
             sender.send_message(receiver_name, duplicate_content)
-            time.sleep(0.01)
 
         # Count how many times we receive the message
         receive_count = 0
@@ -568,7 +566,6 @@ def test_docker_clock_skew():
                 # Send messages and verify no errors
                 for i in range(3):
                     client.send_message(user, f"skew_test_{i}")
-                    time.sleep(0.1)
                 log("  Messages sent successfully under clock skew")
             else:
                 log("  FAIL: Login failed during clock skew test")
@@ -939,7 +936,6 @@ def test_rapid_reconnect():
                 reconnect_errors.append(f"reconnect {i}: socket error - {e}")
             except Exception as e:
                 reconnect_errors.append(f"reconnect {i}: {type(e).__name__}: {e}")
-            time.sleep(0.1)  # Brief delay
 
         if reconnect_errors:
             for err in reconnect_errors[:3]:

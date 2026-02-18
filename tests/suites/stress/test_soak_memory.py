@@ -330,10 +330,6 @@ class LoadGenerator:
             self.threads.append(thread)
             thread.start()
 
-            # Stagger connection creation
-            if i % 10 == 0:
-                time.sleep(0.1)
-
         log(f"Load generator started with {self.config.connections} clients")
 
     def stop(self):
@@ -373,7 +369,6 @@ class LoadGenerator:
                         client.login(username)
                     else:
                         # Fallback: just track stats without real connection
-                        time.sleep(1)
                         continue
 
                 # Send a message
@@ -408,7 +403,6 @@ class LoadGenerator:
             except Exception:
                 with self.stats_lock:
                     self.stats['errors'] += 1
-                time.sleep(1)
 
         # Cleanup
         if client:
@@ -458,15 +452,8 @@ def test_soak_24h():
     try:
         # Start monitoring and load generation
         monitor.start()
-        time.sleep(5)  # Let monitoring stabilize
 
         load_gen.start()
-
-        # Wait for memory to stabilize after connection creation.
-        # The BEAM spikes during TLS handshakes / process spawning,
-        # then GC recovers. We need to measure steady-state, not the spike.
-        log("Waiting 60s for memory to stabilize after connection creation...")
-        time.sleep(60)
 
         # Mark warm-up complete — analysis starts from HERE
         monitor.mark_warm_up_complete()

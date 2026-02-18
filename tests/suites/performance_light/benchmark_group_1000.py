@@ -96,9 +96,7 @@ def add_members_and_sync(sock, group_id, count, prefix="member"):
         except Exception as e:
             log(f"  Exception adding member {i}: {e}")
             break
-        # Pacing: brief pause every 100 to avoid overwhelming the TCP buffer
         if (i + 1) % 100 == 0:
-            time.sleep(0.05)
             log(f"    Added {i + 1}/{count} members...")
 
     # Send roster query as synchronization barrier.
@@ -268,10 +266,7 @@ def benchmark_group_creation():
                 log(f"  Exception adding member {i}: {e}")
                 break
 
-            # Batch: don't wait for each response, just send
             if (i + 1) % 100 == 0:
-                # Brief pause every 100 to let server process
-                time.sleep(0.05)
                 log(f"    Added {i + 1}/{GROUP_SIZE} members...")
 
         # Wait for final responses to flush
@@ -366,9 +361,6 @@ def benchmark_message_fanout():
             # Note: This doesn't include fanout to all members
             latency_ms = (time.time() - start) * 1000
             latencies.append(latency_ms)
-
-            # Small delay between messages
-            time.sleep(0.02)
 
         sender.close()
 
@@ -472,8 +464,6 @@ def benchmark_roster_retrieval():
 
             latency_ms = (time.time() - start) * 1000
             latencies.append(latency_ms)
-
-            time.sleep(0.1)
 
         admin.close()
 

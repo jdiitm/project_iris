@@ -89,9 +89,6 @@ def test_offline_durability_strict():
         print(f"  ✗ FAIL: Could not send messages: {e}")
         return False
 
-    # Give Mnesia time to persist
-    time.sleep(3)
-
     # Step 2: Connect as receiver and collect messages
     print("\n[Step 2] Connecting as receiver...")
 
@@ -102,8 +99,6 @@ def test_offline_durability_strict():
         try:
             receiver = IrisClient('localhost', 8085)
             receiver.login(receiver_user)
-
-            time.sleep(2)  # Wait for offline delivery
 
             for _ in range(10):
                 try:

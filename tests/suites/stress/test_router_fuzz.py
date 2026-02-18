@@ -33,7 +33,6 @@ def test_route_random_usernames():
     sender = IrisClient()
     try:
         sender.login("fuzz_sender")
-        time.sleep(0.3)
 
         # Send messages to random, likely-offline users
         for i in range(200):
@@ -44,9 +43,7 @@ def test_route_random_usernames():
                 pass  # Some may be rate-limited or overflow -- OK
 
         # Verify server is still healthy
-        time.sleep(0.5)
         sender.send_msg("fuzz_sender", "self_check")
-        time.sleep(1)
         return True
     finally:
         sender.close()
@@ -73,11 +70,9 @@ def test_offline_fallback_under_load():
         # Setup
         sender.login("offline_fuzz_sender")
         receiver.login("offline_fuzz_receiver")
-        time.sleep(0.3)
 
         # Disconnect receiver
         receiver.close()
-        time.sleep(0.5)
 
         # Send to offline receiver, paced within rate limiter budget.
         # Rate limit: 5 msg/sec sustained, initial tokens = 10.
@@ -90,13 +85,9 @@ def test_offline_fallback_under_load():
                 pass
             time.sleep(0.21)
 
-        # Allow offline storage pipeline to complete
-        time.sleep(3)
-
-        # Reconnect receiver — allow time for offline delivery pipeline
+        # Reconnect receiver
         receiver = IrisClient()
         receiver.login("offline_fuzz_receiver")
-        time.sleep(5)
 
         # Check for delivered messages - receive what we can
         msgs = []
