@@ -30,6 +30,7 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(_
 sys.path.insert(0, PROJECT_ROOT)
 
 from tests.utilities import IrisClient, unique_user
+from tests.utilities.tls_connection import get_unverified_ssl_context
 
 SERVER_HOST = os.environ.get("IRIS_HOST", "localhost")
 SERVER_PORT = int(os.environ.get("IRIS_PORT", "8085"))
@@ -130,9 +131,7 @@ def test_post_tls_stalled_login():
 
     for i in range(n):
         try:
-            ctx = ssl.create_default_context()
-            ctx.check_hostname = False
-            ctx.verify_mode = ssl.CERT_NONE
+            ctx = get_unverified_ssl_context()  # Unverified: testing rejection/attack scenario
             raw = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             raw.settimeout(5)
             tls_sock = ctx.wrap_socket(raw, server_hostname=SERVER_HOST)

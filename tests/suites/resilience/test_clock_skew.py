@@ -53,6 +53,7 @@ if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
 from tests.utilities.helpers import unique_user
+from tests.utilities.tls_connection import get_verified_ssl_context
 
 # CI environment detection — libfaketime may not be installed on CI runners
 IS_CI = os.environ.get("CI") == "true" or os.environ.get("GITHUB_ACTIONS") == "true"
@@ -95,12 +96,7 @@ class SimpleClient:
     
     def connect(self):
         """Establish TLS connection."""
-        context = ssl.create_default_context()
-        if CA_CERT.exists():
-            context.load_verify_locations(str(CA_CERT))
-        else:
-            context.check_hostname = False
-            context.verify_mode = ssl.CERT_NONE
+        context = get_verified_ssl_context()
         
         raw_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         raw_sock.settimeout(TIMEOUT)
@@ -152,12 +148,7 @@ class SimpleClient:
 def check_server_available():
     """Check if server is reachable via TLS."""
     try:
-        context = ssl.create_default_context()
-        if CA_CERT.exists():
-            context.load_verify_locations(str(CA_CERT))
-        else:
-            context.check_hostname = False
-            context.verify_mode = ssl.CERT_NONE
+        context = get_verified_ssl_context()
         
         raw_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         raw_sock.settimeout(2)

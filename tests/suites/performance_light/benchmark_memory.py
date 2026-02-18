@@ -26,6 +26,7 @@ if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
 from tests.framework.cluster import ClusterManager
+from tests.utilities.tls_connection import get_verified_ssl_context
 
 # CI environment detection
 IS_CI = os.environ.get("CI") == "true" or os.environ.get("GITHUB_ACTIONS") == "true"
@@ -66,12 +67,7 @@ def get_ssl_context():
     """Get or create a shared SSL context for benchmark connections."""
     global _ssl_context
     if _ssl_context is None:
-        _ssl_context = ssl.create_default_context()
-        if CA_CERT.exists():
-            _ssl_context.load_verify_locations(str(CA_CERT))
-        else:
-            _ssl_context.check_hostname = False
-            _ssl_context.verify_mode = ssl.CERT_NONE
+        _ssl_context = get_verified_ssl_context()
     return _ssl_context
 
 

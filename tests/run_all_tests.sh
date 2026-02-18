@@ -506,13 +506,21 @@ else
     if [ $eunit_rc -eq 0 ]; then
         echo -e "${GREEN}PASS${NC}"
         TOTAL_PASS=$((TOTAL_PASS + 1))
-    elif grep -q "Failed: 0" "$LOG_DIR/eunit.log" 2>/dev/null; then
-        echo -e "${GREEN}PASS${NC} (cancelled tests, 0 failures)"
-        TOTAL_PASS=$((TOTAL_PASS + 1))
     else
-        echo -e "${RED}FAIL${NC}"
-        TOTAL_FAIL=$((TOTAL_FAIL + 1))
-        FAILED_TESTS+=("EUnit")
+        CANCELLED=$(grep -oP 'Cancelled: \K[0-9]+' "$LOG_DIR/eunit.log" 2>/dev/null || echo "0")
+        FAILED_COUNT=$(grep -oP 'Failed: \K[0-9]+' "$LOG_DIR/eunit.log" 2>/dev/null || echo "unknown")
+        if [ "$FAILED_COUNT" = "0" ] && [ "$CANCELLED" = "0" ]; then
+            echo -e "${GREEN}PASS${NC} (non-zero exit, 0 failures, 0 cancellations)"
+            TOTAL_PASS=$((TOTAL_PASS + 1))
+        elif [ "$FAILED_COUNT" = "0" ] && [ "$CANCELLED" != "0" ]; then
+            echo -e "${RED}FAIL${NC} ($CANCELLED test(s) CANCELLED — never ran)"
+            TOTAL_FAIL=$((TOTAL_FAIL + 1))
+            FAILED_TESTS+=("EUnit ($CANCELLED cancelled)")
+        else
+            echo -e "${RED}FAIL${NC}"
+            TOTAL_FAIL=$((TOTAL_FAIL + 1))
+            FAILED_TESTS+=("EUnit")
+        fi
     fi
 
     echo ""

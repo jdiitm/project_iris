@@ -261,7 +261,7 @@ handle_packet({send_seq, _Target, _SeqNo, _Msg}, undefined, _Pid, _Mod) ->
     {ok, undefined, []};
 
 %% RFC v4.0: SEND_SEQ_V2 (0x0D) with UUIDv7 idempotency key
-handle_packet({send_seq_v2, Target, IdKey, SeqNo, Msg}, User, _Pid, _Mod) when User =/= undefined ->
+handle_packet({send_seq_v2, Target, IdKey, _SeqNo, Msg}, User, _Pid, _Mod) when User =/= undefined ->
     iris_trace:new_span(<<"session.send_seq_v2">>),
     iris_metrics:msg_in(),
     track_request(User),

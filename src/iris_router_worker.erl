@@ -7,11 +7,12 @@
 -define(IDX_TIME, 2).
 
 %% Dynamic Core node discovery with failover
-get_core_node() ->
-    case iris_core_registry:get_core() of
-        {ok, Node} -> Node;
-        {error, _} -> legacy_core_node()
-    end.
+%% Commented out: unused local function (kept for potential future use).
+%% get_core_node() ->
+%%     case iris_core_registry:get_core() of
+%%         {ok, Node} -> Node;
+%%         {error, _} -> legacy_core_node()
+%%     end.
 
 get_core_for_user(User) ->
     case iris_core_registry:get_core_for_user(User) of

@@ -6,6 +6,7 @@ primitives for chaos_dist tests.
 All tests in this suite connect to the Docker cluster which has TLS enabled.
 """
 
+import sys
 import socket
 import ssl
 import struct
@@ -14,8 +15,10 @@ import time
 from pathlib import Path
 from typing import Optional, Tuple, List
 
-# Project root for locating certificates
 PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
+sys.path.insert(0, str(PROJECT_ROOT))
+
+from tests.utilities.tls_connection import get_verified_ssl_context
 CA_CERT = PROJECT_ROOT / "certs" / "ca.pem"
 
 # Default timeout for connections
@@ -39,14 +42,7 @@ def get_tls_context() -> ssl.SSLContext:
     if _tls_context_cache is not None:
         return _tls_context_cache
     
-    context = ssl.create_default_context()
-    
-    if CA_CERT.exists():
-        context.load_verify_locations(str(CA_CERT))
-    else:
-        # Fallback: don't verify if CA cert not found (for local testing)
-        context.check_hostname = False
-        context.verify_mode = ssl.CERT_NONE
+    context = get_verified_ssl_context()
     
     _tls_context_cache = context
     return context

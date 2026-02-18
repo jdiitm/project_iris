@@ -27,19 +27,14 @@ if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
 from tests.framework.cluster import ClusterManager
+from tests.utilities.tls_connection import get_verified_ssl_context
 
 # TLS Configuration
 CA_CERT = Path(project_root) / "certs" / "ca.pem"
 
 def get_ssl_context():
     """Create SSL context for TLS connections."""
-    context = ssl.create_default_context()
-    if CA_CERT.exists():
-        context.load_verify_locations(str(CA_CERT))
-    else:
-        context.check_hostname = False
-        context.verify_mode = ssl.CERT_NONE
-    return context
+    return get_verified_ssl_context()
 
 # Configuration
 TEST_PROFILE = os.environ.get("TEST_PROFILE", "smoke")

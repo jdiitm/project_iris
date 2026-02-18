@@ -36,6 +36,11 @@ IS_CI = os.environ.get("CI") == "true" or os.environ.get("GITHUB_ACTIONS") == "t
 
 # TLS Configuration
 PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from tests.utilities.tls_connection import get_verified_ssl_context
+
 CA_CERT = PROJECT_ROOT / "certs" / "ca.pem"
 
 # Socket timeout — prevents hangs when server is degraded from prior benchmarks
@@ -43,13 +48,7 @@ SOCKET_TIMEOUT = 30
 
 def get_ssl_context():
     """Create SSL context for TLS connections."""
-    context = ssl.create_default_context()
-    if CA_CERT.exists():
-        context.load_verify_locations(str(CA_CERT))
-    else:
-        context.check_hostname = False
-        context.verify_mode = ssl.CERT_NONE
-    return context
+    return get_verified_ssl_context()
 
 
 # Scale workload to environment:

@@ -150,7 +150,7 @@ different_sessions_different_secrets_test() ->
     %% Generate identity keys
     {IK_A_Pub, IK_A_Priv} = iris_x3dh:generate_identity_key(),
     {IK_B_Pub, IK_B_Priv} = iris_x3dh:generate_identity_key(),
-    {SPK_B_Pub, SPK_B_Priv, SPK_B_Sig} = iris_x3dh:generate_signed_prekey(IK_B_Priv),
+    {SPK_B_Pub, _SPK_B_Priv, SPK_B_Sig} = iris_x3dh:generate_signed_prekey(IK_B_Priv),
     
     AliceKeys = #{
         identity_key_public => IK_A_Pub,
@@ -235,7 +235,7 @@ signature_binds_to_prekey_test() ->
     
     {_, IK_A_Priv} = iris_x3dh:generate_identity_key(),
     {IK_A_Pub, _} = iris_x3dh:generate_identity_key(),  %% Different for cross-check
-    {SPK_Pub, _, Sig} = iris_x3dh:generate_signed_prekey(IK_A_Priv),
+    {_SPK_Pub, _, Sig} = iris_x3dh:generate_signed_prekey(IK_A_Priv),
     
     %% Generate a different prekey to test binding
     {DifferentSPK_Pub, _, _} = iris_x3dh:generate_signed_prekey(IK_A_Priv),

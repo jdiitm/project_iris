@@ -22,6 +22,8 @@ project_root = os.path.abspath(os.path.join(current_dir, "../../.."))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
+from tests.utilities.tls_connection import get_verified_ssl_context
+
 # TLS CA certificate
 CA_CERT = os.path.join(project_root, "certs", "ca.pem")
 
@@ -37,12 +39,7 @@ def get_connection(port=8085):
     """
     raw = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     raw.settimeout(5.0)
-    ctx = ssl.create_default_context()
-    if os.path.exists(CA_CERT):
-        ctx.load_verify_locations(CA_CERT)
-    else:
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
+    ctx = get_verified_ssl_context()
     s = ctx.wrap_socket(raw, server_hostname='localhost')
     s.connect(('localhost', port))
     return s
@@ -306,12 +303,7 @@ def test_rapid_connection_flood():
     
     try:
         # Open many TLS connections rapidly (server requires TLS)
-        ctx = ssl.create_default_context()
-        if os.path.exists(CA_CERT):
-            ctx.load_verify_locations(CA_CERT)
-        else:
-            ctx.check_hostname = False
-            ctx.verify_mode = ssl.CERT_NONE
+        ctx = get_verified_ssl_context()
         for i in range(num_connections):
             try:
                 raw = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

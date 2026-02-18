@@ -1,0 +1,5 @@
+# Dialyzer warning baseline — single source of truth
+# Measured: 2026-02-16 on OTP 26
+# Update this file ONLY when warnings are fixed (ratchet down, never up)
+# CI reads this value as the maximum allowed warning count
+779

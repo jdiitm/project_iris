@@ -17,6 +17,7 @@
 -export([validate_production_cookie/0, validate_production_cookie/1]).
 -export([is_core_node/1]).  %% Exported for iris_cluster_join_worker
 -export([validate_consistency_mode/0]).  %% CP mode hard-fail
+-export([validate_metrics_token/0]).    %% Production metrics token validation
 -export([make_dedup_key/2]).  %% Testable dedup key generation
 -export([nuke_and_recreate_table/1]).  %% Exported for testing production guard
 -export([force_load_isolated/1]).  %% Exported for H-2 production guard testing
@@ -120,6 +121,14 @@ start(_StartType, _StartArgs) ->
             exit(default_cookie_in_production)
     end,
 
+    %% Reject placeholder metrics token in production mode
+    case validate_metrics_token() of
+        ok -> ok;
+        {error, TokenErr} ->
+            init:stop(1),
+            exit(TokenErr)
+    end,
+
     %% Verify mTLS is configured if enforce_mtls=true
     check_mtls_enforcement(),
 
@@ -150,6 +159,28 @@ validate_production_cookie(Cookie) ->
                 _ -> ok
             end;
         _ -> ok
+    end.
+
+%% @doc Validate metrics_bearer_token in production mode.
+%% Rejects placeholder value and missing token.
+-spec validate_metrics_token() -> ok | {error, placeholder_metrics_token | metrics_token_missing}.
+validate_metrics_token() ->
+    case application:get_env(iris_core, deployment_mode, development) of
+        production ->
+            case application:get_env(iris_core, metrics_bearer_token, undefined) of
+                undefined ->
+                    logger:error("FATAL: metrics_bearer_token not set in production mode. "
+                                 "Set metrics_bearer_token in config or remove metrics endpoint."),
+                    {error, metrics_token_missing};
+                <<"REPLACE_WITH_METRICS_TOKEN">> ->
+                    logger:error("FATAL: metrics_bearer_token is still the default placeholder. "
+                                 "Set a real token in production config."),
+                    {error, placeholder_metrics_token};
+                _Token ->
+                    ok
+            end;
+        _ ->
+            ok
     end.
 
 %% Validate consistency mode.
@@ -991,7 +1022,7 @@ create_tables(Nodes) ->
 
 %% Legacy wrapper for specific node lists (unused now but kept for API compat)
 -spec init_db([node()]) -> ok.
-init_db(Nodes) ->
+init_db(_Nodes) ->
    init_db(). %% Ignore args, use robust logic
 
 join_cluster(Node) ->

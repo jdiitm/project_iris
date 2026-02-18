@@ -24,6 +24,7 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(o
 sys.path.insert(0, PROJECT_ROOT)
 
 from pathlib import Path
+from tests.utilities.tls_connection import get_verified_ssl_context
 
 CA_CERT = Path(PROJECT_ROOT) / "certs" / "ca.pem"
 HOST = os.environ.get('IRIS_HOST', 'localhost')
@@ -39,12 +40,7 @@ def unique_user(prefix):
 
 
 def get_tls_socket():
-    context = ssl.create_default_context()
-    if CA_CERT.exists():
-        context.load_verify_locations(str(CA_CERT))
-    else:
-        context.check_hostname = False
-        context.verify_mode = ssl.CERT_NONE
+    context = get_verified_ssl_context()
     raw = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     raw.settimeout(10.0)
     s = context.wrap_socket(raw, server_hostname=HOST)

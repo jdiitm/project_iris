@@ -30,6 +30,7 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(o
 sys.path.insert(0, PROJECT_ROOT)
 
 from pathlib import Path
+from tests.utilities.tls_connection import get_unverified_ssl_context
 
 # Test configuration
 HOST = os.environ.get("IRIS_HOST", "localhost")
@@ -58,12 +59,7 @@ def log_test(name: str, passed: bool, message: str = ""):
 
 def connect_tls():
     """Create TLS connection to server."""
-    context = ssl.create_default_context()
-    if CA_CERT.exists():
-        context.load_verify_locations(str(CA_CERT))
-    else:
-        context.check_hostname = False
-        context.verify_mode = ssl.CERT_NONE
+    context = get_unverified_ssl_context()  # Unverified: testing rejection/attack scenario
     
     raw_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     raw_sock.settimeout(TIMEOUT)

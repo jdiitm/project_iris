@@ -37,6 +37,8 @@ SERVER_HOST = os.environ.get("IRIS_HOST", "localhost")
 SERVER_PORT = int(os.environ.get("IRIS_PORT", "8085"))
 CA_CERT = Path(PROJECT_ROOT) / "certs" / "ca.pem"
 
+from tests.utilities.tls_connection import get_verified_ssl_context
+
 # Results tracking
 results = []
 
@@ -83,12 +85,7 @@ def log_test(name: str, passed: bool, message: str = ""):
 
 def create_connection(timeout=5.0):
     """Create a TLS connection to the server."""
-    context = ssl.create_default_context()
-    if CA_CERT.exists():
-        context.load_verify_locations(str(CA_CERT))
-    else:
-        context.check_hostname = False
-        context.verify_mode = ssl.CERT_NONE
+    context = get_verified_ssl_context()
     
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.settimeout(timeout)

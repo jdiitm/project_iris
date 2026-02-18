@@ -33,6 +33,11 @@ from pathlib import Path
 
 # TLS Configuration
 PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from tests.utilities.tls_connection import get_verified_ssl_context
+
 CA_CERT = PROJECT_ROOT / "certs" / "ca.pem"
 
 # Configuration
@@ -433,12 +438,7 @@ def test_live_login_contract():
     """Test: Live server respects login contract."""
     try:
         # Create TLS context
-        context = ssl.create_default_context()
-        if CA_CERT.exists():
-            context.load_verify_locations(str(CA_CERT))
-        else:
-            context.check_hostname = False
-            context.verify_mode = ssl.CERT_NONE
+        context = get_verified_ssl_context()
         
         raw_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         raw_sock.settimeout(TIMEOUT)
@@ -471,12 +471,7 @@ def test_live_message_contract():
     """Test: Live server respects message contract."""
     try:
         # Create TLS context
-        context = ssl.create_default_context()
-        if CA_CERT.exists():
-            context.load_verify_locations(str(CA_CERT))
-        else:
-            context.check_hostname = False
-            context.verify_mode = ssl.CERT_NONE
+        context = get_verified_ssl_context()
         
         # Login sender
         raw_sender = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

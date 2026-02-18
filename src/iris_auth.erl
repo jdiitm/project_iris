@@ -149,16 +149,17 @@ get_jti_from_token(Token) ->
 %% An attacker can forge a JWT with any 'sub' claim.
 %% Use validate_token/1 for all security-sensitive operations.
 %% B-8 FIX: Removed from module exports to prevent misuse.
--spec get_user_from_token_UNSAFE(binary()) -> {ok, binary()} | {error, term()}.
-get_user_from_token_UNSAFE(Token) ->
-    case decode_payload(Token) of
-        {ok, Claims} ->
-            case maps:get(<<"sub">>, Claims, undefined) of
-                undefined -> {error, no_subject};
-                UserId -> {ok, UserId}
-            end;
-        Error -> Error
-    end.
+%% Commented out: unused local function (kept for potential future use).
+%% -spec get_user_from_token_UNSAFE(binary()) -> {ok, binary()} | {error, term()}.
+%% get_user_from_token_UNSAFE(Token) ->
+%%     case decode_payload(Token) of
+%%         {ok, Claims} ->
+%%             case maps:get(<<"sub">>, Claims, undefined) of
+%%                 undefined -> {error, no_subject};
+%%                 UserId -> {ok, UserId}
+%%             end;
+%%         Error -> Error
+%%     end.
 
 %% =============================================================================
 %% GenServer Callbacks
@@ -531,7 +532,7 @@ do_validate(Token, Opts, State = #state{signing_keys = SigningKeys, issuer = Exp
         Error -> Error
     end.
 
-validate_claims(Claims, ExpectedIssuer, Opts) ->
+validate_claims(Claims, ExpectedIssuer, _Opts) ->
     Now = os:system_time(second),
     
     %% Check expiry

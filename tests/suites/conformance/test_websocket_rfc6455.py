@@ -38,6 +38,7 @@ import base64
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 sys.path.insert(0, PROJECT_ROOT)
 from tests.utilities.helpers import wait_until
+from tests.utilities.tls_connection import get_verified_ssl_context
 
 SERVER_HOST = os.environ.get("IRIS_HOST", "localhost")
 SERVER_PORT = int(os.environ.get("IRIS_PORT", "8085"))
@@ -81,9 +82,7 @@ def port_open(port):
 def send_http_request(port, request_bytes):
     """Send raw HTTP request via TLS and return response bytes."""
     try:
-        ctx = ssl.create_default_context()
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
+        ctx = get_verified_ssl_context()
         raw = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         raw.settimeout(TIMEOUT)
         tls_sock = ctx.wrap_socket(raw, server_hostname=SERVER_HOST)

@@ -246,7 +246,7 @@ connected(info, check_acks, Data = #data{pending_acks = Pending, user = User, re
     end.
 
 %% Enforce bounded pending_acks by moving oldest to offline storage
-enforce_pending_limit(Pending, User) when map_size(Pending) < ?MAX_PENDING_ACKS ->
+enforce_pending_limit(Pending, _User) when map_size(Pending) < ?MAX_PENDING_ACKS ->
     Pending;
 enforce_pending_limit(Pending, User) ->
     %% Find and remove oldest entries until under limit
@@ -350,8 +350,9 @@ send(Socket, ssl, Msg) -> ssl:send(Socket, Msg).
 send_compressed(Socket, Transport, Caps, Msg) ->
     send(Socket, Transport, maybe_compress_outbound(Caps, Msg)).
 
-process_buffer(Bin, Data) ->
-    process_buffer(Bin, Data, 0).
+%% Commented out: unused local function (2-arity wrapper, 3-arity called directly).
+%% process_buffer(Bin, Data) ->
+%%     process_buffer(Bin, Data, 0).
 
 %% Depth-limited recursive buffer processing
 process_buffer(_Bin, Data, Depth) when Depth > ?MAX_PROCESS_DEPTH ->
@@ -465,7 +466,7 @@ save_msgs_durable_sync(User, Msgs) ->
 
 save_msgs_durable_sync(_User, [], _CoreNode, _Retries) ->
     ok;
-save_msgs_durable_sync(User, Msgs, CoreNode, 0) ->
+save_msgs_durable_sync(User, Msgs, _CoreNode, 0) ->
     %% All retries exhausted - save to local ETS for later sync
     logger:error("Failed to durably save ~p msgs for ~p after retries, using local fallback", 
                  [length(Msgs), User]),

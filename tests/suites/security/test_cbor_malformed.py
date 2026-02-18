@@ -33,6 +33,8 @@ import time
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 sys.path.insert(0, PROJECT_ROOT)
 
+from tests.utilities.tls_connection import get_verified_ssl_context
+
 SERVER_HOST = os.environ.get("IRIS_HOST", "localhost")
 SERVER_PORT = int(os.environ.get("IRIS_PORT", "8085"))
 CA_CERT = os.path.join(PROJECT_ROOT, "certs", "ca.pem")
@@ -57,9 +59,7 @@ def server_alive():
 
 
 def get_tls_socket(timeout=TIMEOUT):
-    ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
+    ctx = get_verified_ssl_context()
     raw = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     raw.settimeout(timeout)
     tls_sock = ctx.wrap_socket(raw, server_hostname=SERVER_HOST)

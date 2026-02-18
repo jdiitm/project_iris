@@ -74,7 +74,7 @@ test_stats_include_replication() ->
     %% Stats should include the new replication metrics
     %% Note: This test may need the batcher to be running
     %% We test by checking the aggregate function produces expected keys
-    EmptyStats = [#{
+    _EmptyStats = [#{
         writes_wal => 0,
         writes_mnesia => 0,
         batch_count => 0,

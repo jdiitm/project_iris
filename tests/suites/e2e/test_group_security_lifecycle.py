@@ -38,6 +38,7 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(o
 sys.path.insert(0, PROJECT_ROOT)
 
 from tests.utilities import IrisClient, unique_user
+from tests.utilities.tls_connection import get_verified_ssl_context
 
 # Test results
 results = []
@@ -706,8 +707,6 @@ def test_forward_secrecy_within_epoch():
 
 def check_server_available() -> bool:
     """Check if server is available for testing (TLS mandatory)."""
-    import ssl
-    from pathlib import Path
     host = os.environ.get("IRIS_HOST", "localhost")
     port = int(os.environ.get("IRIS_PORT", "8085"))
     
@@ -715,13 +714,7 @@ def check_server_available() -> bool:
         # TLS is mandatory per RFC NFR-14
         raw_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         raw_sock.settimeout(3.0)
-        ctx = ssl.create_default_context()
-        ca_cert = Path(__file__).parent.parent.parent.parent / "certs" / "ca.pem"
-        if ca_cert.exists():
-            ctx.load_verify_locations(str(ca_cert))
-        else:
-            ctx.check_hostname = False
-            ctx.verify_mode = ssl.CERT_NONE
+        ctx = get_verified_ssl_context()
         sock = ctx.wrap_socket(raw_sock, server_hostname=host)
         sock.connect((host, port))
         sock.close()

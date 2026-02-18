@@ -49,13 +49,13 @@ simple_encrypt_decrypt_test() ->
     
     %% Alice encrypts a message
     Plaintext = <<"Hello, Bob!">>,
-    {ok, Ciphertext, Header, AliceState1} = iris_ratchet:encrypt(Plaintext, AliceState0),
+    {ok, Ciphertext, Header, _AliceState1} = iris_ratchet:encrypt(Plaintext, AliceState0),
     
     %% Verify ciphertext is different from plaintext
     ?assertNotEqual(Plaintext, Ciphertext),
     
     %% Bob decrypts the message
-    {ok, Decrypted, BobState1} = iris_ratchet:decrypt(Ciphertext, Header, BobState0),
+    {ok, Decrypted, _BobState1} = iris_ratchet:decrypt(Ciphertext, Header, BobState0),
     
     %% Verify decryption matches original
     ?assertEqual(Plaintext, Decrypted).
@@ -83,8 +83,8 @@ bidirectional_communication_test() ->
     
     %% Alice sends again
     Msg3 = <<"Message 3 from Alice">>,
-    {ok, Ct3, Hdr3, AliceState3} = iris_ratchet:encrypt(Msg3, AliceState2),
-    {ok, Dec3, BobState3} = iris_ratchet:decrypt(Ct3, Hdr3, BobState2),
+    {ok, Ct3, Hdr3, _AliceState3} = iris_ratchet:encrypt(Msg3, AliceState2),
+    {ok, Dec3, _BobState3} = iris_ratchet:decrypt(Ct3, Hdr3, BobState2),
     ?assertEqual(Msg3, Dec3).
 
 multiple_messages_same_chain_test() ->
@@ -107,7 +107,7 @@ multiple_messages_same_chain_test() ->
     %% Bob decrypts all 3
     {ok, Dec1, BobState1} = iris_ratchet:decrypt(Ct1, Hdr1, BobState0),
     {ok, Dec2, BobState2} = iris_ratchet:decrypt(Ct2, Hdr2, BobState1),
-    {ok, Dec3, BobState3} = iris_ratchet:decrypt(Ct3, Hdr3, BobState2),
+    {ok, Dec3, _BobState3} = iris_ratchet:decrypt(Ct3, Hdr3, BobState2),
     
     ?assertEqual(Msg1, Dec1),
     ?assertEqual(Msg2, Dec2),
@@ -430,7 +430,7 @@ test_wrong_sender_key() ->
     {BobPub, BobPriv} = iris_ratchet:generate_ratchet_keypair(),
     
     %% Alice's session with Bob
-    {ok, AliceState} = iris_ratchet:init_alice(SharedSecret, BobPub),
+    {ok, _AliceState} = iris_ratchet:init_alice(SharedSecret, BobPub),
     {ok, BobState} = iris_ratchet:init_bob(SharedSecret, {BobPub, BobPriv}, undefined),
     
     %% Eve's session (different secret)
@@ -606,7 +606,7 @@ skipped_keys_bounded_test() ->
         {'EXIT', {error, too_many_total_skipped}} ->
             %% Thrown error is also acceptable
             ok;
-        Other ->
+        _Other ->
             %% Any other result is unexpected -- fail
             ?assert(false)
     end.

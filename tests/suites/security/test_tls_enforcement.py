@@ -14,6 +14,8 @@ import ssl
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 sys.path.insert(0, PROJECT_ROOT)
 
+from tests.utilities.tls_connection import get_unverified_ssl_context
+
 
 def test_server_responds():
     """Basic check that server is running."""
@@ -52,9 +54,7 @@ def test_tls_mode_check():
     
     # Step 1: Try TLS connection (should succeed if server has TLS)
     try:
-        context = ssl.create_default_context()
-        context.check_hostname = False
-        context.verify_mode = ssl.CERT_NONE
+        context = get_unverified_ssl_context()  # Unverified: testing rejection/attack scenario
         
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         s.settimeout(5)

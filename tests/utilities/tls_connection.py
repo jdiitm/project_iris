@@ -1,8 +1,12 @@
 """
-TLS Connection Utility for Chaos Tests
+TLS Connection Utility for Tests
 
-Provides TLS-aware connection functions for connecting to edge nodes
-in the Docker cluster where TLS is enabled by default.
+Provides TLS-aware connection functions for connecting to edge nodes.
+Test certificates are self-signed; the CA cert is loaded for verification.
+
+IMPORTANT: Use get_verified_ssl_context() by default. Only use
+get_unverified_ssl_context() in tests that explicitly test rejection
+scenarios (e.g., wrong cert, expired cert, plaintext rejection).
 """
 
 import socket
@@ -22,30 +26,63 @@ CLIENT_KEY = PROJECT_ROOT / "certs" / "test-client.key"
 DEFAULT_TIMEOUT = 10
 
 
+def get_verified_ssl_context(client_cert: bool = False) -> ssl.SSLContext:
+    """
+    Create an SSL context that verifies the server certificate against the test CA.
+
+    This is the DEFAULT for all tests. It ensures tests actually validate TLS.
+    Hostname checking is disabled because tests connect to localhost with
+    certs issued to edge-east-1 etc.
+
+    Raises:
+        FileNotFoundError: If certs/ca.pem is missing.
+    """
+    if not CA_CERT.exists():
+        raise FileNotFoundError(
+            f"CA certificate not found at {CA_CERT}. "
+            "Run 'make certs' or 'cd certs && bash generate_certs.sh' to generate test certificates."
+        )
+    # Use bare SSLContext to avoid loading system CAs — self-signed test CA
+    # must be the ONLY trusted root, otherwise OpenSSL rejects the chain.
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    context.load_verify_locations(str(CA_CERT))
+    context.check_hostname = False
+
+    if client_cert and CLIENT_CERT.exists() and CLIENT_KEY.exists():
+        context.load_cert_chain(str(CLIENT_CERT), str(CLIENT_KEY))
+
+    return context
+
+
+def get_unverified_ssl_context() -> ssl.SSLContext:
+    """
+    Create an SSL context that does NOT verify the server certificate.
+
+    ONLY use this in tests that explicitly test rejection scenarios:
+    - Plaintext rejection tests
+    - Wrong/expired certificate tests
+    - Protocol fuzzing against TLS listener
+    """
+    context = ssl.create_default_context()
+    context.check_hostname = False
+    context.verify_mode = ssl.CERT_NONE
+    return context
+
+
 def get_ssl_context(verify: bool = True, client_cert: bool = False) -> ssl.SSLContext:
     """
     Create an SSL context for TLS connections.
-    
-    Args:
-        verify: Whether to verify server certificate (default: True)
-        client_cert: Whether to use client certificate for mTLS (default: False)
-    
-    Returns:
-        ssl.SSLContext configured for TLS
+
+    Prefer get_verified_ssl_context() or get_unverified_ssl_context() for clarity.
+    This function is kept for backward compatibility.
     """
-    context = ssl.create_default_context()
-    
     if verify and CA_CERT.exists():
-        context.load_verify_locations(str(CA_CERT))
+        return get_verified_ssl_context(client_cert=client_cert)
     else:
-        # Don't verify for testing (not recommended for production)
-        context.check_hostname = False
-        context.verify_mode = ssl.CERT_NONE
-    
-    if client_cert and CLIENT_CERT.exists() and CLIENT_KEY.exists():
-        context.load_cert_chain(str(CLIENT_CERT), str(CLIENT_KEY))
-    
-    return context
+        ctx = get_unverified_ssl_context()
+        if client_cert and CLIENT_CERT.exists() and CLIENT_KEY.exists():
+            ctx.load_cert_chain(str(CLIENT_CERT), str(CLIENT_KEY))
+        return ctx
 
 
 def connect_tls(host: str, port: int, timeout: int = DEFAULT_TIMEOUT, 

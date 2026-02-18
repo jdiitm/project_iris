@@ -80,7 +80,7 @@ test_disc_only_handles_large_data() ->
     mnesia:wait_for_tables([large_test_offline], 5000),
 
     %% Measure baseline memory (in words)
-    BaselineMemory = mnesia:table_info(large_test_offline, memory),
+    _BaselineMemory = mnesia:table_info(large_test_offline, memory),
 
     %% Insert 10K records (each ~100 bytes)
     NumRecords = 10000,

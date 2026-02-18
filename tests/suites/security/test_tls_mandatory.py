@@ -19,6 +19,7 @@ import os
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 sys.path.insert(0, PROJECT_ROOT)
 from tests.utilities.helpers import wait_until
+from tests.utilities.tls_connection import get_unverified_ssl_context
 
 SERVER_HOST = os.environ.get("IRIS_HOST", "localhost")
 SERVER_PORT = int(os.environ.get("IRIS_PORT", "8085"))
@@ -113,9 +114,7 @@ def test_tls_connection_works():
     print("\n=== Test 2: TLS Connection Must Be Accepted ===")
     
     try:
-        context = ssl.create_default_context()
-        context.check_hostname = False
-        context.verify_mode = ssl.CERT_NONE  # Self-signed cert
+        context = get_unverified_ssl_context()  # Unverified: testing rejection/attack scenario
         
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.settimeout(TIMEOUT)

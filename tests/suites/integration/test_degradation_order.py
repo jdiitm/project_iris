@@ -41,6 +41,7 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(_
 sys.path.insert(0, PROJECT_ROOT)
 
 from tests.utilities import IrisClient, unique_user
+from tests.utilities.tls_connection import get_verified_ssl_context
 
 # Determinism
 TEST_SEED = int(os.environ.get("TEST_SEED", 42))
@@ -193,13 +194,7 @@ def probe_message_delivery(sender_client, receiver_client, receiver_user):
             reconnect_timeout = 10.0 if IS_CI else 5.0
             new_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             new_sock.settimeout(reconnect_timeout)
-            context = ssl.create_default_context()
-            ca_cert = str(Path(__file__).parent.parent.parent.parent / "certs" / "ca.pem")
-            if os.path.exists(ca_cert):
-                context.load_verify_locations(ca_cert)
-            else:
-                context.check_hostname = False
-                context.verify_mode = ssl.CERT_NONE
+            context = get_verified_ssl_context()
             new_sock.connect((SERVER_HOST, SERVER_PORT))
             sender_client.sock = context.wrap_socket(new_sock, server_hostname=SERVER_HOST)
             sender_client.sock.settimeout(5.0)

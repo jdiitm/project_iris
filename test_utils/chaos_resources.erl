@@ -25,7 +25,7 @@ eat_memory(MB) ->
     Chunks = MB div 10,
     spawn(?MODULE, mem_worker, [[], Chunks, ChunkSize]).
 
-mem_worker(List, 0, _) ->
+mem_worker(_List, 0, _) ->
     io:format("[CHAOS] Memory Target Reached. Holding...~n"),
     timer:sleep(infinity);
 mem_worker(List, N, Size) ->

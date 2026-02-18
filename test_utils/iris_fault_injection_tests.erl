@@ -359,7 +359,7 @@ test_partial_batch_failure() ->
     Items = [{key, N, <<"value_", (integer_to_binary(N))/binary>>} || N <- lists:seq(1, 10)],
     
     %% Simulate batch with one bad item
-    Results = lists:map(fun({key, N, Value}) ->
+    Results = lists:map(fun({key, N, _Value}) ->
         case N of
             5 -> {error, simulated_failure};
             _ -> {ok, stored}
@@ -463,7 +463,7 @@ start_slow_process() ->
 
 slow_process_loop() ->
     receive
-        {'$gen_call', From, slow_operation} ->
+        {'$gen_call', _From, slow_operation} ->
             %% Don't reply - this causes timeout
             slow_process_loop();
         {'$gen_call', From, _} ->

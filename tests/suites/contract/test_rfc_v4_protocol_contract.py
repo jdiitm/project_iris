@@ -32,6 +32,8 @@ PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from tests.utilities.tls_connection import get_verified_ssl_context
+
 CA_CERT = PROJECT_ROOT / "certs" / "ca.pem"
 SERVER_HOST = os.environ.get("IRIS_HOST", "localhost")
 SERVER_PORT = int(os.environ.get("IRIS_PORT", "8085"))
@@ -247,12 +249,7 @@ def test_group_opcode_range():
 # =============================================================================
 
 def get_tls_socket():
-    context = ssl.create_default_context()
-    if CA_CERT.exists():
-        context.load_verify_locations(str(CA_CERT))
-    else:
-        context.check_hostname = False
-        context.verify_mode = ssl.CERT_NONE
+    context = get_verified_ssl_context()
     raw = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     raw.settimeout(TIMEOUT)
     s = context.wrap_socket(raw, server_hostname=SERVER_HOST)
