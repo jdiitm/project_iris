@@ -71,9 +71,11 @@ def test_ping_does_not_crash_server():
         sock = get_tls_socket()
         user = unique_user("ping_test")
         raw_login(sock, user)
+        time.sleep(0.05)
 
         # Send PING (0x08)
         sock.sendall(bytes([0x08]))
+        time.sleep(0.3)
 
         # Verify connection still alive by sending a status query
         target = b"nobody"
@@ -111,6 +113,7 @@ def test_ping_pong_with_messages():
     try:
         recv_sock = get_tls_socket()
         raw_login(recv_sock, receiver_name)
+        time.sleep(0.05)
 
         sender_sock = get_tls_socket()
         raw_login(sender_sock, sender_name)
@@ -197,6 +200,8 @@ def test_multiple_pings():
         # Send 10 PINGs rapidly
         for _ in range(10):
             sock.sendall(bytes([0x08]))
+
+        time.sleep(0.5)
 
         # Verify connection alive
         sock.sendall(b'\x05' + struct.pack('>H', 4) + b'test')

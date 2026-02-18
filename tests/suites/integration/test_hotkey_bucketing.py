@@ -119,6 +119,8 @@ def test_hotkey_basic():
             for detail in all_error_details[:5]:
                 log.info("error", detail)
 
+        time.sleep(2)  # Allow messages to be stored
+
         # VIP comes online
         vip = IrisClient()
         vip.login(vip_user)
@@ -229,6 +231,8 @@ def test_hotkey_sustained_load():
 
         flood_duration = time.monotonic() - start_time
 
+        # Wait for messages to arrive
+        time.sleep(3)
         receiver_running.clear()
         vip.close()
         receiver_thread.join(timeout=2)

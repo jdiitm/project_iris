@@ -122,6 +122,8 @@ def test_e2ee_msg_missing_required_fields():
             sock.close()
             return False
 
+        time.sleep(0.05)
+
         # Build E2EE message with header missing 'ik' field
         # Header CBOR map with only 'ek' (missing ik, pn, n)
         header_map = cbor_encode_map([
@@ -140,6 +142,7 @@ def test_e2ee_msg_missing_required_fields():
                   mac)
         sock.sendall(packet)
 
+        time.sleep(0.3)
         sock.settimeout(2.0)
         try:
             resp = sock.recv(4096)
@@ -173,6 +176,8 @@ def test_e2ee_msg_empty_ciphertext():
             sock.close()
             return False
 
+        time.sleep(0.05)
+
         header_map = cbor_encode_map([
             (cbor_text("ik"), cbor_bytes(b'\x00' * 32)),
             (cbor_text("ek"), cbor_bytes(b'\x00' * 32)),
@@ -191,6 +196,7 @@ def test_e2ee_msg_empty_ciphertext():
                   mac)
         sock.sendall(packet)
 
+        time.sleep(0.3)
         sock.settimeout(2.0)
         try:
             resp = sock.recv(4096)
@@ -226,6 +232,8 @@ def test_cbor_msg_oversized_payload():
             sock.close()
             return False
 
+        time.sleep(0.05)
+
         target = b"nobody"
         # Create payload slightly over MAX_CBOR_LEN (262144 = 256KB)
         oversized = b'\x00' * 262200
@@ -243,6 +251,7 @@ def test_cbor_msg_oversized_payload():
             log("  Server survived oversized CBOR: PASS")
             return True
 
+        time.sleep(0.5)
         sock.settimeout(2.0)
         try:
             resp = sock.recv(4096)

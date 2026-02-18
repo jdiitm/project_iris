@@ -35,6 +35,8 @@ def create_client_with_retry(max_retries: int = 3, retry_delay: float = 1.0) -> 
             return IrisClient()
         except ConnectionRefusedError as e:
             last_error = e
+            if attempt < max_retries - 1:
+                time.sleep(retry_delay)
     raise last_error
 
 
@@ -112,6 +114,8 @@ def test_online_user_status():
             except Exception as e:
                 log.info("retry", f"Query failed ({e}), retrying...")
 
+            time.sleep(0.5)
+
         if not result:
             log.error("validation", f"{target_user} failed to show as online after {max_wait}s")
 
@@ -170,6 +174,8 @@ def test_offline_user_status():
                 pass
             except Exception as e:
                 log.info("retry", f"Query failed ({e}), retrying...")
+
+            time.sleep(0.5)
 
         if not result:
             log.error("validation", f"{target_user} still shows as online after {max_wait}s")
@@ -300,6 +306,8 @@ def test_presence_propagation_sla():
             except Exception as e:
                 log.info("poll_error", f"Query error: {e}")
 
+            time.sleep(poll_interval)
+
         # Cleanup
         target.close()
         observer.close()
@@ -397,6 +405,8 @@ def test_last_seen_update_sla():
                 pass
             except Exception as e:
                 log.info("poll_error", f"Query error: {e}")
+
+            time.sleep(poll_interval)
 
         observer.close()
 

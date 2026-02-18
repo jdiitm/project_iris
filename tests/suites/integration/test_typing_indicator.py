@@ -270,6 +270,9 @@ def test_typing_sla_latency():
             else:
                 log(f"    Sample {i+1}: Not received (timeout)")
 
+            # P2-3: Cannot replace — no condition to poll (brief pause between samples)
+            time.sleep(0.5)  # Brief pause between samples
+
         sender.close()
         receiver.close()
 

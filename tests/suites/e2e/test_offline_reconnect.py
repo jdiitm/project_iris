@@ -73,12 +73,18 @@ def test_basic_offline_delivery():
 
         log(f"PASS: Step 2 - Sent 5 messages to offline user")
 
-        # Step 3: Receiver comes online (TLS handshake gives server time to store)
+        # Give time for storage
+        time.sleep(1.0)
+
+        # Step 3: Receiver comes online
         receiver = IrisClient(host, port)
         receiver.login(receiver_name)
         log("PASS: Step 3 - Receiver connected")
 
-        # Step 4+5: Receive messages (recv_msg has its own timeout)
+        # Step 4: Wait for offline messages to be delivered
+        time.sleep(2.0)
+
+        # Step 5: Receive messages
         received = []
         receive_errors = []
 
@@ -171,12 +177,16 @@ def test_offline_then_online_continuation():
         alice.send_msg(bob_name, offline_msg)
         log("Sent message to offline Bob")
 
-        # Bob comes online (TLS handshake gives server time to store)
+        time.sleep(0.5)
+
+        # Bob comes online
         bob = IrisClient(host, port)
         bob.login(bob_name)
         log("PASS: Bob connected")
 
-        # Bob receives offline message (recv_msg has its own timeout)
+        time.sleep(1.0)
+
+        # Bob receives offline message
         try:
             msg = bob.recv_msg(timeout=2.0)
             if msg:
@@ -192,6 +202,8 @@ def test_offline_then_online_continuation():
         # Now continue normal conversation
         online_msg = f"online_{uuid.uuid4().hex[:6]}"
         alice.send_msg(bob_name, online_msg)
+
+        time.sleep(0.5)
 
         try:
             msg = bob.recv_msg(timeout=2.0)
@@ -282,12 +294,16 @@ def test_multiple_offline_senders():
 
         log("PASS: All three senders sent messages")
 
-        # Receiver connects (TLS handshake gives server time to store)
+        time.sleep(1.0)
+
+        # Receiver connects
         receiver = IrisClient(host, port)
         receiver.login(receiver_name)
         log("PASS: Receiver connected")
 
-        # Receive all messages (recv_msg has its own timeout)
+        time.sleep(2.0)
+
+        # Receive all messages
         received = []
         receive_errors = []
 

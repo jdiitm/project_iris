@@ -73,6 +73,7 @@ def test_empty_version_list():
         sock = get_tls_socket()
         # Login first (required for session state)
         sock.sendall(bytes([0x01]) + b"version_empty_user")
+        time.sleep(0.2)
         try:
             sock.recv(1024)
         except socket.timeout:
@@ -83,6 +84,8 @@ def test_empty_version_list():
         cbor_payload = b"\xa2\x68versions\x80\x6ccapabilities\x80"
         packet = bytes([0x0C]) + struct.pack(">I", len(cbor_payload)) + cbor_payload
         sock.sendall(packet)
+        time.sleep(0.3)
+
         try:
             sock.recv(1024)
         except socket.timeout:
@@ -110,6 +113,7 @@ def test_unsupported_version():
     try:
         sock = get_tls_socket()
         sock.sendall(bytes([0x01]) + b"version_v99_user")
+        time.sleep(0.2)
         try:
             sock.recv(1024)
         except socket.timeout:
@@ -119,6 +123,8 @@ def test_unsupported_version():
         cbor_payload = b"\xa2\x68versions\x81\x18\x63\x6ccapabilities\x80"
         packet = bytes([0x0C]) + struct.pack(">I", len(cbor_payload)) + cbor_payload
         sock.sendall(packet)
+        time.sleep(0.3)
+
         try:
             resp = sock.recv(1024)
             if resp:
@@ -148,6 +154,7 @@ def test_unknown_capability():
     try:
         sock = get_tls_socket()
         sock.sendall(bytes([0x01]) + b"cap_unknown_user")
+        time.sleep(0.2)
         try:
             sock.recv(1024)
         except socket.timeout:
@@ -157,6 +164,8 @@ def test_unknown_capability():
         cbor_payload = b"\xa2\x68versions\x81\x01\x6ccapabilities\x81\x6cquantum_e2ee"
         packet = bytes([0x0C]) + struct.pack(">I", len(cbor_payload)) + cbor_payload
         sock.sendall(packet)
+        time.sleep(0.3)
+
         try:
             sock.recv(1024)
         except socket.timeout:
@@ -185,6 +194,7 @@ def test_normal_after_edge_cases():
         c = IrisClient()
         c.login(unique_user("after_edge_cases"))
         c.send_msg("edge_case_target", "normal after edge cases")
+        time.sleep(0.3)
         c.close()
         log("  PASS: Normal client works")
         return True

@@ -15,6 +15,7 @@ import sys
 import os
 import socket
 import struct
+import time
 import random
 
 # Determinism: seed from environment
@@ -58,9 +59,12 @@ def test_garbage_bytes():
             s = get_raw_socket()
             garbage = bytes([random.randint(0, 255) for _ in range(random.randint(1, 1024))])
             s.sendall(garbage)
+            time.sleep(0.1)
             s.close()
         except:
             pass
+
+    time.sleep(0.5)
 
     if server_alive():
         print("✓ Server survived random garbage")
@@ -79,15 +83,19 @@ def test_oversized_packets():
 
         # Claim a huge packet size
         s.sendall(b'\x02' + struct.pack('>H', 65535) + b'x' * 100)
+        time.sleep(0.2)
         s.close()
 
         # Send actual huge packet
         s = get_raw_socket()
         s.sendall(b'\x01' + b'A' * 10000)  # 10KB username
+        time.sleep(0.2)
         s.close()
 
     except:
         pass
+
+    time.sleep(0.5)
 
     if server_alive():
         print("✓ Server survived oversized packets")
@@ -104,14 +112,18 @@ def test_null_bytes():
     try:
         s = get_raw_socket()
         s.sendall(b'\x01user\x00name')  # Null in username
+        time.sleep(0.1)
         s.close()
 
         s = get_raw_socket()
         s.sendall(b'\x01' + b'\x00' * 100)  # All nulls
+        time.sleep(0.1)
         s.close()
 
-        except:
-            pass
+    except:
+        pass
+
+    time.sleep(0.5)
 
     if server_alive():
         print("✓ Server survived null byte injection")
@@ -133,6 +145,8 @@ def test_rapid_disconnect():
         except:
             pass
 
+    time.sleep(0.5)
+
     if server_alive():
         print("✓ Server survived rapid reconnects")
         return True
@@ -149,20 +163,25 @@ def test_partial_packets():
         # Send opcode only
         s = get_raw_socket()
         s.sendall(b'\x02')
+        time.sleep(0.2)
         s.close()
 
         # Send partial length
         s = get_raw_socket()
         s.sendall(b'\x02\x00')
+        time.sleep(0.2)
         s.close()
 
         # Send truncated message
         s = get_raw_socket()
         s.sendall(b'\x02\x00\x10short')
+        time.sleep(0.2)
         s.close()
 
     except:
         pass
+
+    time.sleep(0.5)
 
     if server_alive():
         print("✓ Server survived partial packets")
@@ -189,9 +208,12 @@ def test_binary_protocol_abuse():
         try:
             s = get_raw_socket(timeout=1)
             s.sendall(packet)
+            time.sleep(0.05)
             s.close()
         except:
             pass
+
+    time.sleep(0.5)
 
     if server_alive():
         print("✓ Server survived protocol abuse")

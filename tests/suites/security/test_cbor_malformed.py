@@ -72,6 +72,7 @@ def send_cbor_msg(sock, cbor_payload):
     packet = bytes([0x10]) + struct.pack(">H", len(cbor_payload)) + cbor_payload
     try:
         sock.sendall(packet)
+        time.sleep(0.1)
     except (BrokenPipeError, ConnectionResetError, ssl.SSLError):
         pass
 
@@ -95,6 +96,7 @@ def test_truncated_cbor():
         try:
             sock = get_tls_socket(timeout=2)
             sock.sendall(bytes([0x01]) + b"cbor_trunc_user")
+            time.sleep(0.2)
             send_cbor_msg(sock, payload)
             try:
                 sock.recv(1024)
@@ -104,6 +106,7 @@ def test_truncated_cbor():
         except Exception:
             pass
 
+    time.sleep(0.5)
     if server_alive():
         log("  PASS: Server survived truncated CBOR payloads")
         return True
@@ -129,6 +132,7 @@ def test_deep_nesting():
     try:
         sock = get_tls_socket(timeout=3)
         sock.sendall(bytes([0x01]) + b"cbor_deep_user")
+        time.sleep(0.2)
         send_cbor_msg(sock, payload)
         try:
             sock.recv(1024)
@@ -138,6 +142,7 @@ def test_deep_nesting():
     except Exception:
         pass
 
+    time.sleep(0.5)
     if server_alive():
         log(f"  PASS: Server survived {depth}-deep nested CBOR")
         return True
@@ -164,6 +169,7 @@ def test_invalid_utf8():
         try:
             sock = get_tls_socket(timeout=2)
             sock.sendall(bytes([0x01]) + b"cbor_utf8_user")
+            time.sleep(0.1)
             send_cbor_msg(sock, payload)
             try:
                 sock.recv(1024)
@@ -173,6 +179,7 @@ def test_invalid_utf8():
         except Exception:
             pass
 
+    time.sleep(0.5)
     if server_alive():
         log("  PASS: Server survived invalid UTF-8 in CBOR")
         return True
@@ -192,6 +199,7 @@ def test_boundary_sizes():
         try:
             sock = get_tls_socket(timeout=2)
             sock.sendall(bytes([0x01]) + b"cbor_size_user")
+            time.sleep(0.1)
             send_cbor_msg(sock, payload)
             try:
                 sock.recv(1024)
@@ -201,6 +209,7 @@ def test_boundary_sizes():
         except Exception:
             pass
 
+    time.sleep(0.5)
     if server_alive():
         log("  PASS: Server survived boundary-size CBOR")
         return True
@@ -225,6 +234,7 @@ def test_server_survives():
         c = IrisClient()
         c.login("legit_after_cbor")
         c.send_msg("cbor_target", "hello after CBOR abuse")
+        time.sleep(0.3)
         c.close()
         log("  PASS: Legitimate client works after CBOR abuse")
         return True

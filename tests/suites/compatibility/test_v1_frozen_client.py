@@ -77,6 +77,7 @@ class V1FrozenClient:
         """V1 LOGIN: opcode 0x01 + username bytes"""
         packet = bytes([self.V1_LOGIN]) + user.encode("utf-8")
         self.sock.sendall(packet)
+        time.sleep(0.3)
         try:
             self.sock.settimeout(2)
             resp = self.sock.recv(1024)
@@ -151,8 +152,10 @@ def test_v1_send():
     try:
         c = V1FrozenClient()
         c.login("v1_frozen_sender")
+        time.sleep(0.2)
 
         c.send_msg("v1_frozen_target", "hello from v1 client")
+        time.sleep(0.3)
 
         c.close()
 
@@ -177,8 +180,10 @@ def test_v1_ack():
     try:
         c = V1FrozenClient()
         c.login("v1_frozen_acker")
+        time.sleep(0.2)
 
         c.send_ack("fake_msg_id_v1_test")
+        time.sleep(0.2)
 
         c.close()
 
@@ -203,6 +208,7 @@ def test_v1_get_status():
     try:
         c = V1FrozenClient()
         c.login("v1_frozen_status_checker")
+        time.sleep(0.2)
 
         resp = c.get_status("v1_frozen_target")
         if resp:
@@ -233,19 +239,24 @@ def test_v1_full_workflow():
     try:
         sender = V1FrozenClient()
         sender.login("v1_full_sender")
+        time.sleep(0.2)
 
         receiver = V1FrozenClient()
         receiver.login("v1_full_receiver")
+        time.sleep(0.2)
 
         # Send messages
         for i in range(5):
             sender.send_msg("v1_full_receiver", f"v1_workflow_msg_{i}")
+            time.sleep(0.05)
 
         # ACK
         sender.send_ack("v1_workflow_ack_1")
+        time.sleep(0.1)
 
         # Get status
         sender.get_status("v1_full_receiver")
+        time.sleep(0.1)
 
         sender.close()
         receiver.close()
