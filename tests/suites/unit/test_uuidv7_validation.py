@@ -252,7 +252,6 @@ def test_uuidv7_monotonic_timestamp():
     for _ in range(20):
         v7 = generate_uuidv7()
         uuids.append(v7)
-        time.sleep(0.001)  # 1ms gap
 
     # Extract timestamps
     timestamps = []

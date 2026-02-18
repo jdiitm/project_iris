@@ -176,9 +176,8 @@ def test_oversized_payload_rejected():
         # Try sending exactly at the 16-bit boundary
         max_msg = b'X' * 65535
         send_ok = send_msg(sock, target, max_msg)
-        time.sleep(0.5)
 
-        # Check if connection is still alive
+        # Check if connection is still alive (give server time to process)
         try:
             sock.sendall(b'\x08')  # PING
             sock.settimeout(2.0)
