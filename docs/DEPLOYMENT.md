@@ -1,6 +1,6 @@
 # Deployment Guide
 
-**Last Updated**: 2026-02-11 | **TLS Required**
+**Last Updated**: 2026-02-18 | **TLS Required**
 
 ## Architecture
 

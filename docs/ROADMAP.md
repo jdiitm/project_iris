@@ -1,14 +1,14 @@
 # Project Iris: 5B DAU Roadmap
 
-**Last Updated**: 2026-02-15  
-**Status**: Active Development  
+**Last Updated**: 2026-02-18  
+**Status**: Release Candidate  
 **Target**: WhatsApp/Telegram-class scale (5 Billion Daily Active Users)
 
 ---
 
 ## Current State Assessment
 
-**Readiness Level**: 6/10 (improved from 5/10 after RFC v4.0 gap closures and test expansion)
+**Readiness Level**: 8/10 (improved from 6/10 after production hardening, CI optimization, and test cleanup)
 
 | Capability | Status | Notes |
 |------------|--------|-------|
@@ -17,12 +17,13 @@
 | E2EE | ✅ Working | Signal Protocol implemented |
 | Cross-Region | ✅ Hardened | Multi-node disc_copies, TLS enabled |
 | **TLS Security** | ✅ **Enforced** | All client connections require TLS |
-| **Test Suite** | ✅ **100% Pass** | 169 Python + 185 Erlang tests, all TLS-enabled |
+| **Test Suite** | ✅ **100% Pass** | All TLS-enabled. See [TESTING.md](TESTING.md) for counts |
 | **RFC v4.0 Compliance** | ✅ **19 gaps closed** | See [RFC_COMPLIANCE.md](RFC_COMPLIANCE.md) |
 | **Operational Limits** | ✅ **Enforced** | Inbox 10K, payload 64KB, session 100K |
+| **CI Pipeline** | ✅ **Hardened** | Parallelized, security-gated, Dialyzer + Xref |
 | Scalability (10K) | ✅ Validated | Local testing with metrics |
 | Scalability (1M) | ⚠️ Designed | Architecture supports, not yet tested |
-| Production Ready | ❌ No | Development/Pre-alpha |
+| Production Ready | ⚠️ Release Candidate | Pending staging/production-scale validation |
 
 See [CHANGELOG.md](../CHANGELOG.md) for detailed change history.
 
@@ -74,12 +75,15 @@ See [Scalability Analysis](SCALABILITY_ANALYSIS.md) for measured metrics and ext
 
 ---
 
-## Blockers
+## Blockers & Deferred Work
 
-| Item | Blocker | Owner | ETA |
-|------|---------|-------|-----|
-| Partition drill | CI infra | TBD | - |
-| "Messi Test" | Requires 64GB+ RAM infra | TBD | - |
+| Item | Effort | Blocker |
+|------|--------|---------|
+| Partition drill (pumba/tc in CI) | 1 week | Docker infra + CI pipeline changes |
+| "Messi Test" (1M senders) | 1 day | Requires 64GB+ RAM infrastructure |
+| Cross-region Mnesia auto-setup | 2-3 days | Docker volume config |
+| `ra` library integration (full CP) | 1-2 days | External dependency |
+| 5B user architecture | 2-3 months | Storage rewrite (Mnesia replacement) |
 
 ---
 
@@ -102,6 +106,7 @@ See [DECISIONS.md](DECISIONS.md) for full rationale.
 - **Phase 1.5** (Test Stabilization, 2026-02-03): TLS enforced, 100% tests passing, ACK protocol ✅
 - **Phase 1.75** (RFC v4.0 Compliance, 2026-02-08): 19 gaps closed, limits enforced, JWT hardened ✅
 - **Phase 2** (Durability): Queue durability, inbox protection, CoDel AQM ✅ (cross-region Mnesia auto-init pending)
+- **Phase 2.5** (Production Hardening, 2026-02-18): CI parallelized, `time.sleep` cleanup (~130 removed), security gate, production config validation, documentation consolidated ✅
 
 ### Phase 3
 - [x] 10K connections validated locally

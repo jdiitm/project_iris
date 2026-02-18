@@ -1,6 +1,6 @@
 # Operations Guide
 
-**Last Updated**: 2026-02-11 | **TLS Enforced**
+**Last Updated**: 2026-02-18 | **TLS Enforced**
 
 ## Quick Reference
 

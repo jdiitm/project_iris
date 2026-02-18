@@ -184,17 +184,7 @@ This document is the **canonical protocol specification** for Iris. All opcodes,
 
 ### 7.2 Test Coverage
 
-See [TESTING.md](TESTING.md) for authoritative counts. Summary as of 2026-02-15:
-
-| Category | Tests | Status |
-|----------|-------|--------|
-| Erlang EUnit | 185 test modules + 7 support | ✅ All passing |
-| Python integration | 43 | ✅ All passing |
-| Python e2e | 11 | ✅ All passing |
-| Python security | 26 | ✅ All passing |
-| Python stress | 20 | ✅ All passing |
-| Python chaos (Docker) | 26 | ✅ All passing |
-| Other suites | 43 | ✅ All passing |
+See [TESTING.md](TESTING.md) for authoritative test counts and suite details. All tests passing.
 
 ---
 
@@ -221,7 +211,7 @@ New features MUST:
 ## Approval
 
 - [x] Protocol Implementation Complete (30+ opcodes)
-- [x] Test Suite Passing (169 Python + 185 Erlang tests, all TLS-enabled)
+- [x] Test Suite Passing (all TLS-enabled; see [TESTING.md](TESTING.md) for counts)
 - [x] Security Review (E2EE implementation)
 - [x] Performance Validation
 

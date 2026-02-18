@@ -1,6 +1,6 @@
 # Adversarial Test Audit: Changes Summary
 
-> **Historical artifact** (2026-02-07). This document records a one-time audit. For current test status, see [TESTING.md](../TESTING.md).
+> **Frozen artifact** (2026-02-07). This document records a one-time audit and will not be updated. All changes are also captured in [CHANGELOG.md](../../CHANGELOG.md). For current test status, see [TESTING.md](../TESTING.md).
 
 All 19 mitigations from the adversarial test audit plan have been implemented.
 

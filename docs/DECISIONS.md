@@ -1,6 +1,6 @@
 # Architectural Decisions & Design Rationale
 
-**Last Updated**: 2026-02-11  
+**Last Updated**: 2026-02-18  
 **Status**: Current (RFC-001 v4.0 Aligned, TLS Enforced)
 
 ---
@@ -265,38 +265,11 @@ See [TESTING.md](TESTING.md) for current test counts, suite details, and CI pipe
 
 ---
 
-## 8. Deferred Work
+## 8. Deferred Work & Roadmap
 
-**Completed**: UUIDv7 message IDs, mTLS inter-node (NFR-15), inbox 10K limit (GAP-6), outbox 7-day TTL (GAP-1). See [CHANGELOG.md](../CHANGELOG.md) for details.
+For deferred items, blockers, and the scaling roadmap, see [ROADMAP.md](ROADMAP.md).
 
-### Still Deferred
-
-| Item | Effort | Blocker |
-|------|--------|---------|
-| Cross-region Mnesia replication | 2-3 days | Docker volume config |
-| `ra` library integration (full CP) | 1-2 days | External dependency |
-| 5B user architecture | 2-3 months | Storage rewrite |
-
----
-
-## 9. Module Overview
-
-See the [README](../README.md#modules-70-total) for the full module reference (70 modules, grouped by layer).
-
----
-
-## 10. Deferred Architectural Work (Forensic Audit 2026-01-29)
-
-**Completed**: Cross-region persistent queue (`iris_region_bridge.erl`, FIFO + 7-day TTL), mailbox overflow AQM (`iris_mailbox_guard.erl`, CoDel), `iris_router_pool` removed (dead code), TLS stabilization (all clients default TLS), HOL blocking fix (`iris_async_router.erl` ephemeral spawn), ETS presence default, cluster manager. See [CHANGELOG.md](../CHANGELOG.md) for details.
-
-### P2 - Network Partition Drill Infrastructure (Still Deferred)
-
-| Attribute | Value |
-|-----------|-------|
-| **Issue** | No automated chaos testing for network partitions in CI |
-| **Fix** | Integrate `pumba` or `tc`-based network simulation |
-| **Effort** | 1 week |
-| **Blocked By** | Docker infrastructure changes, CI pipeline updates |
+For the full module reference (70 modules, grouped by layer), see the [README](../README.md#modules-70-total).
 
 ---
 
