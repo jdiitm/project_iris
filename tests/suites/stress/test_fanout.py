@@ -226,7 +226,7 @@ class IrisClient:
                     # EOF — peer closed
                     break
             except (BlockingIOError, ssl.SSLWantReadError):
-                pass
+                time.sleep(0.001)
             except Exception:
                 break
 
@@ -362,6 +362,9 @@ def run_fanout_test(test_name: str, num_recipients: int, target_rate: int,
     if len(recipients) < num_recipients * 0.9:
         errors.append(f"Only {len(recipients)}/{num_recipients} recipients connected")
 
+    # Allow recipient background threads to reach their recv loops
+    time.sleep(0.5)
+
     # Send messages to all recipients
     print(f"  Sending messages...", end="", flush=True)
 
@@ -386,6 +389,14 @@ def run_fanout_test(test_name: str, num_recipients: int, target_rate: int,
 
     send_complete_time = time.time()
     print(f" {messages_sent} sent in {(send_complete_time - start_time)*1000:.1f}ms")
+
+    # Poll until all expected messages arrive or timeout
+    deadline = time.time() + max(2.0, max_latency_ms / 1000 * 3)
+    while time.time() < deadline:
+        total = sum(len(r.received_messages) for r in recipients)
+        if total >= messages_sent:
+            break
+        time.sleep(0.05)
 
     # Collect results
     messages_received = 0

@@ -205,6 +205,7 @@ def test_msg_id_sortable():
     ids = []
     for _ in range(100):
         ids.append(generate_msg_id())
+        time.sleep(0.001)
 
     # IDs should be sortable (later IDs sort after earlier ones)
     sorted_ids = sorted(ids)
