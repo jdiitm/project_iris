@@ -1,15 +1,18 @@
 # =============================================================================
 # Project Iris CI/CD Pipeline — Production Release Gate
 # =============================================================================
-# 7 focused facet jobs running in parallel after compile, plus a strict
-# quality gate that blocks merge unless ALL facets pass.
+# Parallel facet jobs after compile, plus a strict quality gate that blocks
+# merge unless ALL facets pass. Python tests split into 3 parallel jobs.
 #
 # Job Graph:
 #   compile ──┬── erlang-tests
-#             ├── python-quick ──── docker-chaos (nightly/main only)
+#             ├── python-fast
+#             ├── python-security
+#             ├── python-heavy
 #             ├── static-analysis
 #             ├── security-gate
-#             └── release-build
+#             ├── release-build
+#             └── docker-chaos (nightly/main only)
 #   compat-otp27 (independent)
 #   quality-gate (requires all)
 #
@@ -166,12 +169,12 @@ jobs:
           if-no-files-found: ignore
 
   # ===========================================================================
-  # PYTHON QUICK: All non-Docker Python tests (12 suites)
+  # PYTHON FAST: unit + integration + e2e + contract + compatibility
   # ===========================================================================
-  python-quick:
-    name: "Python Tests (non-Docker)"
+  python-fast:
+    name: "Python Fast (integration/e2e/contract)"
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 15
     needs: compile
     if: github.event.inputs.tier != 'full'
 
@@ -187,6 +190,8 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+          cache-dependency-path: requirements-test-locked.txt
 
       - name: Install Python dependencies
         run: pip install --require-hashes -r requirements-test-locked.txt
@@ -200,16 +205,114 @@ jobs:
           name: ebin-otp${{ env.ERLANG_VERSION }}
           path: ebin/
 
-      - name: Run quick tests (non-Docker)
+      - name: Run tests
         run: |
           chmod +x tests/run_all_tests.sh
-          ./tests/run_all_tests.sh --quick
+          CI_SKIP_COMPILE=true ./tests/run_all_tests.sh --suites unit,integration,e2e,contract,compatibility
 
       - name: Upload test artifacts
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: python-quick-artifacts
+          name: python-fast-artifacts
+          path: tests/artifacts/
+
+  # ===========================================================================
+  # PYTHON SECURITY: security + resilience + conformance + performance
+  # ===========================================================================
+  python-security:
+    name: "Python Security (security/resilience/perf)"
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: compile
+    if: github.event.inputs.tier != 'full'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Erlang
+        uses: erlef/setup-beam@v1
+        with:
+          otp-version: ${{ env.ERLANG_VERSION }}
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+          cache-dependency-path: requirements-test-locked.txt
+
+      - name: Install Python dependencies
+        run: pip install --require-hashes -r requirements-test-locked.txt
+
+      - name: Install system dependencies
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq libzstd-dev
+
+      - name: Download ebin
+        uses: actions/download-artifact@v4
+        with:
+          name: ebin-otp${{ env.ERLANG_VERSION }}
+          path: ebin/
+
+      - name: Run tests
+        run: |
+          chmod +x tests/run_all_tests.sh
+          CI_SKIP_COMPILE=true ./tests/run_all_tests.sh --suites security,resilience,conformance,performance_light
+
+      - name: Upload test artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-security-artifacts
+          path: tests/artifacts/
+
+  # ===========================================================================
+  # PYTHON HEAVY: stress + chaos_controlled
+  # ===========================================================================
+  python-heavy:
+    name: "Python Heavy (stress/chaos_controlled)"
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: compile
+    if: github.event.inputs.tier != 'full'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Erlang
+        uses: erlef/setup-beam@v1
+        with:
+          otp-version: ${{ env.ERLANG_VERSION }}
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+          cache-dependency-path: requirements-test-locked.txt
+
+      - name: Install Python dependencies
+        run: pip install --require-hashes -r requirements-test-locked.txt
+
+      - name: Install system dependencies
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq libzstd-dev
+
+      - name: Download ebin
+        uses: actions/download-artifact@v4
+        with:
+          name: ebin-otp${{ env.ERLANG_VERSION }}
+          path: ebin/
+
+      - name: Run tests
+        run: |
+          chmod +x tests/run_all_tests.sh
+          CI_SKIP_COMPILE=true ./tests/run_all_tests.sh --suites stress,chaos_controlled
+
+      - name: Upload test artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-heavy-artifacts
           path: tests/artifacts/
 
   # ===========================================================================
@@ -450,6 +553,8 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+          cache-dependency-path: requirements-test-locked.txt
 
       - name: Install Python dependencies
         run: pip install --require-hashes -r requirements-test-locked.txt
@@ -669,8 +774,8 @@ jobs:
   docker-chaos:
     name: "Docker Chaos Tests"
     runs-on: ubuntu-latest
-    timeout-minutes: 150
-    needs: python-quick
+    timeout-minutes: 90
+    needs: compile
     if: |
       github.event.inputs.tier != 'full' &&
       (
@@ -691,6 +796,8 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+          cache-dependency-path: requirements-test-locked.txt
 
       - name: Install dependencies
         run: |
@@ -710,8 +817,9 @@ jobs:
           chmod +x tests/run_all_tests.sh
           ./tests/run_all_tests.sh --docker-only
 
-      # --- Short soak: memory/WAL/FD leak detection (5 min) ---
+      # --- Short soak: memory/WAL/FD leak detection (5 min) — nightly only ---
       - name: "Soak stability check (5 min)"
+        if: github.event_name == 'schedule'
         run: |
           make start CONFIG=config/test_tls > /tmp/soak_server.log 2>&1
           sleep 5
@@ -726,7 +834,9 @@ jobs:
             python3 -u tests/suites/stress/test_soak_24h.py -v
           pkill -9 -f "beam.smp.*iris_" 2>/dev/null || true
 
+      # --- mTLS verification — nightly only (most common source of false failures) ---
       - name: Verify NFR-15 internal mTLS
+        if: github.event_name == 'schedule'
         run: |
           cd docker/global-cluster
           docker compose -f docker-compose.yml -f docker-compose.mtls.yml up -d
@@ -775,6 +885,8 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+          cache-dependency-path: requirements-test-locked.txt
 
       - name: Install dependencies
         run: |
@@ -816,7 +928,9 @@ jobs:
     needs:
       - compile
       - erlang-tests
-      - python-quick
+      - python-fast
+      - python-security
+      - python-heavy
       - static-analysis
       - security-gate
       - release-build
@@ -834,7 +948,9 @@ jobs:
 
           compile="${{ needs.compile.result }}"
           erlang="${{ needs.erlang-tests.result }}"
-          python="${{ needs.python-quick.result }}"
+          py_fast="${{ needs.python-fast.result }}"
+          py_sec="${{ needs.python-security.result }}"
+          py_heavy="${{ needs.python-heavy.result }}"
           analysis="${{ needs.static-analysis.result }}"
           security="${{ needs.security-gate.result }}"
           release="${{ needs.release-build.result }}"
@@ -845,7 +961,9 @@ jobs:
           echo ""
           echo "  compile:         $compile"
           echo "  erlang-tests:    $erlang"
-          echo "  python-quick:    $python"
+          echo "  python-fast:     $py_fast"
+          echo "  python-security: $py_sec"
+          echo "  python-heavy:    $py_heavy"
           echo "  static-analysis: $analysis"
           echo "  security-gate:   $security"
           echo "  release-build:   $release"
@@ -868,9 +986,17 @@ jobs:
             failed=true
           fi
 
-          # Python tests must pass when they run
-          if [[ "$python" == "failure" || "$python" == "cancelled" ]]; then
-            echo "::error::Python tests failed ($python)"
+          # All 3 Python test jobs must pass when they run
+          if [[ "$py_fast" == "failure" || "$py_fast" == "cancelled" ]]; then
+            echo "::error::Python fast tests failed ($py_fast)"
+            failed=true
+          fi
+          if [[ "$py_sec" == "failure" || "$py_sec" == "cancelled" ]]; then
+            echo "::error::Python security tests failed ($py_sec)"
+            failed=true
+          fi
+          if [[ "$py_heavy" == "failure" || "$py_heavy" == "cancelled" ]]; then
+            echo "::error::Python heavy tests failed ($py_heavy)"
             failed=true
           fi
 
@@ -899,8 +1025,6 @@ jobs:
           fi
 
           # Docker chaos must pass when it runs (skip is OK — nightly/main only)
-          # ACCEPTED RISK: PRs don't run chaos tests. Nightly schedule covers this.
-          # If chaos has not passed on main within 7 days, investigate nightly schedule.
           if [[ "$chaos" == "failure" || "$chaos" == "cancelled" ]]; then
             echo "::error::Docker chaos tests failed ($chaos)"
             failed=true
@@ -913,15 +1037,15 @@ jobs:
           fi
 
           # At least one real test tier must have run (prevents empty pipeline)
-          if [[ "$erlang" == "skipped" && "$python" == "skipped" && "$full" == "skipped" ]]; then
+          if [[ "$erlang" == "skipped" && "$py_fast" == "skipped" && "$full" == "skipped" ]]; then
             echo "::error::No test jobs ran — pipeline misconfiguration"
             failed=true
           fi
 
           # Both Erlang AND Python tiers must run on every PR (not just one)
-          if [[ "$erlang" == "skipped" || "$python" == "skipped" ]]; then
+          if [[ "$erlang" == "skipped" || "$py_fast" == "skipped" ]]; then
             if [[ "$full" == "skipped" ]]; then
-              echo "::error::Both erlang-tests and python-quick must run on every PR"
+              echo "::error::Both erlang-tests and python test jobs must run on every PR"
               failed=true
             fi
           fi

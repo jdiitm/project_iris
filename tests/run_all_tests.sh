@@ -16,10 +16,11 @@
 # - Fresh cluster per Docker test for isolation
 #
 # Usage:
-#   ./tests/run_all_tests.sh                  # Run ALL tests (recommended)
-#   ./tests/run_all_tests.sh --docker-only    # Run Docker chaos tests only
-#   ./tests/run_all_tests.sh --quick          # Run non-Docker tests only
-#   ./tests/run_all_tests.sh --help           # Show help
+#   ./tests/run_all_tests.sh                          # Run ALL tests (recommended)
+#   ./tests/run_all_tests.sh --docker-only             # Run Docker chaos tests only
+#   ./tests/run_all_tests.sh --quick                   # Run non-Docker tests only
+#   ./tests/run_all_tests.sh --suites integration,e2e  # Run specific suites only
+#   ./tests/run_all_tests.sh --help                    # Show help
 #
 # ============================================================================
 
@@ -72,34 +73,59 @@ WARNED_TESTS=()
 SKIP_DOCKER=false
 DOCKER_ONLY=false
 
+SELECTED_SUITES=""
+
 show_help() {
     echo "IRIS Complete Test Suite Runner"
     echo ""
     echo "Usage: $0 [OPTIONS]"
     echo ""
     echo "Options:"
-    echo "  --help         Show this help"
-    echo "  --quick        Run non-Docker tests only (faster)"
-    echo "  --docker-only  Run Docker chaos tests only"
-    echo "  (no option)    Run ALL tests (recommended)"
+    echo "  --help                      Show this help"
+    echo "  --quick                     Run non-Docker tests only (faster)"
+    echo "  --docker-only               Run Docker chaos tests only"
+    echo "  --suites <suite1,suite2>    Run only specified suites (implies --quick)"
+    echo "  (no option)                 Run ALL tests (recommended)"
     echo ""
-    echo "Proven Scripts (dependencies):"
-    echo "  docker/global-cluster/cluster.sh      - Cluster up/down"
-    echo "  docker/global-cluster/init_cluster.sh - Mnesia initialization"
+    echo "Suites: unit, integration, e2e, contract, compatibility, security,"
+    echo "        resilience, conformance, performance_light, stress, chaos_controlled"
     echo ""
     echo "Examples:"
-    echo "  $0                  # Full test suite"
-    echo "  $0 --quick          # Fast iteration (no Docker)"
-    echo "  $0 --docker-only    # Only chaos tests"
+    echo "  $0                                       # Full test suite"
+    echo "  $0 --quick                               # Fast iteration (no Docker)"
+    echo "  $0 --docker-only                         # Only chaos tests"
+    echo "  $0 --suites integration,e2e,contract     # Specific suites"
     exit 0
 }
 
 # Parse args
-case "$1" in
-    --help|-h) show_help ;;
-    --quick) SKIP_DOCKER=true; export QUICK_MODE=true ;;
-    --docker-only) DOCKER_ONLY=true ;;
-esac
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --help|-h) show_help ;;
+        --quick) SKIP_DOCKER=true; export QUICK_MODE=true ;;
+        --docker-only) DOCKER_ONLY=true ;;
+        --suites)
+            SELECTED_SUITES="$2"
+            SKIP_DOCKER=true
+            export QUICK_MODE=true
+            shift
+            ;;
+        *) echo "Unknown option: $1"; show_help ;;
+    esac
+    shift
+done
+
+suite_enabled() {
+    local suite_name=$1
+    [ -z "$SELECTED_SUITES" ] && return 0
+    echo ",$SELECTED_SUITES," | grep -q ",$suite_name,"
+}
+
+needs_server() {
+    suite_enabled integration || suite_enabled e2e || suite_enabled contract || \
+    suite_enabled compatibility || suite_enabled security || suite_enabled resilience || \
+    suite_enabled conformance || suite_enabled performance_light || suite_enabled stress
+}
 
 # Export CONFIG so Python tests know the server is TLS-enabled.
 # Without this, tests using ClusterManager would start non-TLS servers (killing
@@ -112,7 +138,9 @@ LOG_DIR="$PROJECT_ROOT/tests/artifacts/full_run_$(date +%Y%m%d_%H%M%S)"
 mkdir -p "$LOG_DIR"
 
 get_mode_string() {
-    if [ "$SKIP_DOCKER" = true ]; then
+    if [ -n "$SELECTED_SUITES" ]; then
+        echo "Suites: $SELECTED_SUITES"
+    elif [ "$SKIP_DOCKER" = true ]; then
         echo 'Quick (non-Docker tests only)'
     elif [ "$DOCKER_ONLY" = true ]; then
         echo 'Docker Only (chaos tests with fresh cluster each)'
@@ -449,15 +477,131 @@ run_docker_test_fresh() {
     fi
 }
 
+# Run a batch of Docker tests on a SHARED cluster (reduces infrastructure overhead)
+run_docker_test_batch() {
+    local batch_name=$1
+    shift
+    local tests=("$@")
+    local timeout_sec=480
+
+    echo ""
+    echo -e "  ${CYAN}[BATCH]${NC} $batch_name (${#tests[@]} tests on shared cluster)"
+    echo "  ========================================"
+
+    cluster_down
+
+    if ! cluster_up; then
+        echo -e "  ${RED}CLUSTER INIT FAILED for batch $batch_name${NC}"
+        for test_path in "${tests[@]}"; do
+            local tname=$(basename "$test_path" .py)
+            TOTAL_FAIL=$((TOTAL_FAIL + 1))
+            FAILED_TESTS+=("$tname (cluster init)")
+        done
+        return 1
+    fi
+
+    for test_path in "${tests[@]}"; do
+        local test_name=$(basename "$test_path" .py)
+        printf "    %-48s" "$test_name"
+
+        local start_time=$(date +%s)
+        SKIP_TEST_CLEANUP=1 timeout "$timeout_sec" python3 -u "$test_path" > "$LOG_DIR/${test_name}.log" 2>&1
+        local exit_code=$?
+        local end_time=$(date +%s)
+        local duration=$((end_time - start_time))
+
+        if [ $exit_code -eq 0 ]; then
+            echo -e "${GREEN}PASS${NC} (${duration}s)"
+            TOTAL_PASS=$((TOTAL_PASS + 1))
+        elif [ $exit_code -eq 2 ]; then
+            echo -e "${YELLOW}SKIP${NC} (${duration}s)"
+            TOTAL_SKIP=$((TOTAL_SKIP + 1))
+            SKIPPED_TESTS+=("$test_name")
+        elif [ $exit_code -eq 124 ]; then
+            echo -e "${RED}TIMEOUT${NC} (${duration}s)"
+            TOTAL_FAIL=$((TOTAL_FAIL + 1))
+            FAILED_TESTS+=("$test_name (timeout)")
+        else
+            echo -e "${RED}FAIL (exit $exit_code)${NC} (${duration}s)"
+            TOTAL_FAIL=$((TOTAL_FAIL + 1))
+            FAILED_TESTS+=("$test_name")
+        fi
+    done
+}
+
 # ============================================================================
-# DOCKER CHAOS TESTS (auto-discovered from chaos_dist directory)
+# DOCKER CHAOS TESTS — batched by runtime/destructiveness
 # ============================================================================
-# Dynamic discovery ensures new tests are never silently excluded.
-# Sorted for deterministic execution order.
-DOCKER_CHAOS_TESTS=()
+# Batching shares a cluster across compatible tests, cutting ~45 min of
+# cluster spin-up/teardown overhead from 26 individual cycles to ~6 cycles.
+# Tests are grouped by runtime and destructiveness level.
+# New tests not listed here are auto-discovered and run individually (safe default).
+
+DOCKER_BATCH_FAST=(
+    "tests/suites/chaos_dist/test_cross_region_latency.py"
+    "tests/suites/chaos_dist/test_disk_full.py"
+    "tests/suites/chaos_dist/test_failover_time.py"
+    "tests/suites/chaos_dist/test_mtls_inter_node.py"
+    "tests/suites/chaos_dist/test_outbox_queue_overflow.py"
+    "tests/suites/chaos_dist/test_real_clock_skew.py"
+    "tests/suites/chaos_dist/test_split_brain.py"
+)
+
+DOCKER_BATCH_MEDIUM_A=(
+    "tests/suites/chaos_dist/test_ack_disconnect_race.py"
+    "tests/suites/chaos_dist/test_bridge_durability.py"
+    "tests/suites/chaos_dist/test_cascade_failure.py"
+    "tests/suites/chaos_dist/test_cross_region_chaos.py"
+    "tests/suites/chaos_dist/test_cross_region_node_kill.py"
+)
+
+DOCKER_BATCH_MEDIUM_B=(
+    "tests/suites/chaos_dist/test_dedup_persistence.py"
+    "tests/suites/chaos_dist/test_dist_failover.py"
+    "tests/suites/chaos_dist/test_distributed_rate_limit.py"
+    "tests/suites/chaos_dist/test_multimaster_durability.py"
+    "tests/suites/chaos_dist/test_ordering_under_failure.py"
+)
+
+DOCKER_BATCH_MEDIUM_C=(
+    "tests/suites/chaos_dist/test_outbox_overflow_enforcement.py"
+    "tests/suites/chaos_dist/test_quorum_write_failures.py"
+    "tests/suites/chaos_dist/test_server_storage_audit.py"
+    "tests/suites/chaos_dist/test_split_brain_convergence.py"
+    "tests/suites/chaos_dist/test_split_brain_epoch_resolution.py"
+)
+
+DOCKER_BATCH_LONG=(
+    "tests/suites/chaos_dist/test_ack_durability.py"
+    "tests/suites/chaos_dist/test_key_bundle_durability.py"
+    "tests/suites/chaos_dist/test_network_partition.py"
+    "tests/suites/chaos_dist/test_region_outage.py"
+)
+
+# Collect all batched test paths for detecting unbatched new tests
+ALL_BATCHED_TESTS=()
+ALL_BATCHED_TESTS+=("${DOCKER_BATCH_FAST[@]}")
+ALL_BATCHED_TESTS+=("${DOCKER_BATCH_MEDIUM_A[@]}")
+ALL_BATCHED_TESTS+=("${DOCKER_BATCH_MEDIUM_B[@]}")
+ALL_BATCHED_TESTS+=("${DOCKER_BATCH_MEDIUM_C[@]}")
+ALL_BATCHED_TESTS+=("${DOCKER_BATCH_LONG[@]}")
+
+# Auto-discover any tests NOT in the batches (new tests get fresh clusters)
+DOCKER_UNBATCHED_TESTS=()
 while IFS= read -r test_file; do
-    DOCKER_CHAOS_TESTS+=("$test_file")
+    is_batched=false
+    for batched in "${ALL_BATCHED_TESTS[@]}"; do
+        if [ "$test_file" = "$batched" ]; then
+            is_batched=true
+            break
+        fi
+    done
+    if [ "$is_batched" = false ]; then
+        DOCKER_UNBATCHED_TESTS+=("$test_file")
+    fi
 done < <(find tests/suites/chaos_dist -name 'test_*.py' -type f | sort)
+
+TOTAL_DOCKER_TESTS=$(( ${#ALL_BATCHED_TESTS[@]} + ${#DOCKER_UNBATCHED_TESTS[@]} ))
 
 # ============================================================================
 # MAIN EXECUTION
@@ -481,9 +625,15 @@ else
     # ==========================================================================
     # PHASE 0: SETUP
     # ==========================================================================
-    echo -e "${BLUE}[PHASE 0]${NC} Setup and cleanup..."
-    cleanup_standalone
-    echo ""
+    if [ "${CI_SKIP_COMPILE:-}" != "true" ]; then
+        echo -e "${BLUE}[PHASE 0]${NC} Setup and cleanup..."
+        cleanup_standalone
+        echo ""
+    else
+        echo -e "${BLUE}[PHASE 0]${NC} Setup (CI_SKIP_COMPILE=true, using pre-built ebin)..."
+        epmd -daemon 2>/dev/null || true
+        echo ""
+    fi
 
     # ==========================================================================
     # PHASE 1: UNIT TESTS (No server needed)
@@ -491,313 +641,309 @@ else
     echo -e "${BLUE}[PHASE 1]${NC} Unit Tests"
     echo "============================================================================"
 
-    echo "Compiling..."
-    make all > "$LOG_DIR/compile.log" 2>&1 || {
-        echo -e "${RED}Compilation failed!${NC}"
-        cat "$LOG_DIR/compile.log"
-        exit 1
-    }
-    echo -e "  ${GREEN}Compilation successful${NC}"
+    if [ "${CI_SKIP_COMPILE:-}" != "true" ]; then
+        echo "Compiling..."
+        make all > "$LOG_DIR/compile.log" 2>&1 || {
+            echo -e "${RED}Compilation failed!${NC}"
+            cat "$LOG_DIR/compile.log"
+            exit 1
+        }
+        echo -e "  ${GREEN}Compilation successful${NC}"
 
-    echo ""
-    echo "--- EUnit Tests ---"
-    printf "  %-50s" "EUnit (all discovered modules)"
-    make test > "$LOG_DIR/eunit.log" 2>&1; eunit_rc=$?
-    if [ $eunit_rc -eq 0 ]; then
-        echo -e "${GREEN}PASS${NC}"
-        TOTAL_PASS=$((TOTAL_PASS + 1))
-    else
-        CANCELLED=$(grep -oP 'Cancelled: \K[0-9]+' "$LOG_DIR/eunit.log" 2>/dev/null || echo "0")
-        FAILED_COUNT=$(grep -oP 'Failed: \K[0-9]+' "$LOG_DIR/eunit.log" 2>/dev/null || echo "unknown")
-        if [ "$FAILED_COUNT" = "0" ] && [ "$CANCELLED" = "0" ]; then
-            echo -e "${GREEN}PASS${NC} (non-zero exit, 0 failures, 0 cancellations)"
+        echo ""
+        echo "--- EUnit Tests ---"
+        printf "  %-50s" "EUnit (all discovered modules)"
+        make test > "$LOG_DIR/eunit.log" 2>&1; eunit_rc=$?
+        if [ $eunit_rc -eq 0 ]; then
+            echo -e "${GREEN}PASS${NC}"
             TOTAL_PASS=$((TOTAL_PASS + 1))
-        elif [ "$FAILED_COUNT" = "0" ] && [ "$CANCELLED" != "0" ]; then
-            echo -e "${RED}FAIL${NC} ($CANCELLED test(s) CANCELLED — never ran)"
-            TOTAL_FAIL=$((TOTAL_FAIL + 1))
-            FAILED_TESTS+=("EUnit ($CANCELLED cancelled)")
+        else
+            CANCELLED=$(grep -oP 'Cancelled: \K[0-9]+' "$LOG_DIR/eunit.log" 2>/dev/null || echo "0")
+            FAILED_COUNT=$(grep -oP 'Failed: \K[0-9]+' "$LOG_DIR/eunit.log" 2>/dev/null || echo "unknown")
+            if [ "$FAILED_COUNT" = "0" ] && [ "$CANCELLED" = "0" ]; then
+                echo -e "${GREEN}PASS${NC} (non-zero exit, 0 failures, 0 cancellations)"
+                TOTAL_PASS=$((TOTAL_PASS + 1))
+            elif [ "$FAILED_COUNT" = "0" ] && [ "$CANCELLED" != "0" ]; then
+                echo -e "${RED}FAIL${NC} ($CANCELLED test(s) CANCELLED — never ran)"
+                TOTAL_FAIL=$((TOTAL_FAIL + 1))
+                FAILED_TESTS+=("EUnit ($CANCELLED cancelled)")
+            else
+                echo -e "${RED}FAIL${NC}"
+                TOTAL_FAIL=$((TOTAL_FAIL + 1))
+                FAILED_TESTS+=("EUnit")
+            fi
+        fi
+
+        echo ""
+        echo "--- Property-Based Tests ---"
+        printf "  %-50s" "Protocol Properties (iris_proto_props)"
+        ERL_CMD="erl -pa ebin -noshell -eval \"case iris_proto_props:test_all() of ok -> halt(0); error -> halt(1) end.\""
+        eval $ERL_CMD > "$LOG_DIR/proto_props.log" 2>&1
+        if [ $? -eq 0 ]; then
+            echo -e "${GREEN}PASS${NC}"
+            TOTAL_PASS=$((TOTAL_PASS + 1))
         else
             echo -e "${RED}FAIL${NC}"
             TOTAL_FAIL=$((TOTAL_FAIL + 1))
-            FAILED_TESTS+=("EUnit")
+            FAILED_TESTS+=("iris_proto_props")
         fi
-    fi
-
-    echo ""
-    echo "--- Property-Based Tests ---"
-    printf "  %-50s" "Protocol Properties (iris_proto_props)"
-    ERL_CMD="erl -pa ebin -noshell -eval \"case iris_proto_props:test_all() of ok -> halt(0); error -> halt(1) end.\""
-    eval $ERL_CMD > "$LOG_DIR/proto_props.log" 2>&1
-    if [ $? -eq 0 ]; then
-        echo -e "${GREEN}PASS${NC}"
-        TOTAL_PASS=$((TOTAL_PASS + 1))
     else
-        echo -e "${RED}FAIL${NC}"
-        TOTAL_FAIL=$((TOTAL_FAIL + 1))
-        FAILED_TESTS+=("iris_proto_props")
+        echo "  (skipping compile/EUnit/property tests — CI_SKIP_COMPILE=true)"
     fi
 
-    echo ""
-    echo "--- Python Unit Tests ---"
-    for test in tests/suites/unit/test_*.py; do
-        [ -f "$test" ] && run_test "$test" 60
-    done
+    if suite_enabled unit; then
+        echo ""
+        echo "--- Python Unit Tests ---"
+        for test in tests/suites/unit/test_*.py; do
+            [ -f "$test" ] && run_test "$test" 60
+        done
+    fi
     echo ""
 
     # ==========================================================================
     # PHASE 2: STANDALONE SERVER TESTS
     # ==========================================================================
-    echo -e "${BLUE}[PHASE 2]${NC} Standalone Server Tests"
-    echo "============================================================================"
+    if needs_server; then
+        echo -e "${BLUE}[PHASE 2]${NC} Standalone Server Tests"
+        echo "============================================================================"
 
-    start_server || exit 1
+        start_server || exit 1
 
-    echo ""
-    echo "--- Integration Tests ---"
-    echo "  (Server will restart automatically after heavy tests)"
-    
-    # Sort tests to run heavy tests last within integration suite
-    INTEGRATION_TESTS_LIGHT=()
-    INTEGRATION_TESTS_HEAVY=()
-    for test in tests/suites/integration/test_*.py; do
-        if [ -f "$test" ]; then
-            test_name=$(basename "$test" .py)
-            if is_heavy_test "$test_name"; then
-                INTEGRATION_TESTS_HEAVY+=("$test")
-            else
-                INTEGRATION_TESTS_LIGHT+=("$test")
+        if suite_enabled integration; then
+            echo ""
+            echo "--- Integration Tests ---"
+            echo "  (Server will restart automatically after heavy tests)"
+
+            INTEGRATION_TESTS_LIGHT=()
+            INTEGRATION_TESTS_HEAVY=()
+            for test in tests/suites/integration/test_*.py; do
+                if [ -f "$test" ]; then
+                    test_name=$(basename "$test" .py)
+                    if is_heavy_test "$test_name"; then
+                        INTEGRATION_TESTS_HEAVY+=("$test")
+                    else
+                        INTEGRATION_TESTS_LIGHT+=("$test")
+                    fi
+                fi
+            done
+
+            for test in "${INTEGRATION_TESTS_LIGHT[@]}"; do
+                run_test "$test" 180
+                sleep 0.5
+            done
+
+            for test in "${INTEGRATION_TESTS_HEAVY[@]}"; do
+                run_test "$test" 240
+            done
+        fi
+
+        if suite_enabled e2e; then
+            echo ""
+            echo "--- E2E Tests ---"
+            ensure_server_ready "E2E Tests"
+            for test in tests/suites/e2e/test_*.py; do
+                [ -f "$test" ] && run_test "$test" 180
+            done
+        fi
+
+        if suite_enabled contract; then
+            echo ""
+            echo "--- Contract Tests ---"
+            ensure_server_ready "Contract Tests"
+            for test in tests/suites/contract/test_*.py; do
+                [ -f "$test" ] && run_test "$test" 180
+            done
+        fi
+
+        if suite_enabled compatibility; then
+            echo ""
+            echo "--- Compatibility Tests ---"
+            ensure_server_ready "Compatibility Tests"
+            for test in tests/suites/compatibility/test_*.py; do
+                [ -f "$test" ] && run_test "$test" 180
+            done
+        fi
+
+        if suite_enabled security; then
+            echo ""
+            echo "--- Security Tests ---"
+            ensure_server_ready "Security Tests"
+            for test in tests/suites/security/test_*.py; do
+                [ -f "$test" ] || continue
+                test_name=$(basename "$test" .py)
+                if [[ "$test_name" == "test_mtls_enforcement" ]]; then
+                    echo -e "    ${YELLOW}(switching to mTLS config for $test_name)${NC}"
+                    restart_server_quick config/test_mtls
+                    run_test "$test" 180
+                    restart_server_quick config/test_tls
+                else
+                    run_test "$test" 180
+                fi
+            done
+        fi
+
+        if suite_enabled resilience; then
+            echo ""
+            echo "--- Resilience Tests ---"
+            ensure_server_ready "Resilience Tests"
+            for test in tests/suites/resilience/test_*.py; do
+                [ -f "$test" ] && run_test "$test" 300
+            done
+        fi
+
+        if suite_enabled conformance; then
+            echo ""
+            echo -e "${YELLOW}[RECOVERY]${NC} Restarting server before conformance tests..."
+            restart_server_quick
+
+            echo ""
+            echo "--- Conformance Tests ---"
+            for test in tests/suites/conformance/test_*.py; do
+                [ -f "$test" ] && run_test "$test" 180
+            done
+        fi
+
+        if suite_enabled performance_light; then
+            echo ""
+            echo -e "${YELLOW}[RECOVERY]${NC} Restarting server..."
+            restart_server_quick
+
+            echo ""
+            echo "--- Performance Tests ---"
+            echo "  (Server will restart automatically after heavy tests)"
+            ensure_server_ready "Performance Tests"
+            perf_timeout=600
+            perf_heavy_timeout=600
+            if [ "$QUICK_MODE" = "true" ]; then
+                perf_timeout=300
+                perf_heavy_timeout=600
             fi
+
+            PERF_TESTS_LIGHT=()
+            PERF_TESTS_HEAVY=()
+            for test in tests/suites/performance_light/benchmark_*.py tests/suites/performance_light/measure_*.py tests/suites/performance_light/test_*.py; do
+                if [ -f "$test" ]; then
+                    test_name=$(basename "$test" .py)
+                    if is_heavy_test "$test_name"; then
+                        PERF_TESTS_HEAVY+=("$test")
+                    else
+                        PERF_TESTS_LIGHT+=("$test")
+                    fi
+                fi
+            done
+
+            for test in "${PERF_TESTS_LIGHT[@]}"; do
+                run_test "$test" "$perf_timeout"
+            done
+
+            for test in "${PERF_TESTS_HEAVY[@]}"; do
+                run_test "$test" "$perf_heavy_timeout"
+            done
         fi
-    done
-    
-    # Run light tests first
-    for test in "${INTEGRATION_TESTS_LIGHT[@]}"; do
-        run_test "$test" 180
-        sleep 0.5  # Brief pause between tests
-    done
-    
-    # Then run heavy tests (each will trigger server restart after)
-    for test in "${INTEGRATION_TESTS_HEAVY[@]}"; do
-        run_test "$test" 240  # Longer timeout for heavy tests
-    done
 
-    echo ""
-    echo "--- E2E Tests ---"
-    ensure_server_ready "E2E Tests"
-    for test in tests/suites/e2e/test_*.py; do
-        [ -f "$test" ] && run_test "$test" 180
-    done
+        if suite_enabled stress; then
+            echo ""
+            echo "--- Stress Tests ---"
+            echo "  (Server will restart automatically after heavy tests)"
+            ensure_server_ready "Stress Tests"
 
-    echo ""
-    echo "--- Contract Tests ---"
-    ensure_server_ready "Contract Tests"
-    for test in tests/suites/contract/test_*.py; do
-        [ -f "$test" ] && run_test "$test" 180
-    done
-
-    echo ""
-    echo "--- Compatibility Tests ---"
-    ensure_server_ready "Compatibility Tests"
-    for test in tests/suites/compatibility/test_*.py; do
-        [ -f "$test" ] && run_test "$test" 180
-    done
-
-    echo ""
-    echo "--- Security Tests ---"
-    ensure_server_ready "Security Tests"
-    for test in tests/suites/security/test_*.py; do
-        [ -f "$test" ] || continue
-        test_name=$(basename "$test" .py)
-        if [[ "$test_name" == "test_mtls_enforcement" ]]; then
-            # mTLS test requires server with client cert enforcement
-            echo -e "    ${YELLOW}(switching to mTLS config for $test_name)${NC}"
-            restart_server_quick config/test_mtls
-            run_test "$test" 180
-            # Restore normal TLS config for remaining security tests
-            restart_server_quick config/test_tls
-        else
-            run_test "$test" 180
-        fi
-    done
-
-    echo ""
-    echo "--- Resilience Tests ---"
-    ensure_server_ready "Resilience Tests"
-    for test in tests/suites/resilience/test_*.py; do
-        [ -f "$test" ] && run_test "$test" 300
-    done
-
-    # Restart server before conformance tests (resilience tests may degrade it)
-    echo ""
-    echo -e "${YELLOW}[RECOVERY]${NC} Restarting server before conformance tests..."
-    restart_server_quick
-
-    echo ""
-    echo "--- Conformance Tests ---"
-    for test in tests/suites/conformance/test_*.py; do
-        [ -f "$test" ] && run_test "$test" 180
-    done
-
-    # Restart server (use graceful shutdown to avoid eaddrinuse)
-    echo ""
-    echo -e "${YELLOW}[RECOVERY]${NC} Restarting server..."
-    restart_server_quick
-
-    echo ""
-    echo "--- Performance Tests ---"
-    echo "  (Server will restart automatically after heavy tests)"
-    ensure_server_ready "Performance Tests"
-    # Quick mode: 300s per test (CI workloads are already scaled down)
-    # Full mode: 600s per test (heavy benchmarks need more time)
-    perf_timeout=600
-    perf_heavy_timeout=600
-    if [ "$QUICK_MODE" = "true" ]; then
-        perf_timeout=300
-        perf_heavy_timeout=600
-    fi
-
-    # Sort performance tests: light first, heavy last.
-    # Heavy tests (e.g. benchmark_group_1000) trigger server restarts that
-    # destabilize subsequent memory measurements. Same pattern as integration
-    # and stress test sections.
-    PERF_TESTS_LIGHT=()
-    PERF_TESTS_HEAVY=()
-    for test in tests/suites/performance_light/benchmark_*.py tests/suites/performance_light/measure_*.py tests/suites/performance_light/test_*.py; do
-        if [ -f "$test" ]; then
-            test_name=$(basename "$test" .py)
-            if is_heavy_test "$test_name"; then
-                PERF_TESTS_HEAVY+=("$test")
-            else
-                PERF_TESTS_LIGHT+=("$test")
+            stress_light_timeout=300
+            stress_heavy_timeout=600
+            if [ "$QUICK_MODE" = "true" ]; then
+                stress_light_timeout=180
+                stress_heavy_timeout=300
             fi
+
+            STRESS_TESTS_LIGHT=()
+            STRESS_TESTS_HEAVY=()
+            for test in tests/suites/stress/stress_*.py tests/suites/stress/test_*.py; do
+                if [ -f "$test" ]; then
+                    test_name=$(basename "$test" .py)
+                    if [ "$QUICK_MODE" = "true" ] && is_tier2_test "$test_name"; then
+                        echo "  $test_name  (skipped — Tier 2, full mode only)"
+                        TOTAL_SKIP=$((TOTAL_SKIP + 1))
+                        SKIPPED_TESTS+=("$test_name (tier2)")
+                        continue
+                    fi
+                    if is_heavy_test "$test_name"; then
+                        STRESS_TESTS_HEAVY+=("$test")
+                    else
+                        STRESS_TESTS_LIGHT+=("$test")
+                    fi
+                fi
+            done
+
+            for test in "${STRESS_TESTS_LIGHT[@]}"; do
+                run_test "$test" "$stress_light_timeout"
+                sleep 0.5
+            done
+
+            for test in "${STRESS_TESTS_HEAVY[@]}"; do
+                run_test "$test" "$stress_heavy_timeout"
+            done
         fi
-    done
 
-    # Run light tests first (includes benchmark_memory before any restart)
-    for test in "${PERF_TESTS_LIGHT[@]}"; do
-        run_test "$test" "$perf_timeout"
-    done
-
-    # Then run heavy tests (each will trigger server restart after)
-    for test in "${PERF_TESTS_HEAVY[@]}"; do
-        run_test "$test" "$perf_heavy_timeout"
-    done
-
-    # ======================================================================
-    # STRESS TESTS — all tests run, no skipping
-    # ======================================================================
-    # Quick mode: stress tests use CI-scaled parameters (QUICK_MODE env var
-    # detected by each test) with tighter timeouts. Full mode: original scale.
-    echo ""
-    echo "--- Stress Tests ---"
-    echo "  (Server will restart automatically after heavy tests)"
-    ensure_server_ready "Stress Tests"
-    
-    # Quick mode: 180s per light test, 300s per heavy test (CI-scaled workloads)
-    # Full mode:  300s per light test, 600s per heavy test
-    stress_light_timeout=300
-    stress_heavy_timeout=600
-    if [ "$QUICK_MODE" = "true" ]; then
-        stress_light_timeout=180
-        stress_heavy_timeout=300
-    fi
-    
-    # Sort stress tests - run lighter ones first, skip Tier 2 in quick mode
-    STRESS_TESTS_LIGHT=()
-    STRESS_TESTS_HEAVY=()
-    for test in tests/suites/stress/stress_*.py tests/suites/stress/test_*.py; do
-        if [ -f "$test" ]; then
-            test_name=$(basename "$test" .py)
-            # Skip Tier 2 tests (e.g. 24h soak) in quick mode
-            if [ "$QUICK_MODE" = "true" ] && is_tier2_test "$test_name"; then
-                echo "  $test_name  (skipped — Tier 2, full mode only)"
-                TOTAL_SKIP=$((TOTAL_SKIP + 1))
-                SKIPPED_TESTS+=("$test_name (tier2)")
-                continue
-            fi
-            if is_heavy_test "$test_name"; then
-                STRESS_TESTS_HEAVY+=("$test")
-            else
-                STRESS_TESTS_LIGHT+=("$test")
-            fi
-        fi
-    done
-    
-    # Run light tests first
-    for test in "${STRESS_TESTS_LIGHT[@]}"; do
-        run_test "$test" "$stress_light_timeout"
-        sleep 0.5
-    done
-    
-    # Then run heavy tests with longer timeout
-    for test in "${STRESS_TESTS_HEAVY[@]}"; do
-        run_test "$test" "$stress_heavy_timeout"
-    done
-
-    echo ""
-    echo "Stopping standalone server..."
-    pkill -u "$USER" -TERM beam.smp 2>/dev/null || true
-    sleep 1
-    pkill -u "$USER" -9 beam.smp 2>/dev/null || true
-    p2_wait=0
-    while pgrep -u "$USER" -x beam.smp > /dev/null 2>&1; do
-        p2_wait=$((p2_wait + 1))
-        if [ $p2_wait -ge 15 ]; then
-            echo -e "  ${YELLOW}Warning: beam.smp still in process table after 15s${NC}"
-            break
-        fi
+        echo ""
+        echo "Stopping standalone server..."
+        pkill -u "$USER" -TERM beam.smp 2>/dev/null || true
         sleep 1
-    done
-    p2_port=0
-    while ss -tlnp 2>/dev/null | grep -q ':8085\|:8086'; do
-        p2_port=$((p2_port + 1))
-        if [ $p2_port -ge 30 ]; then
-            echo -e "  ${YELLOW}Warning: ports still held after 30s — forcing with SO_REUSEADDR${NC}"
-            break
-        fi
-        sleep 1
-    done
+        pkill -u "$USER" -9 beam.smp 2>/dev/null || true
+        p2_wait=0
+        while pgrep -u "$USER" -x beam.smp > /dev/null 2>&1; do
+            p2_wait=$((p2_wait + 1))
+            if [ $p2_wait -ge 15 ]; then
+                echo -e "  ${YELLOW}Warning: beam.smp still in process table after 15s${NC}"
+                break
+            fi
+            sleep 1
+        done
+        p2_port=0
+        while ss -tlnp 2>/dev/null | grep -q ':8085\|:8086'; do
+            p2_port=$((p2_port + 1))
+            if [ $p2_port -ge 30 ]; then
+                echo -e "  ${YELLOW}Warning: ports still held after 30s — forcing with SO_REUSEADDR${NC}"
+                break
+            fi
+            sleep 1
+        done
+    fi
 
     # ==========================================================================
     # PHASE 3: CLUSTERMANAGER TESTS
     # ==========================================================================
-    echo ""
-    echo -e "${BLUE}[PHASE 3]${NC} ClusterManager Tests (self-managed)"
-    echo "============================================================================"
-    echo "  (Each test manages its own cluster - server restart between tests)"
+    if suite_enabled chaos_controlled; then
+        echo ""
+        echo -e "${BLUE}[PHASE 3]${NC} ClusterManager Tests (self-managed)"
+        echo "============================================================================"
+        echo "  (Each test manages its own cluster - server restart between tests)"
 
-    # Reset CONFIG to plain-TCP baseline for Phase 3: chaos_controlled tests
-    # start their OWN cluster via ClusterManager or direct `make` calls.
-    # Phase 2 used config/test_tls (TLS-enabled); Phase 3 tests that need
-    # TLS configure it themselves. Using config/test as a working baseline
-    # ensures `make start` succeeds (config/sys doesn't exist, and the
-    # .app defaults require TLS certs that aren't at the default paths).
-    export CONFIG=config/test
+        # Reset CONFIG to plain-TCP baseline for Phase 3
+        export CONFIG=config/test
 
-    for test in tests/suites/chaos_controlled/*.py; do
-        if [ -f "$test" ]; then
-            # Full cleanup before each chaos_controlled test
-            pkill -u "$USER" -TERM beam.smp 2>/dev/null || true
-            sleep 1
-            pkill -u "$USER" -9 beam.smp 2>/dev/null || true
-            p3_wait=0
-            while pgrep -u "$USER" -x beam.smp > /dev/null 2>&1; do
-                p3_wait=$((p3_wait + 1))
-                if [ $p3_wait -ge 10 ]; then break; fi
+        for test in tests/suites/chaos_controlled/*.py; do
+            if [ -f "$test" ]; then
+                pkill -u "$USER" -TERM beam.smp 2>/dev/null || true
                 sleep 1
-            done
-            p3_port=0
-            while ss -tlnp 2>/dev/null | grep -q ':8085\|:8086'; do
-                p3_port=$((p3_port + 1))
-                if [ $p3_port -ge 15 ]; then break; fi
-                sleep 1
-            done
-            rm -rf Mnesia.* MnesiaCore.* 2>/dev/null || true
-            run_test "$test" 300
-        fi
-    done
+                pkill -u "$USER" -9 beam.smp 2>/dev/null || true
+                p3_wait=0
+                while pgrep -u "$USER" -x beam.smp > /dev/null 2>&1; do
+                    p3_wait=$((p3_wait + 1))
+                    if [ $p3_wait -ge 10 ]; then break; fi
+                    sleep 1
+                done
+                p3_port=0
+                while ss -tlnp 2>/dev/null | grep -q ':8085\|:8086'; do
+                    p3_port=$((p3_port + 1))
+                    if [ $p3_port -ge 15 ]; then break; fi
+                    sleep 1
+                done
+                rm -rf Mnesia.* MnesiaCore.* 2>/dev/null || true
+                run_test "$test" 300
+            fi
+        done
 
-    pkill -u "$USER" -9 beam.smp 2>/dev/null || true
+        pkill -u "$USER" -9 beam.smp 2>/dev/null || true
+    fi
     echo ""
 fi
 
@@ -810,16 +956,23 @@ if [ "$SKIP_DOCKER" = true ]; then
     echo "  Use './tests/run_all_tests.sh' (no flags) to run ALL tests"
     echo ""
 else
-    echo -e "${BLUE}[PHASE 4]${NC} Docker Chaos Tests (Fresh Cluster per Test)"
+    echo -e "${BLUE}[PHASE 4]${NC} Docker Chaos Tests (Batched Clusters)"
     echo "============================================================================"
     echo ""
-    echo "Running ${#DOCKER_CHAOS_TESTS[@]} chaos tests. Each test gets a FRESH cluster"
-    echo "using the proven cluster.sh script for isolation."
+    echo "Running $TOTAL_DOCKER_TESTS chaos tests in 5 batches + ${#DOCKER_UNBATCHED_TESTS[@]} unbatched."
+    echo "Batched tests share a cluster to reduce infrastructure overhead."
     echo ""
     
     pkill -u "$USER" -9 beam.smp 2>/dev/null || true
     
-    for test in "${DOCKER_CHAOS_TESTS[@]}"; do
+    run_docker_test_batch "Fast (< 30s)" "${DOCKER_BATCH_FAST[@]}"
+    run_docker_test_batch "Medium-A (cross-region)" "${DOCKER_BATCH_MEDIUM_A[@]}"
+    run_docker_test_batch "Medium-B (data durability)" "${DOCKER_BATCH_MEDIUM_B[@]}"
+    run_docker_test_batch "Medium-C (overflow/convergence)" "${DOCKER_BATCH_MEDIUM_C[@]}"
+    run_docker_test_batch "Long (> 120s)" "${DOCKER_BATCH_LONG[@]}"
+    
+    # Run any new/unbatched tests with fresh clusters (safe default)
+    for test in "${DOCKER_UNBATCHED_TESTS[@]}"; do
         if [ -f "$test" ]; then
             run_docker_test_fresh "$test" 480
         fi
