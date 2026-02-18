@@ -382,8 +382,6 @@ def send_cross_region_message(port: int, sender: str, target: str, msg_id: str) 
             log(f"  Login failed for {sender}")
             return False
 
-        time.sleep(0.05)  # Ensure server-side registration completes
-
         # Send message to user in different region
         target_bytes = target.encode()
         msg_bytes = msg_id.encode()
@@ -653,12 +651,9 @@ def test_queue_survives_graceful_stop() -> Tuple[bool, Dict]:
         if accepted:
             metrics["messages_sent"] += 1
 
-        time.sleep(0.1)
-
     log(f"  Sent {metrics['messages_sent']} messages")
 
     # Check queue depth
-    time.sleep(2)
     metrics["queue_before_kill"] = get_bridge_queue_depth(CORE_EAST_1)
     log(f"  Queue depth before kill: {metrics['queue_before_kill']}")
 
@@ -751,8 +746,6 @@ def test_queue_survives_hard_kill() -> Tuple[bool, Dict]:
         accepted = send_cross_region_message(EDGE_EAST_PORT, sender, eu_user, msg_id)
         if accepted:
             metrics["messages_sent"] += 1
-
-        time.sleep(0.1)
 
     log(f"  Sent {metrics['messages_sent']} messages")
 
@@ -865,8 +858,6 @@ def test_eventual_delivery_after_recovery() -> Tuple[bool, Dict]:
         if accepted:
             sent_ids.add(msg_id)
             metrics["messages_sent"] += 1
-
-        time.sleep(0.1)
 
     log(f"  Sent {metrics['messages_sent']} messages")
 

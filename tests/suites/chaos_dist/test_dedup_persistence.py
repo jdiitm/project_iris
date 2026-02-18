@@ -103,7 +103,6 @@ def login(sock, username):
     try:
         response = sock.recv(1024)
         if b"LOGIN_OK" in response or len(response) > 0:
-            time.sleep(0.05)  # Ensure server-side registration completes
             return True
         return False
     except socket.timeout:
@@ -473,9 +472,6 @@ def test_dedup_survives_sigkill():
     sock.close()
 
     log(f"   Retry sent, ACK received: {retry_ack}")
-
-    # Brief pause for server-side processing
-    time.sleep(0.5)
 
     log(f"\n9. Logging in as receiver: {receiver}")
     log("   Checking how many copies of the message were delivered")

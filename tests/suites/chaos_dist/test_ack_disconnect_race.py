@@ -151,7 +151,6 @@ def login(sock, username):
     try:
         response = sock.recv(1024)
         if len(response) > 0:
-            time.sleep(0.05)  # Ensure server-side registration completes
             return True
         return False
     except socket.timeout:
@@ -381,10 +380,7 @@ def test_ack_disconnect_race():
 
     log(f"     Message sent at {send_time:.6f}")
 
-    # Step 3: Brief delay to allow TCP to transmit, then close socket
-    # Note: Without this delay, TCP might not have flushed the data before close
-    # We're testing server durability, not TCP transmission
-    time.sleep(0.01)  # 10ms for TCP flush
+    # Step 3: Close socket (simulating disconnect after send)
 
     log(f"  4. Closing socket (simulating disconnect after send)...")
     disconnect_time = time.time()
@@ -529,7 +525,6 @@ def test_rapid_ack_disconnect_cycles():
 
     # Kill server - messages should already be durable from the 500ms wait above
     log(f"  3. SIGKILL server...")
-    time.sleep(0.1)  # 100ms additional buffer
     sigkill_container(CONTAINER_NAME)
     time.sleep(3)
 

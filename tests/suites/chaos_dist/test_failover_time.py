@@ -97,7 +97,6 @@ def login(sock, username):
     """Send login packet."""
     packet = bytes([0x01]) + username.encode()
     sock.sendall(packet)
-    time.sleep(0.1)
 
 
 # Sequence counter for RFC-compliant messaging
@@ -178,8 +177,6 @@ def traffic_worker(monitor, sender_id):
                 except Exception:
                     pass
             sock = None
-
-        time.sleep(TRAFFIC_INTERVAL_MS / 1000)
 
     if sock:
         try:

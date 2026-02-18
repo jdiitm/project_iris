@@ -250,7 +250,6 @@ def test_concurrent_connections() -> TestResult:
             for i in range(10):
                 if send_message(sock, b"echo_service", f"msg_{worker_id}_{i}".encode()):
                     success += 1
-                time.sleep(0.05)
             sock.close()
             results.append(success)
         except Exception:

@@ -88,7 +88,6 @@ def login(sock, username):
     try:
         response = sock.recv(1024)
         if b"LOGIN_OK" in response:
-            time.sleep(0.05)  # Ensure server-side registration completes
             return True
         return False
     except socket.timeout:
@@ -569,7 +568,6 @@ def run_simplified_test():
         return False
 
     print("\n2. Waiting for storage...")
-    time.sleep(1)
 
     print(f"\n3. Connecting as receiver: {receiver}")
     try:

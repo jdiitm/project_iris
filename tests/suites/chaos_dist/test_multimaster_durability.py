@@ -105,7 +105,6 @@ def login(sock, username):
     try:
         response = sock.recv(1024)
         if b"LOGIN_OK" in response:
-            time.sleep(0.05)  # Ensure server-side registration completes
             return True, response
         else:
             return False, response
@@ -169,10 +168,6 @@ def receive_offline_messages(sock, timeout=10):
                 buffer += data
                 buffer, msgs = parse_and_ack_messages(sock, buffer)
                 messages.extend(msgs)
-                # If we got messages and buffer is empty, we might be done
-                if messages and not buffer:
-                    # Wait a bit more for any stragglers
-                    time.sleep(0.5)
         except socket.timeout:
             if messages:
                 break

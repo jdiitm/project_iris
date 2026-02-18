@@ -400,8 +400,6 @@ def send_message(port: int, sender: str, target: str, msg_id: str) -> bool:
         if b"LOGIN_OK" not in login_response:
             return False
 
-        time.sleep(0.05)  # Ensure server-side registration completes
-
         # Send message with sequence number
         target_bytes = target.encode()
         msg_bytes = msg_id.encode()
@@ -482,7 +480,6 @@ def test_message_queueing_during_outage() -> Tuple[bool, Dict]:
         log("  WARN: Failed to disconnect EU - continuing anyway")
 
     log(f"  Backbone disconnected. Waiting for detection...")
-    time.sleep(3)  # AUDIT P4: Reduced from 5s, Docker disconnect is fast
 
     # Phase 3: Send messages to EU user (should be queued)
     log("\nPhase 3: Sending messages US→EU during outage...")
@@ -501,13 +498,10 @@ def test_message_queueing_during_outage() -> Tuple[bool, Dict]:
         if (i + 1) % 5 == 0:
             log(f"  Sent {i+1}/{MESSAGE_COUNT}")
 
-        time.sleep(0.1)
-
     log(f"  Sent: {metrics['messages_sent']}, Accepted: {metrics['messages_accepted']}")
 
     # Phase 4: Check queue depth (should have increased)
     log("\nPhase 4: Checking bridge queue after sends...")
-    time.sleep(2)  # Allow queueing
     metrics["queue_depth_during"] = get_bridge_queue_depth(CORE_EAST)
     log(f"  Queue depth during outage: {metrics['queue_depth_during']}")
 
@@ -580,7 +574,6 @@ def test_eventual_delivery_after_heal() -> Tuple[bool, Dict]:
         send_message(EDGE_EAST_PORT, sender, eu_user, msg_id)
         sent_ids.add(msg_id)
         metrics["messages_sent"] += 1
-        time.sleep(0.1)
 
     log(f"  Sent {metrics['messages_sent']} messages")
 
@@ -688,7 +681,6 @@ def test_no_duplicate_delivery() -> Tuple[bool, Dict]:
 
         send_message(EDGE_EAST_PORT, f"sender_{test_id}", eu_user, msg_id)
         metrics["messages_sent"] += 1
-        time.sleep(0.5)
 
     # AUDIT P4 FIX: Poll for delivery instead of blind 15s sleep
     log("\nPhase 3: Polling for delivery...")

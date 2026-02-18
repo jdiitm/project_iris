@@ -276,7 +276,6 @@ def test_basic_ordering():
         num_messages = 10
         for i in range(num_messages):
             sender.send_message(receiver_name, f"ORDER_TEST_{i:05d}_payload")
-            time.sleep(0.02)
 
         # Receive and verify (recv_messages has its own timeout)
         received = receiver.recv_messages(timeout=5)
@@ -353,20 +352,17 @@ def test_ordering_during_edge_pause():
         # Send first batch
         for i in range(5):
             sender.send_message(receiver_name, f"ORDER_TEST_{i:05d}_before")
-            time.sleep(0.02)
 
         # Pause container briefly
         log("  Pausing edge container for 2 seconds...")
         pause_thread = pause_container(edge_container, duration=2)
 
         # Send during/after pause
-        time.sleep(0.5)
         for i in range(5, 10):
             try:
                 sender.send_message(receiver_name, f"ORDER_TEST_{i:05d}_after")
             except:
                 pass  # May fail if socket disrupted
-            time.sleep(0.1)
 
         pause_thread.join(timeout=5)
 
@@ -431,12 +427,9 @@ def test_ordering_with_jitter():
             log_test("Ordering with jitter", False, "Receiver login failed")
             return
 
-        # Send with random delays (simulating jitter)
         num_messages = 10
         for i in range(num_messages):
             sender.send_message(receiver_name, f"ORDER_TEST_{i:05d}_jitter")
-            jitter = random.uniform(0.01, 0.1)
-            time.sleep(jitter)
 
         received = receiver.recv_messages(timeout=5)
 
@@ -502,10 +495,8 @@ def test_ordering_during_reconnect():
         for i in range(5):
             sender1.send_message(receiver_name, f"ORDER_TEST_{i:05d}_session1")
             all_sent.append(i)
-            time.sleep(0.02)
 
         sender1.close()
-        time.sleep(0.5)
 
         # Second sender session (reconnect)
         sender2 = SimpleClient()
@@ -517,7 +508,6 @@ def test_ordering_during_reconnect():
         for i in range(5, 10):
             sender2.send_message(receiver_name, f"ORDER_TEST_{i:05d}_session2")
             all_sent.append(i)
-            time.sleep(0.02)
 
         sender2.close()
 
@@ -586,7 +576,6 @@ def test_concurrent_senders():
             for s_id, sender in senders:
                 seq = s_id * 100 + i  # Sender 0: 0-4, Sender 1: 100-104, etc.
                 sender.send_message(receiver_name, f"ORDER_TEST_{seq:05d}_s{s_id}")
-                time.sleep(0.01)
 
         received = receiver.recv_messages(timeout=5)
 

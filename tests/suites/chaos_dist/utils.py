@@ -136,11 +136,6 @@ def tls_connect_and_login(host: str, port: int, username: str,
         response = sock.recv(1024)
 
         if b"LOGIN_OK" in response:
-            # Small delay to ensure server-side registration completes
-            # This prevents race conditions where messages are sent before
-            # the recipient is fully registered in the presence table
-            import time
-            time.sleep(0.05)
             return sock
         else:
             # Login failed - log the response for debugging

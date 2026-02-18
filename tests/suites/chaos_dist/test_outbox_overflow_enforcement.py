@@ -159,7 +159,6 @@ def test_queue_drains_on_heal():
 
     # Clean state: clear outbound queue from previous test
     run_on_node(node_a, "mnesia:clear_table(cross_region_outbound), ok", timeout=15)
-    time.sleep(2)
 
     # Get initial queue depth (should be 0 after clear)
     initial_depth_str = run_on_node(node_a, "iris_region_bridge:get_queue_depth()")

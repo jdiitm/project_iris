@@ -491,7 +491,6 @@ def run_latency_test(attempt=1, max_attempts=1):
         return "retry"
 
     receiver.start_listening()
-    time.sleep(0.5)  # Let receiver settle
 
     # Step 2: Connect sender to US West
     print("\n2. Connecting sender to US West...")
@@ -510,7 +509,6 @@ def run_latency_test(attempt=1, max_attempts=1):
         sender.send_message(receiver_name, msg_id)
         if (i + 1) % 10 == 0:
             print(f"   Sent {i + 1}/{MESSAGE_COUNT}")
-        time.sleep(0.05)  # 50ms between messages
 
     # Step 4: Wait for delivery
     print("\n4. Waiting for messages to arrive in Sydney...")

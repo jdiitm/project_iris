@@ -268,7 +268,6 @@ class LoadGenerator:
                     self.metrics.messages_failed += 1
 
             msg_id += 1
-            time.sleep(interval)
 
         try:
             sock.close()

@@ -572,8 +572,6 @@ def test_botnet_flood_bounded():
                     total_rejected += 1
             except Exception:
                 pass
-        # Small delay to avoid pure spin
-        time.sleep(0.01)
 
     elapsed = time.time() - start_time
 

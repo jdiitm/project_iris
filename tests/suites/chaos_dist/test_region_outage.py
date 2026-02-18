@@ -247,7 +247,6 @@ def login(sock, username: str) -> bool:
     try:
         response = sock.recv(1024)
         if len(response) > 0:
-            time.sleep(0.05)  # Ensure server-side registration completes
             return True
         return False
     except socket.timeout:
@@ -271,7 +270,6 @@ def send_message(sock, target: str, content: str) -> bool:
 
     try:
         sock.sendall(packet)
-        time.sleep(0.01)  # Brief delay to ensure TCP flush
         return True  # Fire-and-forget - no ACK expected
     except Exception:
         return False
